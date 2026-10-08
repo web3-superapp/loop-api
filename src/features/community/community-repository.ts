@@ -485,7 +485,7 @@ export class CommunityNotFoundError extends Error {
 }
 
 /**
- * A target account is nonexistent, not discoverable, blocked, or otherwise
+ * A target account is nonexistent, unactivated, blocked, or otherwise
  * unavailable. Every one of those states returns the same non-enumerating
  * error so membership of the set cannot be probed.
  */

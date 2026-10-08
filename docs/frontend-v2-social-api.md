@@ -28,7 +28,10 @@ X-Loop-Client-Version: 1.0.0
 - 目标必须是已激活资料。**不存在 / 未激活 / 对方拉黑了你** 一律
   `404 PROFILE_NOT_FOUND`（`userMessageKey: errors.profile.notFound`），不泄露
   是否被拉黑。文案统一「用户不存在或不可见」。
-- 不看 `discoverable`（那是搜索与关注的开关）；从聊天头像、分享链接都能进。
+- 不看 `discoverable`（它只管别名搜索与推荐是否列出该用户）；从聊天头像、分享链接都能进。
+- 决策 0096（S107b）起，加好友（`POST /v1/friend-requests` 与 `POST /v2/message-requests`）和关注
+  （`POST /v2/connections/follow/{id}`）都**不看**对方的 `discoverable`：只要对方已激活、未关闭
+  `friendRequests`（关注不看此项）、双方无拉黑即可；否则仍是同一个非枚举 404。
 - 看自己也返回 200（`relationship` 全 false / `none`）；客户端按需求直接跳 Me。
 - 钱包地址永不下发。
 

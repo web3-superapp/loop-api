@@ -868,15 +868,15 @@ async function readDetail(
 
 /**
  * Resolve another account from its public profile ID. Nonexistent, inactive,
- * self, blocked, and (when required) non-discoverable targets all raise the
- * same non-enumerating error.
+ * self, and (when required) blocked targets all raise the same
+ * non-enumerating error. `discoverable` is never consulted: it governs only
+ * whether search and recommendations list the account (Decisions 0090, 0096).
  */
 async function resolveTarget(
   client: DatabaseClient,
   input: {
     readonly viewerUserId: string;
     readonly targetPublicProfileId: string;
-    readonly requireDiscoverable: boolean;
     readonly requireUnblocked: boolean;
   },
 ): Promise<{ readonly userId: string; readonly profile: IdentityProjection }> {
@@ -885,7 +885,6 @@ async function resolveTarget(
       select
         profile.owner_user_id,
         ${identityColumns},
-        coalesce(privacy.discoverable, false) as discoverable,
         exists (
           select 1
           from public.user_blocks as blocks
@@ -898,8 +897,6 @@ async function resolveTarget(
             )
         ) as blocked
       ${identityFromSql}
-      left join public.privacy_preferences_v2 as privacy
-        on privacy.owner_user_id = profile.owner_user_id
       where profile.public_profile_id = $2
         and profile.profile_status = 'active'
       limit 1
@@ -913,7 +910,6 @@ async function resolveTarget(
   const ownerUserId = userIdSchema.parse(row["owner_user_id"]);
   if (
     ownerUserId === input.viewerUserId ||
-    (input.requireDiscoverable && row["discoverable"] !== true) ||
     (input.requireUnblocked && row["blocked"] === true)
   ) {
     throw new CommunityTargetUnavailableError();
@@ -2330,7 +2326,6 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId,
-            requireDiscoverable: true,
             requireUnblocked: true,
           });
           const inserted = await client.query<{ created_at: Date }>({
@@ -2398,7 +2393,6 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId,
-            requireDiscoverable: false,
             requireUnblocked: false,
           });
           const removed = await client.query({
@@ -2571,7 +2565,6 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId: stableId,
-            requireDiscoverable: false,
             requireUnblocked: false,
           });
           {
@@ -2866,7 +2859,6 @@ export function createPostgresCommunityRepository(
           const target = await resolveTarget(client, {
             viewerUserId: ownerUserId,
             targetPublicProfileId,
-            requireDiscoverable: false,
             requireUnblocked: true,
           });
           // The same pair lock the V1 sender takes, so two concurrent sends

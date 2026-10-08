@@ -1018,7 +1018,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
   });
 
-  it("hides a non-discoverable account from follow and search", async () => {
+  it("hides a non-discoverable account from search but still admits a follow (Decision 0096)", async () => {
     const viewer = await createAccount("search-viewer");
     const hidden = await createAccount("search-hidden");
     await pool.query({
@@ -1030,17 +1030,17 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       values: [hidden.userId],
     });
 
-    await expect(
-      repository.follow({
-        ownerUserId: viewer.userId,
-        targetPublicProfileId: hidden.publicProfileId,
-        idempotencyKey: randomUUID(),
-        requestSha256: commandDigest("socialGraph", "follow", [
-          hidden.publicProfileId,
-        ]),
-        requestId: randomUUID(),
-      }),
-    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+    const followed = await repository.follow({
+      ownerUserId: viewer.userId,
+      targetPublicProfileId: hidden.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        hidden.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(followed.profile.publicProfileId).toBe(hidden.publicProfileId);
+    expect(followed.viewerFollows).toBe(true);
 
     const results = await repository.searchUsers({
       viewerUserId: viewer.userId,
@@ -1054,7 +1054,54 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     ).toBe(false);
   });
 
-  it("admits a non-discoverable recipient to message requests but not to follow (Decision 0090)", async () => {
+  it("admits a follow of a target with no privacy rows and still refuses a blocked one (Decision 0096)", async () => {
+    const viewer = await createAccount("s107b-follow-viewer");
+    const bare = await createAccount("s107b-follow-bare");
+    const blocker = await createAccount("s107b-follow-blocker");
+    await pool.query({
+      text: `delete from public.privacy_preferences_v2 where owner_user_id = $1`,
+      values: [bare.userId],
+    });
+    const rows = await pool.query<{ count: string }>({
+      text: `
+        select (
+          (select count(*) from public.privacy_preferences_v2
+            where owner_user_id = $1)
+          + (select count(*) from public.social_privacy_preferences
+            where owner_user_id = $1)
+        )::text as count
+      `,
+      values: [bare.userId],
+    });
+    expect(rows.rows[0]?.count).toBe("0");
+
+    const followed = await repository.follow({
+      ownerUserId: viewer.userId,
+      targetPublicProfileId: bare.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        bare.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(followed.profile.publicProfileId).toBe(bare.publicProfileId);
+
+    await repository.blockUser({
+      ownerUserId: blocker.userId,
+      stableId: viewer.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        viewer.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    await expect(
+      follow(viewer.userId, blocker.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
+  it("admits a non-discoverable recipient to message requests and follow (Decisions 0090, 0096)", async () => {
     const sender = await createAccount("s98-mr-sender");
     const hiddenOpen = await createAccount("s98-mr-hidden-open");
     const hiddenClosed = await createAccount("s98-mr-hidden-closed");
@@ -1112,7 +1159,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
     );
     await expect(
       follow(sender.userId, hiddenOpen.publicProfileId),
-    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+    ).resolves.toMatchObject({ viewerFollows: true });
   });
 
   describe("LOOP ID exact match (Decision 0090)", () => {
