@@ -556,6 +556,59 @@ export interface CommunityChannelSyncRepository {
   ): Promise<void>;
 }
 
+/**
+ * A live room as the `voice_room_reaper` lane sees it (Decision 0094). All
+ * times come from one PostgreSQL clock read so the lane never compares a
+ * database timestamp with the worker host's clock.
+ */
+export interface VoiceRoomReapCandidate {
+  readonly voiceRoomId: string;
+  readonly callId: string;
+  readonly provisionState: VoiceRoomProvisionState;
+  /** `voice_rooms.created_at`: a provisioned room goes live at creation (0054). */
+  readonly createdAt: string;
+  /**
+   * The latest LOOP-side change to the room or any of its member rows:
+   * `greatest(voice_rooms.updated_at, max(voice_room_members.updated_at))`.
+   */
+  readonly lastActivityAt: string;
+  /** Joined speakers plus joined listeners; the host row is never counted. */
+  readonly nonHostJoinedCount: number;
+  /** `clock_timestamp()` of the listing read. */
+  readonly databaseNow: string;
+}
+
+export type VoiceRoomReapReason = "idle" | "max_age";
+
+export type VoiceRoomReapOutcome =
+  | { readonly outcome: "ended"; readonly callId: string }
+  /** The room was no longer live, or no longer met the rule, under the row lock. */
+  | { readonly outcome: "skipped" };
+
+/**
+ * The `voice_room_reaper` lane's persistence (Decision 0094). It never takes
+ * an actor or an idempotency key: the end is a system transition, audited as
+ * `room_ended` with a null actor and the lane's reason code.
+ */
+export interface VoiceRoomReaperRepository {
+  listLiveVoiceRoomsForReaper(input: {
+    readonly limit: number;
+  }): Promise<readonly VoiceRoomReapCandidate[]>;
+  /**
+   * Re-checks the rule under the room's row lock and ends the room only if
+   * it still holds: `max_age` needs `created_at` older than `maxLiveHours`;
+   * `idle` needs no joined speaker or listener and no LOOP change for
+   * `idleEndMinutes`.
+   */
+  endVoiceRoomByReaper(input: {
+    readonly voiceRoomId: string;
+    readonly reason: VoiceRoomReapReason;
+    readonly idleEndMinutes: number;
+    readonly maxLiveHours: number;
+    readonly requestId: string;
+  }): Promise<VoiceRoomReapOutcome>;
+}
+
 export class CommunicationRepositoryUnavailableError extends Error {
   readonly code = "communication_repository_unavailable";
 

@@ -617,6 +617,18 @@ evidence that a market, price, or trading path exists.
 | `POST /v2/voice-rooms/{voiceRoomId}/mute-all`           | Write headers; no payload                                                      | Room resource plus `providerSync`                                                                                                                                                   | `implemented`                                                              | `implemented`; host-only; sets the mute intent on every joined speaker                                                                                               |
 | `POST /v2/voice-rooms/{voiceRoomId}/end`                | Write headers; no payload                                                      | Ended room; every later write is `DATA_STALE`                                                                                                                                       | `implemented`                                                              | `implemented`; host-only                                                                                                                                             |
 
+Abandoned rooms are ended by the default-on `voice_room_reaper` worker lane
+(Decision 0094; `VOICE_ROOM_REAPER_ENABLED`, `VOICE_ROOM_REAPER_INTERVAL_MS`
+default 60 000, needs the Stream pair): at most 50 live rooms per pass; a room
+live for `VOICE_ROOM_MAX_LIVE_HOURS` (default 12) is ended regardless of who is
+in it (log `VOICE_ROOM_MAX_AGE_ENDED`); a room with no joined speaker or
+listener, no LOOP change for `VOICE_ROOM_IDLE_END_MINUTES` (default 10), and a
+Stream session confirmed at zero devices is ended (log
+`VOICE_ROOM_IDLE_ENDED`). The end is the host-end path without an actor: LOOP
+first (audit `room_ended`, null actor, reason `voice_room_*_ended`), then one
+Stream end; an unconfirmed Stream end logs `STREAM_CALL_END_UNCONFIRMED` and is
+not retried. A reaped room reads exactly like a host-ended one.
+
 `GET /v2/communities/{communityId}` (the `community` module) additionally
 carries `chat: {status, channelCid, memberState, reasonCode}` and
 `voice: {status, currentRoomId, reasonCode}`. `chat.status` is

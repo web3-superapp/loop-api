@@ -88,6 +88,16 @@ import {
 import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
 import { createCommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
+  createVoiceRoomReaperService,
+  type VoiceRoomReaperEvent,
+} from "./features/communication/voice-room-reaper-service.js";
+import { createStreamCallGateway } from "./integrations/stream/call-gateway.js";
+import {
+  createVoiceRoomReaperWorker,
+  type CreateVoiceRoomReaperWorkerOptions,
+  type VoiceRoomReaperWorker,
+} from "./voice-room-reaper-worker.js";
+import {
   createPostgresDatabase,
   type PostgresDatabaseConfig,
   type PostgresDatabaseLogger,
@@ -99,6 +109,7 @@ import type { ReconciliationControlPlane } from "./features/reconciliation/recon
 import type {
   CommunityChannelPersonaRepository,
   CommunityChannelSyncRepository,
+  VoiceRoomReaperRepository,
 } from "./features/communication/communication-repository.js";
 import type { SpotReconciliationRepository } from "./features/spot/spot-reconciliation-contract.js";
 import {
@@ -159,6 +170,8 @@ export interface ReconciliationWorkerDatabase {
   readonly launchChain?: LaunchChainRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
+  /** `voice_room_reaper` lane (Decision 0094); absent keeps it off. */
+  readonly voiceRoomReaper?: VoiceRoomReaperRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -208,6 +221,10 @@ export type MarketSparklineWarmWorkerFactory = (
   options: CreateMarketSparklineWarmWorkerOptions,
 ) => MarketSparklineWarmWorker;
 
+export type VoiceRoomReaperWorkerFactory = (
+  options: CreateVoiceRoomReaperWorkerOptions,
+) => VoiceRoomReaperWorker;
+
 export type BscReadClientFactory = (
   config: NonNullable<ReconciliationWorkerConfig["bscChain"]>,
 ) => BscReadClient;
@@ -236,6 +253,9 @@ export interface RunReconciliationWorkerOptions {
   readonly createMarketSparklineWarmWorker?: MarketSparklineWarmWorkerFactory;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
+  readonly createVoiceRoomReaperWorker?: VoiceRoomReaperWorkerFactory;
+  /** Test seam for the reaper's Stream call gateway (Decision 0094). */
+  readonly createVoiceRoomCallGateway?: typeof createStreamCallGateway;
   /**
    * Installs the process-wide outbound keep-alive dispatcher before any
    * Provider client is built (Decision 0088 ruling 1, S93b). Test seam; the
@@ -868,6 +888,101 @@ export async function runReconciliationWorker(
               );
             },
           });
+    // The `voice_room_reaper` lane (Decision 0094) is default-on. It needs the
+    // Stream pair to observe presence and end the call; without it the lane
+    // is left out and said so once.
+    const reaperConfig = options.config.voiceRoomReaper;
+    let voiceRoomReaperWorker: VoiceRoomReaperWorker | null = null;
+    if (reaperConfig !== null && database.voiceRoomReaper !== undefined) {
+      if (reaperConfig.stream === null) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "voice_room_reaper",
+            reasonCode: "VOICE_ROOM_REAPER_STREAM_NOT_CONFIGURED",
+          },
+          "LOOP voice room reaper lane stays idle: Stream is not configured",
+        );
+      } else {
+        const onReaperEvent = (event: VoiceRoomReaperEvent): void => {
+          const lane = "voice_room_reaper";
+          switch (event.kind) {
+            case "ended":
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane,
+                  voiceRoomId: event.voiceRoomId,
+                  reasonCode: event.reasonCode,
+                  providerSyncStatus: event.providerSync,
+                  requestId: event.requestId,
+                },
+                "LOOP voice room reaper ended a room",
+              );
+              return;
+            case "end_unconfirmed":
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane,
+                  voiceRoomId: event.voiceRoomId,
+                  reasonCode: event.reasonCode,
+                  detailReasonCode: event.detailReasonCode,
+                  errorClass: event.errorClass,
+                  requestId: event.requestId,
+                },
+                "LOOP voice room reaper could not confirm the Stream call end",
+              );
+              return;
+            case "presence_unavailable":
+              options.logger.debug(
+                {
+                  ...logFields(),
+                  lane,
+                  voiceRoomId: event.voiceRoomId,
+                  errorClass: event.errorClass,
+                },
+                "LOOP voice room reaper could not observe presence; the room is kept",
+              );
+              return;
+            case "room_failed":
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane,
+                  voiceRoomId: event.voiceRoomId,
+                  reasonCode: "voice_room_reaper_end_failed",
+                  errorClass: event.errorClass,
+                },
+                "LOOP voice room reaper could not end a room",
+              );
+              return;
+          }
+        };
+        voiceRoomReaperWorker = (
+          options.createVoiceRoomReaperWorker ?? createVoiceRoomReaperWorker
+        )({
+          service: createVoiceRoomReaperService({
+            repository: database.voiceRoomReaper,
+            callGateway: (
+              options.createVoiceRoomCallGateway ?? createStreamCallGateway
+            )(reaperConfig.stream),
+            thresholds: {
+              idleEndMinutes: reaperConfig.idleEndMinutes,
+              maxLiveHours: reaperConfig.maxLiveHours,
+            },
+            onEvent: onReaperEvent,
+          }),
+          intervalMs: reaperConfig.intervalMs,
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        });
+      }
+    }
     workerId = worker.workerId;
     options.logger.info(
       { ...logFields(), environment: options.config.nodeEnv },
@@ -942,6 +1057,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               sparklineWarmWorker.run(controller.signal),
+            ),
+          ]),
+      ...(voiceRoomReaperWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              voiceRoomReaperWorker.run(controller.signal),
             ),
           ]),
     ];

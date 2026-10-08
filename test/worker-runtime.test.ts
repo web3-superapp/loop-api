@@ -31,6 +31,8 @@ import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-clie
 import type { MarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
 import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-sparkline-warm-worker.js";
+import type { CreateVoiceRoomReaperWorkerOptions } from "../src/voice-room-reaper-worker.js";
+import { createUnavailableStreamCallGateway } from "../src/integrations/stream/call-gateway.js";
 
 const workerId = "33b40904-4487-49cd-8481-7075d9025713";
 
@@ -1036,5 +1038,187 @@ describe("BSC transfer lane composition (Decision 0075)", () => {
     expect(factories.createBscIndexerWorker).not.toHaveBeenCalled();
     // The pool lane does not depend on the wallet set (Decision 0034).
     expect(factories.createBscPoolIndexerWorker).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("voice_room_reaper lane composition (Decision 0094)", () => {
+  function laneConfig(overrides: Readonly<Record<string, string>> = {}) {
+    return loadReconciliationWorkerConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "silent",
+      DATABASE_URL:
+        "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+      SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+      ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+      MARKET_SPARKLINE_WARM_ENABLED: "false",
+      ...overrides,
+    });
+  }
+
+  const streamPair = {
+    STREAM_API_KEY: "stream-key-for-test",
+    STREAM_API_SECRET: "stream-secret-for-test",
+  };
+
+  function laneDatabase(events: string[]) {
+    return {
+      ...fakeDatabase(events),
+      voiceRoomReaper: {
+        listLiveVoiceRoomsForReaper: vi.fn(() => Promise.resolve([])),
+        endVoiceRoomByReaper: vi.fn(),
+      },
+    } satisfies ReconciliationWorkerDatabase;
+  }
+
+  it("runs the lane with the configured interval and the Stream pair", async () => {
+    const events: string[] = [];
+    const database = laneDatabase(events);
+    const createVoiceRoomCallGateway = vi.fn(
+      createUnavailableStreamCallGateway,
+    );
+    const createVoiceRoomReaperWorker = vi.fn(
+      (options: CreateVoiceRoomReaperWorkerOptions) => {
+        expect(options.intervalMs).toBe(30_000);
+        return {
+          runOnce: (signal: AbortSignal) => options.service.runOnce(signal),
+          run: async (signal: AbortSignal) => {
+            await options.service.runOnce(signal);
+            events.push("run-voice-room-reaper");
+          },
+        };
+      },
+    );
+
+    await runReconciliationWorker({
+      config: laneConfig({
+        ...streamPair,
+        VOICE_ROOM_REAPER_INTERVAL_MS: "30000",
+      }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createVoiceRoomReaperWorker,
+      createVoiceRoomCallGateway,
+    });
+
+    expect(createVoiceRoomCallGateway).toHaveBeenCalledWith({
+      apiKey: "stream-key-for-test",
+      apiSecret: "stream-secret-for-test",
+    });
+    expect(
+      database.voiceRoomReaper.listLiveVoiceRoomsForReaper,
+    ).toHaveBeenCalledWith({ limit: 50 });
+    expect(events).toEqual(["ping", "run-voice-room-reaper", "close"]);
+  });
+
+  it("leaves the lane out and says so once without the Stream pair", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createVoiceRoomReaperWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig(),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => laneDatabase(events),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createVoiceRoomReaperWorker,
+    });
+
+    expect(createVoiceRoomReaperWorker).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "voice_room_reaper",
+        reasonCode: "VOICE_ROOM_REAPER_STREAM_NOT_CONFIGURED",
+      },
+      "LOOP voice room reaper lane stays idle: Stream is not configured",
+    );
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("does not construct the lane when its switch is off", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createVoiceRoomReaperWorker = vi.fn();
+
+    await runReconciliationWorker({
+      config: laneConfig({ ...streamPair, VOICE_ROOM_REAPER_ENABLED: "false" }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => laneDatabase(events),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createVoiceRoomReaperWorker,
+    });
+
+    expect(createVoiceRoomReaperWorker).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lane: "voice_room_reaper" }),
+      expect.anything(),
+    );
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("logs an ended room with its reason code and the Stream outcome", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const voiceRoomId = "0f0e0d0c-0b0a-4908-8706-000000000001";
+    const callId = `loop_voice_${"b".repeat(32)}`;
+    const database = {
+      ...fakeDatabase(events),
+      voiceRoomReaper: {
+        listLiveVoiceRoomsForReaper: vi.fn(() =>
+          Promise.resolve([
+            {
+              voiceRoomId,
+              callId,
+              provisionState: "provisioned" as const,
+              createdAt: "2026-10-07T00:00:00.000Z",
+              lastActivityAt: "2026-10-07T00:00:00.000Z",
+              nonHostJoinedCount: 0,
+              databaseNow: "2026-10-08T00:00:00.000Z",
+            },
+          ]),
+        ),
+        endVoiceRoomByReaper: vi.fn(() =>
+          Promise.resolve({ outcome: "ended" as const, callId }),
+        ),
+      },
+    } satisfies ReconciliationWorkerDatabase;
+
+    await runReconciliationWorker({
+      config: laneConfig(streamPair),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      // The unavailable gateway cannot confirm the end.
+      createVoiceRoomCallGateway: createUnavailableStreamCallGateway,
+      createVoiceRoomReaperWorker: (options) => ({
+        runOnce: (signal) => options.service.runOnce(signal),
+        run: async (signal) => {
+          await options.service.runOnce(signal);
+        },
+      }),
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "voice_room_reaper",
+        voiceRoomId,
+        reasonCode: "STREAM_CALL_END_UNCONFIRMED",
+        detailReasonCode: "VOICE_ROOM_MAX_AGE_ENDED",
+      }),
+      "LOOP voice room reaper could not confirm the Stream call end",
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "voice_room_reaper",
+        voiceRoomId,
+        reasonCode: "VOICE_ROOM_MAX_AGE_ENDED",
+        providerSyncStatus: "unconfirmed",
+      }),
+      "LOOP voice room reaper ended a room",
+    );
   });
 });

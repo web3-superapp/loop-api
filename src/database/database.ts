@@ -69,6 +69,7 @@ import type {
   CommunicationRepository,
   CommunityChannelPersonaRepository,
   CommunityChannelSyncRepository,
+  VoiceRoomReaperRepository,
 } from "../features/communication/communication-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
 import { createPostgresCommunityAiRepository } from "./community-ai-repository.js";
@@ -77,6 +78,7 @@ import {
   createPostgresCommunicationRepository,
   createPostgresCommunityChannelPersonaRepository,
   createPostgresCommunityChannelSyncRepository,
+  createPostgresVoiceRoomReaperRepository,
 } from "./communication-repository.js";
 import { createPostgresDeviceSessionRepository } from "./device-session-repository.js";
 import {
@@ -199,6 +201,8 @@ export interface PostgresDatabase extends Database {
   readonly spotIntents: PostgresSpotIntentRepository;
   readonly spotReconciliation: SpotReconciliationRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
+  /** `voice_room_reaper` lane (Decision 0094). */
+  readonly voiceRoomReaper: VoiceRoomReaperRepository;
   /** Decision 0055 community chat personas. */
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
 }
@@ -348,6 +352,7 @@ export function createPostgresDatabase(
   const communication = createPostgresCommunicationRepository(pool);
   const communityChannelSync =
     createPostgresCommunityChannelSyncRepository(pool);
+  const voiceRoomReaper = createPostgresVoiceRoomReaperRepository(pool);
   const communityChannelPersonas =
     createPostgresCommunityChannelPersonaRepository(pool);
 
@@ -370,6 +375,7 @@ export function createPostgresDatabase(
     community,
     communication,
     communityChannelSync,
+    voiceRoomReaper,
     communityChannelPersonas,
     watchlists,
     watchlistsV2,

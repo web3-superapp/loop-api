@@ -28,7 +28,10 @@ const indexerLanes = new Set([
   "market_sparkline_warm",
   // Decision 0080: the Launch part of the wallet-intent reconcile lane.
   "launch_intent_reconcile",
+  // Decision 0094: ends abandoned and over-age voice rooms.
+  "voice_room_reaper",
 ]);
+const providerSyncStatuses = new Set(["confirmed", "unconfirmed"]);
 const launchIntentSettlements = new Set([
   "confirmed",
   "reverted",
@@ -59,7 +62,12 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP push channel stays deferred: the Firebase service account is unusable"
   | "LOOP push delivery was not confirmed"
   | "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled"
-  | "LOOP market sparkline warm lane could not refresh an asset";
+  | "LOOP market sparkline warm lane could not refresh an asset"
+  | "LOOP voice room reaper ended a room"
+  | "LOOP voice room reaper could not confirm the Stream call end"
+  | "LOOP voice room reaper could not end a room"
+  | "LOOP voice room reaper could not observe presence; the room is kept"
+  | "LOOP voice room reaper lane stays idle: Stream is not configured";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -126,6 +134,14 @@ export interface ReconciliationWorkerLogFields {
   /** Decision 0080: the opaque Launch Intent ID and the state it settled to. */
   readonly launchIntentId?: string;
   readonly toState?: string;
+  /**
+   * Decision 0094 voice_room_reaper lane: the opaque room ID, the request ID
+   * of the system end (the `voice_room_events.request_id`), and whether the
+   * Stream `end` call was confirmed.
+   */
+  readonly voiceRoomId?: string;
+  readonly requestId?: string;
+  readonly providerSyncStatus?: "confirmed" | "unconfirmed";
 }
 
 export interface ReconciliationWorkerLogger {
@@ -254,6 +270,19 @@ function sanitizeFields(
     fields.toState !== undefined && launchIntentSettlements.has(fields.toState)
       ? fields.toState
       : undefined;
+  const voiceRoomId =
+    fields.voiceRoomId !== undefined && safeUuidPattern.test(fields.voiceRoomId)
+      ? fields.voiceRoomId
+      : undefined;
+  const requestId =
+    fields.requestId !== undefined && safeUuidPattern.test(fields.requestId)
+      ? fields.requestId
+      : undefined;
+  const providerSyncStatus =
+    fields.providerSyncStatus !== undefined &&
+    providerSyncStatuses.has(fields.providerSyncStatus)
+      ? fields.providerSyncStatus
+      : undefined;
   const limits = Object.fromEntries(
     (
       [
@@ -313,6 +342,9 @@ function sanitizeFields(
     ...(detailReasonCode === undefined ? {} : { detailReasonCode }),
     ...(launchIntentId === undefined ? {} : { launchIntentId }),
     ...(toState === undefined ? {} : { toState }),
+    ...(voiceRoomId === undefined ? {} : { voiceRoomId }),
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(providerSyncStatus === undefined ? {} : { providerSyncStatus }),
     ...limits,
   });
 }

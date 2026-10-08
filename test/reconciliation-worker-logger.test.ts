@@ -247,6 +247,67 @@ describe("reconciliation worker logger", () => {
     expect(dropped).not.toContain("behindBlocks");
   });
 
+  it("passes the voice_room_reaper fields (Decision 0094) through and drops malformed ones", () => {
+    const stdout = vi.fn<(line: string) => void>();
+    const logger = createReconciliationWorkerLogger({
+      level: "info",
+      serviceVersion: "0.1.0",
+      now: () => new Date("2026-10-08T10:00:00.000Z"),
+      writeStdout: stdout,
+    });
+    const voiceRoomId = "b1ab0c3b-4fb3-483c-be6f-7b98f0ac065b";
+    const requestId = "8f9a0c1e-2b3d-4e5f-8a6b-7c8d9e0f1a2b";
+
+    logger.info(
+      {
+        workerId,
+        lane: "voice_room_reaper",
+        voiceRoomId,
+        reasonCode: "VOICE_ROOM_IDLE_ENDED",
+        providerSyncStatus: "confirmed",
+        requestId,
+      },
+      "LOOP voice room reaper ended a room",
+    );
+    logger.info(
+      {
+        lane: "voice_room_reaper",
+        voiceRoomId: "loop_voice_not-a-uuid",
+        requestId: "x",
+        providerSyncStatus: "maybe" as "confirmed",
+      },
+      "LOOP voice room reaper ended a room",
+    );
+
+    expect(stdout).toHaveBeenNthCalledWith(
+      1,
+      `${JSON.stringify({
+        level: "info",
+        time: "2026-10-08T10:00:00.000Z",
+        service: "loop-reconciliation-worker",
+        version: "0.1.0",
+        workerId,
+        reasonCode: "VOICE_ROOM_IDLE_ENDED",
+        lane: "voice_room_reaper",
+        voiceRoomId,
+        requestId,
+        providerSyncStatus: "confirmed",
+        msg: "LOOP voice room reaper ended a room",
+      })}\n`,
+    );
+    expect(stdout).toHaveBeenNthCalledWith(
+      2,
+      `${JSON.stringify({
+        level: "info",
+        time: "2026-10-08T10:00:00.000Z",
+        service: "loop-reconciliation-worker",
+        version: "0.1.0",
+        lane: "voice_room_reaper",
+        msg: "LOOP voice room reaper ended a room",
+      })}\n`,
+    );
+  });
+
   it("emits nothing at the silent level", () => {
     const stdout = vi.fn<(line: string) => void>();
     const stderr = vi.fn<(line: string) => void>();
