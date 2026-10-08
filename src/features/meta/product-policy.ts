@@ -265,6 +265,23 @@ export interface V2ProductPolicyRuntime {
    * because no Provider was ever asked to answer.
    */
   readonly communityAiRuntimeAvailable: boolean;
+  /**
+   * Decision 0101: `meme` module enabled with the MEME repository and the
+   * cursor codec composed. Optional so fakes predating it stay valid; absent
+   * is false.
+   */
+  readonly memeRuntimeAvailable?: boolean;
+  /**
+   * Decision 0101: why the MEME contract is not usable, read per request
+   * without probing: a configuration reason (`MEME_CONTRACT_NOT_CONFIGURED`,
+   * `MEME_USD1_NOT_CONFIGURED`) closes the capability; a chain reason only
+   * keeps its evidence pending. `null` once code and parameters were
+   * observed on the launch slot.
+   */
+  readonly memeContractState?: () => {
+    readonly configured: boolean;
+    readonly reasonCode: string | null;
+  };
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -350,6 +367,12 @@ export const v2BscWritesDisabledReasonCode = "BSC_WRITES_DISABLED" as const;
  */
 export const v2PrivySwapEvidencePendingReasonCode =
   "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING" as const;
+export const v2MemeModuleDeferredReasonCode =
+  "MEME_MODULE_NOT_ENABLED" as const;
+export const v2MemeRuntimeUnavailableReasonCode =
+  "MEME_RUNTIME_UNAVAILABLE" as const;
+export const v2MemeEvidenceConfirmedReasonCode =
+  "MEME_CONTRACT_OBSERVED" as const;
 export const v2LaunchModuleDeferredReasonCode =
   "V2_LAUNCH_RUNTIME_DEFERRED" as const;
 export const v2LaunchRuntimeUnavailableReasonCode =
@@ -452,6 +475,7 @@ export const v2ModuleCapabilityIds = Object.freeze({
   security: "security",
   settings: "settings",
   support: "support",
+  meme: "meme",
 } as const satisfies Readonly<Record<V2ModuleId, string | null>>);
 
 export const v2CapabilityIds = Object.freeze([
@@ -486,6 +510,7 @@ export const v2CapabilityIds = Object.freeze([
   "bridge",
   "dappExecution",
   "communityAi",
+  "meme",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -939,6 +964,48 @@ function unavailableCapability(
   });
 }
 
+/**
+ * Decision 0101: `meme` is available when the module is enabled, its
+ * runtime is composed, and the four contract keys plus the launch slot's
+ * USD1 are configured; otherwise unavailable with the reason, and every
+ * `/v2/meme/*` route answers 503. Evidence is `confirmed` only once the
+ * adapter observed the code and `params()` on the launch slot.
+ */
+function memeCapability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const capabilityId = v2ModuleCapabilityIds.meme;
+  if (!config.v2ModulesEnabled.has("meme")) {
+    return deferredCapability(capabilityId, v2MemeModuleDeferredReasonCode);
+  }
+  const state = runtime.memeContractState?.() ?? {
+    configured: false,
+    reasonCode: v2MemeRuntimeUnavailableReasonCode,
+  };
+  const runtimeAvailable = runtime.memeRuntimeAvailable === true;
+  const available = runtimeAvailable && state.configured;
+  return Object.freeze({
+    capabilityId,
+    availability: available ? "available" : "unavailable",
+    reasonCode: available
+      ? null
+      : runtimeAvailable
+        ? state.reasonCode
+        : v2MemeRuntimeUnavailableReasonCode,
+    evidence:
+      available && state.reasonCode === null
+        ? Object.freeze({
+            status: "confirmed" as const,
+            reasonCode: v2MemeEvidenceConfirmedReasonCode,
+          })
+        : Object.freeze({
+            status: "pending" as const,
+            reasonCode: state.reasonCode ?? v2MemeRuntimeUnavailableReasonCode,
+          }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1164,6 +1231,7 @@ export async function createV2CapabilitiesProjection(
           }),
         })
       : deferredCapability("communityAi", "COMMUNITY_AI_RUNTIME_DEFERRED"),
+    memeCapability(config, runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

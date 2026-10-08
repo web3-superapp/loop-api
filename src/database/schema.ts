@@ -1,4 +1,4 @@
-export const latestMigrationName = "000048_v2_group_rename_voice_title";
+export const latestMigrationName = "000049_v2_meme_launchpad";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -119,4 +119,10 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.media_objects",
   "public.community_feed_cursors",
   "public.community_member_buy_events",
+  "public.meme_tokens",
+  "public.meme_indexed_events",
+  "public.meme_trades",
+  "public.meme_holders",
+  "public.meme_salts",
+  "public.meme_intents",
 ] as const);

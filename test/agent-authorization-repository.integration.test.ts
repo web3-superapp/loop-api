@@ -27,6 +27,12 @@ const agentAddress = "0x3333333333333333333333333333333333333333";
 
 const truncateAll = `
   truncate table
+    public.meme_intents,
+    public.meme_holders,
+    public.meme_trades,
+    public.meme_indexed_events,
+    public.meme_salts,
+    public.meme_tokens,
     public.community_member_buy_events,
     public.media_objects,
     public.community_ai_answer_reports,

@@ -2803,6 +2803,12 @@ describe("LOOP API V2 market module", () => {
         listLaunchProjectAssetIds: vi.fn(() =>
           Promise.resolve([memeAsset.assetId, frogAsset.assetId]),
         ),
+        listMemeCandidates: vi.fn(() =>
+          Promise.resolve([
+            { assetId: memeAsset.assetId, curve: null },
+            { assetId: frogAsset.assetId, curve: null },
+          ]),
+        ),
         listVerifiedCommunityAssets: vi.fn(() =>
           Promise.resolve([
             {
@@ -2985,6 +2991,52 @@ describe("LOOP API V2 market module", () => {
           },
         }),
       ]);
+    });
+
+    it("prices an ungraduated MEME launchpad token from its curve snapshot (Decision 0101)", async () => {
+      const { app } = await createApp(
+        fakes({
+          assets: registryRows,
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake({
+            listMemeCandidates: vi.fn(() =>
+              Promise.resolve([
+                { assetId: frogAsset.assetId, curve: null },
+                {
+                  assetId: memeAsset.assetId,
+                  curve: {
+                    status: "trading" as const,
+                    vUsd1: "6000000000000000000000",
+                    vToken: "1073000000000000000000000000",
+                    volume24hRaw: "12500000000000000000",
+                    price24hAgoE18: null,
+                    observedAt: fetchedAt,
+                  },
+                },
+              ]),
+            ),
+          }),
+        }),
+      );
+      const meme = await list(app, "category=meme&sort=volume24h");
+      expect(meme.statusCode).toBe(200);
+      expect(meme.body.items[0]).toMatchObject({
+        assetId: memeAsset.assetId,
+        quote: {
+          priceUsd: "0.000005591798695246",
+          change24hPct: "0.00",
+          marketCapUsd: "5591.79869524697110904",
+          volume24hUsd: "12.5",
+          observedAt: fetchedAt,
+          source: "loop_curve",
+          quality: "fresh",
+        },
+        sparkline: {
+          status: "unavailable",
+          reasonCode: "MEME_CURVE_SPARKLINE_UNAVAILABLE",
+        },
+      });
+      expect(meme.body.items[0]).not.toHaveProperty("quoteUnavailable");
     });
 
     it("lists the assets of verified communities with the community", async () => {

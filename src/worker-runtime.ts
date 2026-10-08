@@ -16,6 +16,20 @@ import {
   type LaunchIndexerWorker,
 } from "./bsc-launch-indexer-worker.js";
 import type { LaunchChainRepository } from "./features/launch/launch-chain-repository.js";
+import {
+  createMemeGraduationExecutor,
+  createMemeIndexerWorker,
+  createMemeIntentReconciler,
+  createMemeSaltPoolWorker,
+  type PeriodicLane,
+} from "./bsc-meme-indexer-worker.js";
+import type { MemeRepository } from "./features/meme/meme-repository.js";
+import { createMemeContractAdapter } from "./integrations/meme/meme-contract-adapter.js";
+import {
+  MemeGraduationSenderRefusedError,
+  createMemeGraduationSender,
+  type MemeGraduationSender,
+} from "./integrations/meme/meme-graduation-sender.js";
 import { createLaunchContractAdapter } from "./integrations/launch/launch-contract-adapter.js";
 import {
   createAlertEvaluatorWorker,
@@ -182,6 +196,8 @@ export interface ReconciliationWorkerDatabase {
   readonly mining?: MiningRepository;
   /** `launch_event` lane persistence (Decision 0077); absent keeps it off. */
   readonly launchChain?: LaunchChainRepository;
+  /** MEME launchpad lanes (Decision 0101); absent keeps them off. */
+  readonly meme?: MemeRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   /** Decision 0095: identities the channel sync upserts; absent keeps `{id}`. */
@@ -265,6 +281,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createBscIndexerWorker?: BscIndexerWorkerFactory;
   readonly createBscPoolIndexerWorker?: BscPoolIndexerWorkerFactory;
   readonly createLaunchIndexerWorker?: LaunchIndexerWorkerFactory;
+  /** Test seam for the MEME graduation signer (Decision 0101). */
+  readonly createMemeGraduationSender?: typeof createMemeGraduationSender;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -580,6 +598,203 @@ export async function runReconciliationWorker(
           options.logger.warn(
             { ...logFields(), lane: "launch_event", reasonCode, ...detail },
             "LOOP launch_event lane is idle",
+          );
+        },
+        onInfrastructureBackoff: (event) => {
+          options.logger.warn(
+            { ...logFields(), ...event },
+            "LOOP reconciliation worker infrastructure retry scheduled",
+          );
+        },
+      });
+    })();
+    // MEME launchpad lanes (Decision 0101), default-off: the `meme_event`
+    // lane, the salt pool, and the Intent receipt reconcile run behind
+    // MEME_INDEXER_ENABLED; the graduation fallback signs only behind
+    // MEME_GRADUATION_EXECUTOR_ENABLED, on the testnet slot.
+    const memeLanes: PeriodicLane[] = [];
+    const memeIndexerWorker = (() => {
+      const memeConfig = options.config.meme;
+      const memeRepository = database.meme;
+      if (memeRepository === undefined || memeConfig.contract === null) {
+        if (
+          options.config.memeIndexerEnabled ||
+          options.config.memeGraduationExecutor !== null
+        ) {
+          options.logger.warn(
+            {
+              ...logFields(),
+              lane: "meme_event",
+              reasonCode:
+                memeConfig.unconfiguredReason ?? "MEME_RUNTIME_UNAVAILABLE",
+            },
+            "LOOP meme lanes stay idle: the MEME contract is not configured",
+          );
+        }
+        return null;
+      }
+      const contract = memeConfig.contract;
+      const memeReadClient =
+        launchChainConfig.sharedWithPrimary && indexerReadClient !== null
+          ? indexerReadClient
+          : launchChainConfig.rpcUrls.length === 0
+            ? createUnavailableBscReadClient({
+                chainId: launchChainConfig.chainId,
+                chainReference: launchChainConfig.chainReference,
+                confirmations: launchChainConfig.confirmations,
+                reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
+                reasonCode: "MEME_CHAIN_RPC_NOT_CONFIGURED",
+              })
+            : createBscReadClient({
+                config: launchChainConfig,
+                onLogQueryLimitsReset,
+              });
+      const executor = options.config.memeGraduationExecutor;
+      if (executor !== null) {
+        let sender: MemeGraduationSender | null = null;
+        try {
+          sender = (
+            options.createMemeGraduationSender ?? createMemeGraduationSender
+          )({
+            privateKey: executor.privateKey,
+            curveAddress: contract.address,
+            chainReference: launchChainConfig.chainReference,
+            rpcUrls: launchChainConfig.rpcUrls,
+          });
+        } catch (error) {
+          options.logger.warn(
+            {
+              ...logFields(),
+              lane: "meme_graduation_executor",
+              reasonCode:
+                error instanceof MemeGraduationSenderRefusedError
+                  ? error.reasonCode
+                  : "MEME_GRADUATION_SENDER_UNAVAILABLE",
+            },
+            "LOOP meme graduation executor stays idle",
+          );
+        }
+        if (sender !== null) {
+          memeLanes.push(
+            createMemeGraduationExecutor({
+              repository: memeRepository,
+              sender,
+              chainId: launchChainConfig.chainId,
+              onAttempt: (event) => {
+                const log =
+                  event.outcome === "confirmed" || event.outcome === "not_full"
+                    ? options.logger.info.bind(options.logger)
+                    : options.logger.warn.bind(options.logger);
+                log(
+                  {
+                    ...logFields(),
+                    lane: "meme_graduation_executor",
+                    memeTokenId: event.memeTokenId,
+                    outcome: event.outcome,
+                    attempts: event.attempts,
+                    needsOperator: event.needsOperator,
+                    ...(event.errorCode === null
+                      ? {}
+                      : { reasonCode: event.errorCode }),
+                    ...(event.transactionHash === null
+                      ? {}
+                      : { transactionHash: event.transactionHash }),
+                  },
+                  "LOOP meme graduation executor attempted graduate",
+                );
+              },
+              onInfrastructureBackoff: (event) => {
+                options.logger.warn(
+                  { ...logFields(), ...event },
+                  "LOOP reconciliation worker infrastructure retry scheduled",
+                );
+              },
+            }),
+          );
+        }
+      }
+      if (!options.config.memeIndexerEnabled) {
+        return null;
+      }
+      memeLanes.push(
+        createMemeSaltPoolWorker({
+          repository: memeRepository,
+          scope: {
+            chainId: launchChainConfig.chainId,
+            contractAddress: contract.address,
+            tokenImplementation: contract.tokenImplementation,
+            suffix: memeConfig.vanitySuffix,
+          },
+          target: memeConfig.saltPoolTarget,
+          onRefilled: (event) => {
+            options.logger.info(
+              { ...logFields(), lane: "meme_salt_pool", ...event },
+              "LOOP meme salt pool refilled",
+            );
+          },
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        }),
+        createMemeIntentReconciler({
+          repository: memeRepository,
+          readClient: asChainCallClient(memeReadClient),
+          chainId: launchChainConfig.chainId,
+          onTransition: (transition) => {
+            options.logger.info(
+              {
+                ...logFields(),
+                lane: "meme_intent_reconcile",
+                memeIntentId: transition.intentId,
+                toState: transition.toState,
+                ...(transition.reasonCode === null
+                  ? {}
+                  : { reasonCode: transition.reasonCode }),
+              },
+              "LOOP meme intent settled from its receipt",
+            );
+          },
+          onReadFailure: (failure) => {
+            options.logger.warn(
+              {
+                ...logFields(),
+                lane: "meme_intent_reconcile",
+                memeIntentId: failure.intentId,
+                reasonCode: failure.reasonCode,
+              },
+              "LOOP meme intent receipt read failed",
+            );
+          },
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        }),
+      );
+      return createMemeIndexerWorker({
+        repository: memeRepository,
+        readClient: memeReadClient,
+        adapter: createMemeContractAdapter({
+          contract,
+          chain: launchChainConfig,
+          verifyChain: () => memeReadClient.verifyChain(),
+        }),
+        chainId: launchChainConfig.chainId,
+        onWarning: (warning) => {
+          options.logger.warn(
+            { ...logFields(), lane: "meme_event", ...warning },
+            "LOOP meme_event lane skipped facts",
+          );
+        },
+        onUnavailable: (reasonCode, detail) => {
+          options.logger.warn(
+            { ...logFields(), lane: "meme_event", reasonCode, ...detail },
+            "LOOP meme_event lane is idle",
           );
         },
         onInfrastructureBackoff: (event) => {
@@ -1166,6 +1381,16 @@ export async function runReconciliationWorker(
               launchIndexerWorker.run(controller.signal),
             ),
           ]),
+      ...(memeIndexerWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              memeIndexerWorker.run(controller.signal),
+            ),
+          ]),
+      ...memeLanes.map((lane) =>
+        Promise.resolve().then(() => lane.run(controller.signal)),
+      ),
       ...(alertEvaluatorWorker === null
         ? []
         : [

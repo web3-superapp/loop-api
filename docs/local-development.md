@@ -330,6 +330,40 @@ warning. Testnet funds come from `https://www.bnbchain.org/en/testnet-faucet`.
 No Launch transaction, event lane, asset registry, or market data exists for
 97 yet (see `docs/decisions/0038-launch-chain-slot-bsc-testnet.md`).
 
+## MEME curve launchpad on the BSC testnet (Decision 0101)
+
+The `meme` module reads `LoopMemeCurve` on the launch slot (`LAUNCH_CHAIN_ID=97`)
+and quotes in the Launch `LAUNCH_USD1_ADDRESS`. Development values (BSC testnet,
+loop-contracts `37cb992`):
+
+```sh
+V2_MODULES_ENABLED=…,meme
+MEME_CONTRACT_ADDRESS=0xe108d45e3e9d7b8c9c02c5e10544ad811cb39b8a
+MEME_CONTRACT_VERSION=1.0.0
+MEME_CONTRACT_START_BLOCK=135600269
+MEME_TOKEN_IMPLEMENTATION=0xa87a54dc67e407e8b6d67e690abdfe02f979f4da
+# optional: MEME_SALT_POOL_TARGET=50 MEME_VANITY_SUFFIX=6666 MEME_CREATE_DAILY_LIMIT=3
+```
+
+Order for a first deployment:
+
+1. `pnpm db:migrate` (000049).
+2. `pnpm meme:abi-check /path/to/loop-contracts/abi/LoopMemeCurve.abi.json` must
+   print `ABI v1 check passed`.
+3. `pnpm meme:salt-refill` (or `--target N`) mines CREATE2 salts offline until the
+   pool holds `MEME_SALT_POOL_TARGET` free `MEME_VANITY_SUFFIX` salts (about two
+   seconds of CPU per `6666` salt; no RPC).
+4. Restart the API; `GET /v2/meta/capabilities` shows `meme: available`,
+   evidence `confirmed` once the startup probe saw the code and `params()`.
+5. Worker: `MEME_INDEXER_ENABLED=true` starts the `meme_event` lane from
+   `MEME_CONTRACT_START_BLOCK`, the salt pool (every 5 min), and the Intent
+   receipt reconcile. `MEME_GRADUATION_EXECUTOR_ENABLED=true` additionally signs
+   `graduate(token)` with `LAUNCH_DEPLOYER_PRIVATE_KEY` for curves `full` for 60 s
+   (10 attempts, then `graduation_needs_operator`). Both default to false.
+6. Intents need `BSC_WRITES_ENABLED=true` with MockUSD1 (`eip155:97:0x17d5…ce2b`)
+   in `BSC_WRITE_CANARY_ASSETS`; with a non-empty
+   `BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST` add the curve address to it.
+
 ## Audio-room role evidence switch (Decision 0039)
 
 `GET /v2/meta/capabilities` reports `voiceRooms.evidence` as

@@ -22,8 +22,16 @@ import {
 } from "../../database/market-fact-cache-repository.js";
 import type { WatchlistV2Repository } from "../../database/watchlist-v2-repository.js";
 import {
+  formatE18,
+  freshMemeCurve,
+  memeMarketCapRaw,
+  memePriceE18,
+} from "../meme/meme-curve-math.js";
+import { percentChange } from "../meme/meme-projection.js";
+import {
   MarketCategoryRepositoryUnavailableError,
   type MarketCategoryCommunityRecord,
+  type MarketCategoryMemeCurve,
   type MarketCategoryRepository,
 } from "../../database/market-category-repository.js";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
@@ -193,7 +201,8 @@ export interface MarketQuoteProjection {
   readonly marketCapUsd: string | null;
   readonly volume24hUsd: string | null;
   readonly observedAt: string;
-  readonly source: MarketSource;
+  /** `loop_curve`: a MEME launchpad curve snapshot (Decision 0101). */
+  readonly source: MarketSource | "loop_curve";
   readonly quality: "fresh" | "stale" | "proxied";
 }
 
@@ -2350,7 +2359,8 @@ export function createMarketReadService(
       // Only assets of the chain the market Provider reads are priced; a
       // testnet Launch token is listed with its quote unavailable.
       const priced = candidates.filter(
-        (candidate) => candidate.asset.chainId === input.chainId,
+        (candidate) =>
+          candidate.asset.chainId === input.chainId && candidate.curve === null,
       );
       const addresses = [
         ...new Set(
@@ -2385,6 +2395,23 @@ export function createMarketReadService(
       const rows = await Promise.all(
         candidates.map(async (candidate): Promise<MarketCategoryAssetRow> => {
           const { asset } = candidate;
+          if (candidate.curve !== null) {
+            // Decision 0101: an ungraduated launchpad token is priced from
+            // its curve snapshot on any chain, never from DexScreener.
+            const logo = input.tokenLogos.project({
+              chainId: asset.chainId,
+              address: asset.address,
+              providerImage: null,
+            });
+            return Object.freeze({
+              assetId: asset.assetId,
+              symbol: asset.symbol,
+              name: asset.name,
+              logoUrl: logo.status === "available" ? logo.url : null,
+              quote: memeCurveQuote(candidate.curve),
+              sparkline: unavailableSparkline(memeCurveSparklineReasonCode),
+            });
+          }
           const community =
             candidate.community === null
               ? {}
@@ -2504,6 +2531,7 @@ export function createMarketReadService(
     readonly {
       readonly asset: AssetRecord;
       readonly community: MarketCategoryCommunityRecord | null;
+      readonly curve: MarketCategoryMemeCurve | null;
     }[]
   > {
     const readable = (records: readonly AssetRecord[]) =>
@@ -2514,7 +2542,7 @@ export function createMarketReadService(
       );
       return records
         .slice(0, marketCategoryRules.candidateLimit)
-        .map((asset) => ({ asset, community: null }));
+        .map((asset) => ({ asset, community: null, curve: null }));
     }
     const repository = input.categories ?? null;
     if (repository === null) {
@@ -2522,11 +2550,19 @@ export function createMarketReadService(
     }
     try {
       if (category === "meme") {
-        const ids = await repository.listLaunchProjectAssetIds(
+        // Decision 0101: App-created MEME tokens ∪ Launch project tokens.
+        const memes = await repository.listMemeCandidates(
           marketCategoryRules.candidateLimit,
         );
-        const records = readable(await input.registry.listAssets(ids));
-        return records.map((asset) => ({ asset, community: null }));
+        const curves = new Map(memes.map((row) => [row.assetId, row.curve]));
+        const records = readable(
+          await input.registry.listAssets(memes.map((row) => row.assetId)),
+        );
+        return records.map((asset) => ({
+          asset,
+          community: null,
+          curve: curves.get(asset.assetId) ?? null,
+        }));
       }
       const bound = await repository.listVerifiedCommunityAssets(
         marketCategoryRules.candidateLimit,
@@ -2537,7 +2573,9 @@ export function createMarketReadService(
       const byId = new Map(records.map((record) => [record.assetId, record]));
       return bound.flatMap((row) => {
         const asset = byId.get(row.assetId);
-        return asset === undefined ? [] : [{ asset, community: row }];
+        return asset === undefined
+          ? []
+          : [{ asset, community: row, curve: null }];
       });
     } catch (error) {
       if (error instanceof MarketCategoryRepositoryUnavailableError) {
@@ -2546,6 +2584,32 @@ export function createMarketReadService(
       throw error;
     }
   }
+}
+
+const memeCurveSparklineReasonCode = "MEME_CURVE_SPARKLINE_UNAVAILABLE";
+
+/**
+ * Decision 0101: the market quote of an ungraduated MEME launchpad token,
+ * from its curve snapshot (USD1 at par): price vUsd1/vToken, market cap at
+ * the 1e9 supply, wallet-side 24 h volume, and the change against the
+ * newest trade 24 h ago (or the curve's opening price).
+ */
+function memeCurveQuote(curve: MarketCategoryMemeCurve): MarketQuoteProjection {
+  const state = { vUsd1: BigInt(curve.vUsd1), vToken: BigInt(curve.vToken) };
+  const priceE18 = memePriceE18(state);
+  const reference =
+    curve.price24hAgoE18 === null
+      ? memePriceE18(freshMemeCurve)
+      : BigInt(curve.price24hAgoE18);
+  return Object.freeze({
+    priceUsd: formatE18(priceE18),
+    change24hPct: percentChange(priceE18, reference),
+    marketCapUsd: formatE18(memeMarketCapRaw(state)),
+    volume24hUsd: formatE18(BigInt(curve.volume24hRaw)),
+    observedAt: curve.observedAt,
+    source: "loop_curve",
+    quality: "fresh",
+  });
 }
 
 /** The quote of one row, or null when the price itself is unavailable. */
