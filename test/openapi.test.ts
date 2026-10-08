@@ -4,8 +4,10 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
+  openApiAdminArtifactPath,
   openApiArtifactPath,
   openApiV2ArtifactPath,
+  renderOpenApiAdminArtifact,
   renderOpenApiArtifact,
   renderOpenApiV2Artifact,
 } from "../scripts/generate-openapi.js";
@@ -1255,5 +1257,74 @@ describe("committed OpenAPI artifact", () => {
       "properties.recentSecurityEvents.oneOf.0.properties.items.items.properties.notificationId.pattern",
       canonicalUuidV4Pattern,
     );
+  });
+
+  it("publishes the operator console as its own artifact, never in V1 or V2 (Decision 0102)", async () => {
+    const [first, second, committed, v1, v2] = await Promise.all([
+      renderOpenApiAdminArtifact(),
+      renderOpenApiAdminArtifact(),
+      readFile(openApiAdminArtifactPath, "utf8"),
+      readFile(openApiArtifactPath, "utf8"),
+      readFile(openApiV2ArtifactPath, "utf8"),
+    ]);
+    expect(committed).toBe(first);
+    expect(first).toBe(second);
+    expect(v1).not.toContain("/admin/v1/");
+    expect(v2).not.toContain("/admin/v1/");
+    const document = JSON.parse(committed) as OpenApiDocument & {
+      readonly info: { readonly title: string };
+      readonly components: {
+        readonly securitySchemes: Record<string, unknown>;
+      };
+    };
+    expect(document.info.title).toBe("LOOP Admin API");
+    expect(Object.keys(document.components.securitySchemes)).toEqual([
+      "adminSession",
+    ]);
+    const operations = Object.entries(document.paths)
+      .filter(([path]) => path.startsWith("/admin/v1/"))
+      .flatMap(([path, methods]) =>
+        Object.entries(methods).map(([method, operation]) => ({
+          key: `${method.toUpperCase()} ${path}`,
+          operation,
+        })),
+      );
+    expect(operations.map((entry) => entry.key).sort()).toEqual([
+      "DELETE /admin/v1/session",
+      "GET /admin/v1/audit",
+      "GET /admin/v1/communities",
+      "GET /admin/v1/communities/{communityId}",
+      "GET /admin/v1/meme/tokens",
+      "GET /admin/v1/mining/formula-versions",
+      "GET /admin/v1/overview",
+      "GET /admin/v1/session",
+      "GET /admin/v1/settings/intel-promotions",
+      "GET /admin/v1/settings/recommended-communities",
+      "POST /admin/v1/communities/{communityId}/review",
+      "POST /admin/v1/meme/tokens/{memeTokenId}/listing",
+      "POST /admin/v1/meme/tokens/{memeTokenId}/pause",
+      "POST /admin/v1/meme/tokens/{memeTokenId}/unpause",
+      "POST /admin/v1/mining/formula-versions",
+      "POST /admin/v1/mining/formula-versions/{configVersion}/approve",
+      "POST /admin/v1/mining/formula-versions/{configVersion}/withdraw",
+      "POST /admin/v1/session",
+      "PUT /admin/v1/settings/intel-promotions",
+      "PUT /admin/v1/settings/recommended-communities",
+    ]);
+    for (const { key, operation } of operations) {
+      if (key !== "POST /admin/v1/session") {
+        expect(operation.security, key).toEqual([{ adminSession: [] }]);
+      }
+      if (
+        key === "POST /admin/v1/session" ||
+        key === "DELETE /admin/v1/session"
+      ) {
+        continue;
+      }
+      expect(Object.keys(operation.responses ?? {}), key).toContain("401");
+      expect(Object.keys(operation.responses ?? {}), key).toContain("500");
+    }
+    // No V2 contract header on this surface.
+    expect(committed).not.toContain("x-loop-contract-version");
   });
 });

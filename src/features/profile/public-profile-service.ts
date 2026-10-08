@@ -159,6 +159,13 @@ export interface CreatePublicProfileServiceInput {
   /** Configured BSC USD1 token address, lowercase, or null. */
   readonly usd1Address: string | null;
   readonly recommendedCommunityIds: readonly string[];
+  /**
+   * Decision 0102: the operator console's list. A non-null answer replaces
+   * `recommendedCommunityIds`; null keeps the environment list in force.
+   */
+  readonly recommendedCommunityIdsOverride?: () => Promise<
+    readonly string[] | null
+  >;
 }
 
 /** Deterministic, UUID-shaped, opaque event ID of one chain log. */
@@ -518,8 +525,12 @@ export function createPublicProfileService(
 
     async listRecommendedCommunities() {
       try {
+        const override =
+          input.recommendedCommunityIdsOverride === undefined
+            ? null
+            : await input.recommendedCommunityIdsOverride();
         const items = await input.repository.listVerifiedCommunitiesByIds(
-          input.recommendedCommunityIds,
+          override ?? input.recommendedCommunityIds,
         );
         return Object.freeze({
           items,

@@ -149,6 +149,9 @@ describe("database schema readiness contract", () => {
       "public.meme_holders",
       "public.meme_salts",
       "public.meme_intents",
+      "public.admin_settings",
+      "public.admin_audit_log",
+      "public.community_review_notes",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

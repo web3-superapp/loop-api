@@ -486,6 +486,15 @@ const environmentSchema = z
     APP_DOWNLOAD_URL: optionalCredential(2_048),
     COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
     RECOMMENDED_COMMUNITY_IDS: optionalCredential(4_096),
+    // Decision 0102: the operator console. All three or the `/admin/*`
+    // surface is not mounted.
+    ADMIN_USERNAME: optionalCredential(64),
+    ADMIN_PASSWORD_HASH: optionalCredential(512),
+    ADMIN_SESSION_SECRET: optionalOpaqueSecret(32, 512),
+    // Decision 0102: the console's MEME pause/unpause signs with the same
+    // key and switch as the worker's graduation fallback (Decision 0101).
+    MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
+    LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
     ...marketEnvironmentShape,
@@ -1228,6 +1237,18 @@ export interface AppConfig {
    * in order; the first five are pre-selected. Empty when unset.
    */
   readonly recommendedCommunityIds: readonly string[];
+  /**
+   * Decision 0102: the operator console credentials. Null unless all three
+   * `ADMIN_*` variables are set; null leaves `/admin/*` unmounted (404).
+   */
+  readonly admin: AdminConsoleConfig | null;
+  /**
+   * Decision 0102: the MEME executor key the console's pause/unpause signs
+   * with (`MEME_GRADUATION_EXECUTOR_ENABLED`, Decision 0101). Never logged.
+   */
+  readonly memeGraduationExecutor: {
+    readonly privateKey: `0x${string}`;
+  } | null;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -2249,6 +2270,63 @@ function parseMarketConfig(data: {
   });
 }
 
+export interface AdminConsoleConfig {
+  readonly username: string;
+  /** Argon2id PHC string (`pnpm admin:hash-password`). */
+  readonly passwordHash: string;
+  readonly sessionSecret: string;
+  /** `Secure` cookie attribute: on unless PUBLIC_BASE_URL is plain http. */
+  readonly cookieSecure: boolean;
+}
+
+export const adminUsernamePattern = /^[A-Za-z0-9._@-]{1,64}$/u;
+const adminPasswordHashPattern =
+  /^\$argon2id\$v=19\$m=[0-9]{1,8},t=[0-9]{1,3},p=[0-9]{1,3}\$[A-Za-z0-9+/]{11,64}\$[A-Za-z0-9+/]{16,128}$/u;
+
+/**
+ * Decision 0102: all three `ADMIN_*` variables or none. Any one missing
+ * leaves the console unmounted; a present but malformed value refuses boot
+ * (the hash must be an argon2id PHC string, the secret 32+ characters).
+ */
+export function parseAdminConsoleConfig(data: {
+  readonly ADMIN_USERNAME?: string | undefined;
+  readonly ADMIN_PASSWORD_HASH?: string | undefined;
+  readonly ADMIN_SESSION_SECRET?: string | undefined;
+  readonly PUBLIC_BASE_URL: string;
+}): AdminConsoleConfig | null {
+  const issues: string[] = [];
+  if (
+    data.ADMIN_USERNAME !== undefined &&
+    !adminUsernamePattern.test(data.ADMIN_USERNAME)
+  ) {
+    issues.push("ADMIN_USERNAME: 1-64 characters of A-Z a-z 0-9 . _ @ -");
+  }
+  if (
+    data.ADMIN_PASSWORD_HASH !== undefined &&
+    !adminPasswordHashPattern.test(data.ADMIN_PASSWORD_HASH)
+  ) {
+    issues.push(
+      "ADMIN_PASSWORD_HASH: must be an argon2id PHC string from pnpm admin:hash-password",
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigurationError(issues);
+  }
+  if (
+    data.ADMIN_USERNAME === undefined ||
+    data.ADMIN_PASSWORD_HASH === undefined ||
+    data.ADMIN_SESSION_SECRET === undefined
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    username: data.ADMIN_USERNAME,
+    passwordHash: data.ADMIN_PASSWORD_HASH,
+    sessionSecret: data.ADMIN_SESSION_SECRET,
+    cookieSecure: !data.PUBLIC_BASE_URL.startsWith("http://"),
+  });
+}
+
 export const maximumRecommendedCommunityIds = 50;
 const recommendedCommunityIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -2399,6 +2477,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     COMMUNITY_CHAT_REAL_IDENTITY:
       environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
     RECOMMENDED_COMMUNITY_IDS: environment["RECOMMENDED_COMMUNITY_IDS"],
+    ADMIN_USERNAME: environment["ADMIN_USERNAME"],
+    ADMIN_PASSWORD_HASH: environment["ADMIN_PASSWORD_HASH"],
+    ADMIN_SESSION_SECRET: environment["ADMIN_SESSION_SECRET"],
+    MEME_GRADUATION_EXECUTOR_ENABLED:
+      environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
+    LAUNCH_DEPLOYER_PRIVATE_KEY: environment["LAUNCH_DEPLOYER_PRIVATE_KEY"],
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
@@ -2554,6 +2638,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     recommendedCommunityIds: parseRecommendedCommunityIds(
       parsed.data.RECOMMENDED_COMMUNITY_IDS,
     ),
+    admin: parseAdminConsoleConfig(parsed.data),
+    memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });

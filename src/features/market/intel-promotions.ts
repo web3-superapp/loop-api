@@ -1,8 +1,10 @@
 import { v2ContractVersion } from "../meta/product-policy.js";
 
 /**
- * Intel page promotion cards (Decision 0100). A static, versioned list: no
- * table, no operator write path, no remote content. Each card opens an
+ * Intel page promotion cards (Decision 0100). A versioned list: the shipped
+ * constant below, or — Decision 0102 — the operator console's
+ * `admin_settings.intel_promotions` row, which wins when present and is
+ * validated by the same `defineIntelPromotions`. Each card opens an
  * in-app route only; an external URL, a scheme, or any path outside the
  * allow-list is refused when the module loads, so a bad entry fails the
  * process at start-up instead of reaching a client.
@@ -37,10 +39,15 @@ export interface IntelPromotion {
 
 export interface IntelPromotionsResource {
   readonly items: readonly IntelPromotion[];
-  readonly configVersion: typeof intelPromotionsConfigVersion;
-  readonly effectiveAt: typeof intelPromotionsEffectiveAt;
+  /** `intelPromotionsV1`, or `intelPromotionsV1+db.<epoch ms>` (Decision 0102). */
+  readonly configVersion: string;
+  readonly effectiveAt: string;
   readonly contractVersion: typeof v2ContractVersion;
 }
+
+/** `intelPromotionsV1` or `intelPromotionsV1+db.<epoch ms>`. */
+export const intelPromotionsConfigVersionPatternSource =
+  "^intelPromotionsV1(\\+db\\.[0-9]{1,16})?$";
 
 export class InvalidIntelPromotionError extends Error {
   readonly code = "invalid_intel_promotion";
@@ -119,6 +126,13 @@ export const intelPromotions: readonly IntelPromotion[] = defineIntelPromotions(
 export function intelPromotionsResource(
   now: Date,
   entries: readonly IntelPromotion[] = intelPromotions,
+  version: {
+    readonly configVersion: string;
+    readonly effectiveAt: string;
+  } = {
+    configVersion: intelPromotionsConfigVersion,
+    effectiveAt: intelPromotionsEffectiveAt,
+  },
 ): IntelPromotionsResource {
   const nowMs = now.getTime();
   const items = entries
@@ -135,8 +149,8 @@ export function intelPromotionsResource(
     );
   return Object.freeze({
     items: Object.freeze(items),
-    configVersion: intelPromotionsConfigVersion,
-    effectiveAt: intelPromotionsEffectiveAt,
+    configVersion: version.configVersion,
+    effectiveAt: version.effectiveAt,
     contractVersion: v2ContractVersion,
   });
 }

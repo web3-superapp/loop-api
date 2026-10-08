@@ -163,6 +163,7 @@ export function createPostgresMarketCategoryRepository(
             join public.assets as a on a.asset_id = m.asset_id
             where m.asset_id is not null and a.status <> 'blocked'
               and m.status in ('trading', 'full', 'graduated')
+              and m.listing = 'listed'
             order by m.asset_id, m.created_at asc
           ),
           launch as (
@@ -170,6 +171,11 @@ export function createPostgresMarketCategoryRepository(
             from public.launches as l
             join public.assets as a on a.asset_id = l.project_asset_id
             where l.project_asset_id is not null and a.status <> 'blocked'
+              and not exists (
+                select 1 from public.meme_tokens as hidden
+                where hidden.asset_id = l.project_asset_id
+                  and hidden.listing = 'hidden'
+              )
           )
           select asset_id, status, v_usd1, v_token, observed_at, volume_24h,
             price_24h_ago, pool_address

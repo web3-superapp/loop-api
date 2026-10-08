@@ -532,7 +532,7 @@ export function registerV2PublicProfileRoutes(
         operationId: "listV2RecommendedCommunities",
         summary: "List the communities recommended after registration",
         description:
-          "Verified communities from the operator list RECOMMENDED_COMMUNITY_IDS, in configured order (Decision 0095). `defaultSelectedIds` are the first five listed. An unset list is an empty result, not an error.",
+          "Verified communities from the operator list, in configured order (Decision 0095). Decision 0102: the operator console's saved list wins; without one, RECOMMENDED_COMMUNITY_IDS is in force. `defaultSelectedIds` are the first five listed. An unset list is an empty result, not an error.",
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

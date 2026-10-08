@@ -1,4 +1,4 @@
-export const latestMigrationName = "000049_v2_meme_launchpad";
+export const latestMigrationName = "000050_admin_console";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -125,4 +125,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.meme_holders",
   "public.meme_salts",
   "public.meme_intents",
+  "public.admin_settings",
+  "public.admin_audit_log",
+  "public.community_review_notes",
 ] as const);

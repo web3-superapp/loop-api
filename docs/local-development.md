@@ -365,6 +365,46 @@ Order for a first deployment:
    in `BSC_WRITE_CANARY_ASSETS`; with a non-empty
    `BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST` add the curve address to it.
 
+## Operator console management surface (Decision 0102)
+
+`/admin/v1/*` is the API the `loop-admin` console (S120) calls. It is mounted
+only when all three variables are set; otherwise `/admin/*` is a 404 and
+nothing else changes.
+
+```sh
+# 1. hash the administrator password (typed without echo; or pipe it in)
+pnpm admin:hash-password
+#    → ADMIN_PASSWORD_HASH='$argon2id$v=19$m=19456,t=2,p=1$…$…'
+#    printf '%s' "$PW" | pnpm -s admin:hash-password   # non-interactive
+
+# 2. .env.local (or ops api-dev.local.env) — never commit real values
+ADMIN_USERNAME=operator
+ADMIN_PASSWORD_HASH='$argon2id$v=19$m=19456,t=2,p=1$…$…'   # keep the single quotes
+ADMIN_SESSION_SECRET=<32+ random characters, e.g. openssl rand -base64 48>
+
+# 3. schema
+pnpm db:migrate        # 000050_admin_console
+
+# 4. smoke
+curl -si -X POST "$BASE/admin/v1/session" -H 'content-type: application/json' \
+  -d '{"username":"operator","password":"…"}'          # 200 + Set-Cookie
+curl -s "$BASE/admin/v1/overview" -H "cookie: loop_admin_session=…"
+```
+
+- The password must be 12–256 characters. Five wrong logins lock every login
+  for 15 minutes (423); restarting the API clears the lock.
+- The cookie is `Path=/admin; HttpOnly; SameSite=Strict; Max-Age=43200`, and
+  `Secure` whenever `PUBLIC_BASE_URL` is https. Rotating `ADMIN_SESSION_SECRET`
+  logs everyone out.
+- MEME pause/unpause additionally needs `MEME_GRADUATION_EXECUTOR_ENABLED=true`
+  and `LAUNCH_DEPLOYER_PRIVATE_KEY` **in the API env** (testnet 97 only);
+  without them the console shows `MEME_EXECUTOR_DISABLED`.
+- Formula approval is refused under `NODE_ENV=production`, like
+  `pnpm mining:approve-formula`.
+- Do not expose `/admin/*` publicly without Cloudflare Access or an IP
+  allow-list in front (S120 / docs 07).
+- Contract for the console: `docs/admin-v1-api.md`.
+
 ## Audio-room role evidence switch (Decision 0039)
 
 `GET /v2/meta/capabilities` reports `voiceRooms.evidence` as

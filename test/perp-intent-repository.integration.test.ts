@@ -44,6 +44,7 @@ const generatedClientOrderId = "0x11111111111111111111111111111111";
 
 const truncateAll = `
   truncate table
+    public.community_review_notes,
     public.meme_intents,
     public.meme_holders,
     public.meme_trades,

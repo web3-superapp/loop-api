@@ -341,6 +341,9 @@ export function memeTokenFixture(
     graduationNeedsOperator: false,
     createdAt,
     updatedAt: createdAt,
+    listing: "listed",
+    listingReasonCode: null,
+    listingReasonText: null,
     ...overrides,
   };
 }
@@ -371,6 +374,7 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
     getToken: (id) => Promise.resolve(tokens.get(id) ?? null),
     listTokens: (input) => {
       const ordered = [...tokens.values()]
+        .filter((token) => token.listing === "listed")
         .filter((token) =>
           input.tab === "graduated"
             ? token.status === "graduated"
@@ -393,7 +397,10 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
     rankHotTokens: () =>
       Promise.resolve(
         [...tokens.values()]
-          .filter((token) => token.tokenAddress !== null)
+          .filter(
+            (token) =>
+              token.tokenAddress !== null && token.listing === "listed",
+          )
           .map((token) => ({ memeTokenId: token.memeTokenId, volumeRaw: "0" })),
       ),
     listTokensByIds: (input) =>

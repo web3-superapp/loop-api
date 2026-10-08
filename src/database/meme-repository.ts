@@ -124,7 +124,8 @@ const tokenColumns = `
   t.usd1_to_pool::text as usd1_to_pool, t.tokens_to_pool::text as tokens_to_pool,
   t.graduation_fee_usd1::text as graduation_fee_usd1,
   t.residual_usd1::text as residual_usd1, t.residual_tokens::text as residual_tokens,
-  t.graduation_attempts, t.graduation_needs_operator, t.created_at, t.updated_at
+  t.graduation_attempts, t.graduation_needs_operator, t.created_at, t.updated_at,
+  t.listing, t.listing_reason_code, t.listing_reason_text
 `;
 
 const tokenFrom = `
@@ -200,6 +201,9 @@ const tokenRowSchema = z.object({
   graduation_needs_operator: z.boolean(),
   created_at: dateSchema,
   updated_at: dateSchema,
+  listing: z.enum(["listed", "hidden"]),
+  listing_reason_code: z.string().nullable(),
+  listing_reason_text: z.string().nullable(),
 });
 
 function linkOf(links: Record<string, unknown>, key: string): string | null {
@@ -273,6 +277,9 @@ function mapToken(raw: unknown): MemeTokenRecord {
     graduationNeedsOperator: row.graduation_needs_operator,
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
+    listing: row.listing,
+    listingReasonCode: row.listing_reason_code,
+    listingReasonText: row.listing_reason_text,
   });
 }
 
@@ -755,7 +762,8 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
             select ${tokenColumns}, vol.volume_24h, ago.price_1h_ago
             from ${tokenFrom}
             ${statsJoin("$3")}
-            where t.chain_id = $1 and t.contract_address = $2 and ${where}
+            where t.chain_id = $1 and t.contract_address = $2
+              and t.listing = 'listed' and ${where}
             order by ${order}
             limit $4
           `,
@@ -781,6 +789,7 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
               and tr.traded_at > $3::timestamptz
             where t.chain_id = $1 and t.contract_address = $2
               and t.status = any($5::text[])
+              and t.listing = 'listed'
             group by t.meme_token_id, t.chain_created_at
             order by coalesce(sum(tr.usd1_amount), 0) desc,
               t.chain_created_at desc, t.meme_token_id desc

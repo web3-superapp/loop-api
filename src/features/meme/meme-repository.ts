@@ -68,6 +68,13 @@ export interface MemeTokenRecord {
   readonly graduationNeedsOperator: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /**
+   * Decision 0102: an operator-hidden token leaves the launchpad lists and
+   * `category=meme`; its detail stays readable and carries the state.
+   */
+  readonly listing: "listed" | "hidden";
+  readonly listingReasonCode: string | null;
+  readonly listingReasonText: string | null;
 }
 
 /** A list row: the token plus the trade aggregates the list shows. */

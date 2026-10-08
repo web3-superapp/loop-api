@@ -420,6 +420,18 @@ export function encodeMemeSellCalldata(input: MemeSellCallInput): Hex {
   });
 }
 
+/** Decision 0102: the operator console's `pause(token)` / `unpause(token)`. */
+export function encodeMemePauseCalldata(
+  action: "pause" | "unpause",
+  token: string,
+): Hex {
+  return encodeFunctionData({
+    abi: memeCurveAbiV1,
+    functionName: action,
+    args: [requireAddress(token, "token")],
+  });
+}
+
 export function encodeMemeGraduateCalldata(token: string): Hex {
   return encodeFunctionData({
     abi: memeCurveAbiV1,
