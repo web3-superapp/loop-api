@@ -32052,7 +32052,7 @@
         "operationId": "listV2RecommendedCommunities",
         "summary": "List the communities recommended after registration",
         "tags": ["community"],
-        "description": "Verified communities from the operator list RECOMMENDED_COMMUNITY_IDS, in configured order (Decision 0095). `defaultSelectedIds` are the first five listed. An unset list is an empty result, not an error.",
+        "description": "Verified communities from the operator list, in configured order (Decision 0095). Decision 0102: the operator console's saved list wins; without one, RECOMMENDED_COMMUNITY_IDS is in force. `defaultSelectedIds` are the first five listed. An unset list is an empty result, not an error.",
         "parameters": [
           {
             "schema": {
@@ -57547,7 +57547,7 @@
         "operationId": "listV2IntelPromotions",
         "summary": "List the intel page promotion cards",
         "tags": ["market"],
-        "description": "Decision 0100. A static, versioned list (configVersion intelPromotionsV1) of the cards in force now, ordered by `order`. `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts. An empty `items` means no card is running: hide the strip.",
+        "description": "Decision 0100. A versioned list of the cards in force now, ordered by `order`. Decision 0102: when the operator console has saved a list it is in force (configVersion intelPromotionsV1+db.<epoch ms>, effectiveAt = its save time); otherwise the shipped list (configVersion intelPromotionsV1). `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts or the console saves. An empty `items` means no card is running: hide the strip.",
         "parameters": [
           {
             "schema": {
@@ -57646,7 +57646,8 @@
                     },
                     "configVersion": {
                       "type": "string",
-                      "enum": ["intelPromotionsV1"]
+                      "pattern": "^intelPromotionsV1(\\+db\\.[0-9]{1,16})?$",
+                      "description": "`intelPromotionsV1` for the shipped list; `intelPromotionsV1+db.<epoch ms>` when the operator console's list is in force (Decision 0102)."
                     },
                     "effectiveAt": { "type": "string", "format": "date-time" },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
@@ -134811,7 +134812,9 @@
                         "contract",
                         "viewer",
                         "graduation",
-                        "source"
+                        "source",
+                        "listing",
+                        "listingReason"
                       ],
                       "properties": {
                         "memeTokenId": {
@@ -135292,6 +135295,43 @@
                               "format": "date-time"
                             }
                           }
+                        },
+                        "listing": {
+                          "type": "string",
+                          "enum": ["listed", "hidden"],
+                          "description": "Decision 0102: `hidden` = the operator removed the token from the launchpad lists and category=meme; the detail stays readable. Show a hidden banner."
+                        },
+                        "listingReason": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "reasonText"],
+                              "properties": {
+                                "reasonCode": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "reasonText": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 280
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Non-null exactly when `listing` is `hidden`: the operator's reason code and the user-facing sentence written in the console."
                         }
                       }
                     },
@@ -136050,7 +136090,9 @@
                         "contract",
                         "viewer",
                         "graduation",
-                        "source"
+                        "source",
+                        "listing",
+                        "listingReason"
                       ],
                       "properties": {
                         "memeTokenId": {
@@ -136531,6 +136573,43 @@
                               "format": "date-time"
                             }
                           }
+                        },
+                        "listing": {
+                          "type": "string",
+                          "enum": ["listed", "hidden"],
+                          "description": "Decision 0102: `hidden` = the operator removed the token from the launchpad lists and category=meme; the detail stays readable. Show a hidden banner."
+                        },
+                        "listingReason": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "reasonText"],
+                              "properties": {
+                                "reasonCode": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "reasonText": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 280
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Non-null exactly when `listing` is `hidden`: the operator's reason code and the user-facing sentence written in the console."
                         }
                       }
                     },

@@ -427,6 +427,8 @@ export const memeTokenDetailResourceSchema = {
         "viewer",
         "graduation",
         "source",
+        "listing",
+        "listingReason",
       ],
       properties: {
         ...tokenRowProperties,
@@ -562,6 +564,38 @@ export const memeTokenDetailResourceSchema = {
           ],
         },
         source: sourceSchema,
+        listing: {
+          type: "string",
+          enum: ["listed", "hidden"],
+          description:
+            "Decision 0102: `hidden` = the operator removed the token from the launchpad lists and category=meme; the detail stays readable. Show a hidden banner.",
+        },
+        listingReason: {
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["reasonCode", "reasonText"],
+              properties: {
+                reasonCode: {
+                  anyOf: [
+                    { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+                    { type: "null" },
+                  ],
+                },
+                reasonText: {
+                  anyOf: [
+                    { type: "string", minLength: 1, maxLength: 280 },
+                    { type: "null" },
+                  ],
+                },
+              },
+            },
+            { type: "null" },
+          ],
+          description:
+            "Non-null exactly when `listing` is `hidden`: the operator's reason code and the user-facing sentence written in the console.",
+        },
       },
     },
     contractVersion: contractVersionSchema,

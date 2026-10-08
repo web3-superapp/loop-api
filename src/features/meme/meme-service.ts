@@ -579,9 +579,13 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
               })
             ).map((record) => [record.memeTokenId, record]),
           );
+          // Decision 0102: the ranking is cached for 60 seconds; a token
+          // hidden since then leaves the page at once.
           records = slice.flatMap((item) => {
             const record = byId.get(item.memeTokenId);
-            return record === undefined ? [] : [record];
+            return record === undefined || record.listing === "hidden"
+              ? []
+              : [record];
           });
           const volumes = new Map(
             slice.map((item) => [item.memeTokenId, item.volumeRaw]),
@@ -706,6 +710,14 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
           viewer,
           ...(viewerUnavailable === null ? {} : { viewerUnavailable }),
           graduation: projectMemeGraduation(record),
+          listing: record.listing,
+          listingReason:
+            record.listing === "hidden"
+              ? {
+                  reasonCode: record.listingReasonCode,
+                  reasonText: record.listingReasonText,
+                }
+              : null,
           source: {
             source: "loop_indexer",
             observedAt,

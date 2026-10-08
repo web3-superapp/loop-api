@@ -349,6 +349,25 @@ import { registerSocialRoutes } from "./routes/social.js";
 import { registerTransferRoutes } from "./routes/transfers.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registeredV2ModuleIds, registerV2Routes } from "./routes/v2/index.js";
+import { registerAdminRoutes } from "./routes/admin/index.js";
+import {
+  AdminApiError,
+  adminSessionCookieName,
+  isAdminRequestPath,
+  projectAdminError,
+} from "./features/admin/admin-contract.js";
+import {
+  createAdminService,
+  type AdminMemePauseRuntime,
+} from "./features/admin/admin-service.js";
+import { createAdminSettingsReader } from "./features/admin/admin-settings-reader.js";
+import { createUnavailableAdminRepository } from "./database/admin-repository.js";
+import { createCommunityReviewService } from "./features/community/community-review-service.js";
+import {
+  createMemePauseSender,
+  type MemePauseSender,
+} from "./integrations/meme/meme-pause-sender.js";
+import { MemeGraduationSenderRefusedError } from "./integrations/meme/meme-graduation-sender.js";
 import { createTokenLogoProjector } from "./features/market/token-logo.js";
 import { createTokenLogoProxyService } from "./features/market/token-logo-proxy.js";
 import {
@@ -452,8 +471,12 @@ function sendFrameworkJson(
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
-  readonly contractSurface?: "runtime" | "v1" | "v2";
+  readonly contractSurface?: "runtime" | "v1" | "v2" | "admin";
   readonly database?: Database;
+  /** Decision 0102: test seam for the console's MEME pause signer. */
+  readonly memePauseSender?: MemePauseSender | null;
+  /** Decision 0102: test seam for the console clock and login throttle. */
+  readonly adminNow?: () => Date;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
@@ -690,8 +713,12 @@ export async function buildApp(
 ): Promise<FastifyInstance> {
   const { config } = options;
   const contractSurface = options.contractSurface ?? "runtime";
-  const includeV1 = contractSurface !== "v2";
-  const includeV2 = contractSurface !== "v1";
+  const includeV1 = contractSurface === "runtime" || contractSurface === "v1";
+  const includeV2 = contractSurface === "runtime" || contractSurface === "v2";
+  // Decision 0102: the console mounts only with all three ADMIN_* values.
+  const adminMounted =
+    (contractSurface === "runtime" || contractSurface === "admin") &&
+    config.admin !== null;
   const fastifyOptions: FastifyServerOptions = {
     ajv: {
       customOptions: {
@@ -708,6 +735,17 @@ export async function buildApp(
     connectionTimeout: 15_000,
     exposeHeadRoutes: false,
     frameworkErrors(error, request, reply): void {
+      if (adminMounted && isAdminRequestPath(request.raw.url)) {
+        const projection = projectAdminError(error, request.id);
+        applyFrameworkSecurityHeaders(reply, request.id);
+        sendFrameworkJson(
+          reply,
+          projection.statusCode,
+          projection.response,
+          "application/json; charset=utf-8",
+        );
+        return;
+      }
       if (isV2RequestPath(request.raw.url)) {
         const projection = projectV2Error(error, request.id);
         request.log.warn(
@@ -927,6 +965,23 @@ export async function buildApp(
   ] as const;
   const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
 
+  const adminOpenApiTags = [
+    { name: "admin-session", description: "Operator login and logout" },
+    { name: "admin-overview", description: "Console landing figures" },
+    {
+      name: "admin-settings",
+      description:
+        "Recommended communities and intel promotion cards (database first, constant fallback)",
+    },
+    {
+      name: "admin-communities",
+      description: "Community application review",
+    },
+    { name: "admin-mining", description: "Mining formula versions" },
+    { name: "admin-meme", description: "MEME listing and curve pause" },
+    { name: "admin-audit", description: "Append-only console audit log" },
+  ] as const;
+
   await app.register(swagger, {
     hideUntagged: true,
     // @fastify/swagger marks every request body required. A body schema
@@ -938,27 +993,52 @@ export async function buildApp(
         : document.swaggerObject,
     openapi: {
       openapi: "3.1.0",
-      info: {
-        title: "LOOP API",
-        description:
-          "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
-        version: config.serviceVersion,
-      },
+      info:
+        contractSurface === "admin"
+          ? {
+              title: "LOOP Admin API",
+              description:
+                "Operator console management surface (Decision 0102). Mounted only when ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are configured; every route except POST /admin/v1/session needs the loop_admin_session cookie.",
+              version: config.serviceVersion,
+            }
+          : {
+              title: "LOOP API",
+              description:
+                "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
+              version: config.serviceVersion,
+            },
       servers: [{ url: config.publicBaseUrl.replace(/\/$/, "") }],
       tags:
         contractSurface === "v1"
           ? [...v1OpenApiTags]
           : contractSurface === "v2"
             ? [...v2OpenApiTags]
-            : [...runtimeOpenApiTags],
+            : contractSurface === "admin"
+              ? [...adminOpenApiTags]
+              : [...runtimeOpenApiTags],
       components: {
         securitySchemes: {
-          privyBearer: {
-            type: "http",
-            scheme: "bearer",
-            bearerFormat: "JWT",
-            description: "Current Privy access token",
-          },
+          ...(contractSurface === "admin"
+            ? {}
+            : {
+                privyBearer: {
+                  type: "http",
+                  scheme: "bearer",
+                  bearerFormat: "JWT",
+                  description: "Current Privy access token",
+                },
+              }),
+          ...(contractSurface === "admin" || contractSurface === "runtime"
+            ? {
+                adminSession: {
+                  type: "apiKey",
+                  in: "cookie",
+                  name: adminSessionCookieName,
+                  description:
+                    "Signed operator session cookie from POST /admin/v1/session (HttpOnly, SameSite=Strict, 12 hours)",
+                },
+              }
+            : {}),
         },
       },
     },
@@ -982,6 +1062,11 @@ export async function buildApp(
       ? createUnavailablePrivyUserReader()
       : createPrivyUserReader(privyServerClient.users()));
   const database = options.database ?? createPostgresDatabase(config, app.log);
+  // Decision 0102: operator overrides read "database first, constant second".
+  const adminSettingsReader = createAdminSettingsReader({
+    repository: database.admin ?? null,
+    logger: app.log,
+  });
   const authenticationService = createAuthenticationService(
     privyAccessTokenVerifier,
     database.internalUsers,
@@ -1621,6 +1706,8 @@ export async function buildApp(
       chainId: bscChainId,
       usd1Address: config.bscChain?.usd1TokenAddress?.toLowerCase() ?? null,
       recommendedCommunityIds: config.recommendedCommunityIds,
+      recommendedCommunityIdsOverride: () =>
+        adminSettingsReader.recommendedCommunityIds(),
     });
   const tokenLogoProxyService = createTokenLogoProxyService({
     cache: database.tokenLogoCache ?? null,
@@ -2235,7 +2322,36 @@ export async function buildApp(
       securityService,
       settingsService,
       supportService,
+      adminSettings: adminSettingsReader,
       cursorCodec: v2CursorCodec,
+    });
+  }
+
+  const adminConfig = adminMounted ? config.admin : null;
+  if (adminConfig !== null) {
+    registerAdminRoutes(app, {
+      service: createAdminService({
+        username: adminConfig.username,
+        passwordHash: adminConfig.passwordHash,
+        sessionSecret: adminConfig.sessionSecret,
+        repository: database.admin ?? createUnavailableAdminRepository(),
+        settingsReader: adminSettingsReader,
+        environmentRecommendedCommunityIds: config.recommendedCommunityIds,
+        communityReview:
+          database.community === undefined
+            ? null
+            : createCommunityReviewService({
+                repository: database.community,
+                notifications: database.notifications ?? null,
+                push: pushRuntimeAvailable ? pushDispatchService : null,
+                logger: app.log,
+              }),
+        memePause: composeAdminMemePause(config, options.memePauseSender),
+        production: config.nodeEnv === "production",
+        logger: app.log,
+        ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
+      }),
+      cookieSecure: adminConfig.cookieSecure,
     });
   }
 
@@ -2256,6 +2372,13 @@ export async function buildApp(
 
   app.setNotFoundHandler(async (request, reply) => {
     reply.header("cache-control", "no-store");
+    if (adminMounted && isAdminRequestPath(request.raw.url)) {
+      const projection = projectAdminError(
+        new AdminApiError("NOT_FOUND"),
+        request.id,
+      );
+      return reply.code(projection.statusCode).send(projection.response);
+    }
     if (isV2RequestPath(request.raw.url)) {
       const projection = projectV2Error(V2ApiError.notFound(), request.id);
       return reply.code(projection.statusCode).send(projection.response);
@@ -2269,6 +2392,33 @@ export async function buildApp(
   });
 
   app.setErrorHandler(async (error, request, reply) => {
+    if (adminMounted && isAdminRequestPath(request.raw.url)) {
+      const projection = projectAdminError(error, request.id);
+      if (projection.response.code === "INTERNAL_ERROR") {
+        request.log.error(
+          { requestId: request.id, ...summarizeErrorForLog(error) },
+          "Unhandled error in admin request",
+        );
+      } else {
+        request.log.warn(
+          {
+            requestId: request.id,
+            responseCode: projection.response.code,
+            statusCode: projection.statusCode,
+          },
+          "Admin request failed",
+        );
+      }
+      reply.header("cache-control", "no-store");
+      const retryAfter = projection.response.detailsSafe?.["retryAfterSeconds"];
+      if (
+        projection.response.code === "ADMIN_LOGIN_LOCKED" &&
+        typeof retryAfter === "number"
+      ) {
+        reply.header("retry-after", String(retryAfter));
+      }
+      return reply.code(projection.statusCode).send(projection.response);
+    }
     if (isV2RequestPath(request.raw.url)) {
       const projection = projectV2Error(
         chainReadUnavailableFor(request.method, error) ?? error,
@@ -2392,6 +2542,51 @@ export async function buildApp(
   });
 
   return app;
+}
+
+/**
+ * Decision 0102: the console's pause/unpause signer, composed only when the
+ * executor switch, the MEME contract, the testnet slot, and an RPC are all
+ * present; otherwise the reason the buttons are grey.
+ */
+function composeAdminMemePause(
+  config: AppConfig,
+  override: MemePauseSender | null | undefined,
+): AdminMemePauseRuntime {
+  if (override !== undefined) {
+    return override === null
+      ? { status: "unavailable", reasonCode: "MEME_EXECUTOR_DISABLED" }
+      : { status: "available", sender: override };
+  }
+  if (config.memeGraduationExecutor === null) {
+    return { status: "unavailable", reasonCode: "MEME_EXECUTOR_DISABLED" };
+  }
+  if (config.meme.contract === null) {
+    return {
+      status: "unavailable",
+      reasonCode:
+        config.meme.unconfiguredReason ?? "MEME_CONTRACT_NOT_CONFIGURED",
+    };
+  }
+  try {
+    return {
+      status: "available",
+      sender: createMemePauseSender({
+        privateKey: config.memeGraduationExecutor.privateKey,
+        curveAddress: config.meme.contract.address,
+        chainReference: config.launchChain.chainReference,
+        rpcUrls: config.launchChain.rpcUrls,
+      }),
+    };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      reasonCode:
+        error instanceof MemeGraduationSenderRefusedError
+          ? error.reasonCode
+          : "MEME_PAUSE_SENDER_UNAVAILABLE",
+    };
+  }
 }
 
 /**

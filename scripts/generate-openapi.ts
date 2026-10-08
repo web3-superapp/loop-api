@@ -27,6 +27,23 @@ export const openApiV2ArtifactPath = resolve(
   repositoryRoot,
   "openapi/loop-api.v2.json",
 );
+/** Decision 0102: the operator console surface, never part of the V2 artifact. */
+export const openApiAdminArtifactPath = resolve(
+  repositoryRoot,
+  "openapi/loop-admin.v1.json",
+);
+
+/**
+ * Schema-only console credentials: a well-formed but meaningless argon2id
+ * PHC string and secret, so the generator can mount `/admin/v1/*`. Nothing
+ * here can log anybody in; the generator never serves a request.
+ */
+const schemaOnlyAdminEnvironment = Object.freeze({
+  ADMIN_USERNAME: "schema-only",
+  ADMIN_PASSWORD_HASH:
+    "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  ADMIN_SESSION_SECRET: "schema-only-admin-session-secret-not-a-credential",
+});
 
 function schemaOnlyDependencyInvoked(): never {
   throw new Error("Schema-only dependency invoked");
@@ -52,7 +69,7 @@ function createSchemaOnlyDatabase(): Database {
 }
 
 async function renderContractSurface(
-  contractSurface: "v1" | "v2",
+  contractSurface: "v1" | "v2" | "admin",
 ): Promise<string> {
   const config = loadConfig({
     NODE_ENV: "production",
@@ -66,6 +83,7 @@ async function renderContractSurface(
     // routes to the V2 artifact; modules without a registrar add nothing.
     V2_MODULES_ENABLED: v2ModuleIds.join(","),
     DATABASE_URL: "postgres://schema_only@127.0.0.1:5432/loop_api_schema",
+    ...(contractSurface === "admin" ? schemaOnlyAdminEnvironment : {}),
   });
   const app = await buildApp({
     config,
@@ -89,6 +107,10 @@ export function renderOpenApiArtifact(): Promise<string> {
 
 export function renderOpenApiV2Artifact(): Promise<string> {
   return renderContractSurface("v2");
+}
+
+export function renderOpenApiAdminArtifact(): Promise<string> {
+  return renderContractSurface("admin");
 }
 
 async function writeArtifact(path: string, contents: string): Promise<void> {
@@ -146,18 +168,20 @@ async function main(): Promise<void> {
     throw new Error("Unexpected OpenAPI generator arguments");
   }
 
-  const [v1Contents, v2Contents] = await Promise.all([
+  const [v1Contents, v2Contents, adminContents] = await Promise.all([
     renderOpenApiArtifact(),
     renderOpenApiV2Artifact(),
+    renderOpenApiAdminArtifact(),
   ]);
 
   if (mode === "--write") {
     await Promise.all([
       writeArtifact(openApiArtifactPath, v1Contents),
       writeArtifact(openApiV2ArtifactPath, v2Contents),
+      writeArtifact(openApiAdminArtifactPath, adminContents),
     ]);
     process.stdout.write(
-      "Generated openapi/loop-api.v1.json and openapi/loop-api.v2.json\n",
+      "Generated openapi/loop-api.v1.json, openapi/loop-api.v2.json, and openapi/loop-admin.v1.json\n",
     );
     return;
   }
@@ -165,6 +189,7 @@ async function main(): Promise<void> {
   await Promise.all([
     checkArtifact(openApiArtifactPath, v1Contents),
     checkArtifact(openApiV2ArtifactPath, v2Contents),
+    checkArtifact(openApiAdminArtifactPath, adminContents),
   ]);
   process.stdout.write("OpenAPI artifacts are current\n");
 }

@@ -58,6 +58,7 @@ async function pollUntil(
 
 const truncateControlPlane = `
   truncate table
+    public.community_review_notes,
     public.meme_intents,
     public.meme_holders,
     public.meme_trades,

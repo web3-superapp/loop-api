@@ -32,6 +32,7 @@ import type { LaunchService } from "../../features/launch/launch-service.js";
 import type { MiningService } from "../../features/mining/mining-service.js";
 import type { ReferralService } from "../../features/referral/referral-service.js";
 import type { MemeService } from "../../features/meme/meme-service.js";
+import type { AdminSettingsReader } from "../../features/admin/admin-settings-reader.js";
 import { registerV2ApprovalRoutes } from "./approvals.js";
 import { registerV2ChainRoutes } from "./chain.js";
 import { registerV2CommunicationRoutes } from "./communication.js";
@@ -98,6 +99,11 @@ export interface V2RouteDependencies {
   readonly referralService: ReferralService;
   /** MEME curve launchpad (Decision 0101). */
   readonly memeService: MemeService;
+  /**
+   * Decision 0102: operator overrides (recommended communities, intel
+   * promotions). Absent or null: the shipped constants are in force.
+   */
+  readonly adminSettings?: AdminSettingsReader | null;
   readonly cursorCodec: V2CursorCodec | null;
 }
 

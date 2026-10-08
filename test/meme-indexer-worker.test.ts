@@ -496,8 +496,8 @@ describe("000049 MEME launchpad migration contract (Decision 0101)", () => {
     expect(statement).toContain("drop table public.meme_tokens");
   });
 
-  it("is the head and its tables are required relations", () => {
-    expect(latestMigrationName).toBe("000049_v2_meme_launchpad");
+  it("is applied before the head and its tables are required relations", () => {
+    expect(Number(latestMigrationName.slice(0, 6)) >= 49).toBe(true);
     expect(requiredDatabaseRelations).toContain("public.meme_intents");
   });
 });

@@ -386,6 +386,46 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     expect(hot.json<{ items: unknown[] }>().items).toHaveLength(2);
   });
 
+  it("drops operator-hidden tokens from every list but keeps the detail (Decision 0102)", async () => {
+    const { app, repository, chain } = await createApp();
+    const listed = seedTrading(repository, chain, {
+      memeTokenId: "aaaaaaaa-2222-4222-8222-222222222222",
+    });
+    const hidden = seedTrading(repository, chain, {
+      memeTokenId: "bbbbbbbb-2222-4222-8222-222222222222",
+      tokenAddress: "0x4444444444444444444444444444444444444444",
+    });
+    const ids = async (url: string) =>
+      (await get(app, url))
+        .json<{ items: { memeTokenId: string }[] }>()
+        .items.map((item) => item.memeTokenId);
+    // The hot ranking is cached for 60 s; hiding must still apply at once.
+    expect(await ids("/v2/meme/tokens?tab=hot")).toHaveLength(2);
+    repository.tokens.set(hidden.memeTokenId, {
+      ...hidden,
+      listing: "hidden",
+      listingReasonCode: "user_reports",
+      listingReasonText: "该代币已被平台隐藏。",
+    });
+    expect(await ids("/v2/meme/tokens")).toEqual([listed.memeTokenId]);
+    expect(await ids("/v2/meme/tokens?tab=hot")).toEqual([listed.memeTokenId]);
+    const detail = await get(app, `/v2/meme/tokens/${hidden.memeTokenId}`);
+    expect(detail.statusCode).toBe(200);
+    expect(
+      detail.json<{ memeToken: Record<string, unknown> }>().memeToken,
+    ).toMatchObject({
+      listing: "hidden",
+      listingReason: {
+        reasonCode: "user_reports",
+        reasonText: "该代币已被平台隐藏。",
+      },
+    });
+    const visible = await get(app, `/v2/meme/tokens/${listed.memeTokenId}`);
+    expect(
+      visible.json<{ memeToken: Record<string, unknown> }>().memeToken,
+    ).toMatchObject({ listing: "listed", listingReason: null });
+  });
+
   it("serves the detail with the viewer block, trades, candles, and holders", async () => {
     const { app, repository, chain } = await createApp({
       funds: defaultMemeFunds({

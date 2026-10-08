@@ -13,7 +13,7 @@ import {
 import { communityLogoRefPatternSource } from "../../features/community/community-contract.js";
 import {
   intelPromotionDeeplinkPatternSource,
-  intelPromotionsConfigVersion,
+  intelPromotionsConfigVersionPatternSource,
   intelPromotionsMaximumItems,
 } from "../../features/market/intel-promotions.js";
 import {
@@ -1200,7 +1200,12 @@ export const intelPromotionsResourceSchema = {
         },
       },
     },
-    configVersion: { type: "string", const: intelPromotionsConfigVersion },
+    configVersion: {
+      type: "string",
+      pattern: intelPromotionsConfigVersionPatternSource,
+      description:
+        "`intelPromotionsV1` for the shipped list; `intelPromotionsV1+db.<epoch ms>` when the operator console's list is in force (Decision 0102).",
+    },
     effectiveAt: dateTimeSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },

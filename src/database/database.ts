@@ -54,6 +54,8 @@ import {
 import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
+import { createPostgresAdminRepository } from "./admin-repository.js";
+import type { AdminRepository } from "../features/admin/admin-repository.js";
 import type { MemeRepository } from "../features/meme/meme-repository.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
@@ -215,6 +217,8 @@ export interface Database {
   readonly referral?: ReferralRepository;
   /** MEME curve launchpad: tokens, lane, salts, Intents (Decision 0101). */
   readonly meme?: MemeRepository;
+  /** Operator console settings, audit, review notes (Decision 0102). */
+  readonly admin?: AdminRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -433,6 +437,7 @@ export function createPostgresDatabase(
     launch,
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
+    admin: createPostgresAdminRepository(pool),
     mining,
     referral,
     async ping(): Promise<void> {

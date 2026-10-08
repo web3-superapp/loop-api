@@ -284,6 +284,18 @@ export interface MiningFormulaDocument {
    */
   readonly referencePricing?:
     Readonly<Record<string, MiningReferencePricingRule>> | undefined;
+  /**
+   * Decision 0102: product parameters the requester has not valued yet
+   * (09 §2 A5: NFT weight, invite initial power). Carried and shown by the
+   * operator console only; no snapshot reads them.
+   */
+  readonly placeholders?: MiningFormulaPlaceholders | undefined;
+}
+
+export interface MiningFormulaPlaceholders {
+  readonly status: "placeholder";
+  readonly nftWeight: string | null;
+  readonly inviteInitialPower: string | null;
 }
 
 /** Inclusive decimal bounds a reviewed community weight must satisfy. */
@@ -370,6 +382,14 @@ export const miningFormulaDocumentSchema = z
       .optional(),
     referencePricing: z
       .record(assetIdSchema, miningReferencePricingRuleSchema)
+      .optional(),
+    placeholders: z
+      .object({
+        status: z.literal("placeholder"),
+        nftWeight: decimalSchema.nullable(),
+        inviteInitialPower: decimalSchema.nullable(),
+      })
+      .strict()
       .optional(),
   })
   .strict();
