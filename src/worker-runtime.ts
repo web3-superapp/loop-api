@@ -680,6 +680,7 @@ export async function runReconciliationWorker(
               repository: memeRepository,
               sender,
               chainId: launchChainConfig.chainId,
+              fullGraceMs: executor.delaySeconds * 1_000,
               onAttempt: (event) => {
                 const log =
                   event.outcome === "confirmed" || event.outcome === "not_full"

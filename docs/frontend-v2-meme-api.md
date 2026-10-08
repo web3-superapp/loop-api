@@ -1,4 +1,8 @@
-# 前端联调：V2 MEME 曲线发射台（S116 / 决策 0101）
+# 前端联调：V2 MEME 曲线发射台（S116 / 决策 0101；S116b / 决策 0103 修订）
+
+> S116b 变更（决策 0103）：§3/§4 已毕业无 DexScreener 报价时回退读池子 `slot0`（`priceSource.source = "pool_slot0"`）；
+> §4 `graduation.residual` 取整零头投影为 `null`；§9 `quote.source` 新增 `pool_slot0`、`quality` 新增 `derived`；
+> §10 毕业兜底等待改为 15 秒（可配）。
 
 本文是 `meme` 模块的前端交接契约，S117-mobile 只以本文为准。权威机器契约为
 `openapi/loop-api.v2.json`（tag `meme`）。通用规则（Base URL、`X-Request-ID`、错误体七字段、
@@ -112,10 +116,14 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 行字段：
 
 - `creator`：有激活公开资料时给（点进 `/v2/profiles/{publicProfileId}`），否则 `null`（显示钱包缩写）。
-- `priceUsd1 / marketCapUsd1`：未毕业来自曲线快照（`priceSource.source = "loop_curve"`）；**已毕业**来自
-  DexScreener（`"dexscreener"`）。拿不到价格时两者为 `null`，并多一个 `quoteUnavailable.reasonCode`：
-  `MEME_DEX_CHAIN_NOT_PRICED`（测试网毕业代币，DexScreener 不收录）、`MEME_DEX_QUOTE_UNAVAILABLE` 或行情 Provider 原因；
-  草稿/待上链为 `MEME_TOKEN_NOT_ON_CHAIN`。来源行显示 `priceSource`。
+- `priceUsd1 / marketCapUsd1`：未毕业来自曲线快照（`priceSource.source = "loop_curve"`）；**已毕业**先取
+  DexScreener（`"dexscreener"`，仅主网 56）；DexScreener 没有报价时（测试网 97 毕业代币恒如此，或主网新池尚未收录）
+  回退读该代币自己的 PancakeSwap V3 池 `slot0().sqrtPriceX96` 推价（`"pool_slot0"`，USD1 按 1 美元计，
+  `marketCapUsd1` = 价格 × 10 亿枚，1.5 秒缓存，`observedAt` 为读链时刻）。来源行文案建议：
+  `loop_curve`「内盘曲线」、`dexscreener`「DexScreener」、`pool_slot0`「池子推算」。
+  读链也失败时两者为 `null`，并多一个 `quoteUnavailable.reasonCode`：`MEME_DEX_CHAIN_NOT_PRICED`（测试网）、
+  `MEME_DEX_QUOTE_UNAVAILABLE` 或行情 Provider 原因；草稿/待上链为 `MEME_TOKEN_NOT_ON_CHAIN`。
+  `priceSource.source` 枚举新增 `pool_slot0`，客户端解码请放宽（未知值按「无来源行」处理，不要崩）。
 - `change1hPct`：与 1 小时前最后一笔成交价（没有则与开盘价 V0/T0）相比；毕业后为 `null`。
 - `progressBps`：进度条；`status = graduated` 时显示「已毕业」标签代替进度条。
 - 空列表 = 真的没有（「还没有代币，来创建第一个」）；不可用时是 503，不是空列表。
@@ -198,8 +206,12 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 }
 ```
 
-`lpBurnTx` 就是毕业交易（LP NFT 直接铸给 `0x…dEaD`）。`residual` 非空 = 池子已被他人按其他价格建好，
-有未注入的 USD1/代币留在合约里（`{ usd1Left, tokensLeft }`，只能由运营再注池，不能取走）。
+`lpBurnTx` 就是毕业交易（LP NFT 直接铸给 `0x…dEaD`）。`residual` 非 null = 毕业时池已存在，
+部分资金留在合约（`{ usd1Left, tokensLeft }`，wei 字符串，只能由运营再注池，不能取走）。零头不显示：
+每次毕业都会有取整零头（S118 实测 `usd1Left = 100012`、`tokensLeft = 23` wei），不足 1 USD1 **且** 不足 1 枚时
+后端投影为 `null`。三态：无残余事件 → `null`；仅零头 → `null`；≥ 1 USD1 或 ≥ 1 枚 → 对象。
+
+已毕业时价格区见 §3：测试网显示 `pool_slot0` 推算价，读链失败才是 `quoteUnavailable`。
 
 - 草稿与 `pending_chain` 只有创建者能看；其他人 `404 NOT_FOUND / MEME_TOKEN_NOT_FOUND`。
 
@@ -502,21 +514,39 @@ create 失败（如尾号盐被他人抢用）后代币回到 `draft`，再次�
 
 候选 = App 创建且 `trading/full/graduated` 的 MEME 代币 ∪ 旧 Launch 项目代币。未毕业代币的 `quote` 来自曲线：
 `source: "loop_curve"`、`quality: "fresh"`、`change24hPct` 对比 24 小时前、`volume24hUsd` 为钱包侧 USD1；`sparkline`
-为 `unavailable` / `MEME_CURVE_SPARKLINE_UNAVAILABLE`。已毕业代币走 DexScreener（测试网为 `MARKET_CHAIN_NOT_PRICED`）。
-`quote.source` 枚举新增 `loop_curve`，客户端解码请放宽。
+为 `unavailable` / `MEME_CURVE_SPARKLINE_UNAVAILABLE`。已毕业代币先走 DexScreener；没有报价时（测试网恒如此）
+回退读池 `slot0`（决策 0103）：
+
+```json
+{
+  "priceUsd": "0.0000849",
+  "change24hPct": null,
+  "marketCapUsd": "84900",
+  "volume24hUsd": null,
+  "observedAt": "2026-10-08T06:00:00.000Z",
+  "source": "pool_slot0",
+  "quality": "derived"
+}
+```
+
+`sparkline` 为 `unavailable` / `MEME_POOL_SPARKLINE_UNAVAILABLE`；读链失败保持原因（测试网 `MARKET_CHAIN_NOT_PRICED`）。
+`quote.source` 枚举新增 `loop_curve`、`pool_slot0`，`quote.quality` 新增 `derived`，客户端解码请放宽；`derived`
+建议显示「池子推算」标签；`change24hPct` 为 `null` 时涨跌幅显示 `--`。
 
 ## 10. 状态与底部交易栏
 
-| `status`        | 底栏                                                   |
-| --------------- | ------------------------------------------------------ |
-| `draft`         | 只有创建者可见：「继续创建」                           |
-| `pending_chain` | 「创建中…」（轮询 Intent）                             |
-| `trading`       | 「买入」「卖出」                                       |
-| `full`          | 「打满，毕业中…」禁用（后端 60 秒内兜底调用 graduate） |
-| `graduated`     | 「去兑换」跳 Swap 页并预填代币对                       |
-| `paused`        | 「已暂停交易」                                         |
+| `status`        | 底栏                                                        |
+| --------------- | ----------------------------------------------------------- |
+| `draft`         | 只有创建者可见：「继续创建」                                |
+| `pending_chain` | 「创建中…」（轮询 Intent）                                  |
+| `trading`       | 「买入」「卖出」                                            |
+| `full`          | 「打满，毕业中…」禁用（后端约 15–30 秒内兜底调用 graduate） |
+| `graduated`     | 「去兑换」跳 Swap 页并预填代币对                            |
+| `paused`        | 「已暂停交易」                                              |
 
-`full → graduated` 由轮询详情得知（`graduation` 非空、`pool` 非空）。
+`full → graduated` 由轮询详情得知（`graduation` 非空、`pool` 非空）。兜底执行器在打满后等待
+`MEME_GRADUATION_DELAY_SECONDS`（默认 15 秒）再调用，轮询间隔 15 秒，所以打满到毕业通常 15–30 秒加出块确认；
+建议 `full` 状态每 3–5 秒轮询一次详情。
 
 ## 11. 错误码总表
 

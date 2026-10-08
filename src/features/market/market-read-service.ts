@@ -29,6 +29,11 @@ import {
 } from "../meme/meme-curve-math.js";
 import { percentChange } from "../meme/meme-projection.js";
 import {
+  memePoolMarketCapRaw,
+  type MemePoolPrice,
+  type MemePoolPriceReader,
+} from "../meme/meme-pool-price.js";
+import {
   MarketCategoryRepositoryUnavailableError,
   type MarketCategoryCommunityRecord,
   type MarketCategoryMemeCurve,
@@ -201,9 +206,13 @@ export interface MarketQuoteProjection {
   readonly marketCapUsd: string | null;
   readonly volume24hUsd: string | null;
   readonly observedAt: string;
-  /** `loop_curve`: a MEME launchpad curve snapshot (Decision 0101). */
-  readonly source: MarketSource | "loop_curve";
-  readonly quality: "fresh" | "stale" | "proxied";
+  /**
+   * `loop_curve`: a MEME launchpad curve snapshot (Decision 0101).
+   * `pool_slot0`: a graduated MEME token's own pool price (Decision 0103).
+   */
+  readonly source: MarketSource | "loop_curve" | "pool_slot0";
+  /** `derived`: computed by LOOP from a chain read (`pool_slot0`). */
+  readonly quality: "fresh" | "stale" | "proxied" | "derived";
 }
 
 export interface MarketCategoryAssetRow {
@@ -531,6 +540,15 @@ export interface CreateMarketReadServiceInput {
    * categories with `CAPABILITY_UNAVAILABLE`. `major` needs only the registry.
    */
   readonly categories?: MarketCategoryRepository | null;
+  /**
+   * Decision 0103: slot0 price of a graduated MEME token's pool on the
+   * launch slot, used when DexScreener has no quote. `null`/absent keeps
+   * the earlier reason (`MARKET_CHAIN_NOT_PRICED` on 97).
+   */
+  readonly memePoolPrices?: {
+    readonly chainId: string;
+    readonly read: MemePoolPriceReader;
+  } | null;
   /** Account wallets for `isOwn` on trades; `null` when the wallet module is not composed. */
   readonly wallets: AccountWalletRepository | null;
   readonly readClient: BscReadClient;
@@ -2428,6 +2446,20 @@ export function createMarketReadService(
               address: asset.address,
               providerImage: null,
             });
+            // Decision 0103: a graduated MEME token off the market chain is
+            // priced from its own pool; a failed read keeps the reason.
+            const pool = await memePoolQuote(candidate);
+            if (pool !== null) {
+              return Object.freeze({
+                assetId: asset.assetId,
+                symbol: asset.symbol,
+                name: asset.name,
+                logoUrl: logo.status === "available" ? logo.url : null,
+                quote: pool,
+                sparkline: unavailableSparkline(memePoolSparklineReasonCode),
+                ...community,
+              });
+            }
             return Object.freeze({
               assetId: asset.assetId,
               symbol: asset.symbol,
@@ -2449,7 +2481,7 @@ export function createMarketReadService(
             address: asset.address,
             providerImage: facts.logoImage,
           });
-          const quote = quoteFrom(facts);
+          const quote = quoteFrom(facts) ?? (await memePoolQuote(candidate));
           const sparkline = !input.facts.candlesProviderEnabled
             ? unavailableSparkline(marketReasonCodes.geckoterminalDisabled)
             : sparklineRows === null
@@ -2523,6 +2555,30 @@ export function createMarketReadService(
   return Object.freeze(service);
 
   /**
+   * Decision 0103: the `pool_slot0` quote of a graduated MEME candidate on
+   * the launch slot, or null (no pool, no reader, other chain, read failed).
+   */
+  async function memePoolQuote(candidate: {
+    readonly asset: AssetRecord;
+    readonly graduatedPool: string | null;
+  }): Promise<MarketQuoteProjection | null> {
+    const reader = input.memePoolPrices ?? null;
+    if (
+      reader === null ||
+      candidate.graduatedPool === null ||
+      candidate.asset.address === null ||
+      candidate.asset.chainId !== reader.chainId
+    ) {
+      return null;
+    }
+    const price = await reader.read({
+      tokenAddress: candidate.asset.address,
+      poolAddress: candidate.graduatedPool,
+    });
+    return price === null ? null : memePoolQuoteFrom(price);
+  }
+
+  /**
    * The category's assets: registry rows that are not blocked, at most
    * `candidateLimit`. A missing candidate source closes the category with
    * `CAPABILITY_UNAVAILABLE`; it is never answered as an empty list.
@@ -2532,6 +2588,7 @@ export function createMarketReadService(
       readonly asset: AssetRecord;
       readonly community: MarketCategoryCommunityRecord | null;
       readonly curve: MarketCategoryMemeCurve | null;
+      readonly graduatedPool: string | null;
     }[]
   > {
     const readable = (records: readonly AssetRecord[]) =>
@@ -2542,7 +2599,12 @@ export function createMarketReadService(
       );
       return records
         .slice(0, marketCategoryRules.candidateLimit)
-        .map((asset) => ({ asset, community: null, curve: null }));
+        .map((asset) => ({
+          asset,
+          community: null,
+          curve: null,
+          graduatedPool: null,
+        }));
     }
     const repository = input.categories ?? null;
     if (repository === null) {
@@ -2555,6 +2617,9 @@ export function createMarketReadService(
           marketCategoryRules.candidateLimit,
         );
         const curves = new Map(memes.map((row) => [row.assetId, row.curve]));
+        const pools = new Map(
+          memes.map((row) => [row.assetId, row.graduatedPool ?? null]),
+        );
         const records = readable(
           await input.registry.listAssets(memes.map((row) => row.assetId)),
         );
@@ -2562,6 +2627,7 @@ export function createMarketReadService(
           asset,
           community: null,
           curve: curves.get(asset.assetId) ?? null,
+          graduatedPool: pools.get(asset.assetId) ?? null,
         }));
       }
       const bound = await repository.listVerifiedCommunityAssets(
@@ -2575,7 +2641,7 @@ export function createMarketReadService(
         const asset = byId.get(row.assetId);
         return asset === undefined
           ? []
-          : [{ asset, community: row, curve: null }];
+          : [{ asset, community: row, curve: null, graduatedPool: null }];
       });
     } catch (error) {
       if (error instanceof MarketCategoryRepositoryUnavailableError) {
@@ -2587,6 +2653,23 @@ export function createMarketReadService(
 }
 
 const memeCurveSparklineReasonCode = "MEME_CURVE_SPARKLINE_UNAVAILABLE";
+const memePoolSparklineReasonCode = "MEME_POOL_SPARKLINE_UNAVAILABLE";
+
+/**
+ * Decision 0103: a graduated MEME token priced from its pool's slot0 (USD1
+ * at par). No 24 h change or volume is derived from one price read.
+ */
+function memePoolQuoteFrom(price: MemePoolPrice): MarketQuoteProjection {
+  return Object.freeze({
+    priceUsd: formatE18(price.priceE18),
+    change24hPct: null,
+    marketCapUsd: formatE18(memePoolMarketCapRaw(price.priceE18)),
+    volume24hUsd: null,
+    observedAt: price.observedAt,
+    source: "pool_slot0",
+    quality: "derived",
+  });
+}
 
 /**
  * Decision 0101: the market quote of an ungraduated MEME launchpad token,

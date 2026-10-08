@@ -69,6 +69,10 @@ import {
   type MemeDexQuoteReader,
 } from "./meme-projection.js";
 import {
+  memePoolMarketCapRaw,
+  type MemePoolPriceReader,
+} from "./meme-pool-price.js";
+import {
   MemeCreateRateLimitedError,
   MemeIdempotencyConflictError,
   MemeImageNotOwnedError,
@@ -106,6 +110,8 @@ export interface MemeServiceDependencies {
   }) => Promise<string>;
   readonly publicBaseUrl: string;
   readonly dexQuotes?: MemeDexQuoteReader | null;
+  /** Decision 0103: slot0 fallback for graduated tokens without a quote. */
+  readonly poolPrices?: MemePoolPriceReader | null;
   readonly logger?: MemeServiceLogger;
   readonly now?: () => Date;
   readonly createUuid?: () => string;
@@ -326,6 +332,42 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
     if (graduated.length === 0) {
       return new Map();
     }
+    const quotes = new Map(await dexScreenerQuotesFor(graduated));
+    // Decision 0103: no DexScreener price → the pool's own slot0. A failed
+    // read keeps the DexScreener reason (MEME_DEX_CHAIN_NOT_PRICED on 97).
+    const poolPrices = deps.poolPrices ?? null;
+    if (poolPrices !== null) {
+      await Promise.all(
+        graduated.map(async (record) => {
+          const token = record.tokenAddress as string;
+          const existing = quotes.get(token);
+          if (
+            record.poolAddress === null ||
+            (existing !== undefined && "priceUsd" in existing)
+          ) {
+            return;
+          }
+          const pool = await poolPrices({
+            tokenAddress: token,
+            poolAddress: record.poolAddress,
+          });
+          if (pool !== null) {
+            quotes.set(token, {
+              priceUsd: formatE18(pool.priceE18),
+              marketCapUsd: formatE18(memePoolMarketCapRaw(pool.priceE18)),
+              observedAt: pool.observedAt,
+              source: "pool_slot0",
+            });
+          }
+        }),
+      );
+    }
+    return quotes;
+  }
+
+  async function dexScreenerQuotesFor(
+    graduated: readonly MemeTokenRecord[],
+  ): Promise<ReadonlyMap<string, MemeDexQuote | { reasonCode: string }>> {
     const chainId = graduated[0]?.chainId ?? bscChainId;
     if (chainId !== bscChainId) {
       return new Map(

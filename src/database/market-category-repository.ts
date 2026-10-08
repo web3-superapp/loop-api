@@ -28,6 +28,10 @@ const memeCandidateRowSchema = z
     observed_at: z.date().nullable(),
     volume_24h: rawSchema.nullable(),
     price_24h_ago: rawSchema.nullable(),
+    pool_address: z
+      .string()
+      .regex(/^0x[0-9a-f]{40}$/u)
+      .nullable(),
   })
   .strict();
 
@@ -60,6 +64,12 @@ export interface MarketCategoryMemeRecord {
   readonly assetId: string;
   /** Null for a Launch project token or a graduated MEME token. */
   readonly curve: MarketCategoryMemeCurve | null;
+  /**
+   * Decision 0103: a graduated MEME token's PancakeSwap V3 pool (the slot0
+   * fallback when DexScreener has no quote); null otherwise. Absent in
+   * fakes that predate it.
+   */
+  readonly graduatedPool?: string | null;
 }
 
 export interface MarketCategoryCommunityRecord {
@@ -139,6 +149,8 @@ export function createPostgresMarketCategoryRepository(
                 where tr.meme_token_id = m.meme_token_id and not tr.removed
                   and tr.traded_at > clock_timestamp() - interval '24 hours'
               ) as volume_24h,
+              case when m.status = 'graduated' then lower(m.pool_address) end
+                as pool_address,
               (
                 select tr.price_after_e18::text
                 from public.meme_trades as tr
@@ -160,10 +172,10 @@ export function createPostgresMarketCategoryRepository(
             where l.project_asset_id is not null and a.status <> 'blocked'
           )
           select asset_id, status, v_usd1, v_token, observed_at, volume_24h,
-            price_24h_ago
+            price_24h_ago, pool_address
           from meme
           union all
-          select asset_id, null, null, null, null, null, null
+          select asset_id, null, null, null, null, null, null, null
           from launch
           where asset_id not in (select asset_id from meme)
           order by asset_id asc
@@ -176,6 +188,7 @@ export function createPostgresMarketCategoryRepository(
           const row = memeCandidateRowSchema.parse(raw);
           return Object.freeze({
             assetId: row.asset_id,
+            graduatedPool: row.pool_address,
             curve:
               row.status === null ||
               row.status === "graduated" ||

@@ -713,6 +713,7 @@ const reconciliationWorkerEnvironmentSchema = z
     LAUNCH_INDEXER_ENABLED: booleanString,
     MEME_INDEXER_ENABLED: booleanString,
     MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
+    MEME_GRADUATION_DELAY_SECONDS: positiveIntegerString(0, 600),
     LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     BSC_INDEXER_START_BLOCK: z.coerce
       .number()
@@ -1268,9 +1269,15 @@ export interface ReconciliationWorkerConfig {
    */
   readonly meme: MemeConfig;
   readonly memeIndexerEnabled: boolean;
-  /** Present only while the executor is enabled; never logged. */
+  /**
+   * Present only while the executor is enabled; the key is never logged.
+   * `delaySeconds` (MEME_GRADUATION_DELAY_SECONDS, default 15, 0-600,
+   * Decision 0103) is how long a curve stays `full` before the fallback
+   * signs `graduate(token)`.
+   */
   readonly memeGraduationExecutor: {
     readonly privateKey: `0x${string}`;
+    readonly delaySeconds: number;
   } | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
@@ -1825,15 +1832,23 @@ export function parseMemeConfig(
 
 const privateKeyPattern = /^(0x)?[0-9a-fA-F]{64}$/u;
 
+/** Decision 0103: default wait before the fallback signs `graduate`. */
+export const MEME_GRADUATION_DEFAULT_DELAY_SECONDS = 15;
+
 /**
  * Decision 0101: the graduation fallback executor signs `graduate(token)`
  * with the testnet deployer key. Enabled without a well-formed key refuses
- * boot; the key never enters a log line or an error message.
+ * boot; the key never enters a log line or an error message. Decision 0103:
+ * the wait before signing is MEME_GRADUATION_DELAY_SECONDS (default 15).
  */
 export function parseMemeGraduationExecutor(data: {
   readonly MEME_GRADUATION_EXECUTOR_ENABLED: boolean;
+  readonly MEME_GRADUATION_DELAY_SECONDS?: number | undefined;
   readonly LAUNCH_DEPLOYER_PRIVATE_KEY?: string | undefined;
-}): { readonly privateKey: `0x${string}` } | null {
+}): {
+  readonly privateKey: `0x${string}`;
+  readonly delaySeconds: number;
+} | null {
   if (!data.MEME_GRADUATION_EXECUTOR_ENABLED) {
     return null;
   }
@@ -1845,6 +1860,9 @@ export function parseMemeGraduationExecutor(data: {
   }
   return Object.freeze({
     privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
+    delaySeconds:
+      data.MEME_GRADUATION_DELAY_SECONDS ??
+      MEME_GRADUATION_DEFAULT_DELAY_SECONDS,
   });
 }
 
@@ -2573,6 +2591,8 @@ export function loadReconciliationWorkerConfig(
     MEME_INDEXER_ENABLED: environment["MEME_INDEXER_ENABLED"] ?? "false",
     MEME_GRADUATION_EXECUTOR_ENABLED:
       environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
+    MEME_GRADUATION_DELAY_SECONDS:
+      environment["MEME_GRADUATION_DELAY_SECONDS"] ?? "15",
     LAUNCH_DEPLOYER_PRIVATE_KEY: environment["LAUNCH_DEPLOYER_PRIVATE_KEY"],
     BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
     BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE:

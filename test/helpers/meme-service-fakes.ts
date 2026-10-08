@@ -83,6 +83,8 @@ export const memeWritesEnv = Object.freeze({
 export interface FakeCurveChain {
   curves: Map<string, { curve: MemeCurveState; status: MemeCurveStatus }>;
   unavailable: boolean;
+  /** Decision 0103: `slot0().sqrtPriceX96` by pool address; absent = read fails. */
+  pools?: Map<string, bigint>;
 }
 
 export function createFakeMemeAdapter(
@@ -154,6 +156,12 @@ export function createFakeMemeAdapter(
         const quote = quoteMemeSell(curveOf(input.token).curve, input.tokensIn);
         return { usd1Out: quote.usd1Out, fee: quote.fee };
       }),
+    readPoolSqrtPriceX96: (pool: string) => {
+      const price = chain.pools?.get(pool.toLowerCase());
+      return chain.unavailable || price === undefined
+        ? Promise.reject(new Error("unreachable"))
+        : Promise.resolve(price);
+    },
     encodeCreateToken: (input) => ({
       to: memeCurveAddress,
       data: encodeMemeCreateTokenCalldata(input),

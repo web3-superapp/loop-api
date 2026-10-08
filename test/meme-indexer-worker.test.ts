@@ -9,7 +9,10 @@ import {
   createMemeIntentReconciler,
   createMemeSaltPoolWorker,
 } from "../src/bsc-meme-indexer-worker.js";
-import { parseMemeGraduationExecutor } from "../src/config.js";
+import {
+  loadReconciliationWorkerConfig,
+  parseMemeGraduationExecutor,
+} from "../src/config.js";
 import {
   latestMigrationName,
   requiredDatabaseRelations,
@@ -358,7 +361,7 @@ describe("MEME salt pool, receipt reconcile, and graduation executor (Decision 0
     );
   });
 
-  it("graduates full tokens after 60 s and hands over to an operator after 10 failures", async () => {
+  it("graduates full tokens after the default 15 s and hands over to an operator after 10 failures", async () => {
     const record = vi.fn(() => Promise.resolve());
     const graduate = vi
       .fn()
@@ -399,7 +402,7 @@ describe("MEME salt pool, receipt reconcile, and graduation executor (Decision 0
     });
     expect(await lane.runOnce()).toEqual({ candidates: 2, attempted: 2 });
     expect(listGraduationCandidates).toHaveBeenCalledWith(
-      expect.objectContaining({ fullBefore: "2026-10-08T00:01:00.000Z" }),
+      expect.objectContaining({ fullBefore: "2026-10-08T00:01:45.000Z" }),
     );
     expect(record).toHaveBeenNthCalledWith(1, {
       memeTokenId: "aaaaaaaa-1111-4111-8111-111111111111",
@@ -419,6 +422,52 @@ describe("MEME salt pool, receipt reconcile, and graduation executor (Decision 0
         transactionHash: fixtureTxHash(3),
       }),
     );
+  });
+
+  it("waits MEME_GRADUATION_DELAY_SECONDS before graduating (Decision 0103)", async () => {
+    const listGraduationCandidates = vi.fn(() => Promise.resolve([]));
+    const lane = createMemeGraduationExecutor({
+      repository: laneRepository({ listGraduationCandidates }),
+      sender: { address: token, graduate: vi.fn() },
+      chainId,
+      fullGraceMs: 0,
+      now: () => new Date("2026-10-08T00:02:00.000Z"),
+    });
+    expect(await lane.runOnce()).toEqual({ candidates: 0, attempted: 0 });
+    expect(listGraduationCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ fullBefore: "2026-10-08T00:02:00.000Z" }),
+    );
+  });
+
+  it("parses MEME_GRADUATION_DELAY_SECONDS within 0-600, default 15", () => {
+    const base = {
+      NODE_ENV: "test",
+      LOG_LEVEL: "silent",
+      DATABASE_URL: "postgres://loop_api:pw@127.0.0.1:5432/loop_api_test",
+      MEME_GRADUATION_EXECUTOR_ENABLED: "true",
+      LAUNCH_DEPLOYER_PRIVATE_KEY: "11".repeat(32),
+    };
+    expect(
+      loadReconciliationWorkerConfig(base).memeGraduationExecutor?.delaySeconds,
+    ).toBe(15);
+    expect(
+      loadReconciliationWorkerConfig({
+        ...base,
+        MEME_GRADUATION_DELAY_SECONDS: "600",
+      }).memeGraduationExecutor?.delaySeconds,
+    ).toBe(600);
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...base,
+        MEME_GRADUATION_DELAY_SECONDS: "601",
+      }),
+    ).toThrow(/MEME_GRADUATION_DELAY_SECONDS/);
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...base,
+        MEME_GRADUATION_DELAY_SECONDS: "-1",
+      }),
+    ).toThrow(/MEME_GRADUATION_DELAY_SECONDS/);
   });
 
   it("refuses to sign graduation on mainnet and requires a key when enabled", () => {
@@ -441,7 +490,14 @@ describe("MEME salt pool, receipt reconcile, and graduation executor (Decision 0
         MEME_GRADUATION_EXECUTOR_ENABLED: true,
         LAUNCH_DEPLOYER_PRIVATE_KEY: "11".repeat(32),
       }),
-    ).toEqual({ privateKey: `0x${"11".repeat(32)}` });
+    ).toEqual({ privateKey: `0x${"11".repeat(32)}`, delaySeconds: 15 });
+    expect(
+      parseMemeGraduationExecutor({
+        MEME_GRADUATION_EXECUTOR_ENABLED: true,
+        MEME_GRADUATION_DELAY_SECONDS: 0,
+        LAUNCH_DEPLOYER_PRIVATE_KEY: "11".repeat(32),
+      }),
+    ).toEqual({ privateKey: `0x${"11".repeat(32)}`, delaySeconds: 0 });
     const sender = createMemeGraduationSender({
       privateKey: `0x${"11".repeat(32)}`,
       curveAddress: memeCurveAddress,
