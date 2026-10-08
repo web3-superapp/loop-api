@@ -4146,7 +4146,7 @@
         "operationId": "listV2Communities",
         "summary": "Discover communities by verifiable ordering",
         "tags": ["community"],
-        "description": "Ordering uses only checkable facts: member count or creation time. Highest mining power, fastest growing, and most discussed have no backend and are not offered. `verification=all` additionally shows communities the caller created or joined.",
+        "description": "Ordering uses only checkable facts: member count or creation time. Highest mining power, fastest growing, and most discussed have no backend and are not offered. `verification=all` additionally shows communities the caller created or joined. `membership=joined` lists only the caller's current non-owner memberships (active or muted, never banned) and `membership=owned` the communities the caller owns; either combines with every `sort`. Each row carries the caller's `viewerMembership` and the `boundAsset` registry summary (Decision 0099), read for the whole page with one set-based query each.",
         "parameters": [
           {
             "schema": {
@@ -4250,7 +4250,9 @@
                           "boundAssetKey",
                           "memberCount",
                           "createdAt",
-                          "configVersion"
+                          "configVersion",
+                          "viewerMembership",
+                          "boundAsset"
                         ],
                         "properties": {
                           "communityId": {
@@ -4311,6 +4313,66 @@
                           "configVersion": {
                             "type": "string",
                             "enum": ["communityV1"]
+                          },
+                          "viewerMembership": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["role", "status", "pending"],
+                            "description": "Decision 0099: the caller's own relation to this community. role/status are the caller's membership row, any status (a banned row keeps its role and reads status=banned); both null when the caller has no membership. pending=true only while the caller owns the community and its creation application awaits review; LOOP has no join approval, so a join is never pending.",
+                            "properties": {
+                              "role": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["owner", "admin", "member"]
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "status": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["active", "muted", "banned"]
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "pending": { "type": "boolean" }
+                            }
+                          },
+                          "boundAsset": {
+                            "description": "Decision 0099: the Asset Registry summary of boundAssetKey (same source as the Decision 0097 detail block, three fields only, no market facts); null when unbound or the key is not in the registry.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["assetId", "symbol", "logoUrl"],
+                                "properties": {
+                                  "assetId": {
+                                    "type": "string",
+                                    "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                                  },
+                                  "symbol": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "logoUrl": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "uri",
+                                        "maxLength": 2048
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "This API's token logo proxy URL (Decision 0089); null when the proxy is not served."
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "miningPower": {
                             "anyOf": [

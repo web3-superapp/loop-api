@@ -1115,6 +1115,68 @@ describe("committed OpenAPI artifact", () => {
     });
   });
 
+  it("publishes viewerMembership and boundAsset on every community directory row (Decision 0099)", async () => {
+    const document = JSON.parse(
+      await readFile(openApiV2ArtifactPath, "utf8"),
+    ) as OpenApiDocument;
+    const list = document.paths["/v2/communities"]?.["get"];
+    const schema = (
+      list?.responses?.["200"] as
+        | {
+            readonly content?: Record<
+              string,
+              {
+                readonly schema?: {
+                  readonly properties: {
+                    readonly items: {
+                      readonly items: {
+                        readonly required: readonly string[];
+                        readonly properties: Record<string, unknown>;
+                      };
+                    };
+                  };
+                };
+              }
+            >;
+          }
+        | undefined
+    )?.content?.["application/json"]?.schema;
+    const row = schema?.properties.items.items;
+    expect(row?.required).toEqual(
+      expect.arrayContaining(["viewerMembership", "boundAsset"]),
+    );
+    expect(row?.properties["viewerMembership"]).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["role", "status", "pending"],
+      properties: {
+        role: {
+          anyOf: [
+            { type: "string", enum: ["owner", "admin", "member"] },
+            { type: "null" },
+          ],
+        },
+        status: {
+          anyOf: [
+            { type: "string", enum: ["active", "muted", "banned"] },
+            { type: "null" },
+          ],
+        },
+        pending: { type: "boolean" },
+      },
+    });
+    expect(row?.properties["boundAsset"]).toMatchObject({
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["assetId", "symbol", "logoUrl"],
+        },
+        { type: "null" },
+      ],
+    });
+  });
+
   it("publishes the token logo proxy as a public image route and every logo URL as a proxy URL (Decision 0089)", async () => {
     const committed = await readFile(openApiV2ArtifactPath, "utf8");
     const document = JSON.parse(committed) as OpenApiDocument;

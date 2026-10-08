@@ -30,7 +30,7 @@ import {
   CommunityRepositoryUnavailableError,
   CommunitySlugTakenError,
   CommunityTargetUnavailableError,
-  type CommunityRecord,
+  type CommunityDirectoryRecord,
   type CommunityRepository,
   type MembershipRecord,
 } from "../src/features/community/community-repository.js";
@@ -66,7 +66,7 @@ function idempotencyKey(suffix = "a"): string {
   return `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${suffix}`;
 }
 
-const community: CommunityRecord = Object.freeze({
+const community: CommunityDirectoryRecord = Object.freeze({
   communityId,
   name: "Frog Holders",
   slug: "frog-holders",
@@ -82,6 +82,8 @@ const community: CommunityRecord = Object.freeze({
     reviewedAt: "2026-09-07T02:00:00.000Z",
     rejectedReason: null,
   }),
+  viewerMembership: null,
+  directoryAsset: null,
 });
 
 const ownerMembership: MembershipRecord = Object.freeze({
@@ -1072,6 +1074,131 @@ describe("LOOP API V2 community, social, and search modules", () => {
     });
     expect(unbound.statusCode).toBe(201);
     expect(unbound.json()).toMatchObject({ boundAsset: null });
+  });
+
+  it("carries viewerMembership and boundAsset on every directory row (Decision 0099)", async () => {
+    const dependencies = fakes();
+    const boundAssetKey =
+      "eip155:56:0x1111111111111111111111111111111111111111";
+    const rowId = (suffix: string) =>
+      `3fa85f64-5717-4562-b3fc-2c963f66af${suffix}`;
+    const listCommunities = vi.fn(() =>
+      Promise.resolve([
+        {
+          ...community,
+          communityId: rowId("01"),
+          memberCount: 9,
+          boundAssetKey,
+          viewerMembership: {
+            role: "owner" as const,
+            status: "active" as const,
+          },
+          directoryAsset: { assetId: boundAssetKey, symbol: "FROG" },
+        },
+        {
+          ...community,
+          communityId: rowId("02"),
+          memberCount: 8,
+          viewerMembership: {
+            role: "member" as const,
+            status: "muted" as const,
+          },
+          directoryAsset: null,
+        },
+        {
+          ...community,
+          communityId: rowId("03"),
+          memberCount: 7,
+          viewerMembership: null,
+          directoryAsset: null,
+        },
+        {
+          ...community,
+          communityId: rowId("04"),
+          memberCount: 6,
+          verificationStatus: "pending" as const,
+          viewerMembership: {
+            role: "owner" as const,
+            status: "active" as const,
+          },
+          directoryAsset: null,
+        },
+        {
+          ...community,
+          communityId: rowId("05"),
+          memberCount: 5,
+          viewerMembership: {
+            role: "member" as const,
+            status: "banned" as const,
+          },
+          directoryAsset: null,
+        },
+      ]),
+    );
+    dependencies.communityRepository.listCommunities = listCommunities;
+    const { app } = await createApp(dependencies);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/communities?sort=members&verification=all",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const items = response.json<{
+      items: readonly Record<string, unknown>[];
+    }>().items;
+    expect(items.map((item) => item["viewerMembership"])).toEqual([
+      { role: "owner", status: "active", pending: false },
+      { role: "member", status: "muted", pending: false },
+      { role: null, status: null, pending: false },
+      // Only the owner of a pending application reads pending.
+      { role: "owner", status: "active", pending: true },
+      { role: "member", status: "banned", pending: false },
+    ]);
+    expect(items.map((item) => item["boundAsset"])).toEqual([
+      // The market module (logo proxy) is not served in this app.
+      { assetId: boundAssetKey, symbol: "FROG", logoUrl: null },
+      null,
+      null,
+      null,
+      null,
+    ]);
+    // Three summary fields only: no name, pool, price, or market fact.
+    expect(Object.keys(items[0]?.["boundAsset"] as object).sort()).toEqual([
+      "assetId",
+      "logoUrl",
+      "symbol",
+    ]);
+    expect(items[0]).toMatchObject({
+      communityId: rowId("01"),
+      boundAssetKey,
+      memberCount: 9,
+    });
+    expect(listCommunities).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards membership=joined with every sort to the directory read (Decision 0099)", async () => {
+    const { app, listCommunitiesMock } = await createApp();
+    for (const sort of ["members", "newest"] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities?membership=joined&sort=${sort}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        ordering: { status: "available", sort },
+        items: [
+          {
+            communityId,
+            viewerMembership: { role: null, status: null, pending: false },
+            boundAsset: null,
+          },
+        ],
+      });
+      expect(listCommunitiesMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ membership: "joined", sort }),
+      );
+    }
   });
 
   it("keeps contract and domain blocks unavailable in every verb", async () => {

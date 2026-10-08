@@ -100,7 +100,7 @@ export function registerV2CommunityRoutes(
         operationId: "listV2Communities",
         summary: "Discover communities by verifiable ordering",
         description:
-          "Ordering uses only checkable facts: member count or creation time. Highest mining power, fastest growing, and most discussed have no backend and are not offered. `verification=all` additionally shows communities the caller created or joined.",
+          "Ordering uses only checkable facts: member count or creation time. Highest mining power, fastest growing, and most discussed have no backend and are not offered. `verification=all` additionally shows communities the caller created or joined. `membership=joined` lists only the caller's current non-owner memberships (active or muted, never banned) and `membership=owned` the communities the caller owns; either combines with every `sort`. Each row carries the caller's `viewerMembership` and the `boundAsset` registry summary (Decision 0099), read for the whole page with one set-based query each.",
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
