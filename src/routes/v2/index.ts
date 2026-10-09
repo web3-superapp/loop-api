@@ -1,3 +1,4 @@
+import type { HooksLaunchSubmissionService } from "../../features/launch/hooks-launch-submission.js";
 import type { FastifyInstance, preHandlerAsyncHookHandler } from "fastify";
 
 import { v2ModuleIds, type AppConfig, type V2ModuleId } from "../../config.js";
@@ -27,6 +28,8 @@ import type { SecurityService } from "../../features/security/security-service.j
 import type { SettingsService } from "../../features/settings/settings-service.js";
 import type { SupportService } from "../../features/support/support-service.js";
 import type { LaunchService } from "../../features/launch/launch-service.js";
+import type { HooksLaunchProjectConfigService } from "../../features/launch/hooks-launch-project-config.js";
+import type { HooksLaunchDeploymentService } from "../../features/launch/hooks-launch-deployment.js";
 import type { MiningService } from "../../features/mining/mining-service.js";
 import type { ReferralService } from "../../features/referral/referral-service.js";
 import { registerV2ApprovalRoutes } from "./approvals.js";
@@ -86,6 +89,9 @@ export interface V2RouteDependencies {
   readonly settingsService: SettingsService;
   readonly supportService: SupportService;
   readonly launchService: LaunchService;
+  readonly hooksLaunchProjectConfigService?: HooksLaunchProjectConfigService;
+  readonly hooksLaunchDeploymentService?: HooksLaunchDeploymentService;
+  readonly hooksLaunchSubmissionService?: HooksLaunchSubmissionService;
   readonly miningService: MiningService;
   readonly referralService: ReferralService;
   readonly cursorCodec: V2CursorCodec | null;

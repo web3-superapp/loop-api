@@ -45,6 +45,8 @@
     complete: "完整",
     incomplete: "不完整",
     invalidated: "已撤回",
+    awaiting_executor: "等待链上执行",
+    cancelled: "已取消",
     queued: "待执行",
     held: "已挂起",
     succeeded: "成功",
@@ -90,6 +92,8 @@
       ),
     );
   const nav = [
+    ["launch", "◉", "Hooks 项目", "launch.read"],
+    ["testnet", "◇", "测试网验收", "testnet.read"],
     ["mining", "◈", "挖矿配置", "mining.read"],
     ["drafts", "≡", "草稿与审批", "mining.read"],
     ["snapshots", "▦", "快照记录", "mining.read"],
@@ -417,9 +421,11 @@
     try {
       const resources = ["mining", "drafts", "snapshots"].includes(page)
         ? ["mining", "drafts", ...(page === "snapshots" ? ["snapshots"] : [])]
-        : page === "catalog"
-          ? []
-          : [page];
+        : page === "testnet"
+          ? ["testnet"]
+          : page === "catalog"
+            ? []
+            : [page];
       await Promise.all(resources.map((resource) => load(resource)));
       if (view !== viewGeneration) return;
       if (resources.includes("mining") && active()) {
@@ -531,7 +537,134 @@
       "",
       loading,
     );
-    if (page === "mining" || page === "drafts") {
+    if (page === "testnet") {
+      main.append(
+        heading(
+          "BSC Testnet 验收记录",
+          "仅记录 chainId 97 的验收结果。测试网部署与签收不代表主网部署或独立审计通过。",
+          [reload],
+        ),
+      );
+      const form = el("form", undefined, "editor-form"),
+        projectId = field(form, "项目 ID（UUID）", ""),
+        configVersion = field(form, "配置版本号", "1"),
+        configHash = field(form, "配置哈希（0x + 64 位 hex）", ""),
+        manifestHash = field(form, "合约清单哈希（0x + 64 位 hex）", ""),
+        checklist = field(form, "验收清单版本", "hooks-testnet-v1"),
+        outcome = field(
+          form,
+          "验收结果（passed / failed / incomplete）",
+          "passed",
+        ),
+        evidence = field(form, "证据 HTTPS 链接或交易哈希（每行一个）", "", {
+          multiline: true,
+        }),
+        reason = field(form, "验收说明（写入审计）", "");
+      const error = el("p", "", "error-text"),
+        submit = el("button", "记录测试网验收", "primary");
+      submit.type = "submit";
+      append(form, error, submit);
+      if (
+        !session.grants.some((grant) => grant.permission === "testnet.accept")
+      ) {
+        form.replaceChildren(
+          el(
+            "p",
+            "当前账号只有测试网只读权限。记录验收需要单独的 testnet.accept 权限。",
+            "note warning",
+          ),
+        );
+      } else {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          try {
+            const refs = evidence.value
+              .split(/\r?\n/)
+              .map((uri, index) => ({
+                label: `证据 ${index + 1}`,
+                uri: uri.trim(),
+              }))
+              .filter((item) => item.uri);
+            await startCommand(
+              "testnet.acceptance.record",
+              projectId.value.trim(),
+              {
+                configVersion: Number(configVersion.value),
+                configHash: configHash.value.trim(),
+                contractManifestHash: manifestHash.value.trim(),
+                checklistVersion: checklist.value.trim(),
+                outcome: outcome.value.trim(),
+                evidence: refs,
+              },
+              reason.value.trim(),
+            );
+          } catch (failure) {
+            error.textContent = errorText(failure);
+          }
+        });
+      }
+      main.append(form);
+      main.append(
+        table(
+          "已提交验收记录",
+          ["项目", "链", "清单", "结果", "合约清单哈希", "提交时间"],
+          items("testnet").map((row) => [
+            short(row.project_id),
+            `BSC Testnet · ${row.chain_id}`,
+            row.checklist_version,
+            badge(row.outcome),
+            short(row.contract_manifest_hash),
+            time(row.created_at),
+          ]),
+          "testnet",
+        ),
+      );
+    } else if (page === "launch") {
+      main.append(
+        heading(
+          "Hooks 项目配置",
+          "查看项目配置草稿与当前模板参数。写入、审批及快照操作会按角色开放并记录审计。",
+          [reload],
+        ),
+      );
+      main.append(
+        table(
+          "项目配置",
+          [
+            "项目 / 代币",
+            "审核状态",
+            "配置版本",
+            "独立审批",
+            "部署任务",
+            "模板",
+            "回购接收地址",
+            "更新时间",
+            "详情",
+          ],
+          items("launch").map((row) => [
+            identityCell(row.name, `${row.ticker} · ${row.project_id}`),
+            badge(row.review_status),
+            row.config_version == null ? "未配置" : `v${row.config_version}`,
+            row.config_approved_at
+              ? `已审批 · ${short(row.config_approver_id)}`
+              : "待独立审批",
+            row.deployment_status ? badge(row.deployment_status) : "未提交签名",
+            row.template_version || "—",
+            short(row.config?.buybackRecipient),
+            time(row.config_updated_at || row.updated_at),
+            button("核对配置", () => launchConfigDetail(row), "link"),
+          ]),
+          "launch",
+        ),
+      );
+      main.append(
+        el(
+          "p",
+          "后台账号与回购接收地址分离。当前列表为配置检查入口；发售时间修改、快照发布和部署需要各自的授权与二次验收。",
+          "note warning",
+        ),
+      );
+    } else if (page === "mining" || page === "drafts") {
       const current = active();
       main.append(
         heading(
@@ -794,6 +927,390 @@
       );
     }
   }
+  async function launchV2(path, { method = "GET", body, key } = {}) {
+    if (preview)
+      throw Object.assign(new Error("演示模式不发起钱包或链上操作"), {
+        code: "PREVIEW_NETWORK_DISABLED",
+      });
+    const generation = sessionGeneration;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch(`/v2/${path}`, {
+        method,
+        signal: controller.signal,
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "x-loop-client-version": "1.2.3",
+          "x-loop-contract-version": "2.0",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+          ...(key ? { "Idempotency-Key": key } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const result = await response.json();
+      if (generation !== sessionGeneration)
+        throw Object.assign(new Error("SESSION_REPLACED"), {
+          code: "SESSION_REPLACED",
+        });
+      if (!response.ok)
+        throw Object.assign(new Error(result.code || "REQUEST_FAILED"), {
+          code: result.code,
+          status: response.status,
+        });
+      return result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  function launchWalletPanel(body, row) {
+    const panel = el("section", undefined, "editor-form");
+    append(
+      panel,
+      el("h3", "项目钱包签名与部署任务"),
+      el(
+        "p",
+        "签名提交只登记等待执行的任务，不会广播合约或自动激活。预测地址尚不是链上部署证据。",
+        "note warning",
+      ),
+    );
+    if (row.deployment_job_id) {
+      detailList(panel, [
+        ["任务编号", row.deployment_job_id],
+        ["任务状态", labels[row.deployment_status] || row.deployment_status],
+        ["MEME 预测地址", row.predicted_meme_address || "—"],
+        ["Hook 预测地址", row.predicted_hook_address || "—"],
+      ]);
+    }
+    body.append(panel);
+    if (preview) {
+      panel.append(
+        el(
+          "p",
+          "演示模式不连接钱包、不签名、不提交部署任务。",
+          "section-caption",
+        ),
+      );
+      return;
+    }
+    if (session?.actorId !== row.owner_user_id) {
+      panel.append(
+        el(
+          "p",
+          "需要项目所有者本人登录并使用已登记的项目钱包签名。运营审核权限不能代替项目方签名。",
+          "section-caption",
+        ),
+      );
+      return;
+    }
+    if (!row.config_approved_at) {
+      panel.append(
+        el(
+          "p",
+          "当前配置须先由独立审批人批准，再准备钱包签名。",
+          "section-caption",
+        ),
+      );
+      return;
+    }
+    let prepared = null,
+      submission = null,
+      key = null,
+      busy = false;
+    const generation = sessionGeneration,
+      view = drawerGeneration;
+    const current = () =>
+      generation === sessionGeneration && drawerCurrent(view);
+    const state = el("p", "请先准备并检查签名内容。", "section-caption");
+    const inspect = el("div");
+    const prepare = button("准备项目签名", async () => {
+      if (busy) return;
+      busy = true;
+      prepare.disabled = true;
+      sign.disabled = true;
+      prepared = null;
+      submission = null;
+      key = null;
+      inspect.replaceChildren();
+      try {
+        const wallets = await launchV2("wallets");
+        if (!current()) return;
+        if (!wallets.activeWalletId)
+          throw new Error("请先在项目账户中登记并选定钱包");
+        prepared = await launchV2(
+          `launch/projects/${row.project_id}/hooks-config/signing-request?walletId=${encodeURIComponent(wallets.activeWalletId)}`,
+        );
+        if (!current()) return;
+        prepared.walletId = wallets.activeWalletId;
+        detailList(inspect, [
+          ["链", "BSC Testnet · 97"],
+          ["项目钱包", prepared.request.projectOwner],
+          ["工厂", prepared.typedData.domain.verifyingContract],
+          ["配置版本", prepared.request.configVersion],
+          ["签名截止", time(Number(prepared.request.deadline) * 1000)],
+          ["MEME 预测地址", prepared.memeAddress],
+          ["Hook 预测地址", prepared.hookAddress],
+        ]);
+        jsonDetails(inspect, "完整 EIP-712 签名内容", prepared.typedData, true);
+        state.textContent =
+          "核对钱包、工厂、开售时间和收币地址后，再确认签名。";
+        sign.disabled = false;
+      } catch (error) {
+        if (current()) state.textContent = error.message || errorText(error);
+      } finally {
+        busy = false;
+        if (current()) prepare.disabled = false;
+      }
+    });
+    const sign = button(
+      "确认签名并登记任务",
+      async () => {
+        if (busy || !prepared) return;
+        busy = true;
+        sign.disabled = true;
+        prepare.disabled = true;
+        try {
+          if (!submission) {
+            const provider = window.ethereum;
+            if (!provider?.request)
+              throw new Error(
+                "当前浏览器没有钱包连接。请在支持钱包的浏览器中打开后台。",
+              );
+            const chain = await provider.request({ method: "eth_chainId" });
+            if (!current()) return;
+            if (BigInt(chain) !== 97n)
+              throw new Error("请将钱包切换到 BSC Testnet（97）后再签名。");
+            const addresses = await provider.request({
+              method: "eth_requestAccounts",
+            });
+            if (!current()) return;
+            if (
+              !addresses[0] ||
+              addresses[0].toLowerCase() !==
+                prepared.request.projectOwner.toLowerCase()
+            )
+              throw new Error("连接的钱包与项目已登记钱包不一致。");
+            if (
+              Number(prepared.request.deadline) <= Math.floor(Date.now() / 1000)
+            )
+              throw new Error("签名请求已过期，请重新准备。");
+            const signature = await provider.request({
+              method: "eth_signTypedData_v4",
+              params: [
+                prepared.request.projectOwner,
+                JSON.stringify(prepared.typedData),
+              ],
+            });
+            if (!current()) return;
+            submission = {
+              walletId: prepared.walletId,
+              request: prepared.request,
+              hookSalt: prepared.hookSalt,
+              signature,
+            };
+            key = uuid();
+          }
+          const job = await launchV2(
+            `launch/projects/${row.project_id}/hooks-deployments`,
+            { method: "POST", body: submission, key },
+          );
+          if (!current()) return;
+          state.textContent = `任务 ${job.jobId}：${labels[job.status] || job.status}。尚未广播。`;
+          sign.textContent = "任务已登记";
+          submission = null;
+          prepared = null;
+          key = null;
+          void refresh();
+        } catch (error) {
+          if (current()) {
+            state.textContent = `${error.message || errorText(error)}${submission ? "；保留同一提交编号，可重试查询/提交结果。" : ""}`;
+            sign.textContent = submission
+              ? "重试同一签名提交"
+              : "确认签名并登记任务";
+          }
+        } finally {
+          busy = false;
+          if (current()) {
+            prepare.disabled = Boolean(submission);
+            sign.disabled = !prepared;
+          }
+        }
+      },
+      "primary",
+      true,
+    );
+    append(panel, state, inspect, prepare, sign);
+    if (row.deployment_status === "awaiting_executor")
+      panel.append(
+        button("取消尚未执行的任务", async () => {
+          if (busy) return;
+          busy = true;
+          try {
+            const job = await launchV2(
+              `launch/projects/${row.project_id}/hooks-deployments/${row.deployment_job_id}`,
+              { method: "DELETE" },
+            );
+            if (current()) {
+              state.textContent = `任务已${labels[job.status] || job.status}，原签名与操作记录保留。`;
+              void refresh();
+            }
+          } catch (error) {
+            if (current())
+              state.textContent = error.message || errorText(error);
+          } finally {
+            busy = false;
+          }
+        }),
+      );
+  }
+
+  function launchConfigDetail(row) {
+    const body = showDrawer("Hooks 项目配置检查");
+    detailList(body, [
+      ["项目", row.name],
+      ["Ticker", row.ticker],
+      ["项目 ID", row.project_id],
+      ["项目负责人", row.owner_user_id],
+      ["审核状态", row.review_status],
+      ["配置版本", row.config_version ?? "未配置"],
+      ["配置哈希", row.config_hash ?? "—"],
+      [
+        "独立审批",
+        row.config_approved_at
+          ? `已审批 · ${row.config_approver_id}`
+          : "待独立审批",
+      ],
+      ["NFT 开售时间（UTC 秒）", row.config?.nftSaleStartAt ?? "—"],
+      ["回购接收地址", row.config?.buybackRecipient ?? "—"],
+    ]);
+    jsonDetails(body, "项目配置原始数据", row.config || {}, true);
+    launchWalletPanel(body, row);
+    if (
+      row.config_version &&
+      row.config_hash &&
+      !row.config_approved_at &&
+      can("launch.approve", row.project_id)
+    ) {
+      const approvalReason = field(body, "独立审批理由（写入审计）", "");
+      body.append(
+        button(
+          "审批当前配置哈希",
+          () =>
+            void startCommand(
+              "launch.config.approve",
+              row.project_id,
+              {
+                configVersion: Number(row.config_version),
+                configHash: row.config_hash,
+              },
+              approvalReason.value.trim(),
+            ).catch((failure) => toast(errorText(failure))),
+          "primary",
+        ),
+      );
+      body.append(
+        el(
+          "p",
+          "配置编辑人与审批人必须是不同运营账户；审批绑定当前配置版本与哈希。",
+          "note warning",
+        ),
+      );
+    }
+    if (
+      !can("launch.edit", row.project_id) ||
+      row.review_status !== "approved"
+    ) {
+      body.append(
+        el(
+          "p",
+          "只有获得此项目 launch.edit 权限且项目已审核通过的运营人员可以修改配置。",
+          "note warning",
+        ),
+      );
+      return;
+    }
+    const form = el("form", undefined, "editor-form"),
+      config = row.config || {},
+      name = field(form, "项目名称", config.name || row.name),
+      ticker = field(form, "Ticker", config.ticker || row.ticker),
+      logo = field(form, "Logo HTTPS 地址", config.logoAssetUrl || ""),
+      description = field(form, "项目介绍", config.description || "", {
+        multiline: true,
+      }),
+      links = field(
+        form,
+        "官方链接（每行一个 HTTPS URL）",
+        (config.links || []).join("\n"),
+        { multiline: true },
+      ),
+      saleStart = field(
+        form,
+        "NFT 开售时间（UTC ISO-8601）",
+        config.nftSaleStartAt
+          ? new Date(Number(config.nftSaleStartAt) * 1000).toISOString()
+          : "",
+        { placeholder: "2027-01-02T00:00:00Z" },
+      ),
+      recipient = field(
+        form,
+        "回购 MEME 接收地址",
+        config.buybackRecipient || "0x28816c4C4792467390C90e5B426F198570E29307",
+      ),
+      reason = field(form, "修改原因（写入审计）", "");
+    form.append(
+      el(
+        "p",
+        "保存会生成不可变的新配置版本；NFT 发售开始时间至少提前 24 小时。固定税率、供应量、限购和回购额度不可在此修改。",
+        "note warning",
+      ),
+    );
+    const error = el("p", "", "error-text"),
+      submit = el("button", "保存新配置版本", "primary");
+    submit.type = "submit";
+    append(form, error, submit);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      try {
+        const starts = Date.parse(saleStart.value.trim());
+        if (
+          !Number.isFinite(starts) ||
+          !/([zZ]|[+-][0-9]{2}:[0-9]{2})$/.test(saleStart.value.trim())
+        )
+          throw new Error(
+            "开售时间必须包含 UTC 时区，例如 2027-01-02T00:00:00Z",
+          );
+        submit.disabled = true;
+        await startCommand(
+          "launch.config.save",
+          row.project_id,
+          {
+            expectedVersion: Number(row.config_version || 0),
+            config: {
+              name: name.value.trim(),
+              ticker: ticker.value.trim().toUpperCase(),
+              logoAssetUrl: logo.value.trim(),
+              description: description.value.trim(),
+              links: links.value
+                .split(/\r?\n/)
+                .map((value) => value.trim())
+                .filter(Boolean),
+              nftSaleStartAt: String(Math.floor(starts / 1000)),
+              buybackRecipient: recipient.value.trim(),
+            },
+          },
+          reason.value.trim(),
+        );
+      } catch (failure) {
+        error.textContent = errorText(failure);
+        submit.disabled = false;
+      }
+    });
+    body.append(form);
+  }
+
   function auditDetail(row) {
     const body = showDrawer("审计详情");
     detailList(body, [
@@ -1733,6 +2250,23 @@
   nextPackage.configVersion = "dev-community-v4";
   nextPackage.communityWeights[0].weight = "1.4";
   const demoData = {
+    launch: [
+      {
+        project_id: "80000000-0000-4000-8000-000000000001",
+        owner_user_id: demoActor,
+        name: "开发测试项目（示例）",
+        ticker: "DEMO",
+        review_status: "approved",
+        config_version: 1,
+        config_hash: `0x${"ab".repeat(32)}`,
+        template_version: "示例 / 非部署配置",
+        config: {
+          nftSaleStartAt: "1900000000",
+          buybackRecipient: "0x28816c4C4792467390C90e5B426F198570E29307",
+        },
+        config_updated_at: date,
+      },
+    ],
     mining: [
       {
         config_version: demoPackage.configVersion,
@@ -2014,6 +2548,7 @@
       actorId: demoActor,
       environment: "local-preview",
       grants: [
+        "launch.read",
         "audit.read",
         "mining.read",
         "mining.edit",

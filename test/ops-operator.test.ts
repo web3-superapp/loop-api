@@ -49,4 +49,24 @@ describe("operator bootstrap arguments", () => {
       ]),
     ).toMatchObject({ scope: user, permissions: ["community.review"] });
   });
+
+  it("allows project-scoped launch grants for individual operators", () => {
+    const project = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
+    expect(
+      parseOperatorArgs([
+        "--confirm",
+        "--user",
+        user,
+        "--label",
+        "Project operator",
+        "--permissions",
+        "launch.read,launch.edit",
+        "--scope",
+        project,
+      ]),
+    ).toMatchObject({
+      scope: project,
+      permissions: ["launch.read", "launch.edit"],
+    });
+  });
 });

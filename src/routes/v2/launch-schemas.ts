@@ -183,6 +183,148 @@ export const replaceProjectRequestSchema = {
   },
 } as const;
 
+const hooksLaunchDraftBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "name",
+    "ticker",
+    "logoAssetUrl",
+    "description",
+    "links",
+    "nftSaleStartAt",
+    "buybackRecipient",
+  ],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 64 },
+    ticker: { type: "string", pattern: "^[A-Za-z0-9]{2,12}$" },
+    logoAssetUrl: { type: "string", format: "uri", maxLength: 2_048 },
+    description: { type: "string", maxLength: 2_000 },
+    links: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string", format: "uri", maxLength: 2_048 },
+    },
+    nftSaleStartAt: { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
+    buybackRecipient: { type: "string", pattern: evmAddressPatternSource },
+  },
+} as const;
+
+export const hooksLaunchProjectConfigRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["expectedVersion", "config"],
+  properties: {
+    expectedVersion: { type: "integer", minimum: 0, maximum: 2_147_483_646 },
+    config: hooksLaunchDraftBodySchema,
+  },
+} as const;
+
+export const hooksLaunchProjectConfigResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["projectId", "version", "templateVersion", "config", "updatedAt"],
+  properties: {
+    projectId: { type: "string", pattern: opaqueIdPatternSource },
+    version: { type: "integer", minimum: 1 },
+    templateVersion: { type: "string", const: "hooks_launch_v1" },
+    config: {
+      type: "object",
+      additionalProperties: true,
+      required: [
+        "templateVersion",
+        "templateHash",
+        "name",
+        "ticker",
+        "logoAssetUrl",
+        "description",
+        "links",
+        "nftSaleStartAt",
+        "buybackRecipient",
+        "fixedEconomics",
+        "configHash",
+      ],
+      properties: {
+        templateVersion: { type: "string", const: "hooks_launch_v1" },
+        templateHash: bytes32Schema,
+        name: { type: "string" },
+        ticker: { type: "string" },
+        logoAssetUrl: { type: "string", format: "uri" },
+        description: { type: "string" },
+        links: { type: "array", items: { type: "string", format: "uri" } },
+        nftSaleStartAt: uintStringSchema,
+        buybackRecipient: addressSchema,
+        fixedEconomics: { type: "object", additionalProperties: true },
+        configHash: bytes32Schema,
+      },
+    },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const hooksLaunchSigningRequestQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId"],
+  properties: {
+    walletId: { type: "string", format: "uuid" },
+  },
+} as const;
+
+export const hooksLaunchSigningRequestResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "request",
+    "typedData",
+    "hookDeployer",
+    "hookInitCodeHash",
+    "hookSalt",
+    "hookAddress",
+    "memeDeployer",
+    "memeInitCodeHash",
+    "memeAddress",
+  ],
+  properties: {
+    request: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "projectOwner",
+        "configVersion",
+        "configHash",
+        "name",
+        "ticker",
+        "nftSaleStart",
+        "buybackRecipient",
+        "deadline",
+        "memeSalt",
+        "nonce",
+      ],
+      properties: {
+        projectOwner: { type: "string", pattern: evmAddressPatternSource },
+        configVersion: { type: "integer", minimum: 1 },
+        configHash: bytes32Schema,
+        name: { type: "string", minLength: 1, maxLength: 64 },
+        ticker: { type: "string", pattern: "^[A-Z0-9]{2,12}$" },
+        nftSaleStart: uintStringSchema,
+        buybackRecipient: { type: "string", pattern: evmAddressPatternSource },
+        deadline: uintStringSchema,
+        memeSalt: bytes32Schema,
+        nonce: uintStringSchema,
+      },
+    },
+    typedData: { type: "object", additionalProperties: true },
+    hookDeployer: { type: "string", pattern: evmAddressPatternSource },
+    hookInitCodeHash: bytes32Schema,
+    hookSalt: bytes32Schema,
+    hookAddress: { type: "string", pattern: evmAddressPatternSource },
+    memeDeployer: { type: "string", pattern: evmAddressPatternSource },
+    memeInitCodeHash: bytes32Schema,
+    memeAddress: { type: "string", pattern: evmAddressPatternSource },
+  },
+} as const;
+
 const projectProjectionSchema = {
   type: "object",
   additionalProperties: false,

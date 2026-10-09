@@ -1,3 +1,4 @@
+import { createHooksLaunchSubmissionService } from "./features/launch/hooks-launch-submission.js";
 import { registerOpsWebRoutes } from "./routes/ops-web.js";
 import { createPostgresMarketFactCacheRepository } from "./database/market-fact-cache-repository.js";
 import { createPostgresChainRegistryRepository } from "./database/chain-registry-repository.js";
@@ -340,6 +341,10 @@ import {
   createUnavailableLaunchService,
   type LaunchService,
 } from "./features/launch/launch-service.js";
+import { createHooksLaunchProjectConfigService } from "./features/launch/hooks-launch-project-config.js";
+import { createHooksLaunchDeploymentService } from "./features/launch/hooks-launch-deployment.js";
+import { createHooksLaunchFactoryReader } from "./integrations/launch/hooks-launch-factory-reader.js";
+import type { HooksLaunchFactoryReader } from "./features/launch/hooks-launch-deployment.js";
 import {
   createLaunchContractAdapter,
   type LaunchContractAdapter,
@@ -428,6 +433,8 @@ export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly contractSurface?: "runtime" | "v1" | "v2";
   readonly database?: Database;
+  /** Test seam for the read-only BSC Testnet Hooks Factory adapter. */
+  readonly hooksLaunchFactoryReader?: HooksLaunchFactoryReader;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
@@ -1643,6 +1650,37 @@ export async function buildApp(
                 }),
         })
       : createUnavailableLaunchService());
+  const hooksLaunchProjectConfigService = createHooksLaunchProjectConfigService(
+    {
+      repository: database.hooksLaunchProjectConfigs ?? null,
+      minimumLeadSeconds: 86_400,
+    },
+  );
+  const hooksFactoryReader =
+    options.hooksLaunchFactoryReader ??
+    (config.hooksLaunchFactoryAddress !== null &&
+    config.hooksLaunchFactoryCodeHash !== null &&
+    config.launchChain.chainId === "eip155:97" &&
+    config.launchChain.rpcUrls.length > 0
+      ? createHooksLaunchFactoryReader({
+          factoryAddress: config.hooksLaunchFactoryAddress,
+          expectedRuntimeCodeHash: config.hooksLaunchFactoryCodeHash,
+          rpcUrls: config.launchChain.rpcUrls,
+        })
+      : null);
+  const hooksLaunchDeploymentService = createHooksLaunchDeploymentService({
+    configs: database.hooksLaunchProjectConfigs ?? null,
+    wallets: database.accountWallets ?? null,
+    reader: hooksFactoryReader,
+    signatureLifetimeSeconds: 900,
+    maxSaltAttempts: 1_000_000,
+  });
+  const hooksLaunchSubmissionService = createHooksLaunchSubmissionService({
+    configs: database.hooksLaunchProjectConfigs ?? null,
+    wallets: database.accountWallets ?? null,
+    reader: hooksFactoryReader,
+    repository: database.hooksLaunchSubmissions ?? null,
+  });
   if (launchRuntimeAvailable && launchContractAdapter.contract !== null) {
     void launchContractAdapter.verifyAtStartup();
   }
@@ -2001,6 +2039,9 @@ export async function buildApp(
       approvalService,
       swapService,
       launchService,
+      hooksLaunchProjectConfigService,
+      hooksLaunchDeploymentService,
+      hooksLaunchSubmissionService,
       miningService,
       referralService,
       deviceService,

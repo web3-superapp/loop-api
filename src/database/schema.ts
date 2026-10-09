@@ -1,4 +1,4 @@
-export const latestMigrationName = "000049_ops_bootstrap_audit";
+export const latestMigrationName = "000053_hooks_signed_deployment_tasks";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -121,4 +121,10 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.ops_operations",
   "public.ops_audit",
   "public.ops_jobs",
+  "public.hooks_launch_project_config_versions",
+  "public.hooks_launch_config_approvals",
+  "public.hooks_testnet_acceptances",
+  "public.hooks_launch_deployment_tasks",
+  "public.hooks_launch_deployment_authorizations",
+  "public.hooks_launch_submission_commands",
 ] as const);

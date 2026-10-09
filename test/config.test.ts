@@ -37,6 +37,46 @@ describe("loadConfig", () => {
     expect(config.hyperliquidPrivateReads).toBeNull();
     expect(config.v2SessionEnabled).toBe(true);
     expect(config.serviceName).toBe("loop-api");
+    expect(config.hooksLaunchFactoryAddress).toBeNull();
+    expect(config.hooksLaunchFactoryCodeHash).toBeNull();
+  });
+
+  it("accepts a Hooks launch factory only on the dedicated BSC Testnet slot", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+      HOOKS_LAUNCH_FACTORY_ADDRESS:
+        "0x1111111111111111111111111111111111111111",
+      HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+    };
+    expect(loadConfig(environment).hooksLaunchFactoryAddress).toBe(
+      "0x1111111111111111111111111111111111111111",
+    );
+    expect(loadConfig(environment).hooksLaunchFactoryCodeHash).toBe(
+      `0x${"ab".repeat(32)}`,
+    );
+  });
+
+  it("refuses a configured Hooks launch factory on the BSC mainnet slot", () => {
+    const environment = {
+      ...validEnvironment(),
+      HOOKS_LAUNCH_FACTORY_ADDRESS:
+        "0x1111111111111111111111111111111111111111",
+      HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+    };
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
+  });
+
+  it("requires the Factory address and expected runtime code hash together", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+      HOOKS_LAUNCH_FACTORY_ADDRESS:
+        "0x1111111111111111111111111111111111111111",
+    };
+    expect(() => loadConfig(environment)).toThrow(ConfigurationError);
   });
 
   it("enables Privy verification only when both credentials are present", () => {

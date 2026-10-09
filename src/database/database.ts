@@ -1,3 +1,5 @@
+import { createPostgresHooksLaunchSubmissionRepository } from "./hooks-launch-submission-repository.js";
+import type { HooksLaunchSubmissionRepository } from "../features/launch/hooks-launch-submission.js";
 import { createPostgresOpsRepository } from "./ops-repository.js";
 import type { OpsRepository } from "../features/ops/ops-contract.js";
 import pg from "pg";
@@ -60,9 +62,11 @@ import { createPostgresSupportTicketRepository } from "./support-ticket-reposito
 import type { AccountSettingsRepository } from "../features/settings/account-settings-repository.js";
 import type { SupportTicketRepository } from "../features/support/support-ticket-repository.js";
 import { createPostgresLaunchRepository } from "./launch-repository.js";
+import { createPostgresHooksLaunchProjectConfigRepository } from "./hooks-launch-project-config-repository.js";
 import { createPostgresMiningRepository } from "./mining-repository.js";
 import { createPostgresReferralRepository } from "./referral-repository.js";
 import type { LaunchRepository } from "../features/launch/launch-repository.js";
+import type { HooksLaunchProjectConfigRepository } from "../features/launch/hooks-launch-project-config.js";
 import type { LaunchChainRepository } from "../features/launch/launch-chain-repository.js";
 import { createPostgresLaunchChainRepository } from "./launch-chain-repository.js";
 import type { MiningRepository } from "../features/mining/mining-repository.js";
@@ -186,6 +190,9 @@ export interface Database {
   readonly supportTickets?: SupportTicketRepository;
   /** Launch off-chain catalog and review (Decision 0036). */
   readonly launch?: LaunchRepository;
+  /** Append-only off-chain Hooks project configuration drafts. */
+  readonly hooksLaunchProjectConfigs?: HooksLaunchProjectConfigRepository;
+  readonly hooksLaunchSubmissions?: HooksLaunchSubmissionRepository;
   /** Launch chain facts: lane, projections, allowlist roots, Intents (Decision 0077). */
   readonly launchChain?: LaunchChainRepository;
   /** Mining formula versions, weights, and snapshots (Decision 0036). */
@@ -397,6 +404,9 @@ export function createPostgresDatabase(
     supportTickets,
     communityAi,
     launch,
+    hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
+    hooksLaunchProjectConfigs:
+      createPostgresHooksLaunchProjectConfigRepository(pool),
     launchChain: createPostgresLaunchChainRepository(pool),
     mining,
     referral,

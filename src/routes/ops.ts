@@ -98,6 +98,8 @@ export function registerOpsRoutes(
                   "communities",
                   "support",
                   "audit",
+                  "launch",
+                  "testnet",
                 ],
               },
             },

@@ -45,6 +45,8 @@ describe("ops routes", () => {
       "/ops/api/session",
       "/ops/api/catalog",
       "/ops/api/resources/mining",
+      "/ops/api/resources/launch",
+      "/ops/api/resources/testnet",
       "/ops/api/operations/75c20914-52af-457a-a406-2326faeb2a6c",
     ])
       expect((await server.inject({ url })).statusCode).toBe(401);
@@ -81,6 +83,30 @@ describe("ops routes", () => {
     expect(repository.list).toHaveBeenCalledWith(
       "75c20914-52af-457a-a406-2326faeb2a6c",
       "mining",
+      undefined,
+      {},
+    );
+  });
+  it("exposes Hooks project review only through the authenticated ops resource", async () => {
+    const { server, repository } = app();
+    const response = await server.inject({ url: "/ops/api/resources/launch" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(repository.list).toHaveBeenCalledWith(
+      "75c20914-52af-457a-a406-2326faeb2a6c",
+      "launch",
+      undefined,
+      {},
+    );
+  });
+  it("exposes Testnet acceptance records through the authenticated ops resource", async () => {
+    const { server, repository } = app();
+    const response = await server.inject({ url: "/ops/api/resources/testnet" });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(repository.list).toHaveBeenCalledWith(
+      "75c20914-52af-457a-a406-2326faeb2a6c",
+      "testnet",
       undefined,
       {},
     );

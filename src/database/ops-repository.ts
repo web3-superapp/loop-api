@@ -19,6 +19,7 @@ import { createPostgresSupportTicketRepository } from "./support-ticket-reposito
 import { createPostgresNotificationRepository } from "./notification-repository.js";
 import { communityApplicationNotification } from "../features/community/community-review-service.js";
 import { opsTransactionPool } from "./ops-transaction.js";
+import { parseHooksLaunchDraft } from "../features/launch/hooks-launch-config.js";
 
 type DraftRow = {
   id: string;
@@ -47,6 +48,8 @@ async function authorize(
   if (!grant.rowCount) throw new OpsError("OPS_FORBIDDEN", 403);
 }
 function permissionForResource(resource: string): OpsPermission {
+  if (resource === "launch") return "launch.read";
+  if (resource === "testnet") return "testnet.read";
   if (["mining", "drafts", "weights", "snapshots"].includes(resource))
     return "mining.read";
   if (resource === "communities") return "community.review";
@@ -131,6 +134,68 @@ export function createPostgresOpsRepository(
           );
           await client.query("commit");
           return page(result.rows, "community_id");
+        }
+        if (resource === "launch" || resource === "testnet") {
+          const operator = await client.query(
+            "select 1 from public.ops_operators where user_id=$1 and enabled for share",
+            [actor],
+          );
+          if (!operator.rowCount) throw new OpsError("OPS_FORBIDDEN", 403);
+          const grant = await client.query<{ scope: string }>(
+            "select scope from public.ops_grants where user_id=$1 and permission=$2 for share",
+            [actor, permissionForResource(resource)],
+          );
+          if (!grant.rowCount) throw new OpsError("OPS_FORBIDDEN", 403);
+          const scopes = grant.rows.map((row) => row.scope);
+          const result =
+            resource === "launch"
+              ? await client.query<Record<string, unknown>>(
+                  `select p.project_id,p.owner_user_id,p.name,p.ticker,p.review_status,
+                    p.record_version,p.updated_at,
+                    c.config_version,c.template_version,c.config_hash,c.config,
+                    c.created_at as config_updated_at,
+                    a.approver_id as config_approver_id,
+                    a.approved_at as config_approved_at,
+                    d.job_id as deployment_job_id,d.status as deployment_status,
+                    d.meme_address as predicted_meme_address,d.hook_address as predicted_hook_address
+             from public.launch_projects p
+             left join lateral (
+               select config_version,template_version,config_hash,config,created_at
+               from public.hooks_launch_project_config_versions
+               where project_id=p.project_id
+               order by config_version desc limit 1
+             ) c on true
+             left join lateral (
+               select approver_id,approved_at
+               from public.hooks_launch_config_approvals
+               where project_id=p.project_id and config_version=c.config_version
+               limit 1
+             ) a on true
+             left join lateral (
+               select job_id,status,meme_address,hook_address
+               from public.hooks_launch_deployment_tasks
+               where project_id=p.project_id and config_version=c.config_version
+               order by created_at desc,job_id desc limit 1
+             ) d on true
+             where ($1 or p.project_id::text=any($2::text[]))
+               and ($3::text is null or p.project_id::text < $3)
+             order by p.project_id desc limit 51`,
+                  [scopes.includes("*"), scopes, before ?? null],
+                )
+              : await client.query<Record<string, unknown>>(
+                  `select acceptance_id,project_id,config_version,chain_id,config_hash,
+                   contract_manifest_hash,checklist_version,outcome,evidence,actor_id,reason,created_at
+                 from public.hooks_testnet_acceptances
+                 where ($1 or project_id::text=any($2::text[]))
+                   and ($3::uuid is null or acceptance_id < $3::uuid)
+                 order by acceptance_id desc limit 51`,
+                  [scopes.includes("*"), scopes, before ?? null],
+                );
+          await client.query("commit");
+          return page(
+            result.rows,
+            resource === "launch" ? "project_id" : "acceptance_id",
+          );
         }
         await authorize(client, actor, permission);
         if (
@@ -401,7 +466,12 @@ export function createPostgresOpsRepository(
           client,
           actor,
           commandPermission(command.action),
-          command.action === "community.review" ? command.target : "*",
+          command.action === "community.review" ||
+            command.action === "launch.config.save" ||
+            command.action === "launch.config.approve" ||
+            command.action === "testnet.acceptance.record"
+            ? command.target
+            : "*",
         );
         await client.query(
           "select pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -429,7 +499,139 @@ export function createPostgresOpsRepository(
         }
         const txPool = opsTransactionPool(pool, client);
         let result: unknown;
-        if (
+        if (command.action === "launch.config.save") {
+          const projectId = z.uuid().parse(command.target);
+          const project = await client.query<{
+            owner_user_id: string;
+            review_status: string;
+          }>(
+            "select owner_user_id,review_status from public.launch_projects where project_id=$1 for update",
+            [projectId],
+          );
+          const projectRow = project.rows[0];
+          if (!projectRow) throw new OpsError("OPS_NOT_FOUND", 404);
+          if (projectRow.review_status !== "approved")
+            throw new OpsError("OPS_LAUNCH_NOT_APPROVED");
+          const current = await client.query<{ latest_version: number | null }>(
+            "select max(config_version)::integer as latest_version from public.hooks_launch_project_config_versions where project_id=$1",
+            [projectId],
+          );
+          const currentVersion = current.rows[0]?.latest_version ?? 0;
+          if (currentVersion !== command.payload.expectedVersion)
+            throw new OpsError("OPS_VERSION_CONFLICT");
+          let config;
+          try {
+            config = parseHooksLaunchDraft(command.payload.config, {
+              nowUnixSeconds: String(Math.floor(Date.now() / 1000)),
+              minimumLeadSeconds: 86_400,
+            });
+          } catch {
+            throw new OpsError("OPS_INVALID_LAUNCH_CONFIG", 400);
+          }
+          result = (
+            await client.query(
+              `insert into public.hooks_launch_project_config_versions(
+                project_id,config_version,owner_user_id,template_version,
+                config_hash,config,edited_by_operator_id
+              ) values($1,$2,$3,$4,$5,$6::jsonb,$7)
+              returning project_id,config_version,template_version,config_hash,config,created_at`,
+              [
+                projectId,
+                currentVersion + 1,
+                projectRow.owner_user_id,
+                config.templateVersion,
+                config.configHash,
+                JSON.stringify(config),
+                actor,
+              ],
+            )
+          ).rows[0];
+        } else if (command.action === "launch.config.approve") {
+          const projectId = z.uuid().parse(command.target);
+          const project = (
+            await client.query<{ review_status: string }>(
+              "select review_status from public.launch_projects where project_id=$1 for share",
+              [projectId],
+            )
+          ).rows[0];
+          if (!project) throw new OpsError("OPS_NOT_FOUND", 404);
+          if (project.review_status !== "approved")
+            throw new OpsError("OPS_LAUNCH_NOT_APPROVED");
+          const config = (
+            await client.query<{
+              config_hash: string;
+              edited_by_operator_id: string | null;
+              latest_version: number;
+            }>(
+              `select c.config_hash,c.edited_by_operator_id,
+                 (select max(config_version)::integer from public.hooks_launch_project_config_versions where project_id=c.project_id) as latest_version
+               from public.hooks_launch_project_config_versions c
+               where c.project_id=$1 and c.config_version=$2 for share`,
+              [projectId, command.payload.configVersion],
+            )
+          ).rows[0];
+          if (!config) throw new OpsError("OPS_NOT_FOUND", 404);
+          if (!config.edited_by_operator_id)
+            throw new OpsError("OPS_EDITOR_ID_UNKNOWN");
+          if (config.edited_by_operator_id === actor)
+            throw new OpsError("OPS_SELF_APPROVAL", 403);
+          if (
+            config.config_hash !== command.payload.configHash.toLowerCase() ||
+            config.latest_version !== command.payload.configVersion
+          )
+            throw new OpsError("OPS_VERSION_CONFLICT");
+          result = (
+            await client.query(
+              `insert into public.hooks_launch_config_approvals(project_id,config_version,config_hash,approver_id,reason)
+               values($1,$2,$3,$4,$5) returning project_id,config_version,config_hash,approver_id,reason,approved_at`,
+              [
+                projectId,
+                command.payload.configVersion,
+                command.payload.configHash.toLowerCase(),
+                actor,
+                command.reason,
+              ],
+            )
+          ).rows[0];
+        } else if (command.action === "testnet.acceptance.record") {
+          const projectId = z.uuid().parse(command.target);
+          const record = command.payload;
+          const approved = (
+            await client.query<{ config_hash: string }>(
+              `select a.config_hash from public.hooks_launch_config_approvals a
+               join public.hooks_launch_project_config_versions c using(project_id,config_version)
+               where a.project_id=$1 and a.config_version=$2 and c.config_hash=$3 for share of a,c`,
+              [
+                projectId,
+                record.configVersion,
+                record.configHash.toLowerCase(),
+              ],
+            )
+          ).rows[0];
+          if (!approved) throw new OpsError("OPS_LAUNCH_CONFIG_NOT_APPROVED");
+          result = (
+            await client.query(
+              `insert into public.hooks_testnet_acceptances(
+                 acceptance_id,project_id,config_version,chain_id,config_hash,
+                 contract_manifest_hash,checklist_version,outcome,evidence,actor_id,reason
+               ) values($1,$2,$3,97,$4,$5,$6,$7,$8::jsonb,$9,$10)
+               returning acceptance_id,project_id,config_version,chain_id,config_hash,
+                 contract_manifest_hash,checklist_version,outcome,evidence,actor_id,reason,created_at`,
+              [
+                command.operationId,
+                projectId,
+                record.configVersion,
+                record.configHash.toLowerCase(),
+                record.contractManifestHash.toLowerCase(),
+                record.checklistVersion,
+                record.outcome,
+                JSON.stringify(record.evidence),
+                actor,
+                command.reason,
+              ],
+            )
+          ).rows[0];
+        } else if (
           command.action === "mining.snapshot" ||
           command.action === "mining.trial"
         ) {

@@ -34,8 +34,20 @@ export function parseOperatorArgs(args: readonly string[]) {
   const scope = pairs["--scope"] ?? "*";
   if (scope !== "*") {
     z.uuid().parse(scope);
-    if (permissions.some((p) => p !== "community.review"))
-      throw new Error("scopes apply only to community.review");
+    if (
+      permissions.some(
+        (permission) =>
+          ![
+            "community.review",
+            "launch.read",
+            "launch.edit",
+            "launch.approve",
+            "testnet.read",
+            "testnet.accept",
+          ].includes(permission),
+      )
+    )
+      throw new Error("scopes apply only to community and project permissions");
   }
   return {
     userId,

@@ -115,6 +115,8 @@ const launchChainEnvironmentShape = {
   LAUNCH_CONTRACT_VERSION: optionalCredential(64),
   LAUNCH_CONTRACT_START_BLOCK: optionalCredential(32),
   LAUNCH_USD1_ADDRESS: optionalCredential(64),
+  HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
+  HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
 } as const;
 
 function launchChainEnvironmentDefaults(
@@ -129,6 +131,9 @@ function launchChainEnvironmentDefaults(
     LAUNCH_CONTRACT_VERSION: environment["LAUNCH_CONTRACT_VERSION"],
     LAUNCH_CONTRACT_START_BLOCK: environment["LAUNCH_CONTRACT_START_BLOCK"],
     LAUNCH_USD1_ADDRESS: environment["LAUNCH_USD1_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_CODE_HASH:
+      environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
   };
 }
 
@@ -193,6 +198,52 @@ function refineLaunchChainEnvironment(
         path: [key],
       });
     }
+  }
+}
+
+function refineHooksLaunchFactoryEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+    readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const address = value.HOOKS_LAUNCH_FACTORY_ADDRESS;
+  const codeHash = value.HOOKS_LAUNCH_FACTORY_CODE_HASH;
+  if (address === undefined && codeHash === undefined) return;
+  if (address === undefined || codeHash === undefined) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH must be configured together",
+      path: [
+        address === undefined
+          ? "HOOKS_LAUNCH_FACTORY_ADDRESS"
+          : "HOOKS_LAUNCH_FACTORY_CODE_HASH",
+      ],
+    });
+  }
+  if (value.LAUNCH_CHAIN_ID !== "97") {
+    context.addIssue({
+      code: "custom",
+      message: "is permitted only when LAUNCH_CHAIN_ID=97",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 20-byte contract address",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (codeHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(codeHash)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 32-byte runtime code hash",
+      path: ["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    });
   }
 }
 
@@ -463,6 +514,7 @@ const environmentSchema = z
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
+    refineHooksLaunchFactoryEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1119,6 +1171,9 @@ export interface AppConfig {
   readonly launchChain: LaunchChainConfig;
   /** The Launch contract on that slot (Decision 0076); null keeps it unavailable. */
   readonly launchContract: LaunchContractConfig | null;
+  /** BSC Testnet-only fixed Hooks Factory address; null keeps signing unavailable. */
+  readonly hooksLaunchFactoryAddress: string | null;
+  readonly hooksLaunchFactoryCodeHash: string | null;
   /**
    * Decision 0085: how long (ms) one successful sale snapshot is reused by
    * the Launch detail/eligibility reads. 0 disables the cache.
@@ -2221,6 +2276,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
     }),
     launchContract: parseLaunchContractConfig(parsed.data),
+    hooksLaunchFactoryAddress:
+      parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
+    hooksLaunchFactoryCodeHash:
+      parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,

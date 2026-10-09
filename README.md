@@ -458,6 +458,15 @@ and aggregate discovery experience.
 
 ## Explicit non-goals
 
+### Hooks project configuration (Decision 0090)
+
+The authenticated owner can save and read append-only `hooks_launch_v1` drafts
+through the V2 Launch API. Fixed economics are server-derived and draft saves
+do not publish, deploy, or activate contracts. Database-backed use requires
+migration `000050` and readiness verification against a separate test database.
+USDT payment, Gas sponsorship, mining activation, and production deployment
+remain disabled.
+
 - No wallet keys, recovery phrases, Privy refresh tokens, or long-lived provider
   secrets in Flutter, fixtures, logs, or Git
 - No Mainnet, withdrawals, automated trading, Pay, or payment backend in the

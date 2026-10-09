@@ -1,0 +1,288 @@
+import { z } from "zod";
+import {
+  concatHex,
+  getCreate2Address,
+  hashTypedData,
+  keccak256,
+  recoverAddress,
+  toBytes,
+  type Hex,
+} from "viem";
+import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
+import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
+import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import {
+  createHooksLaunchDeploymentTypedData,
+  hooksLaunchId,
+  type HooksLaunchTypedRequestInput,
+} from "./hooks-launch-deployment-crypto.js";
+
+const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+const uint = z
+  .string()
+  .regex(/^(0|[1-9][0-9]*)$/)
+  .max(78);
+export const hooksLaunchSubmissionSchema = z
+  .object({
+    walletId: z.string().min(1).max(128),
+    request: z
+      .object({
+        configHash: hex32,
+        projectOwner: address,
+        configVersion: z.number().int().min(1).max(0xffff_ffff),
+        name: z.string().min(1).max(64),
+        ticker: z.string().regex(/^[A-Z0-9]{2,12}$/),
+        nftSaleStart: uint,
+        buybackRecipient: address,
+        deadline: uint,
+        memeSalt: hex32,
+        nonce: uint,
+      })
+      .strict(),
+    hookSalt: hex32,
+    signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/),
+  })
+  .strict();
+export type HooksLaunchSignedSubmission = z.infer<
+  typeof hooksLaunchSubmissionSchema
+>;
+export interface HooksLaunchDeploymentJob {
+  readonly jobId: string;
+  readonly projectId: string;
+  readonly configVersion: number;
+  readonly chainId: 97;
+  readonly factoryAddress: string;
+  readonly status: "awaiting_executor" | "cancelled";
+  readonly memeAddress: string;
+  readonly hookAddress: string;
+  readonly createdAt: string;
+}
+export interface AcceptHooksLaunchSubmission {
+  readonly ownerUserId: string;
+  readonly projectId: string;
+  readonly idempotencyKey: string;
+  readonly fingerprint: string;
+  readonly factoryAddress: string;
+  readonly request: HooksLaunchTypedRequestInput;
+  readonly signedPayload: HooksLaunchSignedSubmission;
+  readonly memeAddress: string;
+  readonly hookAddress: string;
+}
+export interface HooksLaunchSubmissionRepository {
+  cancelOwned(
+    ownerUserId: string,
+    projectId: string,
+    jobId: string,
+  ): Promise<HooksLaunchDeploymentJob | null>;
+  findReplay(
+    ownerUserId: string,
+    idempotencyKey: string,
+  ): Promise<{
+    readonly fingerprint: string;
+    readonly job: HooksLaunchDeploymentJob;
+  } | null>;
+  accept(input: AcceptHooksLaunchSubmission): Promise<HooksLaunchDeploymentJob>;
+  getOwned(
+    ownerUserId: string,
+    projectId: string,
+    jobId: string,
+  ): Promise<HooksLaunchDeploymentJob | null>;
+}
+export class HooksLaunchSubmissionError extends Error {
+  constructor(
+    readonly kind:
+      "invalid" | "conflict" | "not_found" | "not_approved" | "unavailable",
+  ) {
+    super(`Hooks launch submission ${kind}`);
+  }
+}
+export interface HooksLaunchSubmissionService {
+  cancelOwned(
+    ownerUserId: string,
+    projectId: string,
+    jobId: string,
+  ): Promise<HooksLaunchDeploymentJob | null>;
+  submit(input: {
+    readonly ownerUserId: string;
+    readonly projectId: string;
+    readonly idempotencyKey: string;
+    readonly body: unknown;
+  }): Promise<HooksLaunchDeploymentJob>;
+  getOwned(
+    ownerUserId: string,
+    projectId: string,
+    jobId: string,
+  ): Promise<HooksLaunchDeploymentJob | null>;
+}
+export function createHooksLaunchSubmissionService(input: {
+  readonly configs: HooksLaunchProjectConfigRepository | null;
+  readonly wallets: AccountWalletRepository | null;
+  readonly reader: HooksLaunchFactoryReader | null;
+  readonly repository: HooksLaunchSubmissionRepository | null;
+  readonly now?: () => number;
+}): HooksLaunchSubmissionService {
+  const now = input.now ?? (() => Math.floor(Date.now() / 1000));
+  return {
+    async cancelOwned(ownerUserId, projectId, jobId) {
+      if (!input.repository)
+        throw new HooksLaunchSubmissionError("unavailable");
+      return input.repository.cancelOwned(ownerUserId, projectId, jobId);
+    },
+    async getOwned(ownerUserId, projectId, jobId) {
+      if (!input.repository)
+        throw new HooksLaunchSubmissionError("unavailable");
+      return input.repository.getOwned(ownerUserId, projectId, jobId);
+    },
+    async submit(command) {
+      const { configs, wallets, reader, repository } = input;
+      if (
+        !configs ||
+        !wallets ||
+        !reader ||
+        !repository ||
+        reader.chainId !== 97
+      )
+        throw new HooksLaunchSubmissionError("unavailable");
+      const parsed = hooksLaunchSubmissionSchema.safeParse(command.body);
+      if (
+        !parsed.success ||
+        !z.uuid().safeParse(command.projectId).success ||
+        !z.uuid().safeParse(command.idempotencyKey).success
+      )
+        throw new HooksLaunchSubmissionError("invalid");
+      const body = parsed.data;
+      const request = body.request;
+      let digest: Hex;
+      try {
+        const typed = createHooksLaunchDeploymentTypedData({
+          chainId: 97,
+          verifyingContract: reader.factoryAddress,
+          request,
+        });
+        digest = hashTypedData({
+          ...typed,
+          message: {
+            ...typed.message,
+            nftSaleStart: BigInt(request.nftSaleStart),
+            deadline: BigInt(request.deadline),
+            nonce: BigInt(request.nonce),
+          },
+        });
+      } catch {
+        throw new HooksLaunchSubmissionError("invalid");
+      }
+      const fingerprint = keccak256(
+        toBytes(
+          JSON.stringify([
+            digest,
+            body.walletId,
+            body.hookSalt.toLowerCase(),
+            body.signature.toLowerCase(),
+          ]),
+        ),
+      );
+      const replay = await repository.findReplay(
+        command.ownerUserId,
+        command.idempotencyKey,
+      );
+      if (replay) {
+        if (
+          replay.fingerprint !== fingerprint ||
+          replay.job.projectId !== command.projectId
+        )
+          throw new HooksLaunchSubmissionError("conflict");
+        return replay.job;
+      }
+      const timestamp = now();
+      if (
+        !Number.isSafeInteger(timestamp) ||
+        timestamp < 0 ||
+        BigInt(request.deadline) <= BigInt(timestamp) ||
+        BigInt(request.deadline) > BigInt(timestamp) + 3600n
+      )
+        throw new HooksLaunchSubmissionError("invalid");
+      const wallet = await wallets.get(command.ownerUserId, body.walletId);
+      if (
+        !wallet ||
+        !wallet.isActive ||
+        wallet.status !== "active" ||
+        wallet.address.toLowerCase() !== request.projectOwner.toLowerCase()
+      )
+        throw new HooksLaunchSubmissionError("invalid");
+      const draft = await configs.getOwnedDraft({
+        ownerUserId: command.ownerUserId,
+        projectId: command.projectId,
+      });
+      if (!draft) throw new HooksLaunchSubmissionError("not_found");
+      if (
+        draft.version !== request.configVersion ||
+        draft.config.configHash.toLowerCase() !==
+          request.configHash.toLowerCase() ||
+        draft.config.name !== request.name ||
+        draft.config.ticker.toUpperCase() !== request.ticker ||
+        draft.config.nftSaleStartAt !== request.nftSaleStart ||
+        draft.config.buybackRecipient.toLowerCase() !==
+          request.buybackRecipient.toLowerCase()
+      )
+        throw new HooksLaunchSubmissionError("conflict");
+      const signature = body.signature as Hex;
+      const halfOrder =
+        0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
+      if (
+        BigInt(`0x${signature.slice(66, 130)}`) > halfOrder ||
+        !["1b", "1c"].includes(signature.slice(-2).toLowerCase())
+      )
+        throw new HooksLaunchSubmissionError("invalid");
+      let signer: string;
+      try {
+        signer = await recoverAddress({ hash: digest, signature });
+      } catch {
+        throw new HooksLaunchSubmissionError("invalid");
+      }
+      if (signer.toLowerCase() !== wallet.address.toLowerCase())
+        throw new HooksLaunchSubmissionError("invalid");
+      let memeAddress: string;
+      let hookAddress: string;
+      try {
+        if ((await reader.nonce(wallet.address)) !== BigInt(request.nonce))
+          throw new HooksLaunchSubmissionError("conflict");
+        const launchId = hooksLaunchId({
+          chainId: 97,
+          factory: reader.factoryAddress,
+          projectOwner: request.projectOwner,
+          configVersion: request.configVersion,
+          configHash: request.configHash,
+        });
+        const token = await reader.tokenDeployment(request);
+        memeAddress = getCreate2Address({
+          from: token.deployer as Hex,
+          salt: keccak256(concatHex([launchId, request.memeSalt as Hex])),
+          bytecodeHash: token.initCodeHash as Hex,
+        });
+        if (!memeAddress.toLowerCase().endsWith("6666"))
+          throw new HooksLaunchSubmissionError("invalid");
+        const hook = await reader.hookDeployment(request);
+        hookAddress = getCreate2Address({
+          from: hook.deployer as Hex,
+          salt: body.hookSalt as Hex,
+          bytecodeHash: hook.initCodeHash as Hex,
+        });
+        if ((BigInt(hookAddress) & 0x3fffn) !== 0x20ccn)
+          throw new HooksLaunchSubmissionError("invalid");
+      } catch (error) {
+        if (error instanceof HooksLaunchSubmissionError) throw error;
+        throw new HooksLaunchSubmissionError("unavailable");
+      }
+      return repository.accept({
+        ...command,
+        fingerprint,
+        factoryAddress: reader.factoryAddress.toLowerCase(),
+        request,
+        signedPayload: body,
+        memeAddress: memeAddress.toLowerCase(),
+        hookAddress: hookAddress.toLowerCase(),
+      });
+    },
+  };
+}

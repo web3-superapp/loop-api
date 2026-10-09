@@ -45,6 +45,20 @@ export const opsCatalog = [
   },
   {
     module: "项目",
+    name: "Hooks 项目列表、配置草稿与哈希核对",
+    status: "connected",
+    consumer: "owner-scoped Hooks launch config versions",
+    entry: "launch",
+  },
+  {
+    module: "测试网",
+    name: "BSC Testnet 配置审批与验收证据",
+    status: "connected",
+    consumer: "hooks_launch_config_approvals / hooks_testnet_acceptances",
+    entry: "testnet",
+  },
+  {
+    module: "项目",
     name: "审核、里程碑、白名单计算、销售登记",
     status: "script",
     consumer: "launch review and allowlist scripts",

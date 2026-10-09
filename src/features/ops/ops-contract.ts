@@ -16,6 +16,11 @@ export const opsPermissions = [
   "mining.snapshot",
   "community.review",
   "support.manage",
+  "launch.read",
+  "launch.edit",
+  "launch.approve",
+  "testnet.read",
+  "testnet.accept",
 ] as const;
 export type OpsPermission = (typeof opsPermissions)[number];
 export class OpsError extends Error {
@@ -54,12 +59,78 @@ export const miningPackageSchema = z
     "Duplicate community",
   );
 export type MiningPackage = z.infer<typeof miningPackageSchema>;
+const hooksLaunchAdminConfigSchema = z
+  .object({
+    name: z.string().trim().min(1).max(64),
+    ticker: z.string().regex(/^[A-Za-z0-9]{2,12}$/),
+    logoAssetUrl: z.url().startsWith("https://"),
+    description: z.string().max(2000),
+    links: z.array(z.url().startsWith("https://")).max(8),
+    nftSaleStartAt: z.string().regex(/^(0|[1-9][0-9]{0,19})$/),
+    buybackRecipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  })
+  .strict();
+const hash32Schema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+const hooksTestnetAcceptanceSchema = z
+  .object({
+    configVersion: z.number().int().positive(),
+    configHash: hash32Schema,
+    contractManifestHash: hash32Schema,
+    checklistVersion: z.string().regex(/^hooks-testnet-v[1-9][0-9]*$/),
+    outcome: z.enum(["passed", "failed", "incomplete"]),
+    evidence: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(100),
+            uri: z.union([
+              z.url().startsWith("https://"),
+              z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+            ]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict();
 const base = {
   operationId: z.uuid(),
   target: z.string().min(1).max(128),
   reason: z.string().trim().min(1).max(500),
 };
 export const opsCommandSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      ...base,
+      action: z.literal("launch.config.save"),
+      payload: z
+        .object({
+          expectedVersion: z.number().int().nonnegative(),
+          config: hooksLaunchAdminConfigSchema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...base,
+      action: z.literal("launch.config.approve"),
+      payload: z
+        .object({
+          configVersion: z.number().int().positive(),
+          configHash: hash32Schema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...base,
+      action: z.literal("testnet.acceptance.record"),
+      payload: hooksTestnetAcceptanceSchema,
+    })
+    .strict(),
   z
     .object({
       ...base,
@@ -158,6 +229,9 @@ export const opsCommandSchema = z.discriminatedUnion("action", [
 ]);
 export type OpsCommand = z.infer<typeof opsCommandSchema>;
 export function commandPermission(action: OpsCommand["action"]): OpsPermission {
+  if (action === "launch.config.save") return "launch.edit";
+  if (action === "launch.config.approve") return "launch.approve";
+  if (action === "testnet.acceptance.record") return "testnet.accept";
   if (action === "community.review") return "community.review";
   if (action === "support.answer") return "support.manage";
   if (action === "mining.publish") return "mining.approve";

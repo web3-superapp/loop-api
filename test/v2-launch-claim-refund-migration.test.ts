@@ -46,8 +46,8 @@ describe("000044 Launch claim / refund Intent migration contract (Decision 0087)
     expect(statement).toContain("drop table public.launch_settlement_records");
   });
 
-  it("remains required after later logo and operations migrations", () => {
-    expect(latestMigrationName).toBe("000049_ops_bootstrap_audit");
+  it("remains required after later launch config migrations", () => {
+    expect(latestMigrationName).toBe("000053_hooks_signed_deployment_tasks");
     expect(requiredDatabaseRelations).toContain(
       "public.launch_settlement_records",
     );

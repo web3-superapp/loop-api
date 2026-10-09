@@ -1,3 +1,4 @@
+import type { HooksLaunchSubmissionRepository } from "../src/features/launch/hooks-launch-submission.js";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,16 @@ import {
   type LaunchProjectRecord,
   type LaunchRepository,
 } from "../src/features/launch/launch-repository.js";
+import type {
+  HooksLaunchProjectConfigRecord,
+  HooksLaunchProjectConfigRepository,
+} from "../src/features/launch/hooks-launch-project-config.js";
+import type { AccountWalletRepository } from "../src/database/account-wallet-repository.js";
+import type { HooksLaunchFactoryReader } from "../src/features/launch/hooks-launch-deployment.js";
+import {
+  HooksLaunchProjectNotFoundError,
+  HooksLaunchProjectVersionConflictError,
+} from "../src/features/launch/hooks-launch-project-config.js";
 import {
   calls,
   s7AccountId,
@@ -27,6 +38,45 @@ const projectId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
 const launchId = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
 const otherAccountId = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
 const createdAt = "2026-09-08T01:00:00.000Z";
+const hooksDraftBody = {
+  name: "MoonCat",
+  ticker: "MCAT",
+  logoAssetUrl: "https://cdn.example.com/logo.png",
+  description: "A launch project",
+  links: ["https://mooncat.example"],
+  nftSaleStartAt: "1800000000",
+  buybackRecipient: "0x1234567890123456789012345678901234567890",
+};
+
+function hooksConfigRepositoryFake(): HooksLaunchProjectConfigRepository {
+  let record: HooksLaunchProjectConfigRecord | null = null;
+  return {
+    getOwnedDraft(input) {
+      return Promise.resolve(
+        input.projectId === projectId && input.ownerUserId === s7AccountId
+          ? record
+          : null,
+      );
+    },
+    saveOwnedDraft(input) {
+      if (input.projectId !== projectId || input.ownerUserId !== s7AccountId) {
+        return Promise.reject(new HooksLaunchProjectNotFoundError());
+      }
+      if ((record?.version ?? 0) !== input.expectedVersion) {
+        return Promise.reject(new HooksLaunchProjectVersionConflictError());
+      }
+      record = Object.freeze({
+        projectId,
+        ownerUserId: s7AccountId,
+        version: input.expectedVersion + 1,
+        templateVersion: input.templateVersion,
+        config: input.config,
+        updatedAt: "2026-10-08T00:00:00.000Z",
+      });
+      return Promise.resolve(record);
+    },
+  };
+}
 
 const draft: LaunchProjectRecord = Object.freeze({
   projectId,
@@ -164,17 +214,223 @@ describe("LOOP API V2 launch module", () => {
   async function createApp(
     repository = repositoryFake(),
     overrides: Readonly<Record<string, string>> = {},
+    hooksLaunchProjectConfigs:
+      HooksLaunchProjectConfigRepository | undefined = undefined,
+    extra: {
+      readonly accountWallets?: AccountWalletRepository;
+      readonly hooksLaunchSubmissions?: HooksLaunchSubmissionRepository;
+      readonly hooksLaunchFactoryReader?: HooksLaunchFactoryReader;
+    } = {},
   ) {
     const app = await buildApp({
       config: s7TestConfig(overrides),
       contractSurface: "v2",
-      database: s7Database({ launch: repository }),
+      database: s7Database({
+        launch: repository,
+        ...(hooksLaunchProjectConfigs ? { hooksLaunchProjectConfigs } : {}),
+        ...(extra.hooksLaunchSubmissions
+          ? { hooksLaunchSubmissions: extra.hooksLaunchSubmissions }
+          : {}),
+        ...(extra.accountWallets
+          ? { accountWallets: extra.accountWallets }
+          : {}),
+      }),
+      ...(extra.hooksLaunchFactoryReader
+        ? { hooksLaunchFactoryReader: extra.hooksLaunchFactoryReader }
+        : {}),
       privyAccessTokenVerifier: s7PrivyVerifier(),
       logger: false,
     });
     apps.push(app);
     return { app, repository };
   }
+
+  it("keeps deployment status owner-scoped and cancellation distinct from broadcast", async () => {
+    const jobId = "00000000-0000-4000-8000-000000000011";
+    const job = {
+      jobId,
+      projectId,
+      configVersion: 1,
+      chainId: 97 as const,
+      factoryAddress: `0x${"11".repeat(20)}`,
+      status: "awaiting_executor" as const,
+      memeAddress: `0x${"ab".repeat(18)}6666`,
+      hookAddress: `0x${"ab".repeat(18)}20cc`,
+      createdAt,
+    };
+    const getOwned = vi.fn((owner: string, pid: string, id: string) =>
+      Promise.resolve(
+        owner === s7AccountId && pid === projectId && id === jobId ? job : null,
+      ),
+    );
+    const cancelOwned = vi.fn(() =>
+      Promise.resolve({
+        ...job,
+        status: "cancelled" as const,
+      }),
+    );
+    const repo = {
+      getOwned,
+      cancelOwned,
+      findReplay: () => Promise.resolve(null),
+      accept: () => Promise.resolve(job),
+    };
+    const { app } = await createApp(repositoryFake(), {}, undefined, {
+      hooksLaunchSubmissions: repo,
+    });
+    const url = `/v2/launch/projects/${projectId}/hooks-deployments/${jobId}`;
+    const read = await app.inject({ url, headers: s7CommonHeaders() });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual(job);
+    expect(read.body).not.toContain("signature");
+    const cancelled = await app.inject({
+      method: "DELETE",
+      url,
+      headers: s7CommonHeaders(),
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<{ status: string }>().status).toBe("cancelled");
+    expect(cancelOwned).toHaveBeenCalledWith(s7AccountId, projectId, jobId);
+    const foreign = await app.inject({
+      url: url.replace(jobId, "00000000-0000-4000-8000-000000000012"),
+      headers: s7CommonHeaders(),
+    });
+    expect(foreign.statusCode).toBe(404);
+    const unsigned = await app.inject({
+      url,
+      headers: s7CommonHeaders({ authorization: undefined }),
+    });
+    expect(unsigned.statusCode).toBe(401);
+  });
+
+  it("saves and reads an owner-scoped Hooks launch draft without publishing it", async () => {
+    const { app } = await createApp(
+      repositoryFake(),
+      {},
+      hooksConfigRepositoryFake(),
+    );
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: hooksDraftBody },
+    });
+    expect(saved.statusCode).toBe(200);
+    const savedBody = saved.json<{
+      readonly projectId: string;
+      readonly version: number;
+      readonly templateVersion: string;
+      readonly config: {
+        readonly configHash: string;
+        readonly fixedEconomics: { readonly curveBuyTaxBps: number };
+      };
+    }>();
+    expect(savedBody.config.configHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(savedBody).toMatchObject({
+      projectId,
+      version: 1,
+      templateVersion: "hooks_launch_v1",
+      config: {
+        fixedEconomics: { curveBuyTaxBps: 1_000 },
+      },
+    });
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json<{ draft: { version: number } }>().draft.version).toBe(1);
+  });
+
+  it("returns not found for project config outside the caller's ownership scope", async () => {
+    const { app } = await createApp(
+      repositoryFake(),
+      {},
+      hooksConfigRepositoryFake(),
+    );
+    const response = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${otherAccountId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: hooksDraftBody },
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("returns an owner-wallet EIP-712 request and CREATE2 Hook salt without signing or broadcasting", async () => {
+    const walletId = "00000000-0000-4000-8000-000000000099";
+    const wallets = {
+      get: (ownerUserId: string, requestedWalletId: string) =>
+        Promise.resolve(
+          ownerUserId === s7AccountId && requestedWalletId === walletId
+            ? {
+                walletId,
+                providerWalletId: "privy-wallet-1",
+                address: "0x2222222222222222222222222222222222222222",
+                kind: "embedded" as const,
+                status: "active" as const,
+                isActive: true,
+                firstSeenAt: createdAt,
+                lastSeenAt: createdAt,
+              }
+            : null,
+        ),
+    } as unknown as AccountWalletRepository;
+    const factoryReader: HooksLaunchFactoryReader = {
+      factoryAddress: "0x1111111111111111111111111111111111111111",
+      chainId: 97,
+      nonce: () => Promise.resolve(9n),
+      tokenDeployment: () =>
+        Promise.resolve({
+          deployer: "0x5555555555555555555555555555555555555555",
+          initCodeHash: `0x${"ef".repeat(32)}`,
+        }),
+      hookDeployment: () =>
+        Promise.resolve({
+          deployer: "0x4444444444444444444444444444444444444444",
+          initCodeHash: `0x${"ab".repeat(32)}`,
+        }),
+    };
+    const { app } = await createApp(
+      repositoryFake(),
+      {},
+      hooksConfigRepositoryFake(),
+      { accountWallets: wallets, hooksLaunchFactoryReader: factoryReader },
+    );
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: hooksDraftBody },
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      request: {
+        projectOwner: "0x2222222222222222222222222222222222222222",
+        configVersion: 1,
+        nonce: "9",
+      },
+      typedData: {
+        domain: { chainId: 97 },
+        primaryType: "LaunchRequest",
+      },
+    });
+    const result = response.json<{
+      readonly hookAddress: string;
+      readonly hookSalt: string;
+    }>();
+    expect(BigInt(result.hookAddress) & 0x3fffn).toBe(0x20ccn);
+    expect(result.hookSalt).toMatch(/^0x[0-9a-f]{64}$/);
+  });
 
   it("registers no launch route when the module is disabled", async () => {
     const { app } = await createApp(repositoryFake(), {
