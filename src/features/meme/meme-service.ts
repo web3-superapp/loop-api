@@ -103,11 +103,6 @@ export interface MemeServiceDependencies {
   /** The launch slot's call client (balances, allowances, simulation). */
   readonly readClient: BscChainCallClient;
   readonly writes: BscWriteConfig | null;
-  /** Exposure of the owner's wallet + Launch Intents (Decision 0065). */
-  readonly walletIntentExposureUsd: (input: {
-    readonly ownerUserId: string;
-    readonly since: string;
-  }) => Promise<string>;
   readonly publicBaseUrl: string;
   readonly dexQuotes?: MemeDexQuoteReader | null;
   /** Decision 0103: slot0 fallback for graduated tokens without a quote. */

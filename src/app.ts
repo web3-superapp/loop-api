@@ -1957,10 +1957,6 @@ export async function buildApp(
           wallets: database.accountWallets ?? null,
           readClient: asChainCallClient(launchChainReadClient ?? bscReadClient),
           writes: config.bscWrites,
-          walletIntentExposureUsd: (input: {
-            readonly ownerUserId: string;
-            readonly since: string;
-          }) => walletIntentRuntime.repository.sumRecentExposureUsd(input),
           publicBaseUrl: config.publicBaseUrl,
           // Graduated rows read DexScreener like `category=meme` (56 only).
           dexQuotes: async (_chainId, addresses) => {

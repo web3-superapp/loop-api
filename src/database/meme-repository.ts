@@ -16,11 +16,13 @@ import {
   memeV0,
 } from "../features/meme/meme-curve-math.js";
 import {
+  MemeCreateIntentInFlightError,
   MemeCreateRateLimitedError,
   MemeIdempotencyConflictError,
   MemeImageNotOwnedError,
   MemeIntentReportConflictError,
   MemeRepositoryUnavailableError,
+  MemeTokenNotDraftError,
   memeCreateDigestVersion,
   memeCreateIdempotencyScope,
   memeEventLane,
@@ -41,6 +43,7 @@ import {
   type MemeTokenRecord,
   type MemeTradeRecord,
 } from "../features/meme/meme-repository.js";
+import type { CanaryExposureAdmission } from "../features/wallet-intents/intent-contract.js";
 import {
   claimV2Command,
   lockV2Owner,
@@ -49,6 +52,10 @@ import {
   withV2Transaction,
   type DatabaseClient,
 } from "./v2-command-support.js";
+import {
+  admitCanaryExposure,
+  sumCanaryExposureUsd,
+} from "./canary-exposure.js";
 
 /**
  * PostgreSQL side of the MEME launchpad (Decision 0101). The `meme_event`
@@ -97,7 +104,9 @@ function translate(error: unknown): never {
     error instanceof MemeIdempotencyConflictError ||
     error instanceof MemeCreateRateLimitedError ||
     error instanceof MemeImageNotOwnedError ||
-    error instanceof MemeIntentReportConflictError
+    error instanceof MemeIntentReportConflictError ||
+    error instanceof MemeCreateIntentInFlightError ||
+    error instanceof MemeTokenNotDraftError
   ) {
     throw error;
   }
@@ -686,6 +695,44 @@ async function reserveFreeSalt(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Decision 0104 M2: one live create Intent per draft. Locks the token row;
+ * the draft must still be `draft`, and no create Intent of it may be
+ * reported or still signable (`prepared` inside its window with a
+ * simulation that did not revert).
+ */
+async function assertDraftCreatable(
+  client: DatabaseClient,
+  memeTokenId: string,
+): Promise<void> {
+  const token = await client.query<{ status: string }>({
+    text: `select status from public.meme_tokens where meme_token_id = $1 for update`,
+    values: [memeTokenId],
+  });
+  const status = token.rows[0]?.status ?? null;
+  if (status !== "draft") {
+    throw new MemeTokenNotDraftError(status);
+  }
+  const live = await client.query<{ intent_id: string }>({
+    text: `
+      select intent_id from public.meme_intents
+      where meme_token_id = $1 and kind = 'create'
+        and (
+          state = 'broadcast_reported'
+          or (
+            state = 'prepared' and expires_at > clock_timestamp()
+            and coalesce(policy -> 'simulation' ->> 'status', '') <> 'reverted'
+          )
+        )
+      limit 1
+    `,
+    values: [memeTokenId],
+  });
+  if (live.rows[0] !== undefined) {
+    throw new MemeCreateIntentInFlightError();
+  }
+}
+
 export function createPostgresMemeRepository(pool: Pool): MemeRepository {
   async function getToken(memeTokenId: string) {
     const result = await pool.query({
@@ -1246,6 +1293,10 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
     async createIntent(input) {
       try {
         const ownerUserId = uuidSchema.parse(input.ownerUserId);
+        const exclusive =
+          input.exclusiveCreate === undefined || input.exclusiveCreate === null
+            ? null
+            : uuidSchema.parse(input.exclusiveCreate.memeTokenId);
         const claim = await withV2Transaction(
           pool,
           unavailable,
@@ -1266,6 +1317,11 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
               text: `select ${intentColumns} from public.meme_intents where idempotency_record_id = $1`,
               values: [recordId],
             });
+            if (existing.rows[0] === undefined && exclusive !== null) {
+              // Refused before any chain read or salt replacement; the
+              // rollback releases the key.
+              await assertDraftCreatable(client, exclusive);
+            }
             return {
               recordId,
               existing:
@@ -1278,14 +1334,47 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
         if (claim.existing !== null) {
           return Object.freeze({ created: false, intent: claim.existing });
         }
+        // Chain reads happen outside any transaction (Decision 0101).
         let built: CreateMemeIntentRecord;
         try {
           built = await input.build();
         } catch (error) {
           throw new CallerCallbackError(error);
         }
-        const inserted = await pool.query({
-          text: `
+        let admission: CanaryExposureAdmission | null;
+        try {
+          admission = input.canaryAdmission?.(built) ?? null;
+        } catch (error) {
+          throw new CallerCallbackError(error);
+        }
+        // Decision 0104 M2: the insert runs under the owner lock; the
+        // exclusivity of a create and the daily canary ceiling are
+        // re-checked on what is stored now, after the chain reads.
+        const inserted = await withV2Transaction(
+          pool,
+          unavailable,
+          async (client) => {
+            await lockV2Owner(client, ownerUserId, unavailable);
+            const raced = await client.query({
+              text: `select ${intentColumns} from public.meme_intents where idempotency_record_id = $1`,
+              values: [claim.recordId],
+            });
+            if (raced.rows[0] !== undefined) {
+              return raced;
+            }
+            if (exclusive !== null) {
+              await assertDraftCreatable(client, exclusive);
+            }
+            if (admission !== null) {
+              await admitCanaryExposure(
+                client,
+                ownerUserId,
+                admission,
+                (error) => new CallerCallbackError(error),
+              );
+            }
+            return client.query({
+              text: `
             insert into public.meme_intents (
               intent_id, owner_user_id, wallet_id, wallet_address, meme_token_id, kind,
               chain_id, contract_address, token_address, usd1_amount_raw,
@@ -1303,41 +1392,46 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
             on conflict (idempotency_record_id) do nothing
             returning ${intentColumns}
           `,
-          values: [
-            uuidSchema.parse(built.intentId),
-            ownerUserId,
-            uuidSchema.parse(built.walletId),
-            addressSchema.parse(built.walletAddress),
-            uuidSchema.parse(built.memeTokenId),
-            built.kind,
-            built.chainId,
-            addressSchema.parse(built.contractAddress),
-            built.tokenAddress === null
-              ? null
-              : addressSchema.parse(built.tokenAddress),
-            rawSchema.parse(built.usd1AmountRaw),
-            rawSchema.parse(built.tokenAmountRaw),
-            rawSchema.parse(built.expectedOutRaw),
-            rawSchema.parse(built.minOutRaw),
-            rawSchema.parse(built.feeRaw),
-            rawSchema.parse(built.refundRaw),
-            built.deadline,
-            blockSchema.parse(built.snapshotBlockNumber),
-            bytes32Schema.parse(built.snapshotBlockHash),
-            JSON.stringify(built.calldata),
-            JSON.stringify(built.unsignedTransaction),
-            built.approval === null ? null : JSON.stringify(built.approval),
-            JSON.stringify(built.policy),
-            sha256Schema.parse(built.payloadDigest),
-            built.state,
-            built.expiresAt,
-            claim.recordId,
-          ],
-        });
-        if (inserted.rows[0] !== undefined) {
+              values: [
+                uuidSchema.parse(built.intentId),
+                ownerUserId,
+                uuidSchema.parse(built.walletId),
+                addressSchema.parse(built.walletAddress),
+                uuidSchema.parse(built.memeTokenId),
+                built.kind,
+                built.chainId,
+                addressSchema.parse(built.contractAddress),
+                built.tokenAddress === null
+                  ? null
+                  : addressSchema.parse(built.tokenAddress),
+                rawSchema.parse(built.usd1AmountRaw),
+                rawSchema.parse(built.tokenAmountRaw),
+                rawSchema.parse(built.expectedOutRaw),
+                rawSchema.parse(built.minOutRaw),
+                rawSchema.parse(built.feeRaw),
+                rawSchema.parse(built.refundRaw),
+                built.deadline,
+                blockSchema.parse(built.snapshotBlockNumber),
+                bytes32Schema.parse(built.snapshotBlockHash),
+                JSON.stringify(built.calldata),
+                JSON.stringify(built.unsignedTransaction),
+                built.approval === null ? null : JSON.stringify(built.approval),
+                JSON.stringify(built.policy),
+                sha256Schema.parse(built.payloadDigest),
+                built.state,
+                built.expiresAt,
+                claim.recordId,
+              ],
+            });
+          },
+        );
+        const insertedRow = inserted.rows[0] as
+          Record<string, unknown> | undefined;
+        if (insertedRow !== undefined) {
+          const intent = mapIntent(insertedRow);
           return Object.freeze({
-            created: true,
-            intent: mapIntent(inserted.rows[0]),
+            created: intent.intentId === built.intentId,
+            intent,
           });
         }
         const winner = await pool.query({
@@ -1425,22 +1519,12 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
 
     async sumRecentExposureUsd(input) {
       try {
-        const result = await pool.query<{ total: string }>({
-          text: `
-            select coalesce(sum((policy ->> 'valueUsd')::numeric), 0)::text as total
-            from public.meme_intents
-            where owner_user_id = $1 and created_at > $2::timestamptz
-              and (
-                state in ('broadcast_reported', 'confirmed')
-                or (state = 'prepared' and expires_at > clock_timestamp())
-              )
-          `,
-          values: [
-            uuidSchema.parse(input.ownerUserId),
-            new Date(input.since).toISOString(),
-          ],
+        // Decision 0104 M1: the same three-table window wallet and Launch
+        // read, so MEME, Send / Swap, and Launch share one ceiling.
+        return await sumCanaryExposureUsd(pool, {
+          ownerUserId: uuidSchema.parse(input.ownerUserId),
+          since: input.since,
         });
-        return result.rows[0]?.total ?? "0";
       } catch (error) {
         return translate(error);
       }
@@ -1575,22 +1659,33 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
           let storedCount = 0;
           let skippedCount = 0;
           let metadataMismatchCount = 0;
+          let creatorMismatchCount = 0;
           if (input.rewindFromBlockNumber !== undefined) {
             const from = blockSchema.parse(input.rewindFromBlockNumber);
+            const removedTransactions = new Set<string>();
             for (const table of ["meme_indexed_events", "meme_trades"]) {
-              const rewound = await client.query<{ meme_token_id: string }>({
+              const rewound = await client.query<{
+                meme_token_id: string;
+                transaction_hash: string;
+              }>({
                 text: `
                   update public.${table}
                   set removed = true, observed_at = clock_timestamp()
                   where chain_id = $1 and block_number >= $2::numeric and not removed
-                  returning meme_token_id
+                  returning meme_token_id, transaction_hash
                 `,
                 values: [input.chainId, from],
               });
               for (const row of rewound.rows) {
                 touched.add(row.meme_token_id);
+                removedTransactions.add(row.transaction_hash);
               }
             }
+            await reopenRewoundIntents(client, {
+              chainId: input.chainId,
+              fromBlockNumber: from,
+              transactionHashes: [...removedTransactions].sort(),
+            });
           }
           const byAddress = new Map<string, string | null>();
           const tokenFor = async (address: string): Promise<string | null> => {
@@ -1611,6 +1706,11 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
               const matched = await matchCreated(client, input, event);
               if (matched.kind === "mismatch") {
                 metadataMismatchCount += 1;
+                skippedCount += 1;
+                continue;
+              }
+              if (matched.kind === "creator_mismatch") {
+                creatorMismatchCount += 1;
                 skippedCount += 1;
                 continue;
               }
@@ -1642,6 +1742,10 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
                   on conflict (chain_id, transaction_hash, log_index) do update set
                     block_number = excluded.block_number,
                     block_hash = excluded.block_hash,
+                    contract_address = excluded.contract_address,
+                    token_address = excluded.token_address,
+                    meme_token_id = excluded.meme_token_id,
+                    event_name = excluded.event_name,
                     payload = excluded.payload,
                     event_at = excluded.event_at,
                     removed = excluded.removed,
@@ -1696,6 +1800,7 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
             storedCount,
             skippedCount,
             metadataMismatchCount,
+            creatorMismatchCount,
             touchedTokenIds: Object.freeze([...touched].sort()),
           });
         });
@@ -1869,8 +1974,12 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
 
 /**
  * Matches a `TokenCreated` log to a draft by salt; the metadata hash, name,
- * and symbol must equal the draft's. Returns the token id, `null` for a
- * token LOOP did not create, or `"mismatch"`.
+ * and symbol must equal the draft's, and the log's `creator` must be the
+ * wallet of a create Intent of that draft (Decision 0104 m3: a salt is not
+ * bound to its creator on chain, so a front-runner replaying the draft's
+ * calldata from another wallet would otherwise take the draft). Returns
+ * the token id, `foreign` for a token LOOP did not create, `mismatch`, or
+ * `creator_mismatch`.
  */
 async function matchCreated(
   client: PoolClient,
@@ -1880,6 +1989,7 @@ async function matchCreated(
   | { readonly kind: "matched"; readonly memeTokenId: string }
   | { readonly kind: "foreign" }
   | { readonly kind: "mismatch" }
+  | { readonly kind: "creator_mismatch" }
 > {
   const salt = event.payload["salt"] ?? "";
   const found = await client.query<{
@@ -1908,6 +2018,18 @@ async function matchCreated(
     (row.token_address !== null && row.token_address !== event.tokenAddress)
   ) {
     return { kind: "mismatch" };
+  }
+  const creator = (event.payload["creator"] ?? "").toLowerCase();
+  const createdBy = await client.query<{ intent_id: string }>({
+    text: `
+      select intent_id from public.meme_intents
+      where meme_token_id = $1 and kind = 'create' and wallet_address = $2
+      limit 1
+    `,
+    values: [row.meme_token_id, creator],
+  });
+  if (createdBy.rows[0] === undefined) {
+    return { kind: "creator_mismatch" };
   }
   const assetId = `${input.chainId}:${event.tokenAddress}`;
   if (!event.removed) {
@@ -1981,6 +2103,18 @@ async function insertTrade(
       on conflict (chain_id, transaction_hash, log_index) do update set
         block_number = excluded.block_number,
         block_hash = excluded.block_hash,
+        token_address = excluded.token_address,
+        meme_token_id = excluded.meme_token_id,
+        wallet = excluded.wallet,
+        is_buy = excluded.is_buy,
+        usd1_amount = excluded.usd1_amount,
+        token_amount = excluded.token_amount,
+        fee_usd1 = excluded.fee_usd1,
+        v_usd1_after = excluded.v_usd1_after,
+        v_token_after = excluded.v_token_after,
+        sold_after = excluded.sold_after,
+        price_after_e18 = excluded.price_after_e18,
+        traded_at = excluded.traded_at,
         removed = excluded.removed,
         observed_at = clock_timestamp()
     `,
@@ -2003,6 +2137,45 @@ async function insertTrade(
       rawSchema.parse(event.priceAfterE18),
       secondsToIso(event.at),
       event.removed,
+    ],
+  });
+}
+
+/**
+ * Decision 0104 M5: a rewind takes back the evidence of every Intent it
+ * confirmed. A `confirmed` Intent whose transaction had a log in the
+ * rewound range, or whose receipt block is in it, returns to
+ * `broadcast_reported` (receipt cleared, reconcile due now) so the lane's
+ * replay or the receipt reconcile confirms it again on the new chain.
+ */
+async function reopenRewoundIntents(
+  client: PoolClient,
+  input: {
+    readonly chainId: string;
+    readonly fromBlockNumber: string;
+    readonly transactionHashes: readonly string[];
+  },
+): Promise<void> {
+  await client.query({
+    text: `
+      update public.meme_intents set
+        state = 'broadcast_reported', reason_code = null, receipt = null,
+        reconcile_after = null, updated_at = clock_timestamp()
+      where chain_id = $1 and state = 'confirmed'
+        and transaction_hash is not null
+        and (
+          transaction_hash = any($2::text[])
+          or (
+            receipt is not null
+            and (receipt ->> 'blockNumber') ~ '^[0-9]{1,19}$'
+            and (receipt ->> 'blockNumber')::numeric >= $3::numeric
+          )
+        )
+    `,
+    values: [
+      input.chainId,
+      [...input.transactionHashes],
+      input.fromBlockNumber,
     ],
   });
 }

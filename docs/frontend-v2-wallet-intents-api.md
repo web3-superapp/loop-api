@@ -514,7 +514,10 @@ OpenAPI 枚举**（`openapi/loop-api.v2.json` 各资金操作路由的 `403` →
 - `spentUsd` / `remainingUsd` 只在 `CANARY_DAILY_CEILING_EXCEEDED` 出现：
   `spentUsd` 是滚动 24 小时内已计入的金额（`awaiting_signature / submitted /
 confirmed / reverted / unknown` 的 intent，决策 0065），`remainingUsd =
-max(0, ceilingUsd − spentUsd)`。
+max(0, ceilingUsd − spentUsd)`。决策 0104 起这个合计同时包含 Launch 认购 Intent 与 MEME
+  Intent（`broadcast_reported`、`confirmed`、已上报 hash 的 `failed`、签名窗口内的 `prepared`）：在 MEME 花满额度后
+  Send / Swap / 授权同样返回 `CANARY_DAILY_CEILING_EXCEEDED`；窗口起点含端点；写库时在账号锁下
+  再核一次，并发的两笔不会同时通过。
 - gas 不足**不是策略**：仍是 `409 INSUFFICIENT_BALANCE`，不在这个枚举里。
 - 其他 `VALIDATION_FAILED`、`POLICY_BLOCKED` 场景 `detailsSafe` 仍为 `null`；前端不得
   依赖未列出的键。

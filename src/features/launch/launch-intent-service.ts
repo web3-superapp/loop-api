@@ -32,14 +32,11 @@ import {
   nativeAssetId,
   parseDecimalAmount,
 } from "../chain/chain-contract.js";
-import {
-  addDecimalStrings,
-  compareDecimalStrings,
-  subtractDecimalStrings,
-} from "../market/market-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import { bscWriteCanaryPolicyVersion } from "../wallet-intents/intent-contract.js";
 import {
+  assertDailyCanaryCeiling,
+  dailyCanaryAdmission,
   enforceCanaryCeiling,
   requireCanaryCounterparty,
 } from "../wallet-intents/intent-preparation.js";
@@ -494,6 +491,16 @@ export async function prepareLaunchIntent(
       idempotencyKey: input.idempotencyKey,
       requestSha256,
       build,
+      // Decision 0104 M2: the daily ceiling is re-checked under the owner
+      // lock in the insert transaction (purchases only; claims carry 0).
+      canaryAdmission:
+        request.kind === "buy"
+          ? dailyCanaryAdmission(
+              writes,
+              formatDecimalAmount(request.payRaw, usd1Decimals),
+              runtime.now(),
+            )
+          : null,
     });
   } catch (error) {
     if (error instanceof LaunchIntentIdempotencyConflictError) {
@@ -553,27 +560,17 @@ async function buildIntent(
     const since = new Date(
       runtime.now().getTime() - 24 * 60 * 60 * 1000,
     ).toISOString();
-    // One rolling window for wallet and Launch intents (0065 / 0077).
+    // One rolling window for wallet, Launch, and MEME Intents (0065 /
+    // 0077 / 0104); the repository re-checks it under the owner lock.
     const spentUsd = await runtime.walletIntentExposureUsd({
       ownerUserId: input.principal.userId,
       since,
     });
-    const exposureUsd = addDecimalStrings(spentUsd, valueUsd);
-    const ceilingUsd = input.writes.canaryDailyMaxUsd;
-    if (compareDecimalStrings(exposureUsd, ceilingUsd) > 0) {
-      const remaining = subtractDecimalStrings(ceilingUsd, spentUsd);
-      refuse(
-        "POLICY_BLOCKED",
-        walletIntentRefusalReasonCodes.canaryDailyCeilingExceeded,
-        {
-          exposureUsd,
-          ceilingUsd,
-          spentUsd,
-          remainingUsd:
-            compareDecimalStrings(remaining, "0") < 0 ? "0" : remaining,
-        },
-      );
-    }
+    assertDailyCanaryCeiling(
+      input.writes.canaryDailyMaxUsd,
+      spentUsd,
+      valueUsd,
+    );
   }
 
   // --- One snapshot for every contract read (Decision 0076). ---

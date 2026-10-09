@@ -56,6 +56,7 @@ function laneRepository(
         storedCount: input.events.length,
         skippedCount: 1,
         metadataMismatchCount: 0,
+        creatorMismatchCount: 0,
         touchedTokenIds: [],
       });
     }),

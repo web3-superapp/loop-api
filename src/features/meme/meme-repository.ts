@@ -1,4 +1,5 @@
 import type { LaunchChainId } from "../chain/chain-contract.js";
+import type { CanaryExposureAdmission } from "../wallet-intents/intent-contract.js";
 import type {
   MemeIntentKind,
   MemeIntentState,
@@ -218,6 +219,30 @@ export class MemeIntentReportConflictError extends Error {
   }
 }
 
+/**
+ * Decision 0104 M2: a draft already has a create Intent that is still
+ * signable (`prepared` inside its window) or reported; a second one would
+ * race it for the same salt.
+ */
+export class MemeCreateIntentInFlightError extends Error {
+  readonly code = "meme_create_intent_in_flight";
+
+  constructor() {
+    super("The MEME draft already has a create Intent in flight");
+    this.name = "MemeCreateIntentInFlightError";
+  }
+}
+
+/** The draft left `draft` between the service's read and the insert. */
+export class MemeTokenNotDraftError extends Error {
+  readonly code = "meme_token_not_draft";
+
+  constructor(readonly status: string | null) {
+    super("The MEME token is no longer a draft");
+    this.name = "MemeTokenNotDraftError";
+  }
+}
+
 export interface MemeIntentReceipt {
   readonly status: "success" | "reverted";
   readonly blockNumber: string;
@@ -341,6 +366,12 @@ export interface CommitMemeSegmentResult {
   readonly skippedCount: number;
   /** TokenCreated logs whose salt matched a draft but not its metadata. */
   readonly metadataMismatchCount: number;
+  /**
+   * TokenCreated logs that matched a draft's salt and metadata but whose
+   * `creator` is not the wallet of any create Intent of that draft
+   * (Decision 0104 m3, `MEME_CREATED_CREATOR_MISMATCH`); never stored.
+   */
+  readonly creatorMismatchCount: number;
   readonly touchedTokenIds: readonly string[];
 }
 
@@ -424,11 +455,23 @@ export interface MemeRepository {
   touchDraftSalt(memeTokenId: string): Promise<void>;
 
   // --- Intents ---------------------------------------------------------
+  /**
+   * Claims the Idempotency-Key, runs `build` (chain reads) outside any
+   * transaction, then inserts under the owner lock (Decision 0104 M2):
+   * `canaryAdmission` re-checks the daily ceiling on the stored totals, and
+   * `exclusiveCreate` refuses a second live create Intent of the draft
+   * (`MemeCreateIntentInFlightError`) or a draft that left `draft`
+   * (`MemeTokenNotDraftError`); both are checked before `build` too.
+   */
   createIntent(input: {
     readonly ownerUserId: string;
     readonly idempotencyKey: string;
     readonly requestSha256: string;
     readonly build: () => Promise<CreateMemeIntentRecord>;
+    readonly canaryAdmission?: (
+      built: CreateMemeIntentRecord,
+    ) => CanaryExposureAdmission | null;
+    readonly exclusiveCreate?: { readonly memeTokenId: string } | null;
   }): Promise<{ readonly created: boolean; readonly intent: MemeIntentRecord }>;
   getIntent(input: {
     readonly ownerUserId: string;
@@ -440,7 +483,10 @@ export interface MemeRepository {
     readonly transactionHash: string;
     readonly payloadVerified: boolean;
   }): Promise<MemeIntentRecord>;
-  /** Wallet-side USD value (USD1 at par) of the owner's Intents since. */
+  /**
+   * The account's whole canary exposure since `since` (inclusive): wallet,
+   * Launch, and MEME Intents that may still move funds (Decision 0104 M1).
+   */
   sumRecentExposureUsd(input: {
     readonly ownerUserId: string;
     readonly since: string;

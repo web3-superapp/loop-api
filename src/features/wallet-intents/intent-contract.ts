@@ -144,6 +144,19 @@ export const walletIntentRefusalReasonCodes = Object.freeze({
   nativeAssetNotApprovable: "NATIVE_ASSET_NOT_APPROVABLE",
   priceImpactBlocked: "PRICE_IMPACT_BLOCKED",
 } as const);
+/**
+ * The in-transaction half of the Decision 0065 daily ceiling (Decision
+ * 0104 M2): a repository that writes an Intent locks the owner row,
+ * recomputes the account's spent total over `[since, now]` across wallet,
+ * Launch, and MEME Intents, and calls `admit`, which throws the
+ * `CANARY_DAILY_CEILING_EXCEEDED` refusal when the new Intent no longer fits.
+ */
+export interface CanaryExposureAdmission {
+  /** Inclusive start of the rolling 24 h window (ISO 8601). */
+  readonly since: string;
+  readonly admit: (spentUsd: string) => void;
+}
+
 export type WalletIntentRefusalReasonCode =
   (typeof walletIntentRefusalReasonCodes)[keyof typeof walletIntentRefusalReasonCodes];
 export const swapPolicyVersion = "swapPolicyV1" as const;
