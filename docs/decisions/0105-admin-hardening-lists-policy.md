@@ -110,11 +110,11 @@ The service still prices and orders the union exactly as before (the ordering ke
 4. Optional: `INTEL_PROMOTION_IMAGE_HOSTS=<cdn host>` when promotion images are hosted.
 5. Restart the API (main agent; sub-agents do not restart the ops stack). No migration.
 
-## Open questions (for the main agent)
+## Rulings (main agent, 2026-10-09)
 
-1. Ownership: making the operator key the curve owner also gives it `setTreasury` / `injectResidual`, and takes them from the deployer. Acceptable for testnet, or should the next curve version add a separate `pauser` role so ownership stays with the deployer / a multisig?
-2. `loop-mobile` must widen the `listingReason.reasonCode` pattern (§6) before this ships with hidden tokens present; confirm the mobile follow-up.
-3. Multi-replica API: the pause single flight and pending memory are per process (§3). Fine while one API process runs per environment.
+1. Ownership: accepted on testnet. The operator key is the curve owner (`transferOwnership` / `acceptOwnership` done; operator `0x475c9242d901f941Ad220E36324b92F6ffEE1Ab0`), and it therefore also holds `setTreasury` / `injectResidual`. **To do:** the next curve contract version adds a separate `pauser` role so ownership can go back to the deployer or a multisig.
+2. `loop-mobile` accepts `OPERATOR_<CODE>` for `listingReason.reasonCode` (loop-mobile `14b21c7` / `fa56a7c`).
+3. Single API process per environment accepted. The pause single flight and pending memory (§3) are per process; running more than one API replica requires moving them to a database lock (e.g. a row or advisory lock per token) first.
 
 ## Verification
 
