@@ -621,3 +621,133 @@
 
 所有这些行的 `actorAccountId`：批准相关为 reviewer 账号；登录失败 / 锁定为 null（actor `anonymous`）。
 锁定期内被直接拒绝的登录不写审计（避免刷屏），锁定开始那一次写 `session.login_locked`。
+
+## 10. S130 变更（决策 0111）：解锁账号、停用即停运营、CLI 审批留痕
+
+机器契约：`openapi/loop-admin.v1.json`（新增 `unlockAdminAccount`，共 30 个操作）。决策与偏离见
+`docs/decisions/0111-admin-followups.md`。Base URL、cookie、错误体七字段同 §1 / §6，无新请求头。
+
+### 10.0 给 loop-admin 的改动清单
+
+1. 账号对象（`GET /accounts` 的 `items[]`，以及所有账号写接口回执里的 `account`）新增两个**只读**字段：
+   `locked: boolean`、`lockedUntil: string | null`（ISO 时间，用户名被锁到何时；未锁为 `null`）。
+   列表可显示「已锁定，至 HH:mm」。只反映**用户名**锁，不反映 IP 锁。
+2. 账号列表每行加「解锁」按钮：**只在 `locked: true` 且 `status: "active"` 时显示**，且只对有
+   `accounts.manage` 的会话（platform_admin）显示。点击后弹窗选原因（`reasonCode`），调 §10.1。
+   成功后用回执里的 `account` 替换该行（`locked: false`）。`bootstrap`（环境变量引导账号）那一行
+   **不显示**解锁按钮（它没有 `accountId`，服务端也会 409）。
+3. 挖矿公式批准可能多两个 403 原因（§10.3），文案见下表。
+4. 停用接口回执与语义不变；说明文字可补一句「停用后该人员的发射审核与公式审批权限同时失效」。
+
+### 10.1 `POST /admin/v1/accounts/{accountId}/unlock` 解锁（`accounts.manage`，`Idempotency-Key` 必填）
+
+请求：
+
+```http
+POST /admin/v1/accounts/6a1d0f6e-2c55-4d0b-9a1e-0f3c1b2a4d5e/unlock
+Cookie: loop_admin_session=…
+Idempotency-Key: 3f2c9a7e-1b4d-4e8f-9a6c-2d1e0f3b4a5c
+Content-Type: application/json
+
+{ "reasonCode": "identity_verified" }
+```
+
+- `reasonCode`：`^[a-z][a-z0-9_]{0,63}$`，必填，写进审计（建议选项：`identity_verified`
+  「已核实本人」、`password_reset_done`「已重置密码」、`false_alarm`「误锁」）。
+- 效果：删除该账号**用户名**的失败计数与锁（`admin_login_attempts` 的 username 行）；**不清 IP 计数**
+  （同一网络失败过多导致的 IP 锁仍按 15 分钟自然解除）。解锁后持有人可立即用正确密码登录。
+
+200 回执（`accountWrite`）：
+
+```json
+{
+  "account": {
+    "accountId": "6a1d0f6e-2c55-4d0b-9a1e-0f3c1b2a4d5e",
+    "username": "reviewer-alice",
+    "role": "reviewer",
+    "permissions": [
+      "audit.read",
+      "formula.approve",
+      "launch.approve",
+      "launch.read"
+    ],
+    "status": "active",
+    "operatorUserId": "0b9f6c1a-7d2e-4f3a-8b5c-1d2e3f4a5b6c",
+    "operator": {
+      "enabled": true,
+      "grants": [{ "permission": "launch.read", "scope": "*" }]
+    },
+    "locked": false,
+    "lockedUntil": null,
+    "passwordChangeRequired": false,
+    "credentialsChangedAt": "2026-10-10T02:00:00.000Z",
+    "createdAt": "2026-10-10T02:00:00.000Z",
+    "createdBy": "operator",
+    "disabledAt": null,
+    "disabledBy": null
+  },
+  "changed": true,
+  "replayed": false,
+  "audit": {
+    "auditId": "1c7e5a2b-3d4f-4a6b-8c9d-0e1f2a3b4c5d",
+    "seq": 913,
+    "at": "2026-10-10T03:00:00.000Z"
+  }
+}
+```
+
+- 没有可清的记录（已过期或从未失败）→ 200 `changed: false`、`audit: null`。
+- 同一 `Idempotency-Key` 原样重放 → 200 `replayed: true`、`changed: false`、`audit: null`，`account` 为当前状态。
+
+错误：
+
+| HTTP | code                     | `detailsSafe.reasonCode`                                                 | 何时 / 后台应显示                                                                         |
+| ---- | ------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`        | `ADMIN_IDEMPOTENCY_KEY_REQUIRED` 或无                                    | 缺/错 `Idempotency-Key`；`reasonCode` 格式不对                                            |
+| 401  | `ADMIN_SESSION_REQUIRED` | —                                                                        | 会话失效 → 回登录页                                                                       |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`（`permission`）、`ADMIN_PASSWORD_CHANGE_REQUIRED` | 非 platform_admin（按钮应已隐藏）                                                         |
+| 404  | `NOT_FOUND`              | `ADMIN_ACCOUNT_NOT_FOUND`                                                | 刷新列表                                                                                  |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_ACCOUNT_ENVIRONMENT`                                              | 目标是引导账号（路径 `bootstrap` 或其用户名）：「环境账号不能在后台解锁，请等待 15 分钟」 |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_ACCOUNT_DISABLED`                                                 | 账号已停用（不可恢复）                                                                    |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_IDEMPOTENCY_CONFLICT`                                             | 同一个 key 用于不同请求 → 换新 key 重试                                                   |
+| 503  | `CAPABILITY_UNAVAILABLE` | `ADMIN_DATABASE_UNAVAILABLE`                                             | 「暂不可用，稍后重试」（什么都没改）                                                      |
+| 500  | `INTERNAL_ERROR`         | —                                                                        | 通用错误                                                                                  |
+
+### 10.2 停用账号同时停用运营人员
+
+`POST /accounts/{accountId}/disable` 的请求与回执不变。对 reviewer / testnet_acceptor：同一事务内
+`ops_operators.enabled = false`（回执 `account.operator.enabled: false`），审计 `account.disable` 的
+`after` 多 `operatorEnabledBefore`（停用前是否启用）与 `operatorEnabled`。之后该人员的发射审核
+（403 `OPS_FORBIDDEN`）与挖矿公式审批（403 `ADMIN_ACCOUNT_DISABLED`）都被拒；其会话立即失效（401）。
+已停用账号不能再启用（不变）。
+
+### 10.3 挖矿公式批准新增的拒绝原因
+
+`POST /mining/formula-versions/{configVersion}/approve`（reviewer）：
+
+| HTTP | code / reasonCode                               | 何时                                                      | 后台应显示                                 |
+| ---- | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
+| 403  | `PERMISSION_DENIED` / `ADMIN_OPERATOR_DISABLED` | 该 reviewer 绑定的运营人员已被停用（例如部署端 CLI 撤销） | 「你的审核权限已被停用，请联系平台管理员」 |
+| 403  | `PERMISSION_DENIED` / `ADMIN_ACCOUNT_DISABLED`  | 批准过程中账号刚被停用                                    | 同上                                       |
+
+两者都会写 `mining.formula.approve.failed`。
+
+### 10.4 应急 CLI 批准在后台的表现
+
+部署端应急命令 `pnpm mining:approve-formula <version> --confirm --approved-by <值班人> --reason "<原因>"`
+（生产环境另需 `--i-know-this-bypasses-review`）批准的版本：
+
+- 公式列表里该版本 `approvedBy: null`（没有后台账号）；
+- 审计列表有 `mining.formula.approve` 行：`actor: "cli"`、`actorAccountId: null`、
+  `after.approvedBy: "cli:<值班人>"`、`after.reason`、`after.bypass`（生产绕过审核为 `true`）、`after.channel: "cli"`。
+  建议审计页对 `actor: "cli"` 的行加「应急通道」标记，`bypass: true` 标红。
+- 被拒的尝试（如值班人就是草稿保存人）写 `mining.formula.approve.failed`（`actor: "cli"`，`after.reasonCode`）。
+
+### 10.5 审计新增
+
+| action                                       | targetType               | `after`                                                                                              |
+| -------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `account.unlock`（新）                       | `admin_account`          | `locked: false`、`reasonCode`、`idempotencyKey`；`before` 带 `failureCount`、`locked`、`lockedUntil` |
+| `account.disable`（扩充）                    | `admin_account`          | 原字段 + `operatorEnabledBefore`                                                                     |
+| `mining.formula.approve`（CLI，actor `cli`） | `mining_formula_version` | `channel: "cli"`、`approvedBy: "cli:<name>"`、`reason`、`bypass`、`draftAuthor`、`retiredVersion`    |
+| `mining.formula.approve.failed`（CLI）       | `mining_formula_version` | `channel: "cli"`、`approvedBy`、`reason`、`bypass`、`reasonCode`                                     |

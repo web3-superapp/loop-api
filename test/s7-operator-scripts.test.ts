@@ -38,6 +38,7 @@ import { miningDevBaselineConfigVersion } from "../src/features/mining/mining-de
 import {
   MiningCommunityAssetNotBoundError,
   MiningFormulaExistsError,
+  MiningFormulaSelfApprovalError,
   MiningSnapshotNotFoundError,
   MiningWeightOutOfRangeError,
 } from "../src/features/mining/mining-repository.js";
@@ -318,42 +319,187 @@ describe("pnpm launch:milestone", () => {
   });
 });
 
-describe("pnpm mining:approve-formula", () => {
-  it("refuses production, requires --confirm, and validates the version", () => {
-    expect(() =>
-      parseMiningApproveFormulaRequest(
-        ["node", "s", "miningFormulaV1-draft", "--confirm"],
-        production,
-      ),
-    ).toThrow(MiningApproveFormulaError);
+describe("pnpm mining:approve-formula (Decisions 0036, 0111)", () => {
+  const trail = [
+    "--approved-by",
+    "oncall-07",
+    "--reason",
+    "Snapshot lane blocked",
+  ];
+
+  function codeOf(argv: string[], environment = development): string {
     try {
-      parseMiningApproveFormulaRequest(
-        ["node", "s", "miningFormulaV1-draft"],
-        development,
-      );
+      parseMiningApproveFormulaRequest(argv, environment);
     } catch (error) {
-      expect((error as MiningApproveFormulaError).code).toBe(
-        "mining_approve_confirmation_required",
-      );
+      expect(error).toBeInstanceOf(MiningApproveFormulaError);
+      return (error as MiningApproveFormulaError).code;
     }
-    expect(() =>
-      parseMiningApproveFormulaRequest(
-        ["node", "s", "bad version!", "--confirm"],
-        development,
-      ),
-    ).toThrow(MiningApproveFormulaError);
+    return "accepted";
+  }
+
+  it("requires --approved-by, --reason, and --confirm, and validates them", () => {
+    expect(codeOf(["node", "s", "miningFormulaV1-draft", "--confirm"])).toBe(
+      "mining_approve_approver_required",
+    );
+    expect(
+      codeOf([
+        "node",
+        "s",
+        "miningFormulaV1-draft",
+        "--confirm",
+        "--approved-by",
+        "oncall-07",
+      ]),
+    ).toBe("mining_approve_reason_required");
+    expect(
+      codeOf([
+        "node",
+        "s",
+        "miningFormulaV1-draft",
+        "--confirm",
+        "--reason",
+        "x",
+      ]),
+    ).toBe("mining_approve_approver_required");
+    expect(
+      codeOf([
+        "node",
+        "s",
+        "miningFormulaV1-draft",
+        "--confirm",
+        "--approved-by",
+        "oncall-07",
+        "--reason",
+        "   ",
+      ]),
+    ).toBe("mining_approve_reason_required");
+    expect(codeOf(["node", "s", "miningFormulaV1-draft", ...trail])).toBe(
+      "mining_approve_confirmation_required",
+    );
+    // A name outside the account-name characters, a dangling option, a
+    // repeated option, a control character in the reason, a bad version.
+    for (const argv of [
+      [
+        "node",
+        "s",
+        "v1",
+        "--confirm",
+        "--approved-by",
+        "cli:ops",
+        "--reason",
+        "x",
+      ],
+      [
+        "node",
+        "s",
+        "v1",
+        "--confirm",
+        "--approved-by",
+        "张三",
+        "--reason",
+        "x",
+      ],
+      ["node", "s", "v1", "--confirm", "--reason", "x", "--approved-by"],
+      ["node", "s", "v1", "--confirm", "--approved-by", "--reason", "x"],
+      ["node", "s", "v1", "--confirm", ...trail, "--approved-by", "b"],
+      [
+        "node",
+        "s",
+        "v1",
+        "--confirm",
+        "--approved-by",
+        "a",
+        "--reason",
+        "x\u0000y",
+      ],
+      [
+        "node",
+        "s",
+        "v1",
+        "--confirm",
+        "--approved-by",
+        "a",
+        "--reason",
+        "x".repeat(501),
+      ],
+      ["node", "s", "bad version!", "--confirm", ...trail],
+      ["node", "s", "v1", "v2", "--confirm", ...trail],
+      ["node", "s", "v1", "--confirm", "--confirm", ...trail],
+    ]) {
+      expect(codeOf(argv)).toBe("mining_approve_arguments_invalid");
+    }
     expect(
       parseMiningApproveFormulaRequest(
-        ["node", "s", "miningFormulaV1-draft", "--confirm"],
+        ["node", "s", "miningFormulaV1-draft", "--confirm", ...trail],
         development,
       ),
-    ).toEqual({ configVersion: "miningFormulaV1-draft", databaseUrl });
+    ).toEqual({
+      configVersion: "miningFormulaV1-draft",
+      databaseUrl,
+      approval: {
+        approvedBy: "oncall-07",
+        reason: "Snapshot lane blocked",
+        bypass: false,
+      },
+    });
+  });
+
+  it("needs --i-know-this-bypasses-review in production and marks the bypass", () => {
+    expect(
+      codeOf(
+        ["node", "s", "miningFormulaV1-draft", "--confirm", ...trail],
+        production,
+      ),
+    ).toBe("mining_approve_forbidden_in_production");
+    expect(
+      codeOf(
+        [
+          "node",
+          "s",
+          "miningFormulaV1-draft",
+          "--i-know-this-bypasses-review",
+          ...trail,
+        ],
+        production,
+      ),
+    ).toBe("mining_approve_confirmation_required");
+    expect(
+      parseMiningApproveFormulaRequest(
+        [
+          "node",
+          "s",
+          "miningFormulaV1-draft",
+          "--confirm",
+          "--i-know-this-bypasses-review",
+          ...trail,
+        ],
+        { ...production, DATABASE_URL: databaseUrl },
+      ).approval,
+    ).toEqual({
+      approvedBy: "oncall-07",
+      reason: "Snapshot lane blocked",
+      bypass: true,
+    });
+    // Outside production the switch changes nothing.
+    expect(
+      parseMiningApproveFormulaRequest(
+        [
+          "node",
+          "s",
+          "miningFormulaV1-draft",
+          "--confirm",
+          "--i-know-this-bypasses-review",
+          ...trail,
+        ],
+        development,
+      ).approval.bypass,
+    ).toBe(false);
   });
 
   it("reports the production refusal without touching the repository", async () => {
     const stderr = outputWriter();
     const exitCode = await runMiningApproveFormula({
-      argv: ["node", "s", "miningFormulaV1-draft", "--confirm"],
+      argv: ["node", "s", "miningFormulaV1-draft", "--confirm", ...trail],
       environment: production,
       stdout: outputWriter(),
       stderr,
@@ -367,7 +513,7 @@ describe("pnpm mining:approve-formula", () => {
     );
   });
 
-  it("approves through the repository outside production", async () => {
+  it("approves through the repository with the approver trail", async () => {
     const approveFormula = vi.fn(() =>
       Promise.resolve({
         configVersion: "miningFormulaV1-draft",
@@ -378,18 +524,58 @@ describe("pnpm mining:approve-formula", () => {
     const close = vi.fn(() => Promise.resolve());
     const stdout = outputWriter();
     const exitCode = await runMiningApproveFormula({
-      argv: ["node", "s", "miningFormulaV1-draft", "--confirm"],
+      argv: ["node", "s", "miningFormulaV1-draft", "--confirm", ...trail],
       environment: development,
       stdout,
       stderr: outputWriter(),
       createRepository: () => ({
-        repository: { approveFormula: approveFormula as never },
+        repository: {
+          approveFormula: approveFormula as never,
+          recordFormulaApprovalRefusal: () => Promise.resolve(true),
+        },
         close,
       }),
     });
     expect(exitCode).toBe(0);
     expect(close).toHaveBeenCalledOnce();
+    expect(approveFormula).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configVersion: "miningFormulaV1-draft",
+        approval: {
+          approvedBy: "oncall-07",
+          reason: "Snapshot lane blocked",
+          bypass: false,
+        },
+      }),
+    );
     expect(stdout.contents()).toContain("miningFormulaV1-draft is approved");
+    expect(stdout.contents()).toContain("approved by cli:oncall-07");
+  });
+
+  it("maps a self-approval refusal and records it", async () => {
+    const recordFormulaApprovalRefusal = vi.fn(() => Promise.resolve(true));
+    const close = vi.fn(() => Promise.resolve());
+    const stderr = outputWriter();
+    const exitCode = await runMiningApproveFormula({
+      argv: ["node", "s", "miningFormulaV1-draft", "--confirm", ...trail],
+      environment: development,
+      stdout: outputWriter(),
+      stderr,
+      createRepository: () => ({
+        repository: {
+          approveFormula: () =>
+            Promise.reject(new MiningFormulaSelfApprovalError()),
+          recordFormulaApprovalRefusal,
+        },
+        close,
+      }),
+    });
+    expect(exitCode).toBe(1);
+    expect(close).toHaveBeenCalledOnce();
+    expect(stderr.contents()).toContain("mining_approve_self_approval");
+    expect(recordFormulaApprovalRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ reasonCode: "mining_approve_self_approval" }),
+    );
   });
 });
 

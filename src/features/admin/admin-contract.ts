@@ -311,6 +311,11 @@ export const adminReasonCodes = Object.freeze({
   accountDisabled: "ADMIN_ACCOUNT_DISABLED",
   accountSelf: "ADMIN_ACCOUNT_SELF",
   accountEnvironment: "ADMIN_ACCOUNT_ENVIRONMENT",
+  /**
+   * Decision 0111: the approving reviewer's bound ops operator is disabled
+   * (or missing); formula approval is refused like the launch review.
+   */
+  operatorDisabled: "ADMIN_OPERATOR_DISABLED",
   passwordInvalid: "ADMIN_PASSWORD_INVALID",
   operatorLabelInvalid: "ADMIN_OPERATOR_LABEL_INVALID",
   launchProjectNotFound: "ADMIN_LAUNCH_PROJECT_NOT_FOUND",

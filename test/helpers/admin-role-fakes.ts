@@ -36,6 +36,8 @@ import {
 export interface InMemoryAdminAccounts extends AdminAccountRepository {
   readonly accounts: Map<string, AdminAccountCredentialRecord>;
   readonly operators: Map<string, AdminOperatorState>;
+  /** Decision 0111: lower-cased username → lockedUntil (ISO). */
+  readonly locks: Map<string, string>;
   seed(input: {
     readonly username: string;
     readonly password: string;
@@ -50,6 +52,7 @@ export function createInMemoryAdminAccounts(
 ): InMemoryAdminAccounts {
   const accounts = new Map<string, AdminAccountCredentialRecord>();
   const operators = new Map<string, AdminOperatorState>();
+  const locks = new Map<string, string>();
   const commands = new Map<
     string,
     AdminAccountCommand & { readonly target: string }
@@ -65,6 +68,7 @@ export function createInMemoryAdminAccounts(
               enabled: null,
               grants: [],
             }),
+      lockedUntil: locks.get(record.username.toLowerCase()) ?? null,
     };
   }
 
@@ -101,6 +105,7 @@ export function createInMemoryAdminAccounts(
   const repository: InMemoryAdminAccounts = {
     accounts,
     operators,
+    locks,
     async seed(input) {
       const now = new Date().toISOString();
       const record: AdminAccountCredentialRecord = {
@@ -273,6 +278,44 @@ export function createInMemoryAdminAccounts(
       );
       return {
         account: item(updated),
+        audit: auditRecord,
+        replayed: false,
+        changed: true,
+      };
+    },
+    async unlock(input) {
+      const earlier = claim(input.command);
+      if (earlier !== null) {
+        return {
+          account: item(lock(earlier)),
+          audit: null,
+          replayed: true,
+          changed: false,
+        };
+      }
+      const current = lock(input.accountId);
+      if (current.disabledAt !== null) {
+        throw new AdminStateConflictError(adminReasonCodes.accountDisabled);
+      }
+      commands.set(input.command.idempotencyKey, {
+        ...input.command,
+        target: current.accountId,
+      });
+      const key = current.username.toLowerCase();
+      if (!locks.has(key)) {
+        return {
+          account: item(current),
+          audit: null,
+          replayed: false,
+          changed: false,
+        };
+      }
+      locks.delete(key);
+      const auditRecord = await writeAudit(input.audit, current.accountId, {
+        reasonCode: input.reasonCode,
+      });
+      return {
+        account: item(current),
         audit: auditRecord,
         replayed: false,
         changed: true,

@@ -53,8 +53,8 @@ describe("000057 admin login attempts", () => {
     );
   });
 
-  it("is the head and lists the new relation", () => {
-    expect(latestMigrationName).toBe("000057_admin_login_attempts");
+  it("lists the new relation (head moved on in 000058)", () => {
+    expect(latestMigrationName).toBe("000058_admin_followups");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

@@ -313,6 +313,55 @@ const communityWeightsSchema = z
   .array(z.object({ communityId: uuidSchema, weight: decimalSchema }).strict())
   .max(500);
 
+/**
+ * Decision 0111: the approving reviewer, row-locked against a concurrent
+ * disable, must still be an active account whose bound LOOP user is an
+ * enabled ops operator — disabling the account or revoking the operator
+ * (console or deployment CLI) stops formula approval like it stops the
+ * Hooks launch review.
+ */
+async function assertApproverActive(
+  client: Queryable,
+  accountId: string,
+): Promise<void> {
+  const account = await client.query({
+    text: `
+      select disabled_at is not null as disabled, operator_user_id
+      from public.admin_accounts
+      where id = $1
+      for share
+    `,
+    values: [uuidSchema.parse(accountId)],
+  });
+  const row = z
+    .object({ disabled: z.boolean(), operator_user_id: uuidSchema.nullable() })
+    .strict()
+    .optional()
+    .parse(account.rows[0]);
+  if (row === undefined || row.disabled) {
+    throw new AdminSeparationOfDutiesError(adminReasonCodes.accountDisabled);
+  }
+  if (row.operator_user_id === null) {
+    throw new AdminSeparationOfDutiesError(adminReasonCodes.operatorDisabled);
+  }
+  const operator = await client.query({
+    text: `
+      select enabled from public.ops_operators
+      where user_id = $1
+      for share
+    `,
+    values: [row.operator_user_id],
+  });
+  const enabled = z
+    .object({ enabled: z.boolean() })
+    .strict()
+    .optional()
+    .parse(operator.rows[0]);
+  if (enabled?.enabled !== true) {
+    throw new AdminSeparationOfDutiesError(adminReasonCodes.operatorDisabled);
+  }
+}
+
 const formulaRowSchema = z
   .object({
     config_version: configVersionSchema,
@@ -987,6 +1036,7 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
     async approveFormula(input) {
       try {
         return await withV2Transaction(pool, unavailable, async (client) => {
+          await assertApproverActive(client, input.approver.accountId);
           const current = await readFormula(client, input.configVersion, true);
           if (current === null) {
             throw new AdminTargetNotFoundError(

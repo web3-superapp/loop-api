@@ -22,6 +22,7 @@ import {
   type AdminAuditInput,
   type AdminAuditRecord,
 } from "../features/admin/admin-repository.js";
+import { adminLoginUsernameKey } from "../features/admin/admin-login-attempts.js";
 import { adminRoles } from "../features/admin/admin-roles.js";
 import {
   HooksLaunchOperatorUserNotFoundError,
@@ -243,6 +244,23 @@ async function readOperator(
   });
 }
 
+/** Decision 0111: the account's login-name lock, if it holds now. */
+async function readLockedUntil(
+  client: Pick<PoolClient, "query">,
+  username: string,
+): Promise<string | null> {
+  const result = await client.query<{ locked_until: Date }>(
+    `select locked_until from public.admin_login_attempts
+     where scope = 'username' and subject_key = $1
+       and locked_until > clock_timestamp()`,
+    [adminLoginUsernameKey(username)],
+  );
+  const lockedUntil = result.rows[0]?.locked_until;
+  return lockedUntil === undefined
+    ? null
+    : dateSchema.parse(lockedUntil).toISOString();
+}
+
 async function listItem(
   client: Pick<PoolClient, "query">,
   record: AdminAccountCredentialRecord,
@@ -253,6 +271,7 @@ async function listItem(
       record.operatorUserId === null
         ? null
         : await readOperator(client, record.operatorUserId),
+    lockedUntil: await readLockedUntil(client, record.username),
   });
 }
 
@@ -394,16 +413,25 @@ export function createPostgresAdminAccountRepository(
                                   order by g.permission, g.scope)
                  from public.ops_grants g where g.user_id = a.operator_user_id
                ), '[]'::jsonb)
-             ) end as operator_state
+             ) end as operator_state,
+             l.locked_until
            from public.admin_accounts a
            left join public.ops_operators o on o.user_id = a.operator_user_id
+           left join public.admin_login_attempts l
+             on l.scope = 'username'
+             and l.subject_key = lower(a.username)
+             and l.locked_until > clock_timestamp()
            order by a.created_at desc, a.id desc
            limit $1`,
           [adminAccountListMaximum],
         );
         return Object.freeze(
           result.rows.map((raw: Record<string, unknown>) => {
-            const { operator_state: state, ...row } = raw;
+            const {
+              operator_state: state,
+              locked_until: lockedUntil,
+              ...row
+            } = raw;
             const account = mapAccount(row);
             return Object.freeze({
               ...publicAccount(account),
@@ -411,6 +439,10 @@ export function createPostgresAdminAccountRepository(
                 state === null || state === undefined
                   ? null
                   : operatorStateSchema.parse(state),
+              lockedUntil:
+                lockedUntil === null || lockedUntil === undefined
+                  ? null
+                  : dateSchema.parse(lockedUntil).toISOString(),
             });
           }),
         );
@@ -558,6 +590,9 @@ export function createPostgresAdminAccountRepository(
           after: {
             ...snapshot(updated),
             reasonCode: input.reasonCode,
+            // Decision 0111: the bound ops operator is disabled in this
+            // transaction (formula approval and the launch review stop).
+            operatorEnabledBefore: operator?.before.enabled ?? null,
             operatorEnabled: operator?.after.enabled ?? null,
             idempotencyKey: input.command.idempotencyKey,
           },
@@ -607,6 +642,71 @@ export function createPostgresAdminAccountRepository(
         });
         return Object.freeze({
           account: await listItem(client, updated),
+          audit,
+          replayed: false,
+          changed: true,
+        });
+      });
+    },
+
+    async unlock(input) {
+      return transaction(async (client) => {
+        const earlier = await claim(client, input.command);
+        if (earlier !== null) {
+          return replay(client, earlier);
+        }
+        const current = await lockAccount(client, input.accountId);
+        if (current.disabledAt !== null) {
+          throw new AdminStateConflictError(adminReasonCodes.accountDisabled);
+        }
+        // Only the name bucket: address buckets count every name tried
+        // from an address and are not one account's to clear.
+        const removed = await client.query<{
+          failure_count: number;
+          locked_until: Date | null;
+          locked: boolean;
+        }>(
+          `delete from public.admin_login_attempts
+           where scope = 'username' and subject_key = $1
+           returning failure_count, locked_until,
+             coalesce(locked_until > clock_timestamp(), false) as locked`,
+          [adminLoginUsernameKey(current.username)],
+        );
+        await record(client, input.command, current.accountId);
+        const bucket = removed.rows[0];
+        if (bucket === undefined) {
+          return Object.freeze({
+            account: await listItem(client, current),
+            audit: null,
+            replayed: false,
+            changed: false,
+          });
+        }
+        const audit = await insertAudit(client, {
+          ...input.audit,
+          targetId: current.accountId,
+          before: {
+            ...snapshot(current),
+            scope: "username",
+            failureCount: bucket.failure_count,
+            locked: bucket.locked,
+            lockedUntil:
+              bucket.locked_until === null
+                ? null
+                : dateSchema.parse(bucket.locked_until).toISOString(),
+          },
+          after: {
+            ...snapshot(current),
+            scope: "username",
+            failureCount: 0,
+            locked: false,
+            lockedUntil: null,
+            reasonCode: input.reasonCode,
+            idempotencyKey: input.command.idempotencyKey,
+          },
+        });
+        return Object.freeze({
+          account: await listItem(client, current),
           audit,
           replayed: false,
           changed: true,

@@ -752,6 +752,11 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const approved = await mining.approveFormula({
         configVersion: "miningFormulaTestOnly",
         requestId: randomUUID(),
+        approval: {
+          approvedBy: "integration-cli",
+          reason: "Integration fixture",
+          bypass: false,
+        },
       });
       expect(approved.status).toBe("approved");
       expect(approved.effectiveAt).not.toBeNull();
@@ -762,6 +767,11 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         mining.approveFormula({
           configVersion: "miningFormulaTestOnly",
           requestId: randomUUID(),
+          approval: {
+            approvedBy: "integration-cli",
+            reason: "Integration fixture",
+            bypass: false,
+          },
         }),
       ).rejects.toBeInstanceOf(MiningFormulaStateError);
       const owner = await createUser(true, true);
@@ -1060,6 +1070,11 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const approved = await mining.approveFormula({
         configVersion: baselineVersion,
         requestId: randomUUID(),
+        approval: {
+          approvedBy: "integration-cli",
+          reason: "Integration fixture",
+          bypass: false,
+        },
       });
       expect(approved.status).toBe("approved");
       await pool.query({
@@ -1390,6 +1405,11 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       await mining.approveFormula({
         configVersion: version,
         requestId: randomUUID(),
+        approval: {
+          approvedBy: "integration-cli",
+          reason: "Integration fixture",
+          bypass: false,
+        },
       });
       complete = randomUUID();
       const written = await mining.writeSnapshot(

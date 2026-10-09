@@ -262,7 +262,8 @@ with `NODE_ENV=production`:
 pnpm launch:review <projectId> approve            # review|approve|return|reject
 pnpm launch:milestone <projectId> lbank spot APPLIED
 pnpm launch:milestone <projectId> lbank spot LISTED --evidence <url> --reviewer ops.alice
-pnpm mining:approve-formula miningFormulaV1-draft --confirm   # do NOT run: the product draft has no parameters
+pnpm mining:approve-formula miningFormulaV1-draft --confirm \
+  --approved-by <name> --reason "<why>"   # do NOT run: the product draft has no parameters
 ```
 
 The `mining-snapshot` worker lane (`MINING_SNAPSHOT_ENABLED=true`) needs the
@@ -279,7 +280,8 @@ sequence is explicit and every step refuses `NODE_ENV=production`:
 
 ```sh
 pnpm mining:dev-baseline --confirm                                   # creates miningFormula-devBaseline-… (pending_approval)
-pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15-r2 --confirm
+pnpm mining:approve-formula miningFormula-devBaseline-2026-09-15-r2 --confirm \
+  --approved-by <name> --reason "<why>"                              # Decision 0111: records cli:<name> + audit row
 pnpm mining:community-weight <communityId> <weight> --confirm        # 0.5 ≤ weight ≤ 2; the community must have a bound asset
 pnpm mining:snapshot --confirm                                       # one lane tick with the worker's real reader (DexScreener)
 ```
@@ -415,8 +417,14 @@ curl -s "$BASE/admin/v1/overview" -H "cookie: loop_admin_session=…"
      `setTreasury` / `injectResidual`; `graduate` stays permissionless.
 - Intel promotion images: `INTEL_PROMOTION_IMAGE_HOSTS=cdn.example.com,…`
   (lower-case host names). Blank = every `imageUrl` must be null.
-- Formula approval is refused under `NODE_ENV=production`, like
-  `pnpm mining:approve-formula`.
+- Formula approval in the console is refused under `NODE_ENV=production`.
+  The break-glass `pnpm mining:approve-formula` (Decision 0111) needs
+  `--approved-by <name> --reason <text>` everywhere and, in production,
+  also `--i-know-this-bypasses-review` (audited as `bypass: true`).
+- A locked console account name (Decision 0110) is lifted early with
+  `POST /admin/v1/accounts/{accountId}/unlock` (platform_admin, Decision
+  0111); the bootstrap administrator's name bucket is not unlockable there
+  (wait 15 minutes).
 - Do not expose `/admin/*` publicly without Cloudflare Access or an IP
   allow-list in front (S120 / docs 07).
 - Contract for the console: `docs/admin-v1-api.md`.

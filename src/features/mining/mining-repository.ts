@@ -218,11 +218,29 @@ export interface WriteMiningSnapshotInput {
 export interface MiningRepository {
   getApprovedFormula(): Promise<MiningFormulaRecord | null>;
   listFormulaVersions(): Promise<readonly MiningFormulaRecord[]>;
-  /** Operator path: approves one version and retires any other approved one. */
+  /**
+   * Break-glass operator path (`pnpm mining:approve-formula`): approves one
+   * version and retires any other approved one. Decision 0111: records
+   * `approved_by = cli:<approvedBy>` (no account ID), refuses a draft whose
+   * author name is the same person (`MiningFormulaSelfApprovalError`), and
+   * writes the `mining.formula.approve` audit row (actor `cli`) in the same
+   * transaction.
+   */
   approveFormula(input: {
     readonly configVersion: string;
     readonly requestId: string;
+    readonly approval: MiningFormulaCliApproval;
   }): Promise<MiningFormulaRecord>;
+  /**
+   * Decision 0111: best-effort `mining.formula.approve.failed` row (actor
+   * `cli`) for a refused CLI approval. Never throws.
+   */
+  recordFormulaApprovalRefusal(input: {
+    readonly configVersion: string;
+    readonly requestId: string;
+    readonly approval: MiningFormulaCliApproval;
+    readonly reasonCode: string;
+  }): Promise<boolean>;
   getCommunityWeight(
     communityId: string,
   ): Promise<CommunityWeightRecord | null>;
@@ -345,6 +363,26 @@ export class MiningFormulaNotFoundError extends Error {
   }
 }
 
+/** Decision 0111: who ran the break-glass approval CLI, and why. */
+export interface MiningFormulaCliApproval {
+  /** `--approved-by` (account-name characters, 1–60); stored as `cli:<name>`. */
+  readonly approvedBy: string;
+  /** `--reason` free text (audit only). */
+  readonly reason: string;
+  /** True only for `NODE_ENV=production` with `--i-know-this-bypasses-review`. */
+  readonly bypass: boolean;
+}
+
+/** Decision 0111: the CLI approver is the draft's author. */
+export class MiningFormulaSelfApprovalError extends Error {
+  readonly code = "mining_formula_self_approval";
+
+  constructor() {
+    super("The approver saved this mining formula draft");
+    this.name = "MiningFormulaSelfApprovalError";
+  }
+}
+
 export class MiningFormulaStateError extends Error {
   readonly code = "mining_formula_state_invalid";
 
@@ -416,6 +454,7 @@ export function createUnavailableMiningRepository(): MiningRepository {
     getApprovedFormula: unavailable,
     listFormulaVersions: unavailable,
     approveFormula: unavailable,
+    recordFormulaApprovalRefusal: () => Promise.resolve(false),
     getCommunityWeight: unavailable,
     listCommunityWeightInputs: unavailable,
     getLatestSnapshot: unavailable,
