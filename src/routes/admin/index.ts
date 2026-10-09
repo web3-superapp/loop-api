@@ -194,6 +194,28 @@ export function registerAdminRoutes(
       ],
     };
   }
+  /**
+   * Decision 0110: a read route open to more than one permission (the
+   * formula list: `console.read`, or `formula.approve` for the reviewer who
+   * has to see the draft). A refusal names the first permission.
+   */
+  function guardAny(
+    permissions: readonly [AdminPermission, ...AdminPermission[]],
+  ): AdminRouteGuard {
+    return {
+      onRequest: [
+        requireSession,
+        (request: FastifyRequest): Promise<void> => {
+          const principal = principalOf(request);
+          const held = permissions.find((permission) =>
+            principal.permissions.includes(permission),
+          );
+          assertAdminPermission(principal, held ?? permissions[0]);
+          return Promise.resolve();
+        },
+      ],
+    };
+  }
 
   app.post(
     `${adminApiPrefix}/session`,
@@ -202,7 +224,7 @@ export function registerAdminRoutes(
         operationId: "createAdminSession",
         summary: "Log in as the operator",
         description:
-          "Decision 0109: a console account (admin_accounts) is tried first, then the ADMIN_USERNAME bootstrap administrator; a disabled account is ADMIN_LOGIN_INVALID. The response carries the role and its permissions. Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`). Only one login is verified at a time; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). The lock lives in process memory and a restart clears it (Decision 0105).",
+          "Decision 0109: a console account (admin_accounts) is tried first, then the ADMIN_USERNAME bootstrap administrator; a disabled account is ADMIN_LOGIN_INVALID. The response carries the role and its permissions. Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Decision 0110: failures lock per login name (case-insensitive; ADMIN_LOGIN_USERNAME_MAX_FAILURES in a row, default 5, lock ADMIN_LOGIN_USERNAME_LOCK_SECONDS, default 900) and per client address (ADMIN_LOGIN_IP_MAX_FAILURES within ADMIN_LOGIN_IP_WINDOW_SECONDS, default 50 in 900, lock ADMIN_LOGIN_IP_LOCK_SECONDS, default 900): 423 ADMIN_LOGIN_LOCKED with `detailsSafe.scope` (`username` | `ip`), `detailsSafe.retryAfterSeconds`, and `Retry-After`. One name's failures never lock another name. A success clears its name's count. The counters live in PostgreSQL (`admin_login_attempts`), shared by every instance and kept across restarts. Only one login is verified at a time per instance; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). Counters unavailable → 503 ADMIN_DATABASE_UNAVAILABLE (no password is verified).",
         tags: ["admin-session"],
         querystring: emptyQuerySchema,
         body: sessionRequestSchema,
@@ -228,6 +250,7 @@ export function registerAdminRoutes(
         username: body.username,
         password: body.password,
         requestId: request.id,
+        sourceIp: request.ip,
       });
       noStore(reply);
       reply.header(
@@ -556,7 +579,7 @@ export function registerAdminRoutes(
         operationId: "listAdminFormulaVersions",
         summary: "List mining formula versions",
         description:
-          "Newest 50 versions (Decision 0046 table) with their editable parameters. `approval.available: false` (reasonCode MINING_APPROVE_FORBIDDEN_IN_PRODUCTION) greys the approve button.",
+          "Newest 50 versions (Decision 0046 table) with their editable parameters. `approval.available: false` (reasonCode MINING_APPROVE_FORBIDDEN_IN_PRODUCTION) greys the approve button. Decision 0110: readable with `console.read` (platform_admin, auditor) or `formula.approve` (reviewer). `draftAuthor` names who saved a draft (null = unknown author: the draft cannot be approved and must be saved again); `approvedBy` names the approving reviewer.",
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -565,7 +588,7 @@ export function registerAdminRoutes(
           ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...guard("console.read"),
+      ...guardAny(["console.read", "formula.approve"]),
     },
     async (_request, reply) => {
       const resource = await service.listFormulaVersions();
@@ -581,7 +604,7 @@ export function registerAdminRoutes(
         operationId: "createAdminFormulaDraft",
         summary: "Create a draft mining formula version",
         description:
-          "Copies `baseVersion` and applies the editable parameters; the draft is `pending_approval` and changes no number until approved. An existing configVersion is 409 ADMIN_CONFLICT (ADMIN_FORMULA_VERSION_EXISTS).",
+          "Copies `baseVersion` and applies the editable parameters; the draft is `pending_approval` and changes no number until approved. An existing configVersion is 409 ADMIN_CONFLICT (ADMIN_FORMULA_VERSION_EXISTS). Decision 0110: the caller is stored as the draft's `draftAuthor`; saving a draft is submitting it for a reviewer's approval.",
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -617,7 +640,7 @@ export function registerAdminRoutes(
         operationId: "approveAdminFormulaVersion",
         summary: "Approve a draft: it becomes the version in force",
         description:
-          "Same semantics as `pnpm mining:approve-formula` (Decision 0046): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
+          "Decision 0110: needs `formula.approve` (reviewer only; platform_admin and the bootstrap administrator are 403 ADMIN_ROLE_FORBIDDEN). The approver must not be the draft's author (403 PERMISSION_DENIED, reasonCode ADMIN_FORMULA_SELF_APPROVAL); a draft without a recorded author is 409 ADMIN_CONFLICT (ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN; save it again as a new draft). Audit: `mining.formula.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing approved), then `mining.formula.approve` in the approving transaction or `mining.formula.approve.failed`. Same semantics as `pnpm mining:approve-formula` (Decision 0046): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
         tags: ["admin-mining"],
         security: adminSecurity,
         params: configVersionParamsSchema,
@@ -634,7 +657,7 @@ export function registerAdminRoutes(
         },
       },
       preValidation: assertEmptyBody,
-      ...guard("console.write"),
+      ...guard("formula.approve"),
     },
     async (request, reply) => {
       const { configVersion } = request.params as {

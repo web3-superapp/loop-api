@@ -63,8 +63,8 @@ describe("000055 admin accounts", () => {
     );
   });
 
-  it("is the head and lists the new relations", () => {
-    expect(latestMigrationName).toBe("000055_admin_accounts");
+  it("lists the new relations (head moved on in 000057)", () => {
+    expect(latestMigrationName).toBe("000057_admin_login_attempts");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

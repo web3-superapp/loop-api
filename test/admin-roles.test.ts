@@ -38,7 +38,7 @@ const expected: Readonly<Record<AdminRole, readonly AdminPermission[]>> = {
     "launch.read",
     "testnet.read",
   ],
-  reviewer: ["audit.read", "launch.approve", "launch.read"],
+  reviewer: ["audit.read", "formula.approve", "launch.approve", "launch.read"],
   testnet_acceptor: [
     "audit.read",
     "launch.read",
@@ -95,6 +95,18 @@ describe("Decision 0109 role table", () => {
       false,
     );
     expect(adminRoleHasPermission("reviewer", "testnet.accept")).toBe(false);
+    // Decision 0110: whoever edits the mining formula never approves it.
+    for (const role of adminRoles) {
+      expect(
+        adminRoleHasPermission(role, "console.write") &&
+          adminRoleHasPermission(role, "formula.approve"),
+        role,
+      ).toBe(false);
+    }
+    expect(adminRoleHasPermission("platform_admin", "formula.approve")).toBe(
+      false,
+    );
+    expect(adminRoleHasPermission("reviewer", "formula.approve")).toBe(true);
     expect(adminRoleHasPermission("testnet_acceptor", "launch.approve")).toBe(
       false,
     );

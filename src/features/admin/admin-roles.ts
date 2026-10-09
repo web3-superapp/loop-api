@@ -10,6 +10,11 @@ import type { HooksLaunchOpsPermission } from "../launch/hooks-launch-review.js"
  * accounts but holds neither `launch.approve` nor `testnet.accept`; only a
  * reviewer approves and only a testnet acceptor accepts, each bound to one
  * LOOP user whose `ops_grants` the Hooks review service checks again.
+ *
+ * Decision 0110: the mining formula follows the same split. The platform
+ * administrator drafts, submits, and withdraws a formula version
+ * (`console.write`); only a reviewer approves it (`formula.approve`), and
+ * the approval is refused when the reviewer is the draft's author.
  */
 
 export const adminRoles = Object.freeze([
@@ -30,6 +35,7 @@ export const adminPermissions = Object.freeze([
   "launch.approve",
   "testnet.read",
   "testnet.accept",
+  "formula.approve",
 ] as const);
 export type AdminPermission = (typeof adminPermissions)[number];
 
@@ -47,6 +53,7 @@ const rolePermissions: Readonly<Record<AdminRole, readonly AdminPermission[]>> =
     reviewer: Object.freeze([
       "launch.read",
       "launch.approve",
+      "formula.approve",
       "audit.read",
     ] as const),
     testnet_acceptor: Object.freeze([

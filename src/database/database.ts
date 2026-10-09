@@ -56,6 +56,7 @@ import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
 import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
+import { createPostgresAdminLoginAttemptStore } from "./admin-login-attempt-repository.js";
 import { createPostgresAdminLaunchReviewRepository } from "./admin-launch-repository.js";
 import type { AdminAccountRepository } from "../features/admin/admin-accounts.js";
 import type { AdminLaunchReviewRepository } from "../features/admin/admin-launch-review.js";
@@ -157,6 +158,7 @@ import {
   createPostgresWatchlistRepository,
   type WatchlistRepository,
 } from "./watchlist-repository.js";
+import type { AdminLoginAttemptStore } from "../features/admin/admin-login-attempts.js";
 
 const { Pool } = pg;
 const privyUserIdSchema = z.string().min(1).max(255);
@@ -239,6 +241,8 @@ export interface Database {
   readonly adminAccounts?: AdminAccountRepository;
   /** Decision 0109: console read projection of the Hooks launch review. */
   readonly adminLaunchReview?: AdminLaunchReviewRepository;
+  /** Decision 0110: login failure buckets shared by every instance. */
+  readonly adminLoginAttempts?: AdminLoginAttemptStore;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -464,6 +468,7 @@ export function createPostgresDatabase(
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),
+    adminLoginAttempts: createPostgresAdminLoginAttemptStore(pool),
     mining,
     referral,
     async ping(): Promise<void> {

@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   AdminRepositoryUnavailableError,
+  AdminSeparationOfDutiesError,
   AdminStateConflictError,
   AdminTargetNotFoundError,
   AdminValidationError,
@@ -58,6 +59,7 @@ function translate(error: unknown): never {
     error instanceof AdminStateConflictError ||
     error instanceof AdminTargetNotFoundError ||
     error instanceof AdminValidationError ||
+    error instanceof AdminSeparationOfDutiesError ||
     error instanceof AdminRepositoryUnavailableError
   ) {
     throw error;
@@ -323,12 +325,19 @@ const formulaRowSchema = z
     created_at: dateSchema,
     updated_at: dateSchema,
     community_weights: communityWeightsSchema.nullable(),
+    draft_author_kind: z.enum(["admin_account", "admin_bootstrap"]).nullable(),
+    draft_author: z.string().nullable(),
+    draft_author_account_id: uuidSchema.nullable(),
+    approved_by: z.string().nullable(),
+    approved_by_account_id: uuidSchema.nullable(),
   })
   .strict();
 
 const formulaColumns = `
   config_version, formula, weight_range, price_guard_rules, status,
-  effective_at, approved_at, created_at, updated_at, community_weights
+  effective_at, approved_at, created_at, updated_at, community_weights,
+  draft_author_kind, draft_author, draft_author_account_id,
+  approved_by, approved_by_account_id
 `;
 
 function mapFormula(raw: unknown): AdminFormulaVersionRecord {
@@ -349,6 +358,21 @@ function mapFormula(raw: unknown): AdminFormulaVersionRecord {
         : Object.freeze(
             row.community_weights.map((entry) => Object.freeze({ ...entry })),
           ),
+    draftAuthor:
+      row.draft_author_kind === null || row.draft_author === null
+        ? null
+        : Object.freeze({
+            kind: row.draft_author_kind,
+            actor: row.draft_author,
+            accountId: row.draft_author_account_id,
+          }),
+    approvedBy:
+      row.approved_by === null || row.approved_by_account_id === null
+        ? null
+        : Object.freeze({
+            actor: row.approved_by,
+            accountId: row.approved_by_account_id,
+          }),
   });
 }
 
@@ -913,9 +937,13 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
               text: `
                 insert into public.mining_formula_versions (
                   config_version, formula, weight_range, price_guard_rules,
-                  status, community_weights
+                  status, community_weights,
+                  draft_author_kind, draft_author, draft_author_account_id
                 )
-                values ($1, $2::jsonb, $3::jsonb, $4::jsonb, 'pending_approval', $5::jsonb)
+                values (
+                  $1, $2::jsonb, $3::jsonb, $4::jsonb, 'pending_approval',
+                  $5::jsonb, $6, $7, $8
+                )
                 returning ${formulaColumns}
               `,
               values: [
@@ -924,6 +952,11 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
                 JSON.stringify(weightRange),
                 JSON.stringify(priceGuardRules),
                 JSON.stringify(communityWeights),
+                input.author.kind,
+                input.author.actor,
+                input.author.kind === "admin_account"
+                  ? uuidSchema.parse(input.author.accountId)
+                  : null,
               ],
             });
           } catch (error) {
@@ -941,6 +974,7 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
               formula: version.formula,
               weightRange: version.weightRange,
               communityWeights: version.communityWeights,
+              draftAuthor: version.draftAuthor,
             },
           });
           return Object.freeze({ version, audit });
@@ -963,6 +997,20 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
             throw new AdminStateConflictError(adminReasonCodes.formulaState, {
               status: current.status,
             });
+          }
+          // Decision 0110: approver ≠ author, checked on the locked row.
+          if (current.draftAuthor === null) {
+            throw new AdminStateConflictError(
+              adminReasonCodes.formulaDraftAuthorUnknown,
+            );
+          }
+          if (
+            current.draftAuthor.accountId !== null &&
+            current.draftAuthor.accountId === input.approver.accountId
+          ) {
+            throw new AdminSeparationOfDutiesError(
+              adminReasonCodes.formulaSelfApproval,
+            );
           }
           const weights = current.communityWeights ?? [];
           const range = current.weightRange.community.range;
@@ -1024,10 +1072,16 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
                 status = 'approved',
                 effective_at = clock_timestamp(),
                 approved_at = clock_timestamp(),
-                updated_at = clock_timestamp()
+                updated_at = clock_timestamp(),
+                approved_by = $2,
+                approved_by_account_id = $3
               where config_version = $1
             `,
-            values: [current.configVersion],
+            values: [
+              current.configVersion,
+              input.approver.actor,
+              uuidSchema.parse(input.approver.accountId),
+            ],
           });
           for (const entry of weights) {
             await client.query({
@@ -1066,6 +1120,9 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
               ...formulaSummary(version),
               retiredVersion,
               communityWeightsApplied: weights.length,
+              draftAuthor: current.draftAuthor,
+              approvedBy: version.approvedBy,
+              requestedAuditId: input.requestedAuditId,
             },
           });
           return Object.freeze({ version, retiredVersion, audit });

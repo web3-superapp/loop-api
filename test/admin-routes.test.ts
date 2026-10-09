@@ -280,14 +280,14 @@ describe("Operator console routes (Decision 0102)", () => {
     ]);
   });
 
-  it("locks every login for 15 minutes after five failures", async () => {
+  it("locks the login name for 15 minutes after five failures, never another name (Decision 0110)", async () => {
     const clock = { now: Date.parse("2026-10-08T00:00:00.000Z") };
     const { app, repository } = await createApp({ clock });
-    const attempt = (secret: string) =>
+    const attempt = (secret: string, username = "operator") =>
       app.inject({
         method: "POST",
         url: "/admin/v1/session",
-        payload: { username: "operator", password: secret },
+        payload: { username, password: secret },
       });
     for (let index = 0; index < 4; index += 1) {
       expectError(
@@ -299,21 +299,43 @@ describe("Operator console routes (Decision 0102)", () => {
     const fifth = await attempt("wrong-password-123");
     const body = expectError(fifth, 423, "ADMIN_LOGIN_LOCKED");
     expect(body["category"]).toBe("rateLimit");
-    expect(body["detailsSafe"]).toEqual({ retryAfterSeconds: 900 });
-    expect(fifth.headers["retry-after"]).toBe("900");
-    // The right password is refused while locked.
-    expectError(await attempt(password), 423, "ADMIN_LOGIN_LOCKED");
-    const wrongUser = await app.inject({
-      method: "POST",
-      url: "/admin/v1/session",
-      payload: { username: "intruder", password },
+    expect(body["detailsSafe"]).toEqual({
+      scope: "username",
+      retryAfterSeconds: 900,
     });
-    expectError(wrongUser, 423, "ADMIN_LOGIN_LOCKED");
+    expect(fifth.headers["retry-after"]).toBe("900");
+    // The right password is refused while the name is locked, in any case.
+    expectError(await attempt(password), 423, "ADMIN_LOGIN_LOCKED");
+    expectError(await attempt(password, "OPERATOR"), 423, "ADMIN_LOGIN_LOCKED");
+    // Another name is not locked (Decision 0110).
+    expectError(
+      await attempt(password, "intruder"),
+      401,
+      "ADMIN_LOGIN_INVALID",
+    );
     clock.now += 15 * 60 * 1000;
     expect((await attempt(password)).statusCode).toBe(200);
-    expect(
-      repository.audit.filter((row) => row.action === "session.login_failed"),
-    ).toHaveLength(5);
+    const failed = repository.audit.filter(
+      (row) => row.action === "session.login_failed",
+    );
+    expect(failed).toHaveLength(6);
+    expect(failed[4]?.after).toMatchObject({
+      locked: true,
+      lockScope: "username",
+      username: "operator",
+      usernameFailures: 5,
+    });
+    // An unknown name is never written down.
+    expect(failed[5]?.after).toMatchObject({ locked: false, username: null });
+    const locks = repository.audit.filter(
+      (row) => row.action === "session.login_locked",
+    );
+    expect(locks).toHaveLength(1);
+    expect(locks[0]?.after).toMatchObject({
+      scope: "username",
+      retryAfterSeconds: 900,
+      username: "operator",
+    });
   });
 
   it("holds the lock under 200 concurrent logins and verifies one at a time (Decision 0105)", async () => {
@@ -708,7 +730,7 @@ describe("Operator console routes (Decision 0102)", () => {
     });
   });
 
-  it("drafts, approves, and withdraws mining formula versions", async () => {
+  it("drafts and withdraws mining formula versions; the platform administrator cannot approve (Decision 0110)", async () => {
     const { app, repository } = await createApp();
     const base = adminFormulaFixture();
     repository.formulas.set(base.configVersion, base);
@@ -758,6 +780,12 @@ describe("Operator console routes (Decision 0102)", () => {
           nftWeight: "1.2",
           inviteInitialPower: "100",
         },
+        draftAuthor: {
+          kind: "admin_bootstrap",
+          username: "operator",
+          accountId: null,
+        },
+        approvedBy: null,
       },
     });
     expectError(
@@ -768,28 +796,25 @@ describe("Operator console routes (Decision 0102)", () => {
       409,
       "ADMIN_CONFLICT",
     );
-    const approved = await app.inject({
+    // Decision 0110: drafting is the platform administrator's, approving a
+    // reviewer's; nothing changes and no audit row is written.
+    const refused = await app.inject({
       method: "POST",
       url: "/admin/v1/mining/formula-versions/miningFormulaV2/approve",
       headers: { cookie },
     });
-    expect(approved.statusCode).toBe(200);
-    expect(approved.json()).toMatchObject({
-      version: { status: "approved" },
-      retiredVersion: base.configVersion,
+    expect(
+      expectError(refused, 403, "PERMISSION_DENIED")["detailsSafe"],
+    ).toEqual({
+      reasonCode: "ADMIN_ROLE_FORBIDDEN",
+      permission: "formula.approve",
     });
-    expectError(
-      await app.inject({
-        method: "POST",
-        url: "/admin/v1/mining/formula-versions/miningFormulaV2/approve",
-        headers: { cookie },
-      }),
-      409,
-      "ADMIN_CONFLICT",
+    expect(repository.formulas.get("miningFormulaV2")?.status).toBe(
+      "pending_approval",
     );
     await draft({
       configVersion: "miningFormulaV3",
-      baseVersion: "miningFormulaV2",
+      baseVersion: base.configVersion,
     });
     const withdrawn = await app.inject({
       method: "POST",
@@ -803,7 +828,7 @@ describe("Operator console routes (Decision 0102)", () => {
       headers: { cookie },
     });
     expect(list.json()).toMatchObject({
-      approvedVersion: "miningFormulaV2",
+      approvedVersion: base.configVersion,
       approval: { available: true, reasonCode: null },
     });
     expect(
@@ -812,44 +837,9 @@ describe("Operator console routes (Decision 0102)", () => {
         .filter((action) => action.startsWith("mining.")),
     ).toEqual([
       "mining.formula.draft",
-      "mining.formula.approve",
       "mining.formula.draft",
       "mining.formula.withdraw",
     ]);
-  });
-
-  it("refuses formula approval under NODE_ENV=production like the script", async () => {
-    const repository = createInMemoryAdminRepository();
-    repository.formulas.set(
-      "draftV9",
-      adminFormulaFixture({
-        configVersion: "draftV9",
-        status: "pending_approval",
-      }),
-    );
-    const app = await buildApp({
-      config: s7TestConfig({
-        NODE_ENV: "production",
-        PUBLIC_BASE_URL: "https://api.example.com",
-        V2_CURSOR_HMAC_SECRET: "c".repeat(64),
-        ...adminEnv(),
-      }),
-      database: { ...s7Database({}), admin: repository },
-      privyAccessTokenVerifier: s7PrivyVerifier(),
-      memePauseSender: null,
-      logger: false,
-    });
-    apps.push(app);
-    const cookie = await login(app);
-    const response = await app.inject({
-      method: "POST",
-      url: "/admin/v1/mining/formula-versions/draftV9/approve",
-      headers: { cookie },
-    });
-    expect(
-      expectError(response, 503, "CAPABILITY_UNAVAILABLE")["detailsSafe"],
-    ).toEqual({ reasonCode: "MINING_APPROVE_FORBIDDEN_IN_PRODUCTION" });
-    expect(repository.formulas.get("draftV9")?.status).toBe("pending_approval");
   });
 
   it("hides a MEME token and reports pause unavailable without the operator key", async () => {

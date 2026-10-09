@@ -7,11 +7,7 @@ import {
 } from "node:crypto";
 
 import { isAdminRole, type AdminRole } from "./admin-roles.js";
-import {
-  adminLoginLockSeconds,
-  adminLoginMaximumFailures,
-  adminSessionTtlSeconds,
-} from "./admin-contract.js";
+import { adminSessionTtlSeconds } from "./admin-contract.js";
 
 /**
  * Operator console authentication (Decision 0102): one administrator, an
@@ -23,17 +19,16 @@ import {
  *   ADMIN_SESSION_SECRET (HMAC-SHA256). Logging out revokes the `sid` in
  *   this process until it expires; rotating the secret revokes every
  *   session.
- * - Five failed logins in a row lock every login for 15 minutes. The lock
- *   is per process and global (there is one account).
- * - Decision 0105: a login attempt reserves its failure *before* argon2
- *   runs (synchronously, so concurrent requests cannot all pass the lock
- *   check), only one verification runs at a time (the rest are 429
- *   ADMIN_LOGIN_BUSY), and argon2 itself never runs more than
+ * - Decision 0110: failed logins lock per username and per client address
+ *   (`admin-login-attempts.ts`, shared through `admin_login_attempts`);
+ *   this replaced the per-process global lock of Decision 0105.
+ * - Decision 0105: only one verification runs at a time per process (the
+ *   rest are 429 ADMIN_LOGIN_BUSY), and argon2 itself never runs more than
  *   `adminArgon2MaximumConcurrency` derivations in this process, so memory
  *   stays bounded at that many × 19 MiB whatever the request rate.
- * - The lock and the logout revocations live in this process's memory: a
- *   restart clears both (accepted for one operator behind Cloudflare
- *   Access; rotating ADMIN_SESSION_SECRET revokes every session).
+ * - The logout revocations of the bootstrap administrator live in this
+ *   process's memory: a restart clears them (rotating ADMIN_SESSION_SECRET
+ *   revokes every session).
  */
 
 /**
@@ -378,104 +373,6 @@ export function createAdminSessionCodec(input: {
         session.sessionId,
         Math.floor(Date.parse(session.expiresAt) / 1000),
       );
-    },
-  });
-}
-
-export type AdminLoginAdmission =
-  | { readonly status: "locked"; readonly retryAfterSeconds: number }
-  | { readonly status: "busy" }
-  | {
-      readonly status: "admitted";
-      /** Right credentials: the counter and the lock reset. */
-      succeed(): void;
-      /**
-       * Wrong credentials: the reserved failure stays counted. Returns the
-       * seconds of the lock this failure started (0 when not locked).
-       */
-      fail(): number;
-      /** The attempt never reached a verdict: its reservation is refunded. */
-      cancel(): void;
-    };
-
-export interface AdminLoginThrottle {
-  /** Seconds until the lock lifts, or 0 when logins are accepted. */
-  lockedForSeconds(): number;
-  /**
-   * Decision 0105: one synchronous step that checks the lock, refuses a
-   * second concurrent attempt, and reserves this attempt's failure before
-   * any password work starts.
-   */
-  admit(): AdminLoginAdmission;
-}
-
-export function createAdminLoginThrottle(
-  options: {
-    readonly now?: () => Date;
-    readonly maximumFailures?: number;
-    readonly lockSeconds?: number;
-  } = {},
-): AdminLoginThrottle {
-  const now = options.now ?? (() => new Date());
-  const maximumFailures = options.maximumFailures ?? adminLoginMaximumFailures;
-  const lockMs = (options.lockSeconds ?? adminLoginLockSeconds) * 1000;
-  let failures = 0;
-  let lockedUntil = 0;
-  let inFlight = false;
-
-  function lockedForSeconds(): number {
-    const remaining = lockedUntil - now().getTime();
-    if (remaining <= 0) {
-      if (lockedUntil !== 0) {
-        lockedUntil = 0;
-        failures = 0;
-      }
-      return 0;
-    }
-    return Math.ceil(remaining / 1000);
-  }
-
-  return Object.freeze({
-    lockedForSeconds,
-    admit(): AdminLoginAdmission {
-      const locked = lockedForSeconds();
-      if (locked > 0) {
-        return { status: "locked", retryAfterSeconds: locked };
-      }
-      if (inFlight) {
-        return { status: "busy" };
-      }
-      inFlight = true;
-      failures += 1;
-      let settled = false;
-      const settle = (): boolean => {
-        if (settled) {
-          return false;
-        }
-        settled = true;
-        inFlight = false;
-        return true;
-      };
-      return Object.freeze({
-        status: "admitted" as const,
-        succeed() {
-          if (settle()) {
-            failures = 0;
-            lockedUntil = 0;
-          }
-        },
-        fail() {
-          if (settle() && failures >= maximumFailures) {
-            lockedUntil = now().getTime() + lockMs;
-          }
-          return lockedForSeconds();
-        },
-        cancel() {
-          if (settle()) {
-            failures = Math.max(0, failures - 1);
-          }
-        },
-      });
     },
   });
 }

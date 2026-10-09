@@ -39,21 +39,26 @@
 
 ## 2. 会话 cookie 规则
 
-| 属性   | 值                                                                                                    |
-| ------ | ----------------------------------------------------------------------------------------------------- |
-| 名称   | `loop_admin_session`                                                                                  |
-| 内容   | 不透明签名串（`<payload>.<HMAC>`），后台不要解析                                                      |
-| 属性   | `Path=/admin; Max-Age=43200; HttpOnly; SameSite=Strict`，https 基址另加 `Secure`                      |
-| 有效期 | 12 小时，到期即 401，不续期（重新登录）                                                               |
-| 登出   | `DELETE /admin/v1/session` → 204 + `Set-Cookie: loop_admin_session=; Max-Age=0`                       |
-| 锁定   | 连续 5 次登录失败 → 全局锁 15 分钟（423）；锁定期内正确密码也被拒                                     |
-| 并发   | 同一时刻只校验一次登录；并发的其它登录立即 429 `ADMIN_LOGIN_BUSY`（`Retry-After: 1`，不计失败次数）   |
-| 失效   | 轮换 `ADMIN_SESSION_SECRET` 使所有会话失效                                                            |
-| 重启   | 锁定与登出撤销只存在 API 进程内存（决策 0105 接受）：重启后锁定清零、已登出但未到期的 cookie 重新有效 |
+| 属性   | 值                                                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 名称   | `loop_admin_session`                                                                                                                                                                                                     |
+| 内容   | 不透明签名串（`<payload>.<HMAC>`），后台不要解析                                                                                                                                                                         |
+| 属性   | `Path=/admin; Max-Age=43200; HttpOnly; SameSite=Strict`，https 基址另加 `Secure`                                                                                                                                         |
+| 有效期 | 12 小时，到期即 401，不续期（重新登录）                                                                                                                                                                                  |
+| 登出   | `DELETE /admin/v1/session` → 204 + `Set-Cookie: loop_admin_session=; Max-Age=0`                                                                                                                                          |
+| 锁定   | 决策 0110：按用户名（不分大小写）连续 5 次失败锁该用户名 15 分钟；同一来源 IP 15 分钟内 50 次失败锁该 IP 15 分钟（423，`detailsSafe.scope` = `username` / `ip`）；锁定期内正确密码也被拒；一个用户名被锁不影响其它用户名 |
+| 并发   | 同一实例同一时刻只校验一次登录；并发的其它登录立即 429 `ADMIN_LOGIN_BUSY`（`Retry-After: 1`，不计失败次数）                                                                                                              |
+| 失效   | 轮换 `ADMIN_SESSION_SECRET` 使所有会话失效                                                                                                                                                                               |
+| 重启   | 决策 0110 起锁定计数在数据库 `admin_login_attempts`，多实例共享、重启不清零；引导管理员的登出撤销仍只在进程内存                                                                                                          |
 
-**重启后的行为（决策 0105，m7 接受）**：单管理员 + Cloudflare Access 前置，锁定计数与登出撤销
-不落库。API 重启（部署、launchd 重拉）后：失败计数归零、锁定解除；已点「登出」但未满 12 小时的
-cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮换 `ADMIN_SESSION_SECRET` 并重启。
+**重启后的行为**：锁定与失败计数（决策 0110）落库，API 重启或多实例部署都不改变锁定状态；成功登录
+清零该用户名的计数（不清 IP 计数）。引导管理员（`ADMIN_USERNAME`）已点「登出」但未满 12 小时的
+cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `credentials_version` 每请求复核（决策 0109）。
+需要立刻让所有 cookie 失效时，轮换 `ADMIN_SESSION_SECRET` 并重启。
+
+锁定阈值可用环境变量调整（都有默认值）：`ADMIN_LOGIN_USERNAME_MAX_FAILURES=5`、
+`ADMIN_LOGIN_USERNAME_LOCK_SECONDS=900`、`ADMIN_LOGIN_IP_MAX_FAILURES=50`、
+`ADMIN_LOGIN_IP_WINDOW_SECONDS=900`、`ADMIN_LOGIN_IP_LOCK_SECONDS=900`。
 
 未登录（无 cookie / 伪造 / 过期 / 已登出）访问任何受保护接口一律
 `401 ADMIN_SESSION_REQUIRED`，且在解析请求体之前返回——后台据此重定向到登录页。
@@ -75,19 +80,19 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
 }
 ```
 
-| code                     | HTTP | category       | 含义 / 后台处理                                                                         |
-| ------------------------ | ---- | -------------- | --------------------------------------------------------------------------------------- |
-| `ADMIN_SESSION_REQUIRED` | 401  | authentication | 未登录或会话失效 → 跳登录页                                                             |
-| `ADMIN_LOGIN_INVALID`    | 401  | authentication | 用户名或密码错（计一次失败）                                                            |
-| `ADMIN_LOGIN_LOCKED`     | 423  | rateLimit      | 已锁定；`detailsSafe.retryAfterSeconds` 与 `Retry-After` 头给剩余秒数                   |
-| `ADMIN_LOGIN_BUSY`       | 429  | rateLimit      | 另一次登录正在校验；`retryAfterSeconds: 1` + `Retry-After: 1`，稍后重试（不计失败）     |
-| `ADMIN_CONFLICT`         | 409  | conflict       | `updatedAt` 过期（重新读取再改）、状态不允许、链上预演回滚；看 `detailsSafe.reasonCode` |
-| `INVALID_REQUEST`        | 400  | validation     | 请求形状错误、cursor 被篡改或与筛选不符、`cursor` 与 `limit` 同时出现                   |
-| `VALIDATION_FAILED`      | 422  | validation     | 内容被规则拒绝；`detailsSafe.reasonCode`，可能附 `index` / `field` / `communityId`      |
-| `NOT_FOUND`              | 404  | validation     | 路由或目标不存在；`detailsSafe.reasonCode` 指明是哪类目标                               |
-| `CAPABILITY_UNAVAILABLE` | 503  | availability   | 数据库/审计不可用、暂停密钥未配、生产环境禁止批准、广播失败；`detailsSafe.reasonCode`   |
-| `REQUEST_TIMEOUT`        | 503  | availability   | 处理超时（15 s）                                                                        |
-| `INTERNAL_ERROR`         | 500  | internal       | 未预期错误；把 `correlationId` 给后端查日志                                             |
+| code                     | HTTP | category       | 含义 / 后台处理                                                                                                                             |
+| ------------------------ | ---- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADMIN_SESSION_REQUIRED` | 401  | authentication | 未登录或会话失效 → 跳登录页                                                                                                                 |
+| `ADMIN_LOGIN_INVALID`    | 401  | authentication | 用户名或密码错（计一次失败）                                                                                                                |
+| `ADMIN_LOGIN_LOCKED`     | 423  | rateLimit      | 已锁定；`detailsSafe.scope`（`username` 该用户名被锁 / `ip` 该来源地址被锁）、`detailsSafe.retryAfterSeconds` 与 `Retry-After` 头给剩余秒数 |
+| `ADMIN_LOGIN_BUSY`       | 429  | rateLimit      | 另一次登录正在校验；`retryAfterSeconds: 1` + `Retry-After: 1`，稍后重试（不计失败）                                                         |
+| `ADMIN_CONFLICT`         | 409  | conflict       | `updatedAt` 过期（重新读取再改）、状态不允许、链上预演回滚；看 `detailsSafe.reasonCode`                                                     |
+| `INVALID_REQUEST`        | 400  | validation     | 请求形状错误、cursor 被篡改或与筛选不符、`cursor` 与 `limit` 同时出现                                                                       |
+| `VALIDATION_FAILED`      | 422  | validation     | 内容被规则拒绝；`detailsSafe.reasonCode`，可能附 `index` / `field` / `communityId`                                                          |
+| `NOT_FOUND`              | 404  | validation     | 路由或目标不存在；`detailsSafe.reasonCode` 指明是哪类目标                                                                                   |
+| `CAPABILITY_UNAVAILABLE` | 503  | availability   | 数据库/审计不可用、暂停密钥未配、生产环境禁止批准、广播失败；`detailsSafe.reasonCode`                                                       |
+| `REQUEST_TIMEOUT`        | 503  | availability   | 处理超时（15 s）                                                                                                                            |
+| `INTERNAL_ERROR`         | 500  | internal       | 未预期错误；把 `correlationId` 给后端查日志                                                                                                 |
 
 `detailsSafe.reasonCode` 全集：
 
@@ -110,6 +115,8 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
 | `ADMIN_FORMULA_COMMUNITY_ASSET_NOT_BOUND`（附 `communityId`）                                                                                                                                 | 草稿 / 批准 422                                                               |
 | `ADMIN_FORMULA_COMMUNITY_WEIGHT_CONFLICT`（附 `communityId`）                                                                                                                                 | 草稿 / 批准 422（两个社区绑同一资产）                                         |
 | `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`                                                                                                                                                      | 批准 503；列表 `approval.reasonCode`                                          |
+| `ADMIN_FORMULA_SELF_APPROVAL`（决策 0110）                                                                                                                                                    | 批准 403 `PERMISSION_DENIED`：批准人就是草稿保存人                            |
+| `ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`（决策 0110）                                                                                                                                             | 批准 409：草稿没有记录保存人（S129 之前或脚本建的），需重新保存为新草稿       |
 | `ADMIN_MEME_TOKEN_NOT_FOUND`                                                                                                                                                                  | MEME 404                                                                      |
 | `MEME_TOKEN_NOT_ON_CHAIN`                                                                                                                                                                     | 暂停 409（草稿/未上链）                                                       |
 | `MEME_PAUSE_STATE_INVALID`（附 `status`）                                                                                                                                                     | 暂停 409（暂停只限 trading/full；恢复只限 paused）                            |
@@ -413,7 +420,13 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
       },
       "formula": { "…": "完整公式文档（只读展示）" },
       "weightRange": { "…": "完整权重范围文档" },
-      "priceGuardRules": []
+      "priceGuardRules": [],
+      "draftAuthor": {
+        "kind": "admin_account",
+        "username": "ops-alice",
+        "accountId": "0b6f…"
+      },
+      "approvedBy": null
     }
   ],
   "approvedVersion": "miningFormulaV1-dev",
@@ -426,8 +439,13 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
 - `approval.available: false`（`MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`）时批准按钮置灰。
 - `communityWeights: null` 表示该版本不是后台建的（脚本建的），批准时不改社区权重。
 - `nftWeight` / `inviteInitialPower` 是占位参数（需求方给准确值前），当前任何算力计算都不读它们，页面要标「占位」。
+- 决策 0110：可读权限 `console.read`（platform_admin、auditor）**或** `formula.approve`（reviewer）。
+- `draftAuthor`：保存草稿的人。`kind: admin_account` 带账号 `accountId`；`kind: admin_bootstrap` 是
+  `ADMIN_USERNAME` 引导管理员（`accountId: null`）。`draftAuthor: null` = 保存人未知（S129 之前或脚本建的），
+  **不能在后台批准**，要以它为 `baseVersion` 重新保存一个新草稿。
+- `approvedBy`：在后台批准该版本的 reviewer（`{username, accountId}`），草稿 / 脚本批准 / 旧版本为 null。
 
-**`POST /admin/v1/mining/formula-versions`**（201）
+**`POST /admin/v1/mining/formula-versions`**（201，需 `console.write` = platform_admin）
 
 ```json
 {
@@ -454,15 +472,23 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
   - `communityWeights`：`[{communityId, weight}]`，**省略时默认取当前在力版本已批准的社区权重**；每个权重须在范围内、社区须存在且已绑定资产、两社区不能绑同一资产；
   - `nftWeight`、`inviteInitialPower`：十进制或 null。
 - 回执：`{ "version": FormulaVersion, "baseVersion": "…", "audit": {…} }`。草稿不影响任何在力数字。
+- 决策 0110：保存草稿即「提交审批」，调用者记为 `draftAuthor`（不可再改）。
 
-**`POST /admin/v1/mining/formula-versions/{configVersion}/approve`**（无请求体）
+**`POST /admin/v1/mining/formula-versions/{configVersion}/approve`**（无请求体；决策 0110：需 `formula.approve` = **reviewer**）
 
+- platform_admin（表内账号与引导管理员）403 `PERMISSION_DENIED`（`ADMIN_ROLE_FORBIDDEN`，`permission: formula.approve`）。
+- 批准人 ≠ 草稿保存人：同一账号 403 `PERMISSION_DENIED`（`ADMIN_FORMULA_SELF_APPROVAL`）；数据库约束同样拒绝。
+- 草稿保存人未知：409 `ADMIN_CONFLICT`（`ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`），重新保存草稿后再批。
+- 审计：先写 `mining.formula.approve.requested`（写不进去 → 503 `ADMIN_AUDIT_UNAVAILABLE`，不批准），
+  再在批准事务里写 `mining.formula.approve`（`after.requestedAuditId`、`draftAuthor`、`approvedBy`），
+  失败时写 `mining.formula.approve.failed`（`after.reasonCode`）。不需要 `Idempotency-Key`（与原接口一致；
+  重复批准是 409 `ADMIN_FORMULA_STATE_INVALID`）。
 - 只能批准 `pending_approval`；原在力版本变 `retired`；`effectiveAt = approvedAt = 现在`；同一事务把草稿的 `communityWeights` 写成该版本下已批准的社区权重。挖矿快照 lane 下一轮起按新版本计算（快照 lane 行为不变）。
 - 200：`{ "version": …, "retiredVersion": "miningFormulaV1-dev", "audit": {…} }`。
-- 错误：404、409 `ADMIN_FORMULA_STATE_INVALID`、422（权重校验）、503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`。
+- 错误：403（角色 / 自批）、404、409 `ADMIN_FORMULA_STATE_INVALID` / `ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`、422（权重校验）、503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION` / `ADMIN_AUDIT_UNAVAILABLE`。
 - 确认弹窗要写明：批准后立刻替换在力版本，App 的挖矿数字会在下一次快照后按新版本变化。
 
-**`POST /admin/v1/mining/formula-versions/{configVersion}/withdraw`**（无请求体）
+**`POST /admin/v1/mining/formula-versions/{configVersion}/withdraw`**（无请求体，需 `console.write` = platform_admin）
 
 - 只撤回草稿（`pending_approval → retired`）。在力版本不能撤回（409），要换版本就批准另一个草稿。
 - 200：`{ "version": …, "audit": {…} }`。
@@ -586,29 +612,31 @@ cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮�
 
 `action` 全集：
 
-| action                                                      | targetType                                        |
-| ----------------------------------------------------------- | ------------------------------------------------- |
-| `session.login` / `session.login_failed` / `session.logout` | `session`（login_failed 的 actor 为 `anonymous`） |
-| `settings.recommended_communities.update`                   | `setting`                                         |
-| `settings.intel_promotions.update`                          | `setting`                                         |
-| `community.review.requested` / `.decided` / `.failed`       | `community`（`after.decision` = verify/reject）   |
-| `community.review.verify` / `community.review.reject`       | `community`（仅 S119b 之前的历史行）              |
-| `mining.formula.draft` / `.approve` / `.withdraw`           | `mining_formula_version`                          |
-| `meme.listing.update`                                       | `meme_token`                                      |
-| `meme.pause.requested` / `.submitted` / `.failed`           | `meme_token`（`unpause` 同理）                    |
-| `meme.pause` / `meme.unpause`                               | `meme_token`（仅 S119b 之前的历史行）             |
+| action                                                      | targetType                                                                                                                                                                             |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session.login` / `session.login_failed` / `session.logout` | `session`（login_failed 的 actor 为 `anonymous`；决策 0110 起 `after` 带 `lockScope`、`username`（仅已知账号，否则 null）、`accountId`、`sourceIp`、`usernameFailures`、`ipFailures`） |
+| `session.login_locked`（决策 0110）                         | `session`（actor `anonymous`；`after.scope` = `username` / `ip`、`retryAfterSeconds`、`failures`、`username`、`accountId`、`sourceIp`）                                                |
+| `settings.recommended_communities.update`                   | `setting`                                                                                                                                                                              |
+| `settings.intel_promotions.update`                          | `setting`                                                                                                                                                                              |
+| `community.review.requested` / `.decided` / `.failed`       | `community`（`after.decision` = verify/reject）                                                                                                                                        |
+| `community.review.verify` / `community.review.reject`       | `community`（仅 S119b 之前的历史行）                                                                                                                                                   |
+| `mining.formula.draft` / `.approve` / `.withdraw`           | `mining_formula_version`                                                                                                                                                               |
+| `mining.formula.approve.requested` / `.failed`（决策 0110） | `mining_formula_version`                                                                                                                                                               |
+| `meme.listing.update`                                       | `meme_token`                                                                                                                                                                           |
+| `meme.pause.requested` / `.submitted` / `.failed`           | `meme_token`（`unpause` 同理）                                                                                                                                                         |
+| `meme.pause` / `meme.unpause`                               | `meme_token`（仅 S119b 之前的历史行）                                                                                                                                                  |
 
 ## 6. Unavailable 行为汇总
 
-| 情况                                    | 表现                                                                                |
-| --------------------------------------- | ----------------------------------------------------------------------------------- |
-| 三个 `ADMIN_*` 不全                     | `/admin/*` 404                                                                      |
-| 数据库不可用                            | 任一接口 503 `ADMIN_DATABASE_UNAVAILABLE`                                           |
-| 社区仓库未组装                          | 审核 503 `COMMUNITY_REVIEW_UNAVAILABLE`                                             |
-| 暂停密钥未配 / 合约未配 / 主网 / 无 RPC | 暂停 503 + reasonCode；列表 `pause.available: false`                                |
-| 审计表写不进去                          | 审核 / 暂停 503 `ADMIN_AUDIT_UNAVAILABLE`，不执行                                   |
-| 未配 `INTEL_PROMOTION_IMAGE_HOSTS`      | 活动位 `imageHosts: []`，`imageUrl` 只能 null                                       |
-| `NODE_ENV=production`                   | 批准 503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`；列表 `approval.available: false` |
+| 情况                                    | 表现                                                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 三个 `ADMIN_*` 不全                     | `/admin/*` 404                                                                                 |
+| 数据库不可用                            | 任一接口 503 `ADMIN_DATABASE_UNAVAILABLE`；登录也 503（锁定计数读不到就不校验密码，决策 0110） |
+| 社区仓库未组装                          | 审核 503 `COMMUNITY_REVIEW_UNAVAILABLE`                                                        |
+| 暂停密钥未配 / 合约未配 / 主网 / 无 RPC | 暂停 503 + reasonCode；列表 `pause.available: false`                                           |
+| 审计表写不进去                          | 审核 / 暂停 503 `ADMIN_AUDIT_UNAVAILABLE`，不执行                                              |
+| 未配 `INTEL_PROMOTION_IMAGE_HOSTS`      | 活动位 `imageHosts: []`，`imageUrl` 只能 null                                                  |
+| `NODE_ENV=production`                   | 批准 503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`；列表 `approval.available: false`            |
 
 ## 7. 验收对照（设计 §3）
 
