@@ -28,6 +28,11 @@ export interface AdminSettingRecord {
 
 export interface AdminAuditInput {
   readonly actor: string;
+  /**
+   * Decision 0109: the acting `admin_accounts.id`; null (or absent) for the
+   * ADMIN_USERNAME bootstrap administrator and anonymous rows.
+   */
+  readonly actorAccountId?: string | null;
   readonly action: string;
   readonly targetType: string;
   readonly targetId: string | null;
@@ -41,6 +46,7 @@ export interface AdminAuditRecord {
   readonly seq: number;
   readonly at: string;
   readonly actor: string;
+  readonly actorAccountId: string | null;
   readonly action: string;
   readonly targetType: string;
   readonly targetId: string | null;

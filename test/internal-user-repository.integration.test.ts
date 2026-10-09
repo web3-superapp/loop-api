@@ -29,6 +29,8 @@ const truncateControlPlane = `
     public.hooks_testnet_acceptances,
     public.hooks_launch_config_approvals,
     public.hooks_launch_project_config_versions,
+    public.admin_account_commands,
+    public.admin_accounts,
     public.ops_audit,
     public.ops_operations,
     public.ops_grants,

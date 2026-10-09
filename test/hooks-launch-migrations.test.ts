@@ -109,7 +109,8 @@ describe("000054 signed deployment tasks", () => {
   });
 
   it("is the latest migration and every new table is a required relation", () => {
-    expect(latestMigrationName).toBe("000054_hooks_signed_deployment_tasks");
+    // Decision 0109 appended 000055; 000054 stays applied before it.
+    expect(Number(latestMigrationName.slice(0, 6)) >= 54).toBe(true);
     for (const relation of [
       "public.hooks_launch_project_config_versions",
       "public.ops_operators",

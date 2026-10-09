@@ -1,3 +1,5 @@
+import * as cryptoModule from "node:crypto";
+
 import { z } from "zod";
 
 import {
@@ -2439,6 +2441,14 @@ export function parseAdminConsoleConfig(data: {
     data.ADMIN_SESSION_SECRET === undefined
   ) {
     return null;
+  }
+  // Decision 0109: console accounts hash and verify with Node's built-in
+  // argon2id; a runtime without it refuses to boot instead of refusing
+  // every login.
+  if (typeof (cryptoModule as { argon2?: unknown }).argon2 !== "function") {
+    throw new ConfigurationError([
+      "ADMIN_*: this Node.js runtime has no crypto.argon2 (Node 24.7+ is required)",
+    ]);
   }
   return Object.freeze({
     username: data.ADMIN_USERNAME,

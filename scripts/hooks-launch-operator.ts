@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { z } from "zod";
+import { provisionHooksLaunchOperator } from "../src/database/hooks-launch-review-repository.js";
 import {
   hooksLaunchOpsPermissions,
   hooksLaunchProjectScopedPermissions,
@@ -71,59 +71,24 @@ export async function runOperator(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    // Lock a stable parent row: this also serializes first-time grants when no
-    // ops_operators row exists yet. NO KEY UPDATE also permits an already
-    // authorized API transaction to finish its actor FK check while this CLI
-    // waits for that transaction's operator lock, avoiding a lock cycle.
-    // Capture both states inside the same lock.
-    const target = await client.query(
-      "select id from public.loop_users where id=$1 for no key update",
-      [input.userId],
-    );
-    if (target.rowCount !== 1) throw new Error("unknown target user");
-    const readState = async () => {
-      const operator = await client.query<{ enabled: boolean }>(
-        "select enabled from public.ops_operators where user_id=$1",
-        [input.userId],
-      );
-      const grants = await client.query<{ permission: string; scope: string }>(
-        "select permission,scope from public.ops_grants where user_id=$1 order by permission,scope",
-        [input.userId],
-      );
-      return {
-        enabled: operator.rows[0]?.enabled ?? null,
-        grants: grants.rows,
-      };
-    };
-    const before = await readState();
-    if (input.revoke) {
-      await client.query(
-        "update public.ops_operators set enabled=false,updated_at=clock_timestamp() where user_id=$1",
-        [input.userId],
-      );
-    } else {
-      await client.query(
-        "insert into public.ops_operators(user_id,label,enabled) values($1,$2,true) on conflict(user_id) do update set label=excluded.label,enabled=true,updated_at=clock_timestamp()",
-        [input.userId, input.label],
-      );
-      await client.query("delete from public.ops_grants where user_id=$1", [
-        input.userId,
-      ]);
-      for (const permission of input.permissions)
-        await client.query(
-          "insert into public.ops_grants(user_id,permission,scope) values($1,$2,$3)",
-          [input.userId, permission, input.scope],
-        );
-    }
-    await client.query(
-      "insert into public.ops_audit(operation_id,actor_id,actor_kind,source,action,target,reason,outcome,before_state,after_state) values($1,null,'deployment_admin','deployment_cli','operator.bootstrap',$2::uuid::text,$3,'succeeded',$4::jsonb,$5::jsonb)",
-      [
-        randomUUID(),
-        input.userId,
-        input.revoke ? "部署管理员撤销运营授权" : "部署管理员配置运营授权",
-        JSON.stringify(before),
-        JSON.stringify(await readState()),
-      ],
+    // Decision 0109: the shared bootstrap (also used by the console account
+    // service) locks the LOOP user row, captures before/after grant state,
+    // and appends the deployment_cli audit row in this transaction.
+    await provisionHooksLaunchOperator(
+      client,
+      input.revoke
+        ? { userId: input.userId, revoke: true }
+        : {
+            userId: input.userId,
+            revoke: false,
+            label: input.label,
+            grants: input.permissions.map((permission) => ({
+              permission,
+              scope: input.scope,
+            })),
+          },
+      { kind: "deployment_cli" },
+      input.revoke ? "部署管理员撤销运营授权" : "部署管理员配置运营授权",
     );
     await client.query("commit");
   } catch (error) {

@@ -73,6 +73,7 @@ export function adminErrors(
     ADMIN_LOGIN_LOCKED: 423,
     ADMIN_LOGIN_BUSY: 429,
     ADMIN_CONFLICT: 409,
+    PERMISSION_DENIED: 403,
     INVALID_REQUEST: 400,
     VALIDATION_FAILED: 422,
     NOT_FOUND: 404,
@@ -101,6 +102,15 @@ export const sessionErrors = [
   "REQUEST_TIMEOUT",
 ] as const satisfies readonly AdminErrorCode[];
 
+/**
+ * Decision 0109: errors of a role-guarded route (403 PERMISSION_DENIED when
+ * the role lacks the permission or a password change is pending).
+ */
+export const guardedSessionErrors = [
+  ...sessionErrors,
+  "PERMISSION_DENIED",
+] as const satisfies readonly AdminErrorCode[];
+
 export const adminSecurity = [{ adminSession: [] }];
 
 export const auditReferenceSchema = {
@@ -126,6 +136,7 @@ export const auditRecordSchema = {
     "seq",
     "at",
     "actor",
+    "actorAccountId",
     "action",
     "targetType",
     "targetId",
@@ -138,6 +149,11 @@ export const auditRecordSchema = {
     seq: { type: "integer", minimum: 1 },
     at: dateTimeSchema,
     actor: { type: "string" },
+    actorAccountId: {
+      anyOf: [uuidSchema, { type: "null" }],
+      description:
+        "Decision 0109: the acting console account; null for the ADMIN_USERNAME bootstrap administrator and anonymous rows.",
+    },
     action: { type: "string" },
     targetType: { type: "string" },
     targetId: nullableStringSchema,

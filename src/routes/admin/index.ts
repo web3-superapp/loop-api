@@ -1,4 +1,9 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  onRequestHookHandler,
+} from "fastify";
 
 import {
   AdminApiError,
@@ -9,8 +14,20 @@ import {
 import {
   readCookie,
   sessionCookieHeader,
-  type AdminSession,
 } from "../../features/admin/admin-auth.js";
+import {
+  assertAdminPermission,
+  type AdminAccountService,
+  type AdminPrincipal,
+  type AdminRequestContext,
+} from "../../features/admin/admin-accounts.js";
+import type { AdminLaunchReviewConsoleService } from "../../features/admin/admin-launch-review.js";
+import type { AdminPermission } from "../../features/admin/admin-roles.js";
+import {
+  principalReadResourceSchema,
+  principalResourceSchema,
+} from "./admin-role-schemas.js";
+import { registerAdminRoleRoutes } from "./role-routes.js";
 import type {
   AdminService,
   AdminWriteContext,
@@ -47,9 +64,9 @@ import {
   recommendedCommunitiesRequestSchema,
   recommendedCommunitiesResourceSchema,
   recommendedCommunitiesWriteResourceSchema,
+  guardedSessionErrors,
   sessionErrors,
   sessionRequestSchema,
-  sessionResourceSchema,
 } from "./admin-schemas.js";
 
 /**
@@ -62,7 +79,30 @@ import {
 
 export interface AdminRouteDependencies {
   readonly service: AdminService;
+  /** Decision 0109: console accounts. */
+  readonly accounts: AdminAccountService;
+  /** Decision 0109: Hooks launch review. */
+  readonly launchReview: AdminLaunchReviewConsoleService;
   readonly cookieSecure: boolean;
+}
+
+/** Decision 0109: `onRequest` hooks of a protected route. */
+export interface AdminRouteGuard {
+  onRequest: onRequestHookHandler[];
+}
+
+/** Decision 0109: the session resource (login, GET, password change). */
+export function principalResource(principal: AdminPrincipal) {
+  return Object.freeze({
+    actor: principal.session.actor,
+    accountId: principal.session.accountId,
+    role: principal.role,
+    permissions: principal.permissions,
+    passwordChangeRequired: principal.passwordChangeRequired,
+    operatorUserId: principal.operatorUserId,
+    issuedAt: principal.session.issuedAt,
+    expiresAt: principal.session.expiresAt,
+  });
 }
 
 const emptyQuerySchema = {
@@ -96,25 +136,32 @@ export function registerAdminRoutes(
   dependencies: AdminRouteDependencies,
 ): void {
   const { service } = dependencies;
-  const sessions = new WeakMap<FastifyRequest, AdminSession>();
+  const principals = new WeakMap<FastifyRequest, AdminPrincipal>();
 
-  function requireSession(request: FastifyRequest): Promise<void> {
-    const session = service.sessionCodec.verify(
+  async function requireSession(request: FastifyRequest): Promise<void> {
+    const principal = await service.resolvePrincipal(
       readCookie(request.headers.cookie, adminSessionCookieName),
     );
-    if (session === null) {
+    if (principal === null) {
       throw new AdminApiError("ADMIN_SESSION_REQUIRED");
     }
-    sessions.set(request, session);
-    return Promise.resolve();
+    principals.set(request, principal);
+  }
+
+  function principalOf(request: FastifyRequest): AdminPrincipal {
+    const principal = principals.get(request);
+    if (principal === undefined) {
+      throw new AdminApiError("ADMIN_SESSION_REQUIRED");
+    }
+    return principal;
   }
 
   function context(request: FastifyRequest): AdminWriteContext {
-    const session = sessions.get(request);
-    if (session === undefined) {
-      throw new AdminApiError("ADMIN_SESSION_REQUIRED");
-    }
-    return { session, requestId: request.id };
+    return { session: principalOf(request).session, requestId: request.id };
+  }
+
+  function requestContext(request: FastifyRequest): AdminRequestContext {
+    return { principal: principalOf(request), requestId: request.id };
   }
 
   function clearCookie(reply: FastifyReply): void {
@@ -131,9 +178,22 @@ export function registerAdminRoutes(
 
   // `onRequest`: an unauthenticated caller is refused before its body is
   // parsed or validated, so it always sees 401, never a validation detail.
-  const protectedRoute = {
-    onRequest: requireSession,
-  } as const;
+  // Decision 0109: the role check runs there too (403 before any body
+  // detail); every service re-checks what it executes.
+  const sessionOnly: AdminRouteGuard = {
+    onRequest: [requireSession],
+  };
+  function guard(permission: AdminPermission): AdminRouteGuard {
+    return {
+      onRequest: [
+        requireSession,
+        (request: FastifyRequest): Promise<void> => {
+          assertAdminPermission(principalOf(request), permission);
+          return Promise.resolve();
+        },
+      ],
+    };
+  }
 
   app.post(
     `${adminApiPrefix}/session`,
@@ -142,18 +202,19 @@ export function registerAdminRoutes(
         operationId: "createAdminSession",
         summary: "Log in as the operator",
         description:
-          "Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`). Only one login is verified at a time; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). The lock lives in process memory and a restart clears it (Decision 0105).",
+          "Decision 0109: a console account (admin_accounts) is tried first, then the ADMIN_USERNAME bootstrap administrator; a disabled account is ADMIN_LOGIN_INVALID. The response carries the role and its permissions. Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`). Only one login is verified at a time; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). The lock lives in process memory and a restart clears it (Decision 0105).",
         tags: ["admin-session"],
         querystring: emptyQuerySchema,
         body: sessionRequestSchema,
         response: {
-          200: sessionResourceSchema,
+          200: principalResourceSchema,
           ...adminErrors(
             "ADMIN_LOGIN_INVALID",
             "ADMIN_LOGIN_LOCKED",
             "ADMIN_LOGIN_BUSY",
             "INVALID_REQUEST",
             "REQUEST_TIMEOUT",
+            "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
@@ -178,11 +239,7 @@ export function registerAdminRoutes(
           secure: dependencies.cookieSecure,
         }),
       );
-      return reply.code(200).send({
-        actor: issued.session.actor,
-        issuedAt: issued.session.issuedAt,
-        expiresAt: issued.session.expiresAt,
-      });
+      return reply.code(200).send(principalResource(issued.principal));
     },
   );
 
@@ -192,28 +249,21 @@ export function registerAdminRoutes(
       schema: {
         operationId: "getAdminSession",
         summary: "Read the current operator session",
-        description: "200 with the session, or 401 ADMIN_SESSION_REQUIRED.",
+        description:
+          "200 with the session principal (role, permissions, passwordChangeRequired), or 401 ADMIN_SESSION_REQUIRED. Decision 0109: an account session ends at once when the account is disabled or its password is changed or reset.",
         tags: ["admin-session"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
         response: {
-          200: {
-            ...sessionResourceSchema,
-            headers: overviewResourceSchema.headers,
-          },
-          ...adminErrors(...sessionErrors),
+          200: principalReadResourceSchema,
+          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...sessionOnly,
     },
     async (request, reply) => {
-      const { session } = context(request);
       noStore(reply);
-      return reply.code(200).send({
-        actor: session.actor,
-        issuedAt: session.issuedAt,
-        expiresAt: session.expiresAt,
-      });
+      return reply.code(200).send(principalResource(principalOf(request)));
     },
   );
 
@@ -261,10 +311,10 @@ export function registerAdminRoutes(
         querystring: emptyQuerySchema,
         response: {
           200: overviewResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (_request, reply) => {
       const resource = await service.overview();
@@ -286,10 +336,10 @@ export function registerAdminRoutes(
         querystring: emptyQuerySchema,
         response: {
           200: recommendedCommunitiesResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (_request, reply) => {
       const resource = await service.getRecommendedCommunities();
@@ -313,14 +363,14 @@ export function registerAdminRoutes(
         response: {
           200: recommendedCommunitiesWriteResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const body = request.body as {
@@ -349,10 +399,10 @@ export function registerAdminRoutes(
         querystring: emptyQuerySchema,
         response: {
           200: intelPromotionsAdminResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (_request, reply) => {
       const resource = await service.getIntelPromotions();
@@ -376,14 +426,14 @@ export function registerAdminRoutes(
         response: {
           200: intelPromotionsAdminWriteResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const body = request.body as {
@@ -409,10 +459,10 @@ export function registerAdminRoutes(
         querystring: communitiesQuerySchema,
         response: {
           200: communityListResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (request, reply) => {
       const resource = await service.listCommunities(
@@ -436,13 +486,13 @@ export function registerAdminRoutes(
         response: {
           200: communityDetailResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "NOT_FOUND",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (request, reply) => {
       const { communityId } = request.params as {
@@ -470,7 +520,7 @@ export function registerAdminRoutes(
         response: {
           200: communityReviewResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "NOT_FOUND",
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
@@ -478,7 +528,7 @@ export function registerAdminRoutes(
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const { communityId } = request.params as {
@@ -512,10 +562,10 @@ export function registerAdminRoutes(
         querystring: emptyQuerySchema,
         response: {
           200: formulaVersionListResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (_request, reply) => {
       const resource = await service.listFormulaVersions();
@@ -539,14 +589,14 @@ export function registerAdminRoutes(
         response: {
           201: formulaDraftResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const body = request.body as {
@@ -575,7 +625,7 @@ export function registerAdminRoutes(
         response: {
           200: formulaApproveResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "NOT_FOUND",
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
@@ -584,7 +634,7 @@ export function registerAdminRoutes(
         },
       },
       preValidation: assertEmptyBody,
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const { configVersion } = request.params as {
@@ -614,7 +664,7 @@ export function registerAdminRoutes(
         response: {
           200: formulaWithdrawResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "NOT_FOUND",
             "ADMIN_CONFLICT",
             "CAPABILITY_UNAVAILABLE",
@@ -622,7 +672,7 @@ export function registerAdminRoutes(
         },
       },
       preValidation: assertEmptyBody,
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const { configVersion } = request.params as {
@@ -650,10 +700,10 @@ export function registerAdminRoutes(
         querystring: memeTokensQuerySchema,
         response: {
           200: memeTokenListResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("console.read"),
     },
     async (request, reply) => {
       const resource = await service.listMemeTokens(
@@ -680,14 +730,14 @@ export function registerAdminRoutes(
         response: {
           200: memeListingResourceSchema,
           ...adminErrors(
-            ...sessionErrors,
+            ...guardedSessionErrors,
             "NOT_FOUND",
             "VALIDATION_FAILED",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
       },
-      ...protectedRoute,
+      ...guard("console.write"),
     },
     async (request, reply) => {
       const { memeTokenId } = request.params as {
@@ -730,7 +780,7 @@ export function registerAdminRoutes(
           response: {
             202: memePauseResourceSchema,
             ...adminErrors(
-              ...sessionErrors,
+              ...guardedSessionErrors,
               "NOT_FOUND",
               "ADMIN_CONFLICT",
               "VALIDATION_FAILED",
@@ -738,7 +788,7 @@ export function registerAdminRoutes(
             ),
           },
         },
-        ...protectedRoute,
+        ...guard("console.write"),
       },
       async (request, reply) => {
         const { memeTokenId } = request.params as {
@@ -773,10 +823,10 @@ export function registerAdminRoutes(
         querystring: auditQuerySchema,
         response: {
           200: auditListResourceSchema,
-          ...adminErrors(...sessionErrors, "CAPABILITY_UNAVAILABLE"),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
         },
       },
-      ...protectedRoute,
+      ...guard("audit.read"),
     },
     async (request, reply) => {
       const resource = await service.listAudit(
@@ -786,4 +836,15 @@ export function registerAdminRoutes(
       return reply.code(200).send(resource);
     },
   );
+
+  registerAdminRoleRoutes(app, {
+    service,
+    accounts: dependencies.accounts,
+    launchReview: dependencies.launchReview,
+    cookieSecure: dependencies.cookieSecure,
+    sessionOnly,
+    guard,
+    principalOf,
+    requestContext,
+  });
 }

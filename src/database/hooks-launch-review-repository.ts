@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Pool, PoolClient } from "pg";
 
 import { parseHooksLaunchDraft } from "../features/launch/hooks-launch-config.js";
@@ -461,4 +463,131 @@ export function createPostgresHooksLaunchReviewRepository(
       }
     },
   } satisfies HooksLaunchReviewRepository);
+}
+
+/** Decision 0108/0109: one `ops_grants` row. */
+export interface HooksLaunchOperatorGrant {
+  readonly permission: HooksLaunchOpsPermission;
+  readonly scope: string;
+}
+
+/** Who provisions an operator (the `ops_audit` actor shape). */
+export type HooksLaunchOperatorProvisioner =
+  | { readonly kind: "deployment_cli" }
+  | {
+      readonly kind: "admin_console";
+      /** The console username (display). */
+      readonly adminActor: string;
+      /** Null for the ADMIN_USERNAME bootstrap administrator. */
+      readonly adminAccountId: string | null;
+    };
+
+export type HooksLaunchOperatorProvisioning =
+  | { readonly userId: string; readonly revoke: true }
+  | {
+      readonly userId: string;
+      readonly revoke: false;
+      readonly label: string;
+      /** Replaces every grant of the operator. */
+      readonly grants: readonly HooksLaunchOperatorGrant[];
+    };
+
+export interface HooksLaunchOperatorState {
+  readonly enabled: boolean | null;
+  readonly grants: readonly { permission: string; scope: string }[];
+}
+
+export class HooksLaunchOperatorUserNotFoundError extends Error {
+  constructor() {
+    super("unknown target user");
+    this.name = "HooksLaunchOperatorUserNotFoundError";
+  }
+}
+
+/**
+ * Decision 0108 operator bootstrap, shared by the deployment CLI
+ * (`pnpm hooks:operator`) and, from Decision 0109, by the console account
+ * service. Runs inside the caller's transaction: it locks the LOOP user row
+ * (NO KEY UPDATE, so an authorized command already holding the operator row
+ * can finish its FK check), captures the grant state before and after, and
+ * appends one `ops_audit` row with both states. Enabling replaces every
+ * grant; revoking only sets `enabled=false`.
+ */
+export async function provisionHooksLaunchOperator(
+  client: Pick<PoolClient, "query">,
+  input: HooksLaunchOperatorProvisioning,
+  provisioner: HooksLaunchOperatorProvisioner,
+  reason: string,
+): Promise<{
+  readonly before: HooksLaunchOperatorState;
+  readonly after: HooksLaunchOperatorState;
+}> {
+  const target = await client.query(
+    "select id from public.loop_users where id=$1 for no key update",
+    [input.userId],
+  );
+  if (target.rowCount !== 1) throw new HooksLaunchOperatorUserNotFoundError();
+  const readState = async (): Promise<HooksLaunchOperatorState> => {
+    const operator = await client.query<{ enabled: boolean }>(
+      "select enabled from public.ops_operators where user_id=$1",
+      [input.userId],
+    );
+    const grants = await client.query<{ permission: string; scope: string }>(
+      "select permission,scope from public.ops_grants where user_id=$1 order by permission,scope",
+      [input.userId],
+    );
+    return {
+      enabled: operator.rows[0]?.enabled ?? null,
+      grants: grants.rows,
+    };
+  };
+  const before = await readState();
+  if (input.revoke) {
+    await client.query(
+      "update public.ops_operators set enabled=false,updated_at=clock_timestamp() where user_id=$1",
+      [input.userId],
+    );
+  } else {
+    await client.query(
+      "insert into public.ops_operators(user_id,label,enabled) values($1,$2,true) on conflict(user_id) do update set label=excluded.label,enabled=true,updated_at=clock_timestamp()",
+      [input.userId, input.label],
+    );
+    await client.query("delete from public.ops_grants where user_id=$1", [
+      input.userId,
+    ]);
+    for (const grant of input.grants) {
+      await client.query(
+        "insert into public.ops_grants(user_id,permission,scope) values($1,$2,$3) on conflict do nothing",
+        [input.userId, grant.permission, grant.scope],
+      );
+    }
+  }
+  const after = await readState();
+  if (provisioner.kind === "deployment_cli") {
+    await client.query(
+      "insert into public.ops_audit(operation_id,actor_id,actor_kind,source,action,target,reason,outcome,before_state,after_state) values($1,null,'deployment_admin','deployment_cli','operator.bootstrap',$2::uuid::text,$3,'succeeded',$4::jsonb,$5::jsonb)",
+      [
+        randomUUID(),
+        input.userId,
+        reason,
+        JSON.stringify(before),
+        JSON.stringify(after),
+      ],
+    );
+  } else {
+    await client.query(
+      "insert into public.ops_audit(operation_id,actor_id,actor_kind,source,action,target,reason,outcome,before_state,after_state,admin_actor,admin_account_id) values($1,null,'admin_account','admin_console',$2,$3::uuid::text,$4,'succeeded',$5::jsonb,$6::jsonb,$7,$8)",
+      [
+        randomUUID(),
+        input.revoke ? "operator.revoke" : "operator.provision",
+        input.userId,
+        reason,
+        JSON.stringify(before),
+        JSON.stringify(after),
+        provisioner.adminActor,
+        provisioner.adminAccountId,
+      ],
+    );
+  }
+  return { before, after };
 }

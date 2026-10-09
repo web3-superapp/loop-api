@@ -162,6 +162,8 @@ describe("database schema readiness contract", () => {
       "public.hooks_launch_deployment_tasks",
       "public.hooks_launch_deployment_authorizations",
       "public.hooks_launch_submission_commands",
+      "public.admin_accounts",
+      "public.admin_account_commands",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

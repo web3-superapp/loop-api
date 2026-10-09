@@ -148,6 +148,7 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
       seq: audit.length + 1,
       at: tick(),
       actor: input.actor,
+      actorAccountId: input.actorAccountId ?? null,
       action: input.action,
       targetType: input.targetType,
       targetId: input.targetId,

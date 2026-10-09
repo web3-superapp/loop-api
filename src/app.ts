@@ -362,6 +362,9 @@ import {
   type AdminMemePauseRuntime,
 } from "./features/admin/admin-service.js";
 import { createAdminSettingsReader } from "./features/admin/admin-settings-reader.js";
+import { createAdminAccountService } from "./features/admin/admin-accounts.js";
+import { createAdminLaunchReviewConsoleService } from "./features/admin/admin-launch-review.js";
+import { createHooksLaunchReviewService } from "./features/launch/hooks-launch-review.js";
 import { createUnavailableAdminRepository } from "./database/admin-repository.js";
 import { createCommunityReviewService } from "./features/community/community-review-service.js";
 import {
@@ -992,6 +995,16 @@ export async function buildApp(
     { name: "admin-mining", description: "Mining formula versions" },
     { name: "admin-meme", description: "MEME listing and curve pause" },
     { name: "admin-audit", description: "Append-only console audit log" },
+    {
+      name: "admin-accounts",
+      description:
+        "Console accounts and roles (Decision 0109): platform_admin, reviewer, testnet_acceptor, auditor",
+    },
+    {
+      name: "admin-launch",
+      description:
+        "Hooks launch review (Decision 0109): stage list, detail, reviewer approval, testnet acceptance",
+    },
   ] as const;
 
   await app.register(swagger, {
@@ -1010,7 +1023,7 @@ export async function buildApp(
           ? {
               title: "LOOP Admin API",
               description:
-                "Operator console management surface (Decision 0102). Mounted only when ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are configured; every route except POST /admin/v1/session needs the loop_admin_session cookie.",
+                "Operator console management surface (Decisions 0102, 0109). Mounted only when ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are configured; every route except POST /admin/v1/session needs the loop_admin_session cookie. Decision 0109: individual accounts with one role each (platform_admin, reviewer, testnet_acceptor, auditor); every protected route checks the role's permission server-side (403 PERMISSION_DENIED); the ADMIN_USERNAME bootstrap administrator is a platform_admin and cannot approve or accept.",
               version: config.serviceVersion,
             }
           : {
@@ -2409,12 +2422,31 @@ export async function buildApp(
 
   const adminConfig = adminMounted ? config.admin : null;
   if (adminConfig !== null) {
+    const adminRepository =
+      database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0109: individual accounts with fixed roles; without a
+      // database only the ADMIN_USERNAME bootstrap administrator exists.
+      accounts: createAdminAccountService({
+        repository: database.adminAccounts ?? null,
+        bootstrapUsername: adminConfig.username,
+        sessionSecret: adminConfig.sessionSecret,
+      }),
+      launchReview: createAdminLaunchReviewConsoleService({
+        repository: database.adminLaunchReview ?? null,
+        review: createHooksLaunchReviewService({
+          repository: database.hooksLaunchReview ?? null,
+        }),
+        audit: adminRepository,
+        sessionSecret: adminConfig.sessionSecret,
+        logger: app.log,
+      }),
       service: createAdminService({
         username: adminConfig.username,
         passwordHash: adminConfig.passwordHash,
         sessionSecret: adminConfig.sessionSecret,
-        repository: database.admin ?? createUnavailableAdminRepository(),
+        repository: adminRepository,
+        accounts: database.adminAccounts ?? null,
         settingsReader: adminSettingsReader,
         environmentRecommendedCommunityIds: config.recommendedCommunityIds,
         promotionImageHosts: config.intelPromotionImageHosts,
