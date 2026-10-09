@@ -113,6 +113,7 @@ import {
   bscChainId,
   bscChainReference,
   bscNativeAssetId,
+  bscTestnetChainId,
   launchChainReasonCodes,
 } from "./features/chain/chain-contract.js";
 import {
@@ -375,6 +376,13 @@ import {
   createUnavailableLaunchService,
   type LaunchService,
 } from "./features/launch/launch-service.js";
+import { createHooksLaunchProjectConfigService } from "./features/launch/hooks-launch-project-config.js";
+import {
+  createHooksLaunchDeploymentService,
+  type HooksLaunchFactoryReader,
+} from "./features/launch/hooks-launch-deployment.js";
+import { createHooksLaunchSubmissionService } from "./features/launch/hooks-launch-submission.js";
+import { createHooksLaunchFactoryReader } from "./integrations/launch/hooks-launch-factory-reader.js";
 import {
   createLaunchContractAdapter,
   type LaunchContractAdapter,
@@ -479,6 +487,8 @@ export interface BuildAppOptions {
   readonly memePauseSender?: MemePauseSender | null;
   /** Decision 0102: test seam for the console clock and login throttle. */
   readonly adminNow?: () => Date;
+  /** Decision 0108: test seam for the read-only BSC Testnet Hooks Factory. */
+  readonly hooksLaunchFactoryReader?: HooksLaunchFactoryReader;
   readonly privyAccessTokenVerifier?: PrivyAccessTokenVerifier;
   readonly privyUserReader?: PrivyUserReader;
   readonly streamTokenIssuer?: StreamTokenIssuer;
@@ -1909,6 +1919,48 @@ export async function buildApp(
   if (launchRuntimeAvailable && launchContractAdapter.contract !== null) {
     void launchContractAdapter.verifyAtStartup();
   }
+  // Decision 0108: Hooks launch config / signing / deployment tasks. Off by
+  // default (HOOKS_LAUNCH_ENABLED); the Factory reader exists only on the
+  // BSC Testnet launch slot with a configured Factory + code hash. Missing
+  // pieces leave the services fail-closed (CAPABILITY_UNAVAILABLE).
+  const hooksLaunchEnabled = config.hooksLaunch.enabled;
+  const hooksFactoryReader: HooksLaunchFactoryReader | null =
+    !hooksLaunchEnabled
+      ? null
+      : (options.hooksLaunchFactoryReader ??
+        (config.hooksLaunch.factoryAddress !== null &&
+        config.hooksLaunch.factoryCodeHash !== null &&
+        config.launchChain.chainId === bscTestnetChainId &&
+        config.launchChain.rpcUrls.length > 0
+          ? createHooksLaunchFactoryReader({
+              factoryAddress: config.hooksLaunch.factoryAddress,
+              expectedRuntimeCodeHash: config.hooksLaunch.factoryCodeHash,
+              rpcUrls: config.launchChain.rpcUrls,
+            })
+          : null));
+  const hooksLaunchProjectConfigService = hooksLaunchEnabled
+    ? createHooksLaunchProjectConfigService({
+        repository: database.hooksLaunchProjectConfigs ?? null,
+        minimumLeadSeconds: 86_400,
+      })
+    : undefined;
+  const hooksLaunchDeploymentService = hooksLaunchEnabled
+    ? createHooksLaunchDeploymentService({
+        configs: database.hooksLaunchProjectConfigs ?? null,
+        wallets: database.accountWallets ?? null,
+        reader: hooksFactoryReader,
+        signatureLifetimeSeconds: 900,
+        maxSaltAttempts: 1_000_000,
+      })
+    : undefined;
+  const hooksLaunchSubmissionService = hooksLaunchEnabled
+    ? createHooksLaunchSubmissionService({
+        configs: database.hooksLaunchProjectConfigs ?? null,
+        wallets: database.accountWallets ?? null,
+        reader: hooksFactoryReader,
+        repository: database.hooksLaunchSubmissions ?? null,
+      })
+    : undefined;
   const miningRuntimeAvailable =
     registeredModuleIds.includes("mining") &&
     (options.miningService !== undefined || database.mining !== undefined);
@@ -2333,6 +2385,15 @@ export async function buildApp(
       approvalService,
       swapService,
       launchService,
+      ...(hooksLaunchProjectConfigService === undefined
+        ? {}
+        : { hooksLaunchProjectConfigService }),
+      ...(hooksLaunchDeploymentService === undefined
+        ? {}
+        : { hooksLaunchDeploymentService }),
+      ...(hooksLaunchSubmissionService === undefined
+        ? {}
+        : { hooksLaunchSubmissionService }),
       miningService,
       referralService,
       memeService,

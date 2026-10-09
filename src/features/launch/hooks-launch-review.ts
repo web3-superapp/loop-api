@@ -1,0 +1,277 @@
+import { createHash } from "node:crypto";
+
+import { z } from "zod";
+
+/**
+ * Decision 0108: platform-side Hooks launch review (ported from the requirer
+ * branch `codex/integrated-dual-pool-20261008` ops control plane, original
+ * Decisions 0093/0094; the web console was not ported).
+ *
+ * Editor, approver, and testnet acceptor are separate scoped permissions on
+ * individual `ops_operators` (LOOP users). Separation of duties is enforced
+ * here and in the repository, never only by hiding a button:
+ *
+ * - the editor of a config version (the operator who saved it, or the
+ *   project owner for an owner-saved draft) can never approve it;
+ * - the project owner can never approve or accept their own project;
+ * - a testnet acceptance needs an approved config and an acceptor who did
+ *   not edit that version.
+ *
+ * Nothing here signs, broadcasts, deploys, or activates a contract.
+ */
+
+export const hooksLaunchOpsPermissions = [
+  "audit.read",
+  "launch.read",
+  "launch.edit",
+  "launch.approve",
+  "testnet.read",
+  "testnet.accept",
+] as const;
+
+export type HooksLaunchOpsPermission =
+  (typeof hooksLaunchOpsPermissions)[number];
+
+/** Permissions a deployment admin may scope to one launch project ID. */
+export const hooksLaunchProjectScopedPermissions: ReadonlySet<HooksLaunchOpsPermission> =
+  new Set([
+    "launch.read",
+    "launch.edit",
+    "launch.approve",
+    "testnet.read",
+    "testnet.accept",
+  ]);
+
+export const hooksLaunchReviewErrorCodes = [
+  "OPS_FORBIDDEN",
+  "OPS_NOT_FOUND",
+  "OPS_INVALID_COMMAND",
+  "OPS_INVALID_LAUNCH_CONFIG",
+  "OPS_LAUNCH_NOT_APPROVED",
+  "OPS_LAUNCH_CONFIG_NOT_APPROVED",
+  "OPS_VERSION_CONFLICT",
+  "OPS_SELF_APPROVAL",
+  "OPS_SELF_ACCEPTANCE",
+  "OPS_IDEMPOTENCY_CONFLICT",
+  "OPS_UNAVAILABLE",
+  "OPS_COMMAND_FAILED",
+] as const;
+
+export type HooksLaunchReviewErrorCode =
+  (typeof hooksLaunchReviewErrorCodes)[number];
+
+export class HooksLaunchReviewError extends Error {
+  constructor(readonly code: HooksLaunchReviewErrorCode) {
+    super(code);
+    this.name = "HooksLaunchReviewError";
+  }
+}
+
+const hash32Schema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+
+const hooksLaunchOperatorConfigSchema = z
+  .object({
+    name: z.string().trim().min(1).max(64),
+    ticker: z.string().regex(/^[A-Za-z0-9]{2,12}$/),
+    logoAssetUrl: z.url().startsWith("https://"),
+    description: z.string().max(2000),
+    links: z.array(z.url().startsWith("https://")).max(8),
+    nftSaleStartAt: z.string().regex(/^(0|[1-9][0-9]{0,19})$/),
+    buybackRecipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  })
+  .strict();
+
+const hooksTestnetAcceptanceSchema = z
+  .object({
+    configVersion: z.number().int().positive().max(2_147_483_647),
+    configHash: hash32Schema,
+    contractManifestHash: hash32Schema,
+    checklistVersion: z.string().regex(/^hooks-testnet-v[1-9][0-9]*$/),
+    outcome: z.enum(["passed", "failed", "incomplete"]),
+    evidence: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(100),
+            uri: z.union([
+              z.url().startsWith("https://"),
+              z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+            ]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict();
+
+const commandBase = {
+  operationId: z.uuid(),
+  target: z.uuid(),
+  reason: z.string().trim().min(1).max(500),
+};
+
+export const hooksLaunchReviewCommandSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("launch.config.save"),
+      payload: z
+        .object({
+          expectedVersion: z.number().int().nonnegative().max(2_147_483_646),
+          config: hooksLaunchOperatorConfigSchema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("launch.config.approve"),
+      payload: z
+        .object({
+          configVersion: z.number().int().positive().max(2_147_483_647),
+          configHash: hash32Schema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("testnet.acceptance.record"),
+      payload: hooksTestnetAcceptanceSchema,
+    })
+    .strict(),
+]);
+
+export type HooksLaunchReviewCommand = z.infer<
+  typeof hooksLaunchReviewCommandSchema
+>;
+
+export function hooksLaunchCommandPermission(
+  action: HooksLaunchReviewCommand["action"],
+): HooksLaunchOpsPermission {
+  if (action === "launch.config.save") return "launch.edit";
+  if (action === "launch.config.approve") return "launch.approve";
+  return "testnet.accept";
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
+      .join(",")}}`;
+  }
+  const encoded: unknown = JSON.stringify(value);
+  if (typeof encoded !== "string") {
+    throw new HooksLaunchReviewError("OPS_INVALID_COMMAND");
+  }
+  return encoded;
+}
+
+/** SHA-256 of the canonical JSON form; binds an operationId to its content. */
+export function hooksLaunchCommandHash(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+export interface HooksLaunchOperatorSession {
+  readonly operatorId: string;
+  readonly label: string;
+  readonly grants: readonly {
+    readonly permission: string;
+    readonly scope: string;
+  }[];
+}
+
+export interface HooksLaunchReviewCommandResult {
+  readonly operationId: string;
+  readonly result: unknown;
+  readonly replayed: boolean;
+}
+
+export interface HooksLaunchReviewPage {
+  readonly items: readonly Readonly<Record<string, unknown>>[];
+  readonly nextCursor: string | null;
+}
+
+export interface HooksLaunchReviewRepository {
+  session(actor: string): Promise<HooksLaunchOperatorSession>;
+  listProjects(actor: string, before?: string): Promise<HooksLaunchReviewPage>;
+  listTestnetAcceptances(
+    actor: string,
+    before?: string,
+  ): Promise<HooksLaunchReviewPage>;
+  execute(
+    actor: string,
+    command: HooksLaunchReviewCommand,
+  ): Promise<HooksLaunchReviewCommandResult>;
+}
+
+export interface HooksLaunchReviewService {
+  session(actor: string): Promise<HooksLaunchOperatorSession>;
+  listProjects(actor: string, before?: string): Promise<HooksLaunchReviewPage>;
+  listTestnetAcceptances(
+    actor: string,
+    before?: string,
+  ): Promise<HooksLaunchReviewPage>;
+  /** Parses an untrusted command body before any database work. */
+  execute(
+    actor: string,
+    body: unknown,
+  ): Promise<HooksLaunchReviewCommandResult>;
+}
+
+/**
+ * The service fails closed (`OPS_UNAVAILABLE`) without a repository and
+ * validates the command shape before the repository authorizes it.
+ */
+export function createHooksLaunchReviewService(input: {
+  readonly repository: HooksLaunchReviewRepository | null;
+}): HooksLaunchReviewService {
+  function requireRepository(): HooksLaunchReviewRepository {
+    if (input.repository === null) {
+      throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+    }
+    return input.repository;
+  }
+  function requireActor(actor: string): string {
+    if (!z.uuid().safeParse(actor).success) {
+      throw new HooksLaunchReviewError("OPS_FORBIDDEN");
+    }
+    return actor;
+  }
+  function requireCursor(before: string | undefined): string | undefined {
+    if (before !== undefined && !z.uuid().safeParse(before).success) {
+      throw new HooksLaunchReviewError("OPS_INVALID_COMMAND");
+    }
+    return before;
+  }
+  return Object.freeze({
+    async session(actor: string) {
+      return requireRepository().session(requireActor(actor));
+    },
+    async listProjects(actor: string, before?: string) {
+      return requireRepository().listProjects(
+        requireActor(actor),
+        requireCursor(before),
+      );
+    },
+    async listTestnetAcceptances(actor: string, before?: string) {
+      return requireRepository().listTestnetAcceptances(
+        requireActor(actor),
+        requireCursor(before),
+      );
+    },
+    async execute(actor: string, body: unknown) {
+      const repository = requireRepository();
+      const parsed = hooksLaunchReviewCommandSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new HooksLaunchReviewError("OPS_INVALID_COMMAND");
+      }
+      return repository.execute(requireActor(actor), parsed.data);
+    },
+  } satisfies HooksLaunchReviewService);
+}

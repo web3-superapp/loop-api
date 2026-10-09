@@ -697,6 +697,54 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
+    expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
+      enabled: false,
+      factoryAddress: null,
+      factoryCodeHash: null,
+    });
+    const environment = validEnvironment();
+    environment["HOOKS_LAUNCH_ENABLED"] = "on";
+    expect(loadConfig(environment).hooksLaunch.enabled).toBe(true);
+    for (const value of ["", "true", "ON", "1"]) {
+      const invalid = validEnvironment();
+      invalid["HOOKS_LAUNCH_ENABLED"] = value;
+      expect(() => loadConfig(invalid), value).toThrow(/HOOKS_LAUNCH_ENABLED/);
+    }
+  });
+
+  it("accepts a Hooks launch Factory only on the BSC Testnet launch slot (Decision 0108)", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+      HOOKS_LAUNCH_FACTORY_ADDRESS:
+        "0x1111111111111111111111111111111111111AbC",
+      HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"AB".repeat(32)}`,
+    };
+    expect(loadConfig(environment).hooksLaunch).toEqual({
+      enabled: false,
+      factoryAddress: "0x1111111111111111111111111111111111111abc",
+      factoryCodeHash: `0x${"ab".repeat(32)}`,
+    });
+    expect(() =>
+      loadConfig({
+        ...environment,
+        LAUNCH_CHAIN_ID: "56",
+        LAUNCH_BSC_RPC_URLS: "",
+      }),
+    ).toThrow(/HOOKS_LAUNCH_FACTORY_ADDRESS/);
+    expect(() =>
+      loadConfig({ ...environment, HOOKS_LAUNCH_FACTORY_CODE_HASH: "" }),
+    ).toThrow(/HOOKS_LAUNCH_FACTORY_CODE_HASH/);
+    expect(() =>
+      loadConfig({ ...environment, HOOKS_LAUNCH_FACTORY_ADDRESS: "0x1234" }),
+    ).toThrow(/HOOKS_LAUNCH_FACTORY_ADDRESS/);
+    expect(() =>
+      loadConfig({ ...environment, HOOKS_LAUNCH_FACTORY_CODE_HASH: "0x12" }),
+    ).toThrow(/HOOKS_LAUNCH_FACTORY_CODE_HASH/);
+  });
+
   it("keeps the shared slot without endpoints when the primary chain has none", () => {
     const config = loadConfig(validEnvironment());
     expect(config.launchChain).toEqual({

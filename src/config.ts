@@ -202,6 +202,66 @@ function refineLaunchChainEnvironment(
   }
 }
 
+/** Decision 0108: Hooks launch switches (API process only). */
+export interface HooksLaunchConfig {
+  readonly enabled: boolean;
+  /** Lower-case BSC Testnet Factory address; null keeps signing unavailable. */
+  readonly factoryAddress: string | null;
+  /** Lower-case expected Factory runtime code hash. */
+  readonly factoryCodeHash: string | null;
+}
+
+/**
+ * Decision 0108: the Hooks Factory address and its runtime code hash are one
+ * unit, BSC Testnet only (`LAUNCH_CHAIN_ID=97`). A partial or malformed pair
+ * refuses boot.
+ */
+function refineHooksLaunchFactoryEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+    readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const address = value.HOOKS_LAUNCH_FACTORY_ADDRESS;
+  const codeHash = value.HOOKS_LAUNCH_FACTORY_CODE_HASH;
+  if (address === undefined && codeHash === undefined) return;
+  if (address === undefined || codeHash === undefined) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH must be configured together",
+      path: [
+        address === undefined
+          ? "HOOKS_LAUNCH_FACTORY_ADDRESS"
+          : "HOOKS_LAUNCH_FACTORY_CODE_HASH",
+      ],
+    });
+  }
+  if (value.LAUNCH_CHAIN_ID !== "97") {
+    context.addIssue({
+      code: "custom",
+      message: "is permitted only when LAUNCH_CHAIN_ID=97",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 20-byte contract address",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (codeHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(codeHash)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 32-byte runtime code hash",
+      path: ["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    });
+  }
+}
+
 /**
  * MEME curve launchpad keys shared by the API and worker processes
  * (Decision 0101). Every key is optional: while any of the four contract
@@ -511,11 +571,21 @@ const environmentSchema = z
     // branch. `off` (default) keeps the pre-S83b7b bytes for clients that
     // only decode the unavailable branch. Anything but off/on refuses boot.
     LAUNCH_GRADUATED_LIST: z.enum(["off", "on"]),
+    // Decision 0108: Hooks launch configuration / signing / deployment tasks
+    // (ported from the requirer branch). `off` (default) keeps every
+    // `/v2/launch/projects/{projectId}/hooks-*` route at 503.
+    HOOKS_LAUNCH_ENABLED: z.enum(["off", "on"]),
+    // Decision 0108: the BSC Testnet Hooks Factory and its expected runtime
+    // code hash. Both blank (default) or both set, and only with
+    // LAUNCH_CHAIN_ID=97. No address is shipped in source.
+    HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
+    HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
+    refineHooksLaunchFactoryEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1205,6 +1275,12 @@ export interface AppConfig {
    * (`LAUNCH_CONTRACT_BASELINE_PENDING`) even with a configured contract.
    */
   readonly launchGraduatedListEnabled: boolean;
+  /**
+   * Decision 0108: Hooks launch configuration, signing preparation, and
+   * deployment tasks. `enabled` false keeps every hooks route at 503; a null
+   * Factory keeps signing preparation and submission unavailable.
+   */
+  readonly hooksLaunch: HooksLaunchConfig;
   /** MEME curve launchpad (Decision 0101); `contract` null keeps it unavailable. */
   readonly meme: MemeConfig;
   /**
@@ -2570,6 +2646,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH_SNAPSHOT_CACHE_TTL_MS:
       environment["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] ?? "1500",
     LAUNCH_GRADUATED_LIST: environment["LAUNCH_GRADUATED_LIST"] ?? "off",
+    HOOKS_LAUNCH_ENABLED: environment["HOOKS_LAUNCH_ENABLED"] ?? "off",
+    HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_CODE_HASH:
+      environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
   });
 
   if (!parsed.success) {
@@ -2700,6 +2780,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launchContract: parseLaunchContractConfig(parsed.data),
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
+    hooksLaunch: {
+      enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
+      factoryAddress:
+        parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
+      factoryCodeHash:
+        parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
+    },
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),

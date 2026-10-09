@@ -152,6 +152,16 @@ describe("database schema readiness contract", () => {
       "public.admin_settings",
       "public.admin_audit_log",
       "public.community_review_notes",
+      "public.hooks_launch_project_config_versions",
+      "public.ops_operators",
+      "public.ops_grants",
+      "public.ops_operations",
+      "public.ops_audit",
+      "public.hooks_launch_config_approvals",
+      "public.hooks_testnet_acceptances",
+      "public.hooks_launch_deployment_tasks",
+      "public.hooks_launch_deployment_authorizations",
+      "public.hooks_launch_submission_commands",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

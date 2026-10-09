@@ -1,6 +1,7 @@
 import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
+  anyCaseEvmAddressPatternSource,
   evmAddressPatternSource,
   launchChainIds,
   transactionHashPatternSource,
@@ -1656,6 +1657,318 @@ export const economyResourceSchema = {
     },
     observedAt: { type: "string", format: "date-time" },
     contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/*
+ * Decision 0108: Hooks launch configuration, signing preparation, and
+ * deployment-task schemas (ported from the requirer branch, original
+ * Decisions 0090/0095/0097). Every amount and timestamp is a decimal string.
+ */
+
+const anyCaseBytes32Schema = {
+  type: "string",
+  pattern: "^0x[0-9a-fA-F]{64}$",
+} as const;
+
+const anyCaseAddressSchema = {
+  type: "string",
+  pattern: anyCaseEvmAddressPatternSource,
+} as const;
+
+const unixSecondsStringSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,19})$",
+} as const;
+
+const hooksLaunchDraftBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "name",
+    "ticker",
+    "logoAssetUrl",
+    "description",
+    "links",
+    "nftSaleStartAt",
+    "buybackRecipient",
+  ],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 64 },
+    ticker: { type: "string", pattern: "^[A-Za-z0-9]{2,12}$" },
+    logoAssetUrl: { type: "string", format: "uri", maxLength: 2_048 },
+    description: { type: "string", maxLength: 2_000 },
+    links: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string", format: "uri", maxLength: 2_048 },
+    },
+    nftSaleStartAt: {
+      ...unixSecondsStringSchema,
+      description:
+        "NFT sale start (unix seconds, decimal string). Must be at least 24 hours after the save.",
+    },
+    buybackRecipient: {
+      ...anyCaseAddressSchema,
+      description:
+        "Per-project MEME buyback recipient. A configuration value, never an operator or deployer identity.",
+    },
+  },
+} as const;
+
+export const hooksLaunchProjectConfigRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["expectedVersion", "config"],
+  properties: {
+    expectedVersion: {
+      type: "integer",
+      minimum: 0,
+      maximum: 2_147_483_646,
+      description:
+        "Compare-and-swap: the latest saved version (0 when none). A stale value answers VERSION_CONFLICT.",
+    },
+    config: hooksLaunchDraftBodySchema,
+  },
+} as const;
+
+const hooksLaunchFixedEconomicsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "chainId",
+    "memeTotalSupplyRaw",
+    "curveSaleSupplyRaw",
+    "initialLiquiditySupplyRaw",
+    "graduationReserveUsd1Raw",
+    "nftPriceUsd1Raw",
+    "nftSaleDurationSeconds",
+    "earlyRoundDurationSeconds",
+    "perAddressLifetimeBuyCapRaw",
+    "curveBuyTaxBps",
+    "curveSellTaxBps",
+    "officialPoolBuyTaxBps",
+    "officialPoolSellTaxBps",
+    "lpFee",
+    "tickSpacing",
+    "buybackOrderUsd1Raw",
+    "buybackMinIntervalSeconds",
+  ],
+  description:
+    "Server-derived immutable hooks_launch_v1 economics. Raw amounts are 18-decimal smallest-unit strings; bps and seconds are small bounded integers.",
+  properties: {
+    chainId: { type: "string", pattern: "^[1-9][0-9]{0,9}$" },
+    memeTotalSupplyRaw: uintStringSchema,
+    curveSaleSupplyRaw: uintStringSchema,
+    initialLiquiditySupplyRaw: uintStringSchema,
+    graduationReserveUsd1Raw: uintStringSchema,
+    nftPriceUsd1Raw: uintStringSchema,
+    nftSaleDurationSeconds: { type: "integer", minimum: 0 },
+    earlyRoundDurationSeconds: { type: "integer", minimum: 0 },
+    perAddressLifetimeBuyCapRaw: uintStringSchema,
+    curveBuyTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },
+    curveSellTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },
+    officialPoolBuyTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },
+    officialPoolSellTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },
+    lpFee: { type: "integer", minimum: 0, maximum: 1_000_000 },
+    tickSpacing: { type: "integer", minimum: 1, maximum: 32_767 },
+    buybackOrderUsd1Raw: uintStringSchema,
+    buybackMinIntervalSeconds: { type: "integer", minimum: 0 },
+  },
+} as const;
+
+export const hooksLaunchProjectConfigResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["projectId", "version", "templateVersion", "config", "updatedAt"],
+  properties: {
+    projectId: { type: "string", pattern: opaqueIdPatternSource },
+    version: { type: "integer", minimum: 1 },
+    templateVersion: { type: "string", const: "hooks_launch_v1" },
+    config: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "templateVersion",
+        "templateHash",
+        "name",
+        "ticker",
+        "logoAssetUrl",
+        "description",
+        "links",
+        "nftSaleStartAt",
+        "buybackRecipient",
+        "fixedEconomics",
+        "configHash",
+      ],
+      properties: {
+        templateVersion: { type: "string", const: "hooks_launch_v1" },
+        templateHash: bytes32Schema,
+        name: { type: "string" },
+        ticker: { type: "string" },
+        logoAssetUrl: { type: "string", format: "uri" },
+        description: { type: "string" },
+        links: { type: "array", items: { type: "string", format: "uri" } },
+        nftSaleStartAt: unixSecondsStringSchema,
+        buybackRecipient: addressSchema,
+        fixedEconomics: hooksLaunchFixedEconomicsSchema,
+        configHash: bytes32Schema,
+      },
+    },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const hooksLaunchProjectConfigReadSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["draft", "contractVersion"],
+  properties: {
+    draft: {
+      anyOf: [hooksLaunchProjectConfigResourceSchema, { type: "null" }],
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+export const hooksLaunchSigningRequestQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId"],
+  properties: {
+    walletId: { type: "string", pattern: opaqueIdPatternSource },
+  },
+} as const;
+
+const hooksLaunchRequestFieldsSchema = {
+  projectOwner: addressSchema,
+  configVersion: { type: "integer", minimum: 1, maximum: 4_294_967_295 },
+  configHash: bytes32Schema,
+  name: { type: "string", minLength: 1, maxLength: 64 },
+  ticker: { type: "string", pattern: "^[A-Z0-9]{2,12}$" },
+  nftSaleStart: unixSecondsStringSchema,
+  buybackRecipient: addressSchema,
+  deadline: unixSecondsStringSchema,
+  memeSalt: bytes32Schema,
+  nonce: uintStringSchema,
+} as const;
+
+const hooksLaunchRequestRequired = [
+  "projectOwner",
+  "configVersion",
+  "configHash",
+  "name",
+  "ticker",
+  "nftSaleStart",
+  "buybackRecipient",
+  "deadline",
+  "memeSalt",
+  "nonce",
+] as const;
+
+export const hooksLaunchSigningRequestResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "request",
+    "typedData",
+    "hookDeployer",
+    "hookInitCodeHash",
+    "hookSalt",
+    "hookAddress",
+    "memeDeployer",
+    "memeInitCodeHash",
+    "memeAddress",
+  ],
+  properties: {
+    request: {
+      type: "object",
+      additionalProperties: false,
+      required: [...hooksLaunchRequestRequired],
+      properties: hooksLaunchRequestFieldsSchema,
+    },
+    typedData: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "EIP-712 typed data (domain 'LOOP Launch Factory' v1, chainId 97, primaryType LaunchRequest) for the project wallet to sign. uint64/uint256 message fields are decimal strings.",
+    },
+    hookDeployer: addressSchema,
+    hookInitCodeHash: bytes32Schema,
+    hookSalt: bytes32Schema,
+    hookAddress: addressSchema,
+    memeDeployer: addressSchema,
+    memeInitCodeHash: bytes32Schema,
+    memeAddress: addressSchema,
+  },
+} as const;
+
+export const hooksLaunchDeploymentRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId", "request", "hookSalt", "signature"],
+  properties: {
+    walletId: { type: "string", minLength: 1, maxLength: 128 },
+    request: {
+      type: "object",
+      additionalProperties: false,
+      required: [...hooksLaunchRequestRequired],
+      properties: {
+        ...hooksLaunchRequestFieldsSchema,
+        projectOwner: anyCaseAddressSchema,
+        configHash: anyCaseBytes32Schema,
+        buybackRecipient: anyCaseAddressSchema,
+        memeSalt: anyCaseBytes32Schema,
+      },
+    },
+    hookSalt: anyCaseBytes32Schema,
+    signature: {
+      type: "string",
+      pattern: "^0x[0-9a-fA-F]{130}$",
+      description: "65-byte low-S EOA EIP-712 signature (v = 27 or 28).",
+    },
+  },
+} as const;
+
+export const hooksLaunchDeploymentParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["projectId", "jobId"],
+  properties: {
+    projectId: { type: "string", pattern: opaqueIdPatternSource },
+    jobId: { type: "string", pattern: opaqueIdPatternSource },
+  },
+} as const;
+
+export const hooksLaunchDeploymentJobSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "jobId",
+    "projectId",
+    "configVersion",
+    "chainId",
+    "factoryAddress",
+    "status",
+    "memeAddress",
+    "hookAddress",
+    "createdAt",
+  ],
+  properties: {
+    jobId: { type: "string", pattern: opaqueIdPatternSource },
+    projectId: { type: "string", pattern: opaqueIdPatternSource },
+    configVersion: { type: "integer", minimum: 1 },
+    chainId: { type: "integer", const: 97 },
+    factoryAddress: addressSchema,
+    status: {
+      type: "string",
+      enum: ["awaiting_executor", "cancelled"],
+      description:
+        "awaiting_executor: verified and recorded, not broadcast. cancelled: withdrawn before any broadcast (does not revoke a signature already shared).",
+    },
+    memeAddress: addressSchema,
+    hookAddress: addressSchema,
+    createdAt: { type: "string", format: "date-time" },
   },
 } as const;
 
