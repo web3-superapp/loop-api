@@ -35,6 +35,7 @@ import {
   buildUnsignedTransaction,
   canaryPolicyFact,
   enforceCanaryCeiling,
+  dailyCanaryAdmission,
   enforceDailyCanaryCeiling,
   intentStateForSimulation,
   parseIntentAmount,
@@ -331,6 +332,11 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
             expiresAt: source.expiresAt,
             simulationStatus: execution.simulation.status,
             requestId,
+            canaryAdmission: dailyCanaryAdmission(
+              writes,
+              valuation.valueUsd,
+              runtime.now(),
+            ),
           });
         },
       );

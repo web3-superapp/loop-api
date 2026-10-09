@@ -24,17 +24,14 @@ import {
   nativeAssetId,
   parseDecimalAmount,
 } from "../chain/chain-contract.js";
-import {
-  addDecimalStrings,
-  compareDecimalStrings,
-  subtractDecimalStrings,
-} from "../market/market-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   bscWriteCanaryPolicyVersion,
   walletIntentRefusalReasonCodes,
 } from "../wallet-intents/intent-contract.js";
 import {
+  assertDailyCanaryCeiling,
+  dailyCanaryAdmission,
   enforceCanaryCeiling,
   requireCanaryCounterparty,
 } from "../wallet-intents/intent-preparation.js";
@@ -54,9 +51,11 @@ import {
   quoteMemeSell,
 } from "./meme-curve-math.js";
 import {
+  MemeCreateIntentInFlightError,
   MemeIdempotencyConflictError,
   MemeIntentReportConflictError,
   MemeRepositoryUnavailableError,
+  MemeTokenNotDraftError,
   type CreateMemeIntentRecord,
   type MemeIntentRecord,
   type MemeTokenRecord,
@@ -334,6 +333,16 @@ function translate(error: unknown): never {
   if (error instanceof MemeRepositoryUnavailableError) {
     return unavailableWith("MEME_REPOSITORY_UNAVAILABLE");
   }
+  if (error instanceof MemeCreateIntentInFlightError) {
+    return refuse("DATA_STALE", memeReasonCodes.intentCreateInFlight);
+  }
+  if (error instanceof MemeTokenNotDraftError) {
+    return refuse(
+      "DATA_STALE",
+      memeReasonCodes.tokenNotDraft,
+      error.status === null ? {} : { status: error.status },
+    );
+  }
   if (error instanceof Error && error.name === "MemeContractUnavailableError") {
     return unavailableWith(
       (error as Error & { reasonCode: string }).reasonCode,
@@ -344,9 +353,35 @@ function translate(error: unknown): never {
     (error.name === "BscReadUnavailableError" ||
       error.name === "BscChainMismatchError")
   ) {
-    return unavailableWith("MEME_CONTRACT_READ_FAILED");
+    return unavailableWith(memeReasonCodes.contractReadFailed);
   }
   throw error;
+}
+
+/**
+ * Decision 0104 m6: every chain read on a POST path goes through here. A
+ * refusal (`V2ApiError`) and the adapter's own unavailability keep their
+ * reason; anything else the RPC throws (a viem timeout, an HTTP or socket
+ * failure, a malformed answer) is `503 CAPABILITY_UNAVAILABLE` /
+ * `MEME_CONTRACT_READ_FAILED`, never a 500.
+ */
+async function chainRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof V2ApiError) {
+      throw error;
+    }
+    if (
+      error instanceof Error &&
+      error.name === "MemeContractUnavailableError"
+    ) {
+      return unavailableWith(
+        (error as Error & { reasonCode: string }).reasonCode,
+      );
+    }
+    return unavailableWith(memeReasonCodes.contractReadFailed);
+  }
 }
 
 function requestDigest(parts: readonly string[]): string {
@@ -377,7 +412,7 @@ export async function prepareMemeIntent(
     return unavailableWith(memeReasonCodes.mainnetSigningClosed);
   }
   const request = parseBody(input.body);
-  const availability = await deps.contract.availability();
+  const availability = await chainRead(() => deps.contract.availability());
   if (availability.status === "unavailable") {
     return unavailableWith(availability.reasonCode);
   }
@@ -417,11 +452,22 @@ export async function prepareMemeIntent(
     String(request.deadlineSeconds),
   ]);
   try {
+    const writesConfig = writes;
     const outcome = await deps.repository.createIntent({
       ownerUserId: input.principal.userId,
       idempotencyKey: input.idempotencyKey,
       requestSha256,
       build: () => buildIntent(deps, { ...input, request, token, wallet }),
+      // Decision 0104 M2: re-checked under the owner lock at insert time.
+      canaryAdmission: (built) => {
+        const valueUsd = String(built.policy["valueUsd"]);
+        // Same condition as the pre-check in buildIntent.
+        return parseDecimalAmount(valueUsd, 18) > 0n
+          ? dailyCanaryAdmission(writesConfig, valueUsd, deps.now())
+          : null;
+      },
+      exclusiveCreate:
+        request.kind === "create" ? { memeTokenId: token.memeTokenId } : null,
     });
     return projectMemeIntent(outcome.intent, deps.now());
   } catch (error) {
@@ -447,24 +493,25 @@ async function buildIntent(
   const client = deps.readClient;
 
   // --- Canary admission first: it costs no chain read (Decision 0065). ---
-  if (request.kind !== "sell" || request.usd1In > 0n) {
-    if (!writes.canaryAssetIds.includes(usd1AssetId)) {
-      refuse(
-        "POLICY_BLOCKED",
-        walletIntentRefusalReasonCodes.assetNotInCanaryAllowlist,
-      );
-    }
+  // USD1 is paid (create / buy) or received (sell): every kind moves it, so
+  // every kind needs it on the canary allowlist (Decision 0104 m2).
+  if (!writes.canaryAssetIds.includes(usd1AssetId)) {
+    refuse(
+      "POLICY_BLOCKED",
+      walletIntentRefusalReasonCodes.assetNotInCanaryAllowlist,
+    );
   }
   requireCanaryCounterparty(writes, configured.address);
 
   // --- One snapshot for every chain read. ---
-  const snapshot = await deps.contract.takeSnapshot();
-  const block = await deps.contract.readBlock(snapshot.blockNumber);
+  const snapshot = await chainRead(() => deps.contract.takeSnapshot());
+  const block = await chainRead(() =>
+    deps.contract.readBlock(snapshot.blockNumber),
+  );
   let curve = freshMemeCurve;
   if (request.kind !== "create") {
-    const read = await deps.contract.getCurve(
-      token.tokenAddress as string,
-      snapshot,
+    const read = await chainRead(() =>
+      deps.contract.getCurve(token.tokenAddress as string, snapshot),
     );
     if (read.value.status === "FULL") {
       refuse("DATA_STALE", memeReasonCodes.curveFull);
@@ -491,7 +538,9 @@ async function buildIntent(
     let taken =
       token.predictedAddress === null
         ? true
-        : (await client.getCode(token.predictedAddress)) !== "0x";
+        : (await chainRead(() =>
+            client.getCode(token.predictedAddress as string),
+          )) !== "0x";
     for (let attempt = 0; taken && attempt < 3; attempt += 1) {
       const replaced = await deps.repository.replaceDraftSalt({
         memeTokenId: token.memeTokenId,
@@ -503,7 +552,8 @@ async function buildIntent(
         refuse("DATA_STALE", memeReasonCodes.tokenNotDraft);
       }
       token = replaced;
-      taken = (await client.getCode(replaced.predictedAddress)) !== "0x";
+      const predicted = replaced.predictedAddress;
+      taken = (await chainRead(() => client.getCode(predicted))) !== "0x";
     }
     if (taken) {
       refuse("DATA_STALE", memeReasonCodes.saltTaken);
@@ -520,19 +570,21 @@ async function buildIntent(
   const tokenAssetId =
     tokenAddress === null ? null : assetIdForAddress(chainId, tokenAddress);
   const nativeId = nativeAssetId(chainId);
-  const balances = await client.readBalances(wallet.address, [
-    { assetId: usd1AssetId, address: configured.usd1Address },
-    { assetId: nativeId, address: null },
-    ...(tokenAssetId === null
-      ? []
-      : [{ assetId: tokenAssetId, address: tokenAddress }]),
-  ]);
+  const balances = await chainRead(() =>
+    client.readBalances(wallet.address, [
+      { assetId: usd1AssetId, address: configured.usd1Address },
+      { assetId: nativeId, address: null },
+      ...(tokenAssetId === null
+        ? []
+        : [{ assetId: tokenAssetId, address: tokenAddress }]),
+    ]),
+  );
   const balanceOf = (assetId: string | null): bigint => {
     const raw = balances.balances.find(
       (item) => item.assetId === assetId,
     )?.rawValue;
     if (raw === undefined || raw === null) {
-      return unavailableWith("MEME_CONTRACT_READ_FAILED");
+      return unavailableWith(memeReasonCodes.contractReadFailed);
     }
     return raw;
   };
@@ -638,33 +690,13 @@ async function buildIntent(
     const since = new Date(
       deps.now().getTime() - 24 * 60 * 60 * 1000,
     ).toISOString();
-    const [walletSpent, memeSpent] = await Promise.all([
-      deps.walletIntentExposureUsd({
-        ownerUserId: input.principal.userId,
-        since,
-      }),
-      deps.repository.sumRecentExposureUsd({
-        ownerUserId: input.principal.userId,
-        since,
-      }),
-    ]);
-    const spentUsd = addDecimalStrings(walletSpent, memeSpent);
-    const exposureUsd = addDecimalStrings(spentUsd, valueUsd);
-    const ceilingUsd = writes.canaryDailyMaxUsd;
-    if (compareDecimalStrings(exposureUsd, ceilingUsd) > 0) {
-      const remaining = subtractDecimalStrings(ceilingUsd, spentUsd);
-      refuse(
-        "POLICY_BLOCKED",
-        walletIntentRefusalReasonCodes.canaryDailyCeilingExceeded,
-        {
-          exposureUsd,
-          ceilingUsd,
-          spentUsd,
-          remainingUsd:
-            compareDecimalStrings(remaining, "0") < 0 ? "0" : remaining,
-        },
-      );
-    }
+    // One window over wallet + Launch + MEME Intents (Decision 0104 M1);
+    // the repository re-checks it under the owner lock before the insert.
+    const spentUsd = await deps.repository.sumRecentExposureUsd({
+      ownerUserId: input.principal.userId,
+      since,
+    });
+    assertDailyCanaryCeiling(writes.canaryDailyMaxUsd, spentUsd, valueUsd);
   }
 
   // --- Allowance: an exact approve precedes the call when it is short. ---
@@ -673,16 +705,18 @@ async function buildIntent(
   const deadlineSeconds = reference + BigInt(request.deadlineSeconds);
   let approvalTarget: { token: string; amount: bigint } | null = null;
   if (request.kind === "sell") {
-    const allowances = await client.readAllowances(wallet.address, [
-      {
-        assetId: tokenAssetId as string,
-        token: tokenAddress as string,
-        spender: configured.address,
-      },
-    ]);
+    const allowances = await chainRead(() =>
+      client.readAllowances(wallet.address, [
+        {
+          assetId: tokenAssetId as string,
+          token: tokenAddress as string,
+          spender: configured.address,
+        },
+      ]),
+    );
     const allowance = allowances.allowances[0]?.rawValue;
     if (allowance === undefined || allowance === null) {
-      return unavailableWith("MEME_CONTRACT_READ_FAILED");
+      return unavailableWith(memeReasonCodes.contractReadFailed);
     }
     if (allowance < request.tokensIn) {
       approvalTarget = {
@@ -691,16 +725,18 @@ async function buildIntent(
       };
     }
   } else if (request.usd1In > 0n) {
-    const allowances = await client.readAllowances(wallet.address, [
-      {
-        assetId: usd1AssetId,
-        token: configured.usd1Address,
-        spender: configured.address,
-      },
-    ]);
+    const allowances = await chainRead(() =>
+      client.readAllowances(wallet.address, [
+        {
+          assetId: usd1AssetId,
+          token: configured.usd1Address,
+          spender: configured.address,
+        },
+      ]),
+    );
     const allowance = allowances.allowances[0]?.rawValue;
     if (allowance === undefined || allowance === null) {
-      return unavailableWith("MEME_CONTRACT_READ_FAILED");
+      return unavailableWith(memeReasonCodes.contractReadFailed);
     }
     if (allowance < request.usd1In) {
       approvalTarget = {
@@ -750,7 +786,7 @@ async function buildIntent(
       reasonCode: memeReasonCodes.approvalRequired,
     };
   } else {
-    const simulated = await client.call(callRequest);
+    const simulated = await chainRead(() => client.call(callRequest));
     if (simulated.status === "reverted") {
       simulation = {
         status: "reverted",
@@ -769,10 +805,12 @@ async function buildIntent(
       }
     }
   }
-  const [fee_, nonce] = await Promise.all([
-    client.getFeeData(),
-    client.getTransactionCount(wallet.address),
-  ]);
+  const [fee_, nonce] = await chainRead(() =>
+    Promise.all([
+      client.getFeeData(),
+      client.getTransactionCount(wallet.address),
+    ]),
+  );
   const perGas = fee_.type === "eip1559" ? fee_.maxFeePerGas : fee_.gasPrice;
   const totalGas = gasLimit + (approvalTarget === null ? 0n : approvalGas);
   if (totalGas * perGas > nativeBalance) {
@@ -939,7 +977,7 @@ export async function reportMemeIntentBroadcast(
   try {
     observed = await deps.readClient.getTransaction(txHash);
   } catch {
-    return unavailableWith("MEME_CONTRACT_READ_FAILED");
+    return unavailableWith(memeReasonCodes.contractReadFailed);
   }
   const elapsed = Date.parse(record.expiresAt) <= now.getTime();
   if (observed === null && elapsed) {

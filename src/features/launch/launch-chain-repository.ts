@@ -1,3 +1,4 @@
+import type { CanaryExposureAdmission } from "../wallet-intents/intent-contract.js";
 import type { LaunchChainId } from "../chain/chain-contract.js";
 import type {
   LaunchEntitlementState,
@@ -359,6 +360,11 @@ export interface LaunchChainRepository {
     readonly requestSha256: string;
     readonly build: () => Promise<CreateLaunchIntentInput>;
     readonly ownerUserId: string;
+    /**
+     * Decision 0104 M2: re-checked under the owner lock in the insert
+     * transaction, after the chain reads of `build`.
+     */
+    readonly canaryAdmission?: CanaryExposureAdmission | null;
   }): Promise<{
     readonly created: boolean;
     readonly intent: LaunchIntentRecord;

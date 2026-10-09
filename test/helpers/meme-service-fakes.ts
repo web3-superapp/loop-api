@@ -33,6 +33,7 @@ import {
   type MemeCurveState,
 } from "../../src/features/meme/meme-curve-math.js";
 import {
+  MemeCreateIntentInFlightError,
   MemeCreateRateLimitedError,
   MemeIdempotencyConflictError,
   MemeIntentReportConflictError,
@@ -356,6 +357,14 @@ export interface InMemoryMemeRepository extends MemeRepository {
   readonly tokens: Map<string, MemeTokenRecord>;
   readonly intents: Map<string, MemeIntentRecord>;
   rateLimited: boolean;
+  /** What `sumRecentExposureUsd` answers (the pre-check). */
+  exposureUsd: string;
+  /**
+   * What the insert-time re-check sees (Decision 0104 M2); defaults to
+   * `exposureUsd`. A different value models a concurrent Intent stored
+   * between the pre-check and the insert.
+   */
+  insertExposureUsd: string | null;
 }
 
 /** Only what the API process calls; lane / pool / executor methods reject. */
@@ -371,6 +380,8 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
     tokens,
     intents,
     rateLimited: false,
+    exposureUsd: "0",
+    insertExposureUsd: null,
     getToken: (id) => Promise.resolve(tokens.get(id) ?? null),
     listTokens: (input) => {
       const ordered = [...tokens.values()]
@@ -519,7 +530,24 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
           intent: intents.get(replay.id) as MemeIntentRecord,
         };
       }
+      const live = (memeTokenId: string) =>
+        [...intents.values()].some(
+          (intent) =>
+            intent.memeTokenId === memeTokenId &&
+            intent.kind === "create" &&
+            (intent.state === "broadcast_reported" ||
+              intent.state === "prepared"),
+        );
+      const exclusive = input.exclusiveCreate ?? null;
+      if (exclusive !== null && live(exclusive.memeTokenId)) {
+        throw new MemeCreateIntentInFlightError();
+      }
       const built: CreateMemeIntentRecord = await input.build();
+      if (exclusive !== null && live(exclusive.memeTokenId)) {
+        throw new MemeCreateIntentInFlightError();
+      }
+      const admission = input.canaryAdmission?.(built) ?? null;
+      admission?.admit(repository.insertExposureUsd ?? repository.exposureUsd);
       const record: MemeIntentRecord = {
         ...built,
         reasonCode: null,
@@ -558,7 +586,7 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
       intents.set(record.intentId, next);
       return Promise.resolve(next);
     },
-    sumRecentExposureUsd: () => Promise.resolve("0"),
+    sumRecentExposureUsd: () => Promise.resolve(repository.exposureUsd),
     leaseReconcilableIntents: fail,
     markIntentPayloadVerified: fail,
     settleIntent: fail,

@@ -504,13 +504,28 @@ create 失败（如尾号盐被他人抢用）后代币回到 `draft`，再次�
 | HTTP / code                  | detailsSafe.reasonCode                                                                                                                                                                                                                            |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400 INVALID_REQUEST`        | 字段组合不对（sell 带 usd1Amount、buy 缺 usd1Amount、`minOut` 与 `slippageBps` 同时给、金额为 number）                                                                                                                                            |
-| `403 POLICY_BLOCKED`         | `ASSET_NOT_IN_CANARY_ALLOWLIST`、`COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`、`CANARY_CEILING_EXCEEDED`（`exposureUsd`/`ceilingUsd`）、`CANARY_DAILY_CEILING_EXCEEDED`（`remainingUsd` 等）                                                            |
+| `403 POLICY_BLOCKED`         | `ASSET_NOT_IN_CANARY_ALLOWLIST`（create / buy / sell 都要求 USD1 在白名单，决策 0104）、`COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`、`CANARY_CEILING_EXCEEDED`（`exposureUsd`/`ceilingUsd`）、`CANARY_DAILY_CEILING_EXCEEDED`（`remainingUsd` 等）     |
 | `404 NOT_FOUND`              | 代币不存在/不可见、钱包不是本人、create 不是创建者                                                                                                                                                                                                |
-| `409 DATA_STALE`             | `MEME_CURVE_FULL`、`MEME_CURVE_NOT_TRADING`（+`status`）、`MEME_TOKEN_NOT_DRAFT`、`MEME_TOKEN_NOT_ON_CHAIN`、`MEME_SALT_TAKEN`                                                                                                                    |
+| `409 DATA_STALE`             | `MEME_CURVE_FULL`、`MEME_CURVE_NOT_TRADING`（+`status`）、`MEME_TOKEN_NOT_DRAFT`（+`status`）、`MEME_TOKEN_NOT_ON_CHAIN`、`MEME_SALT_TAKEN`、`MEME_INTENT_CREATE_IN_FLIGHT`（该草稿已有一个未终结的 create Intent，决策 0104）                    |
 | `409 INSUFFICIENT_BALANCE`   | `MEME_USD1_BALANCE_INSUFFICIENT`、`MEME_SELL_EXCEEDS_BALANCE`（+`balance`）、`MEME_GAS_INSUFFICIENT`                                                                                                                                              |
 | `409 IDEMPOTENCY_CONFLICT`   | 同 key 不同请求                                                                                                                                                                                                                                   |
 | `422 VALIDATION_FAILED`      | `MEME_BELOW_MIN_BUY`（+`minBuyUsd1`）、`MEME_WALLET_CAP_EXCEEDED`（+`walletCapTokens`、`remainingTokens`）、`MEME_QUOTE_ZERO`、`MEME_MIN_OUT_ABOVE_QUOTE`（+`expectedOut`）、`MEME_SELL_EXCEEDS_BALANCE`；无 reasonCode = 钱包不是 Privy 内嵌钱包 |
-| `503 CAPABILITY_UNAVAILABLE` | `MEME_WRITES_DISABLED`（后端写开关关）、`MEME_MAINNET_SIGNING_CLOSED`（56 主网签名关闭）、`MEME_CONTRACT_*`（读链失败/合约未核对）、`MEME_REPOSITORY_UNAVAILABLE`                                                                                 |
+| `503 CAPABILITY_UNAVAILABLE` | `MEME_WRITES_DISABLED`（后端写开关关）、`MEME_MAINNET_SIGNING_CLOSED`（56 主网签名关闭）、`MEME_CONTRACT_*`（读链失败/合约未核对；RPC 超时或任何未知读链错误都是 `MEME_CONTRACT_READ_FAILED`，可稍后重试）、`MEME_REPOSITORY_UNAVAILABLE`         |
+
+决策 0104 补充（前端行为）：
+
+- **每日额度是一个窗口**：`CANARY_DAILY_CEILING_EXCEEDED` 的 `spentUsd` 是同一账号滚动 24 小时内
+  钱包（Send / Swap / 授权）+ Launch 认购 + MEME（create 首买 / buy / sell）三处 Intent 的合计；
+  MEME 花满后 Send / Swap / Launch 也会被同一个 reasonCode 拒绝，反之亦然。窗口起点含端点（`>=`）。
+  MEME 计入的状态：`broadcast_reported`、`confirmed`、仍在签名窗口内的 `prepared`。
+- 额度在写库时会在账号锁下**再核一次**：两个并发准备不会同时通过；被拒的那个同样返回
+  `403 CANARY_DAILY_CEILING_EXCEEDED`，没有写入 Intent，可降低金额后重试。
+- **一个草稿同时只能有一个未终结的 create Intent**（`prepared` 且未过 `expiresAt` 且模拟未回滚，或
+  `broadcast_reported`）。再次准备返回 `409 DATA_STALE / MEME_INTENT_CREATE_IN_FLIGHT`：前端应读回已有
+  Intent 继续签名 / 等确认，而不是重复准备；它过期或失败后可重新准备。同一 `Idempotency-Key` 的重放仍返回原 Intent。
+- **重组**：链上重组可能把已 `confirmed` 的 Intent 退回 `broadcast_reported`（确认依据的日志被移除），
+  重新打包后会再次变为 `confirmed`；轮询 `GET /v2/meme/intents/{id}` 时不要把 `confirmed` 当作永不回退的终态，
+  在出块确认深度内以最新读数为准。成交列表 / K 线 / 持有者随之按新链重算。
 
 ## 9. 行情段 `GET /v2/market/assets?category=meme`
 
@@ -557,6 +572,7 @@ create 失败（如尾号盐被他人抢用）后代币回到 `draft`，再次�
 | `MEME_TOKEN_NOT_FOUND`                                                                                                                                                | 404 NOT_FOUND              | 代币不存在                      |
 | `MEME_CURVE_NOT_TRADING` / `MEME_CURVE_FULL`                                                                                                                          | 409 DATA_STALE             | 当前不可交易 / 已打满，等待毕业 |
 | `MEME_TOKEN_NOT_DRAFT` / `MEME_TOKEN_NOT_ON_CHAIN`                                                                                                                    | 409 DATA_STALE             | 状态已变化，请刷新              |
+| `MEME_INTENT_CREATE_IN_FLIGHT`                                                                                                                                        | 409 DATA_STALE             | 正在发币中，请先完成上一笔      |
 | `MEME_SALT_TAKEN`                                                                                                                                                     | 409 DATA_STALE             | 地址已被占用，请重试            |
 | `MEME_INTENT_EXPIRED` / `_NOT_SIGNABLE` / `_ALREADY_REPORTED`                                                                                                         | 409 DATA_STALE             | 重新发起                        |
 | `MEME_USD1_BALANCE_INSUFFICIENT`                                                                                                                                      | 409 INSUFFICIENT_BALANCE   | USD1 余额不足                   |

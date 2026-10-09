@@ -59,6 +59,7 @@ import {
   walletIntentIdempotencyScope,
   walletIntentReasonCodes,
   walletIntentRefusalReasonCodes,
+  type CanaryExposureAdmission,
   type CanaryPolicyFact,
   type ChainBoundIntentKind,
   type ExposureBasis,
@@ -395,6 +396,19 @@ export async function enforceDailyCanaryCeiling(
     ownerUserId,
     since,
   });
+  assertDailyCanaryCeiling(ceilingUsd, spentUsd, valueUsd);
+}
+
+/**
+ * Throws `403 POLICY_BLOCKED` / `CANARY_DAILY_CEILING_EXCEEDED` when
+ * `spentUsd + valueUsd` exceeds the ceiling. Shared by wallet, Launch, and
+ * MEME so the refusal reads the same everywhere (Decisions 0065, 0104).
+ */
+export function assertDailyCanaryCeiling(
+  ceilingUsd: string,
+  spentUsd: string,
+  valueUsd: string,
+): void {
   const exposureUsd = addDecimalStrings(spentUsd, valueUsd);
   if (compareDecimalStrings(exposureUsd, ceilingUsd) > 0) {
     // What the day already spent and what is left are the two numbers the
@@ -411,6 +425,27 @@ export async function enforceDailyCanaryCeiling(
         compareDecimalStrings(remainingUsd, "0") < 0 ? "0" : remainingUsd,
     });
   }
+}
+
+/**
+ * The in-transaction re-check of the daily ceiling (Decision 0104 M2): the
+ * repository locks the owner, recomputes the spent total, and calls
+ * `admit`. Null when no daily ceiling is configured.
+ */
+export function dailyCanaryAdmission(
+  writes: BscWriteConfig,
+  valueUsd: string,
+  now: Date,
+): CanaryExposureAdmission | null {
+  const ceilingUsd = writes.canaryDailyMaxUsd;
+  if (ceilingUsd === null) {
+    return null;
+  }
+  return Object.freeze({
+    since: new Date(now.getTime() - canaryDailyWindowMs).toISOString(),
+    admit: (spentUsd: string) =>
+      assertDailyCanaryCeiling(ceilingUsd, spentUsd, valueUsd),
+  });
 }
 
 export function canaryPolicyFact(
