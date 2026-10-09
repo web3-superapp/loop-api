@@ -119,6 +119,12 @@ export const memeReasonCodes = Object.freeze({
   intentExpired: "MEME_INTENT_EXPIRED",
   intentNotSignable: "MEME_INTENT_NOT_SIGNABLE",
   intentAlreadyReported: "MEME_INTENT_ALREADY_REPORTED",
+  /** Decision 0104 M2: the draft already has a live create Intent. */
+  intentCreateInFlight: "MEME_INTENT_CREATE_IN_FLIGHT",
+  /** Decision 0104 m6: a chain read on a POST path failed or timed out. */
+  contractReadFailed: "MEME_CONTRACT_READ_FAILED",
+  /** Decision 0104 m3: lane-only warning, never on the wire. */
+  createdCreatorMismatch: "MEME_CREATED_CREATOR_MISMATCH",
   txPayloadMismatch: "MEME_TX_PAYLOAD_MISMATCH",
   txReverted: "MEME_TX_REVERTED",
   txNotObserved: "MEME_TX_NOT_OBSERVED",

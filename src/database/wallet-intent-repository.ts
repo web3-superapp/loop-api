@@ -14,12 +14,18 @@ import {
   walletIntentKinds,
   walletIntentReasonCodes,
   walletIntentStates,
+  type CanaryExposureAdmission,
   type IntentPublicReview,
   type IntentSource,
   type SimulationStatus,
   type WalletIntentKind,
   type WalletIntentState,
 } from "../features/wallet-intents/intent-contract.js";
+import {
+  admitCanaryExposure,
+  sumCanaryExposureUsd,
+} from "./canary-exposure.js";
+import { lockV2Owner } from "./v2-command-support.js";
 
 /**
  * Storage for unified wallet intents (Decision 0035). The payload columns are
@@ -149,6 +155,11 @@ export interface CreateWalletIntentInput {
   readonly expiresAt: string;
   readonly simulationStatus: SimulationStatus;
   readonly requestId: string;
+  /**
+   * Decision 0104 M2: when present, the owner row is locked and the daily
+   * canary ceiling re-checked inside the insert transaction.
+   */
+  readonly canaryAdmission?: CanaryExposureAdmission | null;
 }
 
 export interface TransitionWalletIntentInput {
@@ -229,9 +240,9 @@ export interface WalletIntentRepository {
   ): Promise<WalletIntentRecord | null>;
   list(input: ListWalletIntentsInput): Promise<WalletIntentPage>;
   /**
-   * Sum of the USD exposure sealed into the payloads of one account's intents
-   * that were created at or after `since` and may still spend (Decision
-   * 0065). `prepared`, `cancelled`, `expired`, and `failed` intents never
+   * Sum of the USD exposure sealed into the payloads of one account's
+   * wallet, Launch, and MEME intents that were created at or after `since`
+   * and may still spend (Decisions 0065, 0104). `prepared`, `cancelled`, `expired`, and `failed` intents never
    * reached a signer or proved nothing was sent, so they do not consume the
    * rolling daily canary ceiling. The sum is a decimal string; nothing
    * becomes a JavaScript number.
@@ -432,18 +443,6 @@ function mapSwapQuote(row: unknown): StoredSwapQuote {
   });
 }
 
-/**
- * The states in which an intent may already have moved, or may still move,
- * funds. `reverted` is included: the chain executed the transaction.
- */
-const dailyCeilingStates = Object.freeze([
-  "awaiting_signature",
-  "submitted",
-  "confirmed",
-  "reverted",
-  "unknown",
-]);
-
 function unavailable(): Promise<never> {
   return Promise.reject(new WalletIntentUnavailableError());
 }
@@ -472,6 +471,15 @@ export function createPostgresWalletIntentRepository(
   return Object.freeze({
     async create(input: CreateWalletIntentInput): Promise<WalletIntentRecord> {
       return withTransaction(pool, async (client) => {
+        const admission = input.canaryAdmission ?? null;
+        if (admission !== null) {
+          await lockV2Owner(
+            client,
+            input.ownerUserId,
+            () => new WalletIntentUnavailableError(),
+          );
+          await admitCanaryExposure(client, input.ownerUserId, admission);
+        }
         const superseded = await client.query<Record<string, unknown>>({
           text: `
             update public.wallet_intents
@@ -627,29 +635,9 @@ export function createPostgresWalletIntentRepository(
       readonly ownerUserId: string;
       readonly since: string;
     }): Promise<string> {
-      const result = await pool.query<{ readonly total: string }>({
-        text: `
-          -- Launch purchase Intents (Decision 0077) share the account's
-          -- rolling canary window; USD1 is sealed at par in policy.valueUsd.
-          select coalesce(sum(value_usd), 0)::text as total
-          from (
-            select (canonical_payload -> 'policy' ->> 'valueUsd')::numeric as value_usd
-            from public.wallet_intents
-            where owner_user_id = $1
-              and created_at >= $2::timestamptz
-              and state = any($3::text[])
-            union all
-            select (policy ->> 'valueUsd')::numeric
-            from public.launch_intents
-            where owner_user_id = $1
-              and created_at >= $2::timestamptz
-              and state = any($3::text[])
-              and policy ? 'valueUsd'
-          ) as exposure
-        `,
-        values: [input.ownerUserId, input.since, [...dailyCeilingStates]],
-      });
-      return result.rows[0]?.total ?? "0";
+      // One rolling canary window for wallet, Launch (Decision 0077), and
+      // MEME (Decision 0101) Intents; USD1 is sealed at par in valueUsd.
+      return sumCanaryExposureUsd(pool, input);
     },
 
     async transition(

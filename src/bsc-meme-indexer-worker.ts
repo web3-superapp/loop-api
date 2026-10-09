@@ -74,6 +74,7 @@ export interface MemeLaneWarning {
   readonly reasonCode:
     | "MEME_EVENTS_IGNORED"
     | "MEME_TOKEN_METADATA_MISMATCH"
+    | "MEME_CREATED_CREATOR_MISMATCH"
     | "MEME_TOKENS_NOT_CREATED_BY_LOOP";
   readonly blockNumber: string;
   readonly count: number;
@@ -341,7 +342,18 @@ export function createMemeIndexerWorker(
         count: committed.metadataMismatchCount,
       });
     }
-    const foreign = committed.skippedCount - committed.metadataMismatchCount;
+    if (committed.creatorMismatchCount > 0) {
+      // Decision 0104 m3: the draft's salt and metadata, another creator.
+      options.onWarning?.({
+        reasonCode: "MEME_CREATED_CREATOR_MISMATCH",
+        blockNumber: toBlock.toString(10),
+        count: committed.creatorMismatchCount,
+      });
+    }
+    const foreign =
+      committed.skippedCount -
+      committed.metadataMismatchCount -
+      committed.creatorMismatchCount;
     if (foreign > 0) {
       options.onWarning?.({
         reasonCode: "MEME_TOKENS_NOT_CREATED_BY_LOOP",

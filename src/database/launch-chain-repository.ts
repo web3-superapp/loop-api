@@ -42,6 +42,7 @@ import {
   withV2Transaction,
   type DatabaseClient,
 } from "./v2-command-support.js";
+import { admitCanaryExposure } from "./canary-exposure.js";
 
 /**
  * PostgreSQL side of the Launch chain facts (Decision 0077). The lane
@@ -1327,8 +1328,26 @@ export function createPostgresLaunchChainRepository(
         // Refusals thrown by `build` are the caller's, not a repository
         // failure: they pass through `translate()` unchanged.
         const built = await runCallerCallback(input.build);
-        const inserted = await pool.query({
-          text: `
+        // Decision 0104 M2: the insert runs under the owner lock and the
+        // daily canary ceiling is recomputed in the same transaction, so two
+        // concurrent prepares (or a wallet / MEME Intent in between) cannot
+        // both pass a check made before the chain reads.
+        const admission = input.canaryAdmission ?? null;
+        const inserted = await withV2Transaction(
+          pool,
+          unavailable,
+          async (client) => {
+            await lockV2Owner(client, ownerUserId, unavailable);
+            if (admission !== null) {
+              await admitCanaryExposure(
+                client,
+                ownerUserId,
+                admission,
+                (error) => new CallerCallbackError(error),
+              );
+            }
+            return client.query({
+              text: `
             insert into public.launch_intents (
               intent_id, owner_user_id, wallet_id, launch_id, project_id, round_id,
               chain_id, quote_asset_id, project_asset_id, direction, pay_amount_raw,
@@ -1347,38 +1366,40 @@ export function createPostgresLaunchChainRepository(
             on conflict (idempotency_record_id) do nothing
             returning ${intentColumns}
           `,
-          values: [
-            uuidSchema.parse(built.intentId),
-            ownerUserId,
-            uuidSchema.parse(built.walletId),
-            uuidSchema.parse(built.launchId),
-            uuidSchema.parse(built.projectId),
-            built.roundId === null ? null : uuidSchema.parse(built.roundId),
-            built.chainId,
-            built.quoteAssetId,
-            built.projectAssetId,
-            rawSchema.parse(built.payAmountRaw),
-            rawSchema.parse(built.expectedReceiveRaw),
-            built.configVersion,
-            rawSchema.parse(built.walletCumulativeRaw),
-            addressSchema.parse(built.contractAddress),
-            bytes32ToColumn(built.stateTupleDigest),
-            blockSchema.parse(built.snapshotBlockNumber),
-            hashSchema.parse(built.snapshotBlockHash),
-            sha256Schema.parse(built.payloadDigest),
-            built.state,
-            built.expiresAt,
-            built.saleId,
-            built.roundIndex,
-            rawSchema.parse(built.minTokenAmountRaw),
-            built.deadline,
-            JSON.stringify(built.eligibilityProof),
-            JSON.stringify(built.unsignedTransaction),
-            JSON.stringify(built.policy),
-            claim.recordId,
-            directionFromKind(built.kind),
-          ],
-        });
+              values: [
+                uuidSchema.parse(built.intentId),
+                ownerUserId,
+                uuidSchema.parse(built.walletId),
+                uuidSchema.parse(built.launchId),
+                uuidSchema.parse(built.projectId),
+                built.roundId === null ? null : uuidSchema.parse(built.roundId),
+                built.chainId,
+                built.quoteAssetId,
+                built.projectAssetId,
+                rawSchema.parse(built.payAmountRaw),
+                rawSchema.parse(built.expectedReceiveRaw),
+                built.configVersion,
+                rawSchema.parse(built.walletCumulativeRaw),
+                addressSchema.parse(built.contractAddress),
+                bytes32ToColumn(built.stateTupleDigest),
+                blockSchema.parse(built.snapshotBlockNumber),
+                hashSchema.parse(built.snapshotBlockHash),
+                sha256Schema.parse(built.payloadDigest),
+                built.state,
+                built.expiresAt,
+                built.saleId,
+                built.roundIndex,
+                rawSchema.parse(built.minTokenAmountRaw),
+                built.deadline,
+                JSON.stringify(built.eligibilityProof),
+                JSON.stringify(built.unsignedTransaction),
+                JSON.stringify(built.policy),
+                claim.recordId,
+                directionFromKind(built.kind),
+              ],
+            });
+          },
+        );
         if (inserted.rows[0] !== undefined) {
           return Object.freeze({
             created: true,

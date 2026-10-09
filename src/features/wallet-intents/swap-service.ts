@@ -35,6 +35,7 @@ import {
   assetSnapshot,
   canaryPolicyFact,
   enforceCanaryCeiling,
+  dailyCanaryAdmission,
   enforceDailyCanaryCeiling,
   isElapsed,
   parseIntentAmount,
@@ -675,6 +676,11 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             expiresAt: source.expiresAt,
             simulationStatus: "unavailable",
             requestId,
+            canaryAdmission: dailyCanaryAdmission(
+              writes,
+              quote.inputValuation.valueUsd,
+              runtime.now(),
+            ),
           });
         },
       );

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { decodeFunctionData } from "viem";
+import { TimeoutError, decodeFunctionData } from "viem";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -12,6 +12,7 @@ import {
   quoteMemeBuy,
   quoteMemeSell,
 } from "../src/features/meme/meme-curve-math.js";
+import type { BscChainCallClient } from "../src/integrations/bsc/rpc-client.js";
 import { memeCurveAbiV1 } from "../src/integrations/meme/meme-abi.v1.js";
 import {
   memeCandlesResourceSchema,
@@ -96,6 +97,7 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       readonly repository?: InMemoryMemeRepository;
       readonly chain?: FakeCurveChain;
       readonly funds?: FakeMemeFunds;
+      readonly client?: BscChainCallClient;
       readonly unconfigured?: boolean;
     } = {},
   ) {
@@ -120,9 +122,9 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       ...(options.unconfigured === true
         ? {}
         : { memeContractAdapter: createFakeMemeAdapter(chain) }),
-      launchChainReadClient: createFakeMemeSlotClient(
-        options.funds ?? defaultMemeFunds(),
-      ),
+      launchChainReadClient:
+        options.client ??
+        createFakeMemeSlotClient(options.funds ?? defaultMemeFunds()),
       walletIntentNow: () => new Date(Number(memeNowSeconds) * 1000),
       logger: false,
     });
@@ -958,5 +960,189 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       payload: { kind: "create", walletId },
     });
     expect(refused.statusCode).toBe(404);
+  });
+  describe("Decision 0104 canary and chain-read fixes", () => {
+    const post = (
+      app: FastifyInstance,
+      memeTokenId: string,
+      payload: Record<string, unknown>,
+      key: string,
+    ) =>
+      app.inject({
+        method: "POST",
+        url: `/v2/meme/tokens/${memeTokenId}/intents`,
+        headers: s7CommandHeaders({ "idempotency-key": s7IdempotencyKey(key) }),
+        payload,
+      });
+
+    it("m2: refuses a sell when USD1 is not on the canary allowlist", async () => {
+      const { app, repository, chain } = await createApp({
+        env: {
+          ...memeWritesEnv,
+          BSC_WRITE_CANARY_ASSETS:
+            "eip155:97:0x3333333333333333333333333333333333333333",
+        },
+        funds: defaultMemeFunds({ tokenBalance: 1_000_000n * memeE18 }),
+      });
+      const traded = quoteMemeBuy(freshMemeCurve, 1_000n * memeE18);
+      const token = seedTrading(repository, chain, {
+        vUsd1: traded.newVUsd1.toString(),
+        vToken: traded.newVToken.toString(),
+      });
+      const sell = await post(
+        app,
+        token.memeTokenId,
+        { kind: "sell", walletId, tokenAmount: "1000" },
+        "4",
+      );
+      expect(sell.statusCode).toBe(403);
+      expect(Object.keys(sell.json<Record<string, unknown>>()).sort()).toEqual(
+        errorKeys,
+      );
+      expect(sell.json()).toMatchObject({
+        code: "POLICY_BLOCKED",
+        detailsSafe: { reasonCode: "ASSET_NOT_IN_CANARY_ALLOWLIST" },
+      });
+      expect(repository.intents.size).toBe(0);
+    });
+
+    it("m6: an RPC timeout or an unknown read error on the POST path is 503 MEME_CONTRACT_READ_FAILED, never 500", async () => {
+      const funds = defaultMemeFunds({ usd1Allowance: 10n ** 30n });
+      const timingOut: BscChainCallClient = Object.freeze({
+        ...createFakeMemeSlotClient(funds),
+        getFeeData: () =>
+          Promise.reject(
+            new TimeoutError({ body: {}, url: "https://bsc-rpc.invalid/" }),
+          ),
+      });
+      const { app, repository, chain } = await createApp({
+        env: memeWritesEnv,
+        client: timingOut,
+      });
+      const token = seedTrading(repository, chain);
+      const timedOut = await post(
+        app,
+        token.memeTokenId,
+        { kind: "buy", walletId, usd1Amount: "10" },
+        "5",
+      );
+      expect(timedOut.statusCode).toBe(503);
+      expect(
+        Object.keys(timedOut.json<Record<string, unknown>>()).sort(),
+      ).toEqual(errorKeys);
+      expect(timedOut.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        detailsSafe: { reasonCode: "MEME_CONTRACT_READ_FAILED" },
+      });
+      // A curve read failing with a plain Error (not a Bsc* error).
+      chain.unavailable = true;
+      const unreadable = await post(
+        app,
+        token.memeTokenId,
+        { kind: "buy", walletId, usd1Amount: "10" },
+        "6",
+      );
+      expect(unreadable.statusCode).toBe(503);
+      expect(unreadable.json()).toMatchObject({
+        detailsSafe: { reasonCode: "MEME_CONTRACT_READ_FAILED" },
+      });
+      expect(repository.intents.size).toBe(0);
+    });
+
+    it("M1: the daily ceiling counts the one wallet + Launch + MEME window and is re-checked at insert", async () => {
+      const { app, repository, chain } = await createApp({
+        env: { ...memeWritesEnv, BSC_WRITE_CANARY_DAILY_MAX_USD: "100" },
+        funds: defaultMemeFunds({ usd1Allowance: 10n ** 30n }),
+      });
+      const token = seedTrading(repository, chain);
+      repository.exposureUsd = "95";
+      const blocked = await post(
+        app,
+        token.memeTokenId,
+        { kind: "buy", walletId, usd1Amount: "10" },
+        "7",
+      );
+      expect(blocked.statusCode).toBe(403);
+      expect(blocked.json()).toMatchObject({
+        code: "POLICY_BLOCKED",
+        detailsSafe: {
+          reasonCode: "CANARY_DAILY_CEILING_EXCEEDED",
+          ceilingUsd: "100",
+          spentUsd: "95",
+          remainingUsd: "5",
+        },
+      });
+      // The pre-check passes, a concurrent Intent landed before the insert.
+      repository.exposureUsd = "0";
+      repository.insertExposureUsd = "95";
+      const raced = await post(
+        app,
+        token.memeTokenId,
+        { kind: "buy", walletId, usd1Amount: "10" },
+        "8",
+      );
+      expect(raced.statusCode).toBe(403);
+      expect(raced.json()).toMatchObject({
+        detailsSafe: {
+          reasonCode: "CANARY_DAILY_CEILING_EXCEEDED",
+          spentUsd: "95",
+        },
+      });
+      expect(repository.intents.size).toBe(0);
+      repository.insertExposureUsd = null;
+      const admitted = await post(
+        app,
+        token.memeTokenId,
+        { kind: "buy", walletId, usd1Amount: "10" },
+        "9",
+      );
+      expect(admitted.statusCode).toBe(201);
+    });
+
+    it("M2: a second create Intent of a draft while one is in flight is 409 MEME_INTENT_CREATE_IN_FLIGHT", async () => {
+      const { app, repository } = await createApp({ env: memeWritesEnv });
+      const draft = memeTokenFixture({
+        creatorUserId: s7AccountId,
+        status: "draft",
+        tokenAddress: null,
+        assetId: null,
+      });
+      repository.tokens.set(draft.memeTokenId, draft);
+      const first = await post(
+        app,
+        draft.memeTokenId,
+        { kind: "create", walletId },
+        "c",
+      );
+      expect(first.statusCode).toBe(201);
+      const second = await post(
+        app,
+        draft.memeTokenId,
+        { kind: "create", walletId },
+        "d",
+      );
+      expect(second.statusCode).toBe(409);
+      expect(
+        Object.keys(second.json<Record<string, unknown>>()).sort(),
+      ).toEqual(errorKeys);
+      expect(second.json()).toMatchObject({
+        code: "DATA_STALE",
+        detailsSafe: { reasonCode: "MEME_INTENT_CREATE_IN_FLIGHT" },
+      });
+      // The same key still replays the first Intent.
+      const replay = await post(
+        app,
+        draft.memeTokenId,
+        { kind: "create", walletId },
+        "c",
+      );
+      expect(
+        replay.json<{ memeIntent: { memeIntentId: string } }>().memeIntent
+          .memeIntentId,
+      ).toBe(
+        first.json<{ memeIntent: { memeIntentId: string } }>().memeIntent
+          .memeIntentId,
+      );
+    });
   });
 });

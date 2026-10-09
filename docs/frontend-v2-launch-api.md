@@ -1051,7 +1051,8 @@ Content-Type: application/json
 - 只放行 **USD1 → Launch 合约**这一对；97 上的其他资产、其他 spender、或 launch 槽位与主链相同
   → `422 CHAIN_MISMATCH`（在 canary 之前判断）。revoke（`/v2/wallet-intents/revoke`）同样只放行这一对。
 - 走完整 canary：97 的 USD1 资产 ID 必须在 `BSC_WRITE_CANARY_ASSETS`，金额按 1 USD 估值，与 Launch Intent
-  共享每日上限。签名后照常调用 `POST /v2/wallet-intents/{intentId}/broadcast-report`；后端按 Intent 记录的链
+  共享每日上限（决策 0104 起该窗口还包含 MEME Intent：MEME 花满额度后 Launch 认购同样返回
+  `403 CANARY_DAILY_CEILING_EXCEEDED`；写库时在账号锁下再核一次）。签名后照常调用 `POST /v2/wallet-intents/{intentId}/broadcast-report`；后端按 Intent 记录的链
   （97）读交易和回执。
 - 钱包 Intent 的 `unsignedTransaction.chainId` 取值从 `56` 放宽为 `56 | 97`。
 

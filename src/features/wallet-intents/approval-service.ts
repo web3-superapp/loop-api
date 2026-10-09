@@ -40,6 +40,7 @@ import {
   canaryPolicyFact,
   chainUnavailable,
   enforceCanaryCeiling,
+  dailyCanaryAdmission,
   enforceDailyCanaryCeiling,
   intentStateForSimulation,
   parseIntentAmount,
@@ -424,6 +425,10 @@ export function createApprovalService(
           expiresAt: source.expiresAt,
           simulationStatus: execution.simulation.status,
           requestId,
+          canaryAdmission:
+            valuation === null
+              ? null
+              : dailyCanaryAdmission(writes, valuation.valueUsd, runtime.now()),
         });
       },
     );
