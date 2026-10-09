@@ -518,6 +518,25 @@ With no due work, the process only performs its bounded polling cycles until
 PostgreSQL cleanly. A real nonempty Testnet account and deployed worker remain
 unverified.
 
+## iOS app identity for association files (Decision 0106)
+
+The API publishes exactly one iOS application identifier,
+`<PASSKEY_IOS_TEAM_ID>.<PASSKEY_IOS_BUNDLE_ID>`, in
+`/.well-known/apple-app-site-association` (Universal Links `applinks` and
+passkey `webcredentials`). Nothing about the iOS app is compiled in.
+
+```sh
+# .env.local (or ops api-dev.env / api-staging.env); not secrets
+PASSKEY_IOS_TEAM_ID=<ten-character Team ID of the current Apple account>
+PASSKEY_IOS_BUNDLE_ID=com.cywd.loopapp   # default when unset
+```
+
+Without `PASSKEY_IOS_TEAM_ID` the file is `{"applinks":{"details":[]}}`
+(no iOS app claimed, no passkeys on iOS) and startup logs one warning with
+`reasonCode: APPLE_TEAM_ID_MISSING`. `assetlinks.json` (Android package
+`com.cywd.loop`) is unaffected. Check with
+`curl -s http://127.0.0.1:3000/.well-known/apple-app-site-association`.
+
 ## Physical phone on a trusted LAN
 
 The safer default binds only to the Mac. For a short-lived trusted-LAN session:

@@ -180,7 +180,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
   it("publishes the Apple application identifier from the Team ID and bundle ID", async () => {
     const app = await buildTestApp({
       PASSKEY_IOS_TEAM_ID: "ABCDE12345",
-      PASSKEY_IOS_BUNDLE_ID: "com.cywd.loop",
+      PASSKEY_IOS_BUNDLE_ID: "com.cywd.loopapp",
     });
 
     const response = await app.inject({
@@ -193,12 +193,12 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
       applinks: {
         details: [
           {
-            appIDs: ["867CN6U7W9.com.cywd.loop"],
+            appIDs: ["ABCDE12345.com.cywd.loopapp"],
             components: [{ "/": "/u/*" }, { "/": "/c/*" }],
           },
         ],
       },
-      webcredentials: { apps: ["ABCDE12345.com.cywd.loop"] },
+      webcredentials: { apps: ["ABCDE12345.com.cywd.loopapp"] },
     });
     expect(response.headers["content-type"]).toBe("application/json");
     expect(response.headers["cache-control"]).toBe("public, max-age=3600");
@@ -216,7 +216,7 @@ describe("Passkey relying-party discovery files (Decision 0063)", () => {
     expect(
       response.json<{ webcredentials: { apps: readonly string[] } }>()
         .webcredentials.apps,
-    ).toEqual(["ABCDE12345.com.cywd.loop"]);
+    ).toEqual(["ABCDE12345.com.cywd.loopapp"]);
     expect(response.headers["www-authenticate"]).toBeUndefined();
   });
 
@@ -279,6 +279,21 @@ describe("Passkey relying-party configuration (Decision 0063)", () => {
     expect(() => testConfig({ PASSKEY_IOS_TEAM_ID: "ABCDE" })).toThrow(
       ConfigurationError,
     );
+  });
+
+  it("rejects a bundle ID that is not dotted", () => {
+    expect(() =>
+      testConfig({
+        PASSKEY_IOS_TEAM_ID: "ABCDE12345",
+        PASSKEY_IOS_BUNDLE_ID: "loopapp",
+      }),
+    ).toThrow(ConfigurationError);
+  });
+
+  it("defaults the iOS bundle ID to com.cywd.loopapp (Decision 0106)", () => {
+    expect(
+      testConfig({ PASSKEY_IOS_TEAM_ID: "ABCDE12345" }).passkeyRelyingParty.ios,
+    ).toEqual({ appId: "ABCDE12345.com.cywd.loopapp" });
   });
 
   it("rejects a package name that is not dotted", () => {

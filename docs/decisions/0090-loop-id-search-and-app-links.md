@@ -31,9 +31,9 @@ Implementation: `SearchUsersInput` gains optional `exactLoopId` + `includeExactM
 
 There was already one route per file (Decision 0063, passkeys); the `/u/*` association is merged into them, no second route exists.
 
-- `apple-app-site-association` always answers 200 with `{"applinks":{"details":[{"appIDs":["867CN6U7W9.com.cywd.loop"],"components":[{"/":"/u/*"}]}]}}`. `webcredentials.apps` is added **only** when `PASSKEY_IOS_TEAM_ID` is configured, exactly as Decision 0063 ruled. With `PASSKEY_IOS_TEAM_ID=867CN6U7W9` the body is byte-identical to the S98 task sheet document (tested).
+- `apple-app-site-association` always answers 200 with `{"applinks":{"details":[{"appIDs":["<TEAMID>.<BUNDLEID>"],"components":[{"/":"/u/*"}]}]}}`. `webcredentials.apps` is added **only** when `PASSKEY_IOS_TEAM_ID` is configured, exactly as Decision 0063 ruled. (Decision 0106 replaced the original compiled-in app ID of the retired Apple account with `PASSKEY_IOS_TEAM_ID` + `PASSKEY_IOS_BUNDLE_ID`; without a Team ID `details` is empty.)
 - `assetlinks.json` always answers 200. Statement 1: `["delegate_permission/common.handle_all_urls"]`, `com.cywd.loop`, the Development debug keystore `AE:60:…:3E:FA`, followed by `ANDROID_RELEASE_CERT_SHA256` entries (comma-separated, validated like `PASSKEY_ANDROID_CERT_SHA256`, must not repeat the debug fingerprint). With no passkey configuration the body is byte-identical to the task sheet document (tested). When `PASSKEY_ANDROID_CERT_SHA256` is set, Decision 0063's statement follows unchanged as statement 2.
-- The iOS app ID, Android package, and debug fingerprint are compiled constants in `src/config.ts` (public facts of the app build, not secrets).
+- The Android package and debug fingerprint are compiled constants in `src/config.ts` (public facts of the app build, not secrets); the iOS app ID is configuration since Decision 0106.
 - `Cache-Control: public, max-age=3600` for both (was 300). `Content-Type: application/json` exactly, no redirect, no authentication.
 - The `404` path of Decision 0063 no longer exists for these two files.
 
@@ -66,7 +66,7 @@ None new. Search stays governed by the `search` capability. The association file
 ## Main-agent ruling (2026-09-28)
 
 1. **Exact LOOP ID match bypasses `discoverable`.** Handing someone your LOOP ID is an explicit act; `discoverable` governs only passive alias/prefix discovery. Blocks (both directions) and self-exclusion still apply. The privacy-center copy "别人可以通过 LOOP ID 搜到你" therefore holds. **This revises Decision 0031 implementation ruling 2** for `GET /v2/search?domain=users`: `discoverable = true` is now required only for the alias-prefix rows; follow admission under ruling 2 is not changed by this ruling.
-2. `PASSKEY_IOS_TEAM_ID=867CN6U7W9` is set in ops by the main agent (no code change).
+2. `PASSKEY_IOS_TEAM_ID` is set in ops by the main agent (no code change). The original Team ID belonged to an Apple account retired by Decision 0106.
 3. `Cache-Control: public, max-age=3600` for the passkey files as well: accepted.
 
 4. **(2026-09-28, closes open question 3) `POST /v2/message-requests` no longer requires the target to be `discoverable`.** The recipient-side gates are exactly two: the recipient's `friendRequests` switch (Decision 0070, default `enabled`) and a block in either direction; an unactivated target and self stay excluded. Every refusal is still the same non-enumerating `404 NOT_FOUND`; the V1 state-machine conflicts (existing friendship, pending pair, rejection cooldown) are still `409 DATA_STALE`. **`POST /v2/connections/follow/{publicProfileId}` keeps requiring `discoverable = true`**: a follow cannot be refused, so passive visibility stays under the target's control. This revises **Decision 0031** (the message-request admission row "identical to `follow` … `discoverable = true`") and **Decision 0070** item 4 ("`discoverable` is unchanged and still required for message requests") and its `friendRequests` table row. The frozen V1 `/v1` friend-request path is not changed.

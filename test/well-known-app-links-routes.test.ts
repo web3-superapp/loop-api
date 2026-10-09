@@ -76,8 +76,35 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     await Promise.all(apps.splice(0).map(async (app) => app.close()));
   });
 
-  it("publishes the Apple association with applinks and the passkey webcredentials", async () => {
-    const { app } = await buildTestApp({ PASSKEY_IOS_TEAM_ID: "867CN6U7W9" });
+  async function captureStartupLogs(overrides: Record<string, string>) {
+    const lines: string[] = [];
+    const app = await buildApp({
+      config: testConfig(overrides),
+      database: fakeDatabase(),
+      logger: {
+        level: "warn",
+        stream: {
+          write: (line: string) => {
+            lines.push(line);
+          },
+        },
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    return {
+      app,
+      reasonCodes: lines.map(
+        (line) => (JSON.parse(line) as { reasonCode?: string }).reasonCode,
+      ),
+    };
+  }
+
+  it("publishes the Apple association from the Team ID and bundle ID (Decision 0106)", async () => {
+    const { app } = await buildTestApp({
+      PASSKEY_IOS_TEAM_ID: "ABCDE12345",
+      PASSKEY_IOS_BUNDLE_ID: "com.example.loopnext",
+    });
 
     const response = await app.inject({
       method: "GET",
@@ -89,12 +116,12 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     expect(response.headers["cache-control"]).toBe("public, max-age=3600");
     expect(response.headers.location).toBeUndefined();
     expect(response.body).toBe(
-      '{"applinks":{"details":[{"appIDs":["867CN6U7W9.com.cywd.loop"],"components":[{"/":"/u/*"},{"/":"/c/*"}]}]},"webcredentials":{"apps":["867CN6U7W9.com.cywd.loop"]}}',
+      '{"applinks":{"details":[{"appIDs":["ABCDE12345.com.example.loopnext"],"components":[{"/":"/u/*"},{"/":"/c/*"}]}]},"webcredentials":{"apps":["ABCDE12345.com.example.loopnext"]}}',
     );
   });
 
-  it("publishes applinks alone while passkeys are not configured", async () => {
-    const { app } = await buildTestApp();
+  it("defaults the bundle ID to com.cywd.loopapp when only the Team ID is set", async () => {
+    const { app } = await buildTestApp({ PASSKEY_IOS_TEAM_ID: "abcde12345" });
 
     const response = await app.inject({
       method: "GET",
@@ -106,11 +133,73 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
       applinks: {
         details: [
           {
-            appIDs: ["867CN6U7W9.com.cywd.loop"],
+            appIDs: ["ABCDE12345.com.cywd.loopapp"],
             components: [{ "/": "/u/*" }, { "/": "/c/*" }],
           },
         ],
       },
+      webcredentials: { apps: ["ABCDE12345.com.cywd.loopapp"] },
+    });
+  });
+
+  it("claims no iOS app with a bundle ID but no Team ID, and warns once", async () => {
+    const { app, reasonCodes } = await captureStartupLogs({
+      PASSKEY_IOS_BUNDLE_ID: "com.example.loopnext",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/.well-known/apple-app-site-association",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("application/json");
+    expect(response.body).toBe('{"applinks":{"details":[]}}');
+    expect(reasonCodes).toEqual(["APPLE_TEAM_ID_MISSING"]);
+  });
+
+  it("claims no iOS app with neither Team ID nor bundle ID, Android unaffected", async () => {
+    const { app, reasonCodes } = await captureStartupLogs({});
+
+    const apple = await app.inject({
+      method: "GET",
+      url: "/.well-known/apple-app-site-association",
+    });
+    const android = await app.inject({
+      method: "GET",
+      url: "/.well-known/assetlinks.json",
+    });
+
+    expect(apple.statusCode).toBe(200);
+    expect(apple.json()).toEqual({ applinks: { details: [] } });
+    expect(apple.body).not.toContain("webcredentials");
+    expect(reasonCodes).toEqual(["APPLE_TEAM_ID_MISSING"]);
+    expect(android.statusCode).toBe(200);
+    expect(android.body).toBe(
+      `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.cywd.loop","sha256_cert_fingerprints":["${debugKeystoreFingerprint}"]}}]`,
+    );
+  });
+
+  it("logs no Team ID warning once a Team ID is configured", async () => {
+    const { reasonCodes } = await captureStartupLogs({
+      PASSKEY_IOS_TEAM_ID: "ABCDE12345",
+    });
+
+    expect(reasonCodes).toEqual([]);
+  });
+
+  it("derives appLinks.iosAppIds from the passkey iOS configuration", () => {
+    expect(testConfig().appLinks.iosAppIds).toEqual([]);
+    expect(testConfig().passkeyRelyingParty.ios).toBeNull();
+    const configured = testConfig({
+      PASSKEY_IOS_TEAM_ID: "ABCDE12345",
+      PASSKEY_IOS_BUNDLE_ID: "com.cywd.loopapp",
+    });
+    expect(configured.appLinks.iosAppIds).toEqual([
+      "ABCDE12345.com.cywd.loopapp",
+    ]);
+    expect(configured.passkeyRelyingParty.ios).toEqual({
+      appId: "ABCDE12345.com.cywd.loopapp",
     });
   });
 
