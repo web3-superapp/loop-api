@@ -26,7 +26,7 @@ export const adminErrorCategories = Object.freeze([
 export type AdminErrorCategory = (typeof adminErrorCategories)[number];
 
 export type AdminErrorStatusCode =
-  400 | 401 | 404 | 409 | 422 | 423 | 500 | 503;
+  400 | 401 | 404 | 409 | 422 | 423 | 429 | 500 | 503;
 
 interface AdminErrorCatalogEntry {
   readonly statusCode: AdminErrorStatusCode;
@@ -56,6 +56,17 @@ export const adminErrorCatalog = Object.freeze({
     category: "rateLimit",
     retryable: true,
     userMessageKey: "errors.admin.loginLocked",
+  },
+  /**
+   * Decision 0105: another login is being verified right now; only one runs
+   * at a time. `detailsSafe.retryAfterSeconds` and `Retry-After` say when to
+   * try again. Not counted as a failure.
+   */
+  ADMIN_LOGIN_BUSY: {
+    statusCode: 429,
+    category: "rateLimit",
+    retryable: true,
+    userMessageKey: "errors.admin.loginBusy",
   },
   /** Optimistic concurrency (`updatedAt`) or a state transition refused. */
   ADMIN_CONFLICT: {
@@ -253,6 +264,12 @@ export const adminReasonCodes = Object.freeze({
   memePauseState: "MEME_PAUSE_STATE_INVALID",
   memePauseSimulationReverted: "MEME_PAUSE_SIMULATION_REVERTED",
   memePauseBroadcastFailed: "MEME_PAUSE_BROADCAST_FAILED",
+  /** Decision 0105: MEME_OPERATOR_PRIVATE_KEY is not configured. */
+  memeOperatorKeyMissing: "MEME_OPERATOR_KEY_MISSING",
+  /** Decision 0105: a pause/unpause of this token is still unconfirmed. */
+  memePausePending: "MEME_PAUSE_PENDING",
+  /** Decision 0105: the intent audit row could not be written; nothing ran. */
+  auditUnavailable: "ADMIN_AUDIT_UNAVAILABLE",
   databaseUnavailable: "ADMIN_DATABASE_UNAVAILABLE",
   communityReviewUnavailable: "COMMUNITY_REVIEW_UNAVAILABLE",
 } as const);

@@ -167,7 +167,7 @@ const clientPolicyResponseSchema = {
     contractVersion: { type: "string", const: v2ContractVersion },
     configVersion: configVersionSchema,
     effectiveAt: { type: "string", format: "date-time" },
-    defaultRoute: { type: "string", const: "community" },
+    defaultRoute: { type: "string", const: "chat" },
     navigation: {
       type: "object",
       additionalProperties: false,

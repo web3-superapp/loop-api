@@ -599,6 +599,10 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
       const observedAt = now().toISOString();
       let records: readonly MemeTokenListRecord[];
       let keyOf: (record: MemeTokenListRecord) => string;
+      let hotContinuation:
+        | { readonly value: string; readonly memeTokenId: string }
+        | null
+        | undefined;
       try {
         if (tab === "hot") {
           const ranking = await hotRanking(contract);
@@ -612,25 +616,47 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
             // snapshot restarts after the same token, or at the end.
             start = index === -1 ? ranking.length : index + 1;
           }
-          const slice = ranking.slice(start, start + limit + 1);
-          const byId = new Map(
-            (
-              await deps.repository.listTokensByIds({
-                memeTokenIds: slice.map((item) => item.memeTokenId),
-                now: observedAt,
-              })
-            ).map((record) => [record.memeTokenId, record]),
-          );
           // Decision 0102: the ranking is cached for 60 seconds; a token
-          // hidden since then leaves the page at once.
-          records = slice.flatMap((item) => {
-            const record = byId.get(item.memeTokenId);
-            return record === undefined || record.listing === "hidden"
-              ? []
-              : [record];
-          });
+          // hidden since then leaves the page at once. Decision 0105: the
+          // page keeps reading the ranking until it holds `limit` visible
+          // tokens or the ranking ends, so hidden ones never shorten it.
+          const visible: MemeTokenListRecord[] = [];
+          let position = start;
+          let lastExamined: (typeof ranking)[number] | null = null;
+          while (visible.length < limit && position < ranking.length) {
+            const chunk = ranking.slice(
+              position,
+              position + (limit - visible.length),
+            );
+            position += chunk.length;
+            const byId = new Map(
+              (
+                await deps.repository.listTokensByIds({
+                  memeTokenIds: chunk.map((item) => item.memeTokenId),
+                  now: observedAt,
+                })
+              ).map((record) => [record.memeTokenId, record]),
+            );
+            for (const item of chunk) {
+              lastExamined = item;
+              const record = byId.get(item.memeTokenId);
+              if (record !== undefined && record.listing !== "hidden") {
+                visible.push(record);
+              }
+            }
+          }
+          records = visible;
+          // The next page starts after the last ranking entry read, and
+          // exists while the ranking has entries left.
+          hotContinuation =
+            position < ranking.length && lastExamined !== null
+              ? {
+                  value: lastExamined.volumeRaw,
+                  memeTokenId: lastExamined.memeTokenId,
+                }
+              : null;
           const volumes = new Map(
-            slice.map((item) => [item.memeTokenId, item.volumeRaw]),
+            ranking.map((item) => [item.memeTokenId, item.volumeRaw]),
           );
           keyOf = (record) => volumes.get(record.memeTokenId) ?? "0";
         } else {
@@ -654,14 +680,20 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
       }
       const page = records.slice(0, limit);
       const last = page.at(-1);
+      const continuation =
+        hotContinuation !== undefined
+          ? hotContinuation
+          : records.length > limit && last !== undefined
+            ? { value: keyOf(last), memeTokenId: last.memeTokenId }
+            : null;
       const nextCursor =
-        records.length > limit && last !== undefined
-          ? encodeCursor(input.principal, listCursorRoute, filter, {
-              value: keyOf(last),
-              memeTokenId: last.memeTokenId,
+        continuation === null
+          ? null
+          : encodeCursor(input.principal, listCursorRoute, filter, {
+              value: continuation.value,
+              memeTokenId: continuation.memeTokenId,
               limit,
-            })
-          : null;
+            });
       return Object.freeze({
         tab,
         items: await rows(page),
@@ -756,7 +788,12 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
           listingReason:
             record.listing === "hidden"
               ? {
-                  reasonCode: record.listingReasonCode,
+                  // Decision 0105: the operator's lower-case code is
+                  // published as an upper-case catalog code.
+                  reasonCode:
+                    record.listingReasonCode === null
+                      ? null
+                      : `OPERATOR_${record.listingReasonCode.toUpperCase()}`,
                   reasonText: record.listingReasonText,
                 }
               : null,

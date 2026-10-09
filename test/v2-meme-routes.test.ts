@@ -416,7 +416,7 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     ).toMatchObject({
       listing: "hidden",
       listingReason: {
-        reasonCode: "user_reports",
+        reasonCode: "OPERATOR_USER_REPORTS",
         reasonText: "该代币已被平台隐藏。",
       },
     });
@@ -424,6 +424,67 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     expect(
       visible.json<{ memeToken: Record<string, unknown> }>().memeToken,
     ).toMatchObject({ listing: "listed", listingReason: null });
+  });
+
+  it("fills a hot page past hidden tokens and pages by the ranking left (Decision 0105)", async () => {
+    const { app, repository, chain } = await createApp();
+    const seeded = ["1", "2", "3", "4"].map((digit) =>
+      seedTrading(repository, chain, {
+        memeTokenId: `cccccccc-${digit}${digit}${digit}${digit}-4333-8333-333333333333`,
+        tokenAddress: `0x${digit.repeat(2)}${"5".repeat(38)}`,
+      }),
+    );
+    const [a, b, c, d] = seeded as [
+      (typeof seeded)[number],
+      (typeof seeded)[number],
+      (typeof seeded)[number],
+      (typeof seeded)[number],
+    ];
+    const page = async (url: string) =>
+      (await get(app, url)).json<{
+        items: { memeTokenId: string }[];
+        nextCursor: string | null;
+      }>();
+    // Caches the 60-second ranking: a, b, c, d.
+    expect((await page("/v2/meme/tokens?tab=hot&limit=4")).items).toHaveLength(
+      4,
+    );
+    const hide = (token: (typeof seeded)[number]) =>
+      repository.tokens.set(token.memeTokenId, {
+        ...token,
+        listing: "hidden",
+        listingReasonCode: "user_reports",
+        listingReasonText: "隐藏",
+      });
+    hide(a);
+    hide(b);
+    // Two hidden at the head: the page still holds two visible tokens.
+    const full = await page("/v2/meme/tokens?tab=hot&limit=2");
+    expect(full.items.map((item) => item.memeTokenId)).toEqual([
+      c.memeTokenId,
+      d.memeTokenId,
+    ]);
+    expect(full.nextCursor).toBeNull();
+    repository.tokens.set(a.memeTokenId, a);
+    // a visible, b hidden: a | c | d, one per page.
+    const first = await page("/v2/meme/tokens?tab=hot&limit=1");
+    expect(first.items.map((item) => item.memeTokenId)).toEqual([
+      a.memeTokenId,
+    ]);
+    const second = await page(
+      `/v2/meme/tokens?tab=hot&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
+    );
+    expect(second.items.map((item) => item.memeTokenId)).toEqual([
+      c.memeTokenId,
+    ]);
+    expect(second.nextCursor).not.toBeNull();
+    const third = await page(
+      `/v2/meme/tokens?tab=hot&cursor=${encodeURIComponent(second.nextCursor ?? "")}`,
+    );
+    expect(third.items.map((item) => item.memeTokenId)).toEqual([
+      d.memeTokenId,
+    ]);
+    expect(third.nextCursor).toBeNull();
   });
 
   it("serves the detail with the viewer block, trades, candles, and holders", async () => {

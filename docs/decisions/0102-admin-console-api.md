@@ -171,6 +171,7 @@ The body is the `/v2` seven-field envelope (`code`, `category`,
    clears the lock and re-validates a logged-out cookie until it expires.
    Acceptable for one administrator behind Cloudflare Access (S120 / docs
    07), or should sessions move to the database?
+   **Resolved by Decision 0105: accepted, restart behaviour documented.**
 5. `GET /v2/meta/about` still lists `intelPromotions` with the static
    `intelPromotionsV1`; the per-response `configVersion` is authoritative.
    Make the registry dynamic?

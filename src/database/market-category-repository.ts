@@ -1,6 +1,11 @@
 import type { Pool } from "pg";
 import { z } from "zod";
 
+import {
+  freshMemeCurve,
+  memePriceE18,
+} from "../features/meme/meme-curve-math.js";
+
 /**
  * Candidate sets of the categorised market list (Decision 0100). Read-only
  * PostgreSQL facts written by other modules: Launch registers the project
@@ -72,6 +77,9 @@ export interface MarketCategoryMemeRecord {
   readonly graduatedPool?: string | null;
 }
 
+/** Decision 0105: the category sort the curve bucket is cut by. */
+export type MarketCategoryMemeSort = "marketCap" | "change24h" | "volume24h";
+
 export interface MarketCategoryCommunityRecord {
   readonly assetId: string;
   readonly communityId: string;
@@ -88,10 +96,14 @@ export interface MarketCategoryRepository {
   /**
    * Decision 0101: the `meme` category = App-created MEME tokens in
    * `trading`, `full`, or `graduated` (with their curve snapshot unless
-   * graduated) ∪ the Launch project tokens, non-blocked, by asset ID.
+   * graduated) ∪ the Launch project tokens, non-blocked. Decision 0105: at
+   * most `limit` curve tokens, the top of `sort` (default `marketCap`) by
+   * their snapshot, plus at most `limit` graduated/Launch tokens, the most
+   * recently graduated or registered.
    */
   listMemeCandidates(
     limit: number,
+    sort?: MarketCategoryMemeSort,
   ): Promise<readonly MarketCategoryMemeRecord[]>;
   /**
    * One verified community per bound, non-blocked registry asset (the one
@@ -113,6 +125,7 @@ export class MarketCategoryRepositoryUnavailableError extends Error {
 }
 
 const limitSchema = z.number().int().min(1).max(500);
+const memeSortSchema = z.enum(["marketCap", "change24h", "volume24h"]);
 
 export function createPostgresMarketCategoryRepository(
   pool: Pool,
@@ -135,24 +148,31 @@ export function createPostgresMarketCategoryRepository(
       );
     },
 
-    async listMemeCandidates(limit: number) {
+    async listMemeCandidates(
+      limit: number,
+      sort: MarketCategoryMemeSort = "marketCap",
+    ) {
+      // Decision 0105: two buckets, each cut at `limit` by a meaningful
+      // order instead of by asset ID. Curve tokens are cut by the requested
+      // sort computed from their own snapshot (price vUsd1/vToken for the
+      // cap — same order at the fixed 1e9 supply —, change against the
+      // newest trade 24 h ago or the opening price, 24 h wallet-side
+      // volume); graduated MEME and Launch tokens, priced by the Provider,
+      // are cut by recency (graduation / sale registration).
       const result = await pool.query<Record<string, unknown>>({
         text: `
-          with meme as (
+          with curve as (
             select distinct on (m.asset_id)
-              m.asset_id, m.status, m.v_usd1::text as v_usd1,
-              m.v_token::text as v_token,
+              m.asset_id, m.status, m.v_usd1, m.v_token,
               coalesce(m.last_trade_at, m.chain_created_at, m.updated_at) as observed_at,
               (
-                select coalesce(sum(tr.usd1_amount), 0)::text
+                select coalesce(sum(tr.usd1_amount), 0)
                 from public.meme_trades as tr
                 where tr.meme_token_id = m.meme_token_id and not tr.removed
                   and tr.traded_at > clock_timestamp() - interval '24 hours'
               ) as volume_24h,
-              case when m.status = 'graduated' then lower(m.pool_address) end
-                as pool_address,
               (
-                select tr.price_after_e18::text
+                select tr.price_after_e18
                 from public.meme_trades as tr
                 where tr.meme_token_id = m.meme_token_id and not tr.removed
                   and tr.traded_at <= clock_timestamp() - interval '24 hours'
@@ -162,12 +182,42 @@ export function createPostgresMarketCategoryRepository(
             from public.meme_tokens as m
             join public.assets as a on a.asset_id = m.asset_id
             where m.asset_id is not null and a.status <> 'blocked'
-              and m.status in ('trading', 'full', 'graduated')
+              and m.status in ('trading', 'full')
               and m.listing = 'listed'
             order by m.asset_id, m.created_at asc
           ),
+          curve_keyed as (
+            select curve.*,
+              trunc(v_usd1 * 1000000000000000000 / nullif(v_token, 0)) as price_e18
+            from curve
+          ),
+          curve_top as (
+            select * from curve_keyed
+            order by
+              case $2::text
+                when 'marketCap' then price_e18
+                when 'change24h' then
+                  (price_e18 - coalesce(price_24h_ago, $3::numeric))
+                    / nullif(coalesce(price_24h_ago, $3::numeric), 0)
+                else volume_24h
+              end desc nulls last,
+              asset_id asc
+            limit $1
+          ),
+          graduated as (
+            select distinct on (m.asset_id)
+              m.asset_id, lower(m.pool_address) as pool_address,
+              coalesce(m.graduated_at, m.updated_at) as recency
+            from public.meme_tokens as m
+            join public.assets as a on a.asset_id = m.asset_id
+            where m.asset_id is not null and a.status <> 'blocked'
+              and m.status = 'graduated'
+              and m.listing = 'listed'
+              and m.asset_id not in (select asset_id from curve)
+            order by m.asset_id, m.created_at asc
+          ),
           launch as (
-            select distinct l.project_asset_id as asset_id
+            select l.project_asset_id as asset_id, max(l.created_at) as recency
             from public.launches as l
             join public.assets as a on a.asset_id = l.project_asset_id
             where l.project_asset_id is not null and a.status <> 'blocked'
@@ -176,18 +226,33 @@ export function createPostgresMarketCategoryRepository(
                 where hidden.asset_id = l.project_asset_id
                   and hidden.listing = 'hidden'
               )
+            group by l.project_asset_id
+          ),
+          external_top as (
+            select asset_id, 'graduated'::text as status, pool_address, recency
+            from graduated
+            union all
+            select asset_id, null, null, recency
+            from launch
+            where asset_id not in (select asset_id from curve)
+              and asset_id not in (select asset_id from graduated)
+            order by recency desc, asset_id asc
+            limit $1
           )
-          select asset_id, status, v_usd1, v_token, observed_at, volume_24h,
-            price_24h_ago, pool_address
-          from meme
+          select asset_id, status, v_usd1::text as v_usd1,
+            v_token::text as v_token, observed_at,
+            volume_24h::text as volume_24h,
+            price_24h_ago::text as price_24h_ago, null::text as pool_address
+          from curve_top
           union all
-          select asset_id, null, null, null, null, null, null, null
-          from launch
-          where asset_id not in (select asset_id from meme)
-          order by asset_id asc
-          limit $1
+          select asset_id, status, null, null, null, null, null, pool_address
+          from external_top
         `,
-        values: [limitSchema.parse(limit)],
+        values: [
+          limitSchema.parse(limit),
+          memeSortSchema.parse(sort),
+          memePriceE18(freshMemeCurve).toString(),
+        ],
       });
       return Object.freeze(
         result.rows.map((raw): MarketCategoryMemeRecord => {

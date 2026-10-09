@@ -142,7 +142,7 @@ export function registerAdminRoutes(
         operationId: "createAdminSession",
         summary: "Log in as the operator",
         description:
-          "Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`).",
+          "Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`). Only one login is verified at a time; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). The lock lives in process memory and a restart clears it (Decision 0105).",
         tags: ["admin-session"],
         querystring: emptyQuerySchema,
         body: sessionRequestSchema,
@@ -151,6 +151,7 @@ export function registerAdminRoutes(
           ...adminErrors(
             "ADMIN_LOGIN_INVALID",
             "ADMIN_LOGIN_LOCKED",
+            "ADMIN_LOGIN_BUSY",
             "INVALID_REQUEST",
             "REQUEST_TIMEOUT",
           ),
@@ -460,7 +461,7 @@ export function registerAdminRoutes(
         operationId: "reviewAdminCommunity",
         summary: "Verify or reject a community application",
         description:
-          "Runs the existing review path (Decision 0073: status, community audit row, owner notification and push) and records a review note plus a console audit row. `reject` needs `reasonText` (the applicant reads it). Rejecting a verified community is 409 ADMIN_CONFLICT (ADMIN_COMMUNITY_ALREADY_VERIFIED). Repeating the current decision is 200 with `changed: false`.",
+          "Runs the existing review path (Decision 0073: status, community audit row, owner notification and push) and records a review note plus console audit rows: `community.review.requested` before the review runs (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing changes), then `community.review.decided` (with the note) or `community.review.failed` (Decision 0105). `reject` needs `reasonText` (the applicant reads it). Rejecting a verified community is 409 ADMIN_CONFLICT (ADMIN_COMMUNITY_ALREADY_VERIFIED). Repeating the current decision is 200 with `changed: false`.",
         tags: ["admin-communities"],
         security: adminSecurity,
         params: communityIdParamsSchema,
@@ -720,7 +721,7 @@ export function registerAdminRoutes(
             action === "pause"
               ? "Pause a MEME token's curve"
               : "Unpause a MEME token's curve",
-          description: `Signs \`${action}(token)\` on the curve with the executor key (MEME_GRADUATION_EXECUTOR_ENABLED, testnet only) after a dry run, and answers 202 once broadcast. The token status follows when the meme_event lane indexes the ${action === "pause" ? "Paused" : "Unpaused"} log. Executor off or contract unconfigured → 503 with reasonCode (MEME_EXECUTOR_DISABLED, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.`,
+          description: `Signs \`${action}(token)\` on the curve with the operator key (MEME_OPERATOR_PRIVATE_KEY, testnet only; Decision 0105) after a dry run, and answers 202 once broadcast. Audit rows: \`meme.${action}.requested\` before anything is signed (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing signed), then \`meme.${action}.submitted\` or \`meme.${action}.failed\`. The token status follows when the meme_event lane indexes the ${action === "pause" ? "Paused" : "Unpaused"} log. A pause/unpause of the same token still in flight or not yet mined → 409 MEME_PAUSE_PENDING. Key missing or contract unconfigured → 503 with reasonCode (MEME_OPERATOR_KEY_MISSING, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.`,
           tags: ["admin-meme"],
           security: adminSecurity,
           params: memeTokenIdParamsSchema,

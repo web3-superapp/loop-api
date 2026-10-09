@@ -222,7 +222,7 @@
         "operationId": "createAdminSession",
         "summary": "Log in as the operator",
         "tags": ["admin-session"],
-        "description": "Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`).",
+        "description": "Username + password (argon2id). Success sets the signed session cookie (HttpOnly, SameSite=Strict, Path=/admin, 12 hours). Five failures in a row lock every login for 15 minutes (423 ADMIN_LOGIN_LOCKED, `detailsSafe.retryAfterSeconds`, `Retry-After`). Only one login is verified at a time; a concurrent one is 429 ADMIN_LOGIN_BUSY (not counted, `Retry-After: 1`). The lock lives in process memory and a restart clears it (Decision 0105).",
         "requestBody": {
           "required": true,
           "content": {
@@ -429,6 +429,64 @@
                       "type": "string",
                       "enum": ["ADMIN_LOGIN_LOCKED"]
                     },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["ADMIN_LOGIN_BUSY"] },
                     "category": {
                       "type": "string",
                       "enum": [
@@ -2286,7 +2344,9 @@
                     "effectiveAt",
                     "deeplinkPattern",
                     "deeplinkChoices",
-                    "maximumItems"
+                    "maximumItems",
+                    "imageHosts",
+                    "imageUrlMaximumLength"
                   ],
                   "properties": {
                     "items": {
@@ -2315,7 +2375,11 @@
                           "subtitle": { "type": "string", "maxLength": 80 },
                           "imageUrl": {
                             "anyOf": [
-                              { "type": "string", "pattern": "^https://" },
+                              {
+                                "type": "string",
+                                "pattern": "^https://",
+                                "maxLength": 512
+                              },
                               { "type": "null" }
                             ]
                           },
@@ -2355,7 +2419,16 @@
                       "type": "array",
                       "items": { "type": "string" }
                     },
-                    "maximumItems": { "type": "integer", "enum": [20] }
+                    "maximumItems": { "type": "integer", "enum": [20] },
+                    "imageHosts": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "INTEL_PROMOTION_IMAGE_HOSTS (Decision 0105): hosts an https `imageUrl` may use. Empty = `imageUrl` must be null."
+                    },
+                    "imageUrlMaximumLength": {
+                      "type": "integer",
+                      "enum": [512]
+                    }
                   }
                 }
               }
@@ -2640,7 +2713,8 @@
                         "subtitle": { "type": "string", "maxLength": 400 },
                         "imageUrl": {
                           "type": ["string", "null"],
-                          "maxLength": 2048
+                          "maxLength": 2048,
+                          "description": "null, or an https URL of at most 512 characters on an INTEL_PROMOTION_IMAGE_HOSTS host (else 422 ADMIN_PROMOTION_INVALID, `field: imageUrl`). Title and subtitle refuse control and format characters."
                         },
                         "deeplink": { "type": "string", "maxLength": 256 },
                         "startsAt": { "type": "string", "maxLength": 64 },
@@ -2685,6 +2759,8 @@
                     "deeplinkPattern",
                     "deeplinkChoices",
                     "maximumItems",
+                    "imageHosts",
+                    "imageUrlMaximumLength",
                     "audit"
                   ],
                   "properties": {
@@ -2714,7 +2790,11 @@
                           "subtitle": { "type": "string", "maxLength": 80 },
                           "imageUrl": {
                             "anyOf": [
-                              { "type": "string", "pattern": "^https://" },
+                              {
+                                "type": "string",
+                                "pattern": "^https://",
+                                "maxLength": 512
+                              },
                               { "type": "null" }
                             ]
                           },
@@ -2755,6 +2835,15 @@
                       "items": { "type": "string" }
                     },
                     "maximumItems": { "type": "integer", "enum": [20] },
+                    "imageHosts": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "INTEL_PROMOTION_IMAGE_HOSTS (Decision 0105): hosts an https `imageUrl` may use. Empty = `imageUrl` must be null."
+                    },
+                    "imageUrlMaximumLength": {
+                      "type": "integer",
+                      "enum": [512]
+                    },
                     "audit": {
                       "type": "object",
                       "additionalProperties": false,
@@ -3965,7 +4054,7 @@
         "operationId": "reviewAdminCommunity",
         "summary": "Verify or reject a community application",
         "tags": ["admin-communities"],
-        "description": "Runs the existing review path (Decision 0073: status, community audit row, owner notification and push) and records a review note plus a console audit row. `reject` needs `reasonText` (the applicant reads it). Rejecting a verified community is 409 ADMIN_CONFLICT (ADMIN_COMMUNITY_ALREADY_VERIFIED). Repeating the current decision is 200 with `changed: false`.",
+        "description": "Runs the existing review path (Decision 0073: status, community audit row, owner notification and push) and records a review note plus console audit rows: `community.review.requested` before the review runs (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing changes), then `community.review.decided` (with the note) or `community.review.failed` (Decision 0105). `reject` needs `reasonText` (the applicant reads it). Rejecting a verified community is 409 ADMIN_CONFLICT (ADMIN_COMMUNITY_ALREADY_VERIFIED). Repeating the current decision is 200 with `changed: false`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7863,7 +7952,7 @@
         "operationId": "pauseAdminMemeToken",
         "summary": "Pause a MEME token's curve",
         "tags": ["admin-meme"],
-        "description": "Signs `pause(token)` on the curve with the executor key (MEME_GRADUATION_EXECUTOR_ENABLED, testnet only) after a dry run, and answers 202 once broadcast. The token status follows when the meme_event lane indexes the Paused log. Executor off or contract unconfigured → 503 with reasonCode (MEME_EXECUTOR_DISABLED, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.",
+        "description": "Signs `pause(token)` on the curve with the operator key (MEME_OPERATOR_PRIVATE_KEY, testnet only; Decision 0105) after a dry run, and answers 202 once broadcast. Audit rows: `meme.pause.requested` before anything is signed (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing signed), then `meme.pause.submitted` or `meme.pause.failed`. The token status follows when the meme_event lane indexes the Paused log. A pause/unpause of the same token still in flight or not yet mined → 409 MEME_PAUSE_PENDING. Key missing or contract unconfigured → 503 with reasonCode (MEME_OPERATOR_KEY_MISSING, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.",
         "requestBody": {
           "required": true,
           "content": {
@@ -8377,7 +8466,7 @@
         "operationId": "unpauseAdminMemeToken",
         "summary": "Unpause a MEME token's curve",
         "tags": ["admin-meme"],
-        "description": "Signs `unpause(token)` on the curve with the executor key (MEME_GRADUATION_EXECUTOR_ENABLED, testnet only) after a dry run, and answers 202 once broadcast. The token status follows when the meme_event lane indexes the Unpaused log. Executor off or contract unconfigured → 503 with reasonCode (MEME_EXECUTOR_DISABLED, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.",
+        "description": "Signs `unpause(token)` on the curve with the operator key (MEME_OPERATOR_PRIVATE_KEY, testnet only; Decision 0105) after a dry run, and answers 202 once broadcast. Audit rows: `meme.unpause.requested` before anything is signed (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing signed), then `meme.unpause.submitted` or `meme.unpause.failed`. The token status follows when the meme_event lane indexes the Unpaused log. A pause/unpause of the same token still in flight or not yet mined → 409 MEME_PAUSE_PENDING. Key missing or contract unconfigured → 503 with reasonCode (MEME_OPERATOR_KEY_MISSING, MEME_CONTRACT_NOT_CONFIGURED, MEME_MAINNET_SIGNING_CLOSED, MEME_CHAIN_RPC_NOT_CONFIGURED). Wrong state or a reverting dry run → 409.",
         "requestBody": {
           "required": true,
           "content": {

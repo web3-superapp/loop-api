@@ -370,7 +370,19 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       },
       note: { decision: "reject", reasonCode: "material_mismatch" },
     });
-    expect(await auditCount()).toBe(before + 1);
+    // Decision 0105: the intent row, then the decision row with the note.
+    expect(await auditCount()).toBe(before + 2);
+    const rows = await pool.query<{ action: string; after: unknown }>({
+      text: `
+        select action, after from public.admin_audit_log
+        where target_id = $1 order by seq asc
+      `,
+      values: [pending],
+    });
+    expect(rows.rows.map((row) => row.action)).toEqual([
+      "community.review.requested",
+      "community.review.decided",
+    ]);
     const stored = await pool.query<{
       verification_status: string;
       rejected_reason: string;
@@ -406,6 +418,17 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       code: "ADMIN_CONFLICT",
       detailsSafe: { reasonCode: "ADMIN_COMMUNITY_ALREADY_VERIFIED" },
     });
+    const refused = await pool.query<{ action: string }>({
+      text: `
+        select action from public.admin_audit_log
+        where target_id = $1 order by seq desc limit 2
+      `,
+      values: [pending],
+    });
+    expect(refused.rows.map((row) => row.action)).toEqual([
+      "community.review.failed",
+      "community.review.requested",
+    ]);
     const detail = await service.getCommunity(pending);
     expect(
       (detail["reviewNotes"] as { decision: string }[]).map(

@@ -1184,7 +1184,12 @@ export const intelPromotionsResourceSchema = {
           subtitle: { type: "string", maxLength: 80 },
           imageUrl: {
             anyOf: [
-              { type: "string", format: "uri", pattern: "^https://" },
+              {
+                type: "string",
+                format: "uri",
+                pattern: "^https://",
+                maxLength: 512,
+              },
               { type: "null" },
             ],
           },

@@ -586,7 +586,12 @@ export const memeTokenDetailResourceSchema = {
               properties: {
                 reasonCode: {
                   anyOf: [
-                    { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+                    {
+                      type: "string",
+                      pattern: "^OPERATOR_[A-Z][A-Z0-9_]{0,63}$",
+                      description:
+                        "Decision 0105: the operator's reason as an upper-case catalog code, `OPERATOR_` + the console code (e.g. OPERATOR_USER_REPORTS).",
+                    },
                     { type: "null" },
                   ],
                 },

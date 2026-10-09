@@ -1,6 +1,11 @@
 # 前端联调：V2 MEME 曲线发射台（S116 / 决策 0101；S116b / 决策 0103 修订）
 
 > **2026-10-09（决策 0102）**：`GET /v2/meme/tokens/{memeTokenId}` 的 `memeToken` 多两个键：`listing: "listed" | "hidden"` 与 `listingReason: { reasonCode: string | null, reasonText: string | null } | null`（恰在 `hidden` 时非 null，`reasonText` 是运营写给用户看的一句话）。`hidden` 的代币不出现在 `/v2/meme/tokens` 与 `category=meme`，详情仍可读；客户端把两个键当可选处理并在 hidden 时显示提示。
+>
+> **2026-10-09（决策 0105）**：`listingReason.reasonCode` 对外改为**大写目录码** `OPERATOR_<运营码大写>`
+> （例 `OPERATOR_USER_REPORTS`，schema `^OPERATOR_[A-Z][A-Z0-9_]{0,63}$`），不再是运营后台的小写码；
+> 也可能为 `null`。客户端只把它当诊断码，**上屏用 `reasonText`**。loop-mobile 的
+> `loop_v2_meme_codec.dart` 现在按小写正则校验，须同步放宽为上面的模式，否则隐藏代币的详情会解析失败。
 
 > S116b 变更（决策 0103）：§3/§4 已毕业无 DexScreener 报价时回退读池子 `slot0`（`priceSource.source = "pool_slot0"`）；
 > §4 `graduation.residual` 取整零头投影为 `null`；§9 `quote.source` 新增 `pool_slot0`、`quality` 新增 `derived`；
@@ -64,12 +69,12 @@ Bearer、`X-Loop-Contract-Version: 2.0`、`Idempotency-Key`）沿用
 
 Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`cursor` 与 `limit` 互斥（同时给 `400`）。
 
-| tab          | 范围与排序                                                        |
-| ------------ | ----------------------------------------------------------------- |
-| `new`        | 已上链（`trading/full/graduated/paused`），按上链时间倒序         |
-| `hot`        | 已上链，按最近 1 小时钱包侧 USD1 成交额倒序；排名每 60 秒刷新一次 |
-| `graduating` | `trading` 且进度 ≥ 50%，按已售量倒序                              |
-| `graduated`  | `graduated`，按毕业时间倒序                                       |
+| tab          | 范围与排序                                                                                                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`        | 已上链（`trading/full/graduated/paused`），按上链时间倒序                                                                                                                                                               |
+| `hot`        | 已上链，按最近 1 小时钱包侧 USD1 成交额倒序；排名每 60 秒刷新一次（决策 0105：被隐藏的代币不再让一页变短，一页凑满 `limit` 或排名读完为止；`nextCursor` 在排名还有剩余时非 null，最后一页可能少于 `limit`，偶尔为空页） |
+| `graduating` | `trading` 且进度 ≥ 50%，按已售量倒序                                                                                                                                                                                    |
+| `graduated`  | `graduated`，按毕业时间倒序                                                                                                                                                                                             |
 
 ```json
 {

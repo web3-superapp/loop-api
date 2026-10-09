@@ -3,7 +3,15 @@
 本文是 `loop-admin`（S120）对接 loop-api 管理面的契约。机器契约：
 `openapi/loop-admin.v1.json`（`pnpm openapi:generate` 生成，不进 `/v2` 文档）。
 设计来源：`LOOP/docs/modules/S119-S120-admin-console.md` §1。决策细节、偏离与待决问题见
-`docs/decisions/0102-admin-console-api.md`。
+`docs/decisions/0102-admin-console-api.md`；S119b 加固（登录并发、意图先行审计、独立暂停密钥、
+活动位过滤）见 `docs/decisions/0105-admin-hardening-lists-policy.md`。
+
+> **2026-10-09 S119b（决策 0105）给 loop-admin 的字段变化**：
+> 新错误码 `ADMIN_LOGIN_BUSY`（429）；新 reasonCode `ADMIN_AUDIT_UNAVAILABLE`、`MEME_PAUSE_PENDING`、
+> `MEME_OPERATOR_KEY_MISSING`（取代 `MEME_EXECUTOR_DISABLED`）；活动位 GET/PUT 回执多
+> `imageHosts`、`imageUrlMaximumLength` 两键，422 可带 `field: "imageUrl"`；审计 action 改为
+> `community.review.requested/.decided/.failed`、`meme.pause.requested/.submitted/.failed`
+> （`unpause` 同理），旧的 `community.review.verify/reject`、`meme.pause/unpause` 只出现在历史行。
 
 ## 1. 挂载与基址
 
@@ -25,15 +33,21 @@
 
 ## 2. 会话 cookie 规则
 
-| 属性   | 值                                                                                                             |
-| ------ | -------------------------------------------------------------------------------------------------------------- |
-| 名称   | `loop_admin_session`                                                                                           |
-| 内容   | 不透明签名串（`<payload>.<HMAC>`），后台不要解析                                                               |
-| 属性   | `Path=/admin; Max-Age=43200; HttpOnly; SameSite=Strict`，https 基址另加 `Secure`                               |
-| 有效期 | 12 小时，到期即 401，不续期（重新登录）                                                                        |
-| 登出   | `DELETE /admin/v1/session` → 204 + `Set-Cookie: loop_admin_session=; Max-Age=0`                                |
-| 锁定   | 连续 5 次登录失败 → 全局锁 15 分钟（423）；锁定期内正确密码也被拒                                              |
-| 失效   | 轮换 `ADMIN_SESSION_SECRET` 使所有会话失效；API 重启会让已登出但未到期的 cookie 重新有效（见决策 0102 待决 4） |
+| 属性   | 值                                                                                                    |
+| ------ | ----------------------------------------------------------------------------------------------------- |
+| 名称   | `loop_admin_session`                                                                                  |
+| 内容   | 不透明签名串（`<payload>.<HMAC>`），后台不要解析                                                      |
+| 属性   | `Path=/admin; Max-Age=43200; HttpOnly; SameSite=Strict`，https 基址另加 `Secure`                      |
+| 有效期 | 12 小时，到期即 401，不续期（重新登录）                                                               |
+| 登出   | `DELETE /admin/v1/session` → 204 + `Set-Cookie: loop_admin_session=; Max-Age=0`                       |
+| 锁定   | 连续 5 次登录失败 → 全局锁 15 分钟（423）；锁定期内正确密码也被拒                                     |
+| 并发   | 同一时刻只校验一次登录；并发的其它登录立即 429 `ADMIN_LOGIN_BUSY`（`Retry-After: 1`，不计失败次数）   |
+| 失效   | 轮换 `ADMIN_SESSION_SECRET` 使所有会话失效                                                            |
+| 重启   | 锁定与登出撤销只存在 API 进程内存（决策 0105 接受）：重启后锁定清零、已登出但未到期的 cookie 重新有效 |
+
+**重启后的行为（决策 0105，m7 接受）**：单管理员 + Cloudflare Access 前置，锁定计数与登出撤销
+不落库。API 重启（部署、launchd 重拉）后：失败计数归零、锁定解除；已点「登出」但未满 12 小时的
+cookie 在重启后重新有效。需要立刻让所有 cookie 失效时，轮换 `ADMIN_SESSION_SECRET` 并重启。
 
 未登录（无 cookie / 伪造 / 过期 / 已登出）访问任何受保护接口一律
 `401 ADMIN_SESSION_REQUIRED`，且在解析请求体之前返回——后台据此重定向到登录页。
@@ -60,43 +74,46 @@
 | `ADMIN_SESSION_REQUIRED` | 401  | authentication | 未登录或会话失效 → 跳登录页                                                             |
 | `ADMIN_LOGIN_INVALID`    | 401  | authentication | 用户名或密码错（计一次失败）                                                            |
 | `ADMIN_LOGIN_LOCKED`     | 423  | rateLimit      | 已锁定；`detailsSafe.retryAfterSeconds` 与 `Retry-After` 头给剩余秒数                   |
+| `ADMIN_LOGIN_BUSY`       | 429  | rateLimit      | 另一次登录正在校验；`retryAfterSeconds: 1` + `Retry-After: 1`，稍后重试（不计失败）     |
 | `ADMIN_CONFLICT`         | 409  | conflict       | `updatedAt` 过期（重新读取再改）、状态不允许、链上预演回滚；看 `detailsSafe.reasonCode` |
 | `INVALID_REQUEST`        | 400  | validation     | 请求形状错误、cursor 被篡改或与筛选不符、`cursor` 与 `limit` 同时出现                   |
 | `VALIDATION_FAILED`      | 422  | validation     | 内容被规则拒绝；`detailsSafe.reasonCode`，可能附 `index` / `field` / `communityId`      |
 | `NOT_FOUND`              | 404  | validation     | 路由或目标不存在；`detailsSafe.reasonCode` 指明是哪类目标                               |
-| `CAPABILITY_UNAVAILABLE` | 503  | availability   | 数据库不可用、执行器未开、生产环境禁止批准、广播失败；`detailsSafe.reasonCode`          |
+| `CAPABILITY_UNAVAILABLE` | 503  | availability   | 数据库/审计不可用、暂停密钥未配、生产环境禁止批准、广播失败；`detailsSafe.reasonCode`   |
 | `REQUEST_TIMEOUT`        | 503  | availability   | 处理超时（15 s）                                                                        |
 | `INTERNAL_ERROR`         | 500  | internal       | 未预期错误；把 `correlationId` 给后端查日志                                             |
 
 `detailsSafe.reasonCode` 全集：
 
-| reasonCode                                                                                                                                                                                 | 出现在                                             |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| `ADMIN_UPDATED_AT_MISMATCH`（附 `currentUpdatedAt`）                                                                                                                                       | 两个 PUT 的 409                                    |
-| `ADMIN_COMMUNITY_NOT_VERIFIED`（附 `communityId`）                                                                                                                                         | 推荐社区 422                                       |
-| `ADMIN_COMMUNITY_NOT_FOUND`（附 `communityId`）                                                                                                                                            | 推荐社区 / 系数草稿 422、审核 404                  |
-| `ADMIN_COMMUNITY_DUPLICATED`                                                                                                                                                               | 推荐社区 422                                       |
-| `ADMIN_COMMUNITY_ALREADY_VERIFIED`                                                                                                                                                         | 驳回已认证社区 409                                 |
-| `ADMIN_PROMOTION_INVALID`（附 `index`）                                                                                                                                                    | 活动位 422                                         |
-| `ADMIN_REASON_CODE_INVALID`                                                                                                                                                                | 审核 / MEME 422                                    |
-| `ADMIN_REASON_TEXT_REQUIRED`                                                                                                                                                               | 驳回、隐藏 422                                     |
-| `ADMIN_REASON_TEXT_INVALID`                                                                                                                                                                | 原因文字超 280 字或含控制字符 422                  |
-| `ADMIN_FORMULA_VERSION_EXISTS`                                                                                                                                                             | 草稿 409                                           |
-| `ADMIN_FORMULA_VERSION_NOT_FOUND`（草稿时附 `field: baseVersion`）                                                                                                                         | 草稿 422、批准/撤回 404                            |
-| `ADMIN_FORMULA_STATE_INVALID`（附 `status`）                                                                                                                                               | 批准/撤回 409                                      |
-| `ADMIN_FORMULA_PARAMETERS_INVALID`（附 `field`）                                                                                                                                           | 草稿 422                                           |
-| `ADMIN_FORMULA_COMMUNITY_WEIGHT_OUT_OF_RANGE`（附 `communityId`）                                                                                                                          | 草稿 / 批准 422                                    |
-| `ADMIN_FORMULA_COMMUNITY_ASSET_NOT_BOUND`（附 `communityId`）                                                                                                                              | 草稿 / 批准 422                                    |
-| `ADMIN_FORMULA_COMMUNITY_WEIGHT_CONFLICT`（附 `communityId`）                                                                                                                              | 草稿 / 批准 422（两个社区绑同一资产）              |
-| `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`                                                                                                                                                   | 批准 503；列表 `approval.reasonCode`               |
-| `ADMIN_MEME_TOKEN_NOT_FOUND`                                                                                                                                                               | MEME 404                                           |
-| `MEME_TOKEN_NOT_ON_CHAIN`                                                                                                                                                                  | 暂停 409（草稿/未上链）                            |
-| `MEME_PAUSE_STATE_INVALID`（附 `status`）                                                                                                                                                  | 暂停 409（暂停只限 trading/full；恢复只限 paused） |
-| `MEME_PAUSE_SIMULATION_REVERTED`                                                                                                                                                           | 暂停 409（链上预演回滚，例如执行器不是合约 owner） |
-| `MEME_PAUSE_BROADCAST_FAILED`（附 `auditId`）                                                                                                                                              | 暂停 503（已记审计）                               |
-| `MEME_EXECUTOR_DISABLED` / `MEME_CONTRACT_NOT_CONFIGURED` / `MEME_USD1_NOT_CONFIGURED` / `MEME_MAINNET_SIGNING_CLOSED` / `MEME_CHAIN_RPC_NOT_CONFIGURED` / `MEME_PAUSE_SENDER_UNAVAILABLE` | 暂停 503；列表 `pause.reasonCode`                  |
-| `ADMIN_DATABASE_UNAVAILABLE`                                                                                                                                                               | 任一接口 503                                       |
-| `COMMUNITY_REVIEW_UNAVAILABLE`                                                                                                                                                             | 审核 503                                           |
+| reasonCode                                                                                                                                                                                    | 出现在                                                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ADMIN_UPDATED_AT_MISMATCH`（附 `currentUpdatedAt`）                                                                                                                                          | 两个 PUT 的 409                                                               |
+| `ADMIN_COMMUNITY_NOT_VERIFIED`（附 `communityId`）                                                                                                                                            | 推荐社区 422                                                                  |
+| `ADMIN_COMMUNITY_NOT_FOUND`（附 `communityId`）                                                                                                                                               | 推荐社区 / 系数草稿 422、审核 404                                             |
+| `ADMIN_COMMUNITY_DUPLICATED`                                                                                                                                                                  | 推荐社区 422                                                                  |
+| `ADMIN_COMMUNITY_ALREADY_VERIFIED`                                                                                                                                                            | 驳回已认证社区 409                                                            |
+| `ADMIN_PROMOTION_INVALID`（附 `index`，图片不合格时另附 `field: "imageUrl"`）                                                                                                                 | 活动位 422                                                                    |
+| `ADMIN_REASON_CODE_INVALID`                                                                                                                                                                   | 审核 / MEME 422                                                               |
+| `ADMIN_REASON_TEXT_REQUIRED`                                                                                                                                                                  | 驳回、隐藏 422                                                                |
+| `ADMIN_REASON_TEXT_INVALID`                                                                                                                                                                   | 原因文字超 280 字或含控制字符 422                                             |
+| `ADMIN_FORMULA_VERSION_EXISTS`                                                                                                                                                                | 草稿 409                                                                      |
+| `ADMIN_FORMULA_VERSION_NOT_FOUND`（草稿时附 `field: baseVersion`）                                                                                                                            | 草稿 422、批准/撤回 404                                                       |
+| `ADMIN_FORMULA_STATE_INVALID`（附 `status`）                                                                                                                                                  | 批准/撤回 409                                                                 |
+| `ADMIN_FORMULA_PARAMETERS_INVALID`（附 `field`）                                                                                                                                              | 草稿 422                                                                      |
+| `ADMIN_FORMULA_COMMUNITY_WEIGHT_OUT_OF_RANGE`（附 `communityId`）                                                                                                                             | 草稿 / 批准 422                                                               |
+| `ADMIN_FORMULA_COMMUNITY_ASSET_NOT_BOUND`（附 `communityId`）                                                                                                                                 | 草稿 / 批准 422                                                               |
+| `ADMIN_FORMULA_COMMUNITY_WEIGHT_CONFLICT`（附 `communityId`）                                                                                                                                 | 草稿 / 批准 422（两个社区绑同一资产）                                         |
+| `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`                                                                                                                                                      | 批准 503；列表 `approval.reasonCode`                                          |
+| `ADMIN_MEME_TOKEN_NOT_FOUND`                                                                                                                                                                  | MEME 404                                                                      |
+| `MEME_TOKEN_NOT_ON_CHAIN`                                                                                                                                                                     | 暂停 409（草稿/未上链）                                                       |
+| `MEME_PAUSE_STATE_INVALID`（附 `status`）                                                                                                                                                     | 暂停 409（暂停只限 trading/full；恢复只限 paused）                            |
+| `MEME_PAUSE_SIMULATION_REVERTED`                                                                                                                                                              | 暂停 409（链上预演回滚，例如暂停密钥不是合约 owner；已记 requested + failed） |
+| `MEME_PAUSE_PENDING`（可附 `transactionHash`）                                                                                                                                                | 暂停 409（同一代币上一笔暂停/恢复仍在处理或未上链）                           |
+| `MEME_PAUSE_BROADCAST_FAILED`（附 `auditId`）                                                                                                                                                 | 暂停 503（已记 requested + failed）                                           |
+| `MEME_OPERATOR_KEY_MISSING` / `MEME_CONTRACT_NOT_CONFIGURED` / `MEME_USD1_NOT_CONFIGURED` / `MEME_MAINNET_SIGNING_CLOSED` / `MEME_CHAIN_RPC_NOT_CONFIGURED` / `MEME_PAUSE_SENDER_UNAVAILABLE` | 暂停 503；列表 `pause.reasonCode`                                             |
+| `ADMIN_AUDIT_UNAVAILABLE`                                                                                                                                                                     | 审核 / 暂停 503：意图审计行写不进去，**什么都没执行**                         |
+| `ADMIN_DATABASE_UNAVAILABLE`                                                                                                                                                                  | 任一接口 503                                                                  |
+| `COMMUNITY_REVIEW_UNAVAILABLE`                                                                                                                                                                | 审核 503                                                                      |
 
 ## 4. 写操作的统一回执
 
@@ -107,6 +124,16 @@
 ```
 
 后台顶部显示「已保存 · 审计 #`seq`」。`auditId` 是不透明 ID；`seq` 只用于展示与排序。
+
+**有外部副作用的写（社区审核、MEME 暂停/恢复）先记意图再执行（决策 0105）**：
+
+1. 先追加 `…requested` 审计行；写不进去 → 503 `ADMIN_AUDIT_UNAVAILABLE`，**审核不改状态、交易不签名**；
+2. 执行；
+3. 追加结果行：成功 `community.review.decided` / `meme.<action>.submitted`，失败
+   `community.review.failed` / `meme.<action>.failed`（`after.requestedAuditId` 指回第 1 步，`after.errorCode` 给原因）。
+
+回执里的 `audit` 指结果行（极少数情况下结果行写入失败，则指 requested 行）。其它写接口
+（推荐社区、活动位、系数、隐藏）的审计行与改动在同一数据库事务里，不受影响。
 
 ## 5. 接口
 
@@ -129,7 +156,8 @@
 ```
 
 响应头 `Set-Cookie: loop_admin_session=…; Path=/admin; Max-Age=43200; HttpOnly; SameSite=Strict[; Secure]`。
-错误：400、401 `ADMIN_LOGIN_INVALID`、423 `ADMIN_LOGIN_LOCKED`。
+错误：400、401 `ADMIN_LOGIN_INVALID`、423 `ADMIN_LOGIN_LOCKED`、429 `ADMIN_LOGIN_BUSY`。
+登录页收到 429 时等 `Retry-After` 秒后自动重试一次即可（不要循环重试）。
 
 **`GET /admin/v1/session`** → 200 同上（当前会话）/ 401。用于「是否已登录」。
 
@@ -234,7 +262,9 @@
     "/meme",
     "/community/profile?id=<communityId>"
   ],
-  "maximumItems": 20
+  "maximumItems": 20,
+  "imageHosts": ["cdn.loop.example"],
+  "imageUrlMaximumLength": 512
 }
 ```
 
@@ -262,7 +292,13 @@
 ```
 
 - 整表替换；已有卡片带回原 `id`，新卡片不带 `id`（服务端分配 UUIDv4）。
-- 规则：标题 1–40 字、副标题 ≤ 80 字、`imageUrl` 为 `https://…` 或 null、deeplink 在白名单内、`endsAt > startsAt`、`order` 为 ≥ 0 整数、≤ 20 张、`id` 不重复。不合格 → 422 `ADMIN_PROMOTION_INVALID` + `index`（第几张，从 0 起）。
+- 规则：标题 1–40 字、副标题 ≤ 80 字，**均不得含控制/格式字符**（换行、零宽、方向控制等）；
+  `imageUrl` 为 null，或 ≤ 512 字符、`https://`、无端口无账号、主机在 `imageHosts`（配置项
+  `INTEL_PROMOTION_IMAGE_HOSTS`）里的 URL——`imageHosts` 为空时只能填 null；deeplink 在白名单内、
+  `endsAt > startsAt`、`order` 为 ≥ 0 整数、≤ 20 张、`id` 不重复。不合格 → 422
+  `ADMIN_PROMOTION_INVALID` + `index`（第几张，从 0 起；图片问题另带 `field: "imageUrl"`）。
+- 编辑器的图片输入框据 `imageHosts` 提示可用域名；为空时把图片输入置灰。已保存的图片若其域名后来
+  被移出配置，App 读到的 `imageUrl` 为 null（后台 GET 仍显示原值）。
 - `items: null` = 删除后台列表，回退内置卡片。
 - 200：GET 形状 + `audit`。错误：400、409、422、503。
 
@@ -314,7 +350,10 @@
 - `decision`：`verify | reject`。`reasonCode`：小写下划线（`^[a-z][a-z0-9_]{0,63}$`），无特定含义时用 `operator_manual_review`。
 - `reasonText`：驳回必填（1–280 字，**申请人会在 App 看到**）；通过可省。
 - 走现有审核流程（决策 0073）：改状态、写社区审计、给申请人发站内通知与推送（推送通道未配置时 `push.status = skipped`）。
-- 再次提交同一结论 → 200、`changed: false`（仍记一条审计）。已认证社区不能驳回 → 409 `ADMIN_COMMUNITY_ALREADY_VERIFIED`。被驳回的社区可以改判通过。
+- 审计：先记 `community.review.requested`，再记 `community.review.decided`（与审核备注同事务）或
+  `community.review.failed`（审核流程拒绝时，如已认证不能驳回）。意图行写不进去 → 503
+  `ADMIN_AUDIT_UNAVAILABLE`，社区状态不变、不发通知。
+- 再次提交同一结论 → 200、`changed: false`（仍记 requested + decided 两条审计）。已认证社区不能驳回 → 409 `ADMIN_COMMUNITY_ALREADY_VERIFIED`。被驳回的社区可以改判通过。
 
 200：
 
@@ -457,14 +496,15 @@
   "nextCursor": null,
   "pause": {
     "available": false,
-    "reasonCode": "MEME_EXECUTOR_DISABLED",
+    "reasonCode": "MEME_OPERATOR_KEY_MISSING",
     "executorAddress": null
   }
 }
 ```
 
 - `sold` 是原始整数字符串（18 位小数的代币单位），不要转浮点。
-- `pause.available: false` → 暂停/恢复按钮置灰，旁边显示 `reasonCode` 的说明（执行器未开 / 合约未配置 / 非测试网 / 无 RPC）。
+- `pause.available: false` → 暂停/恢复按钮置灰，旁边显示 `reasonCode` 的说明（暂停密钥未配 / 合约未配置 / 非测试网 / 无 RPC）。
+- `pause.executorAddress` 是暂停密钥（`MEME_OPERATOR_PRIVATE_KEY`）的地址，**不是**部署者地址；它必须是曲线合约的 owner，否则预演回滚。
 
 **`POST /admin/v1/meme/tokens/{memeTokenId}/listing`**
 
@@ -486,7 +526,15 @@
 { "reasonCode": "operator_incident", "reasonText": "排查异常交易" }
 ```
 
-- 暂停只对 `trading`/`full`；恢复只对 `paused`。先链上预演，预演回滚 → 409（不广播、不记审计）。
+- 用独立的暂停密钥 `MEME_OPERATOR_PRIVATE_KEY` 签名（决策 0105），不再用部署者密钥；未配置 →
+  503 `MEME_OPERATOR_KEY_MISSING`。
+- 暂停只对 `trading`/`full`；恢复只对 `paused`。
+- 同一代币同一时刻只处理一次：上一笔暂停/恢复仍在处理、或已广播但还没上链（按交易回执判断；RPC 读不到
+  时按未上链处理，最长 10 分钟）→ 409 `MEME_PAUSE_PENDING`（附 `transactionHash`）。连点两次只会发一笔。
+  按钮在 202 后置灰直到列表状态变化即可。
+- 审计：先记 `meme.<action>.requested`（写不进去 → 503 `ADMIN_AUDIT_UNAVAILABLE`，不签名），再链上预演；
+  预演回滚 → 409 `MEME_PAUSE_SIMULATION_REVERTED`（不广播，记 `meme.<action>.failed`）；广播成功记
+  `meme.<action>.submitted`，广播失败记 `meme.<action>.failed`。
 - 202：
 
 ```json
@@ -497,7 +545,7 @@
 ```
 
 - `submitted` 只表示交易已广播，**不是已确认**；代币状态要等 `meme_event` 索引到 `Paused`/`Unpaused` 事件后才变（索引器未开时不会变）。页面显示「已提交 · 交易哈希」，刷新列表看状态。
-- 广播失败 → 503 `MEME_PAUSE_BROADCAST_FAILED`（附 `auditId`，已记审计；请到浏览器核对该哈希是否上链后再重试）。
+- 广播失败 → 503 `MEME_PAUSE_BROADCAST_FAILED`（附 `auditId` = failed 行，已记审计；请到浏览器核对后再重试）。
 
 ### 5.8 审计 `GET /admin/v1/audit?actor=&action=&cursor=&limit=`
 
@@ -509,14 +557,13 @@
       "seq": 8,
       "at": "2026-10-08T00:00:00.013Z",
       "actor": "operator",
-      "action": "meme.pause",
+      "action": "meme.pause.submitted",
       "targetType": "meme_token",
       "targetId": "3f2e1d0c-…",
       "before": { "status": "trading" },
       "after": {
-        "outcome": "submitted",
+        "requestedAuditId": "5a1c…",
         "transactionHash": "0x…",
-        "errorCode": null,
         "reasonCode": "operator_incident",
         "reasonText": "排查异常交易",
         "executorAddress": "0x…"
@@ -538,20 +585,24 @@
 | `session.login` / `session.login_failed` / `session.logout` | `session`（login_failed 的 actor 为 `anonymous`） |
 | `settings.recommended_communities.update`                   | `setting`                                         |
 | `settings.intel_promotions.update`                          | `setting`                                         |
-| `community.review.verify` / `community.review.reject`       | `community`                                       |
+| `community.review.requested` / `.decided` / `.failed`       | `community`（`after.decision` = verify/reject）   |
+| `community.review.verify` / `community.review.reject`       | `community`（仅 S119b 之前的历史行）              |
 | `mining.formula.draft` / `.approve` / `.withdraw`           | `mining_formula_version`                          |
 | `meme.listing.update`                                       | `meme_token`                                      |
-| `meme.pause` / `meme.unpause`                               | `meme_token`                                      |
+| `meme.pause.requested` / `.submitted` / `.failed`           | `meme_token`（`unpause` 同理）                    |
+| `meme.pause` / `meme.unpause`                               | `meme_token`（仅 S119b 之前的历史行）             |
 
 ## 6. Unavailable 行为汇总
 
-| 情况                                  | 表现                                                                                |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| 三个 `ADMIN_*` 不全                   | `/admin/*` 404                                                                      |
-| 数据库不可用                          | 任一接口 503 `ADMIN_DATABASE_UNAVAILABLE`                                           |
-| 社区仓库未组装                        | 审核 503 `COMMUNITY_REVIEW_UNAVAILABLE`                                             |
-| 执行器未开 / 合约未配 / 主网 / 无 RPC | 暂停 503 + reasonCode；列表 `pause.available: false`                                |
-| `NODE_ENV=production`                 | 批准 503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`；列表 `approval.available: false` |
+| 情况                                    | 表现                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------- |
+| 三个 `ADMIN_*` 不全                     | `/admin/*` 404                                                                      |
+| 数据库不可用                            | 任一接口 503 `ADMIN_DATABASE_UNAVAILABLE`                                           |
+| 社区仓库未组装                          | 审核 503 `COMMUNITY_REVIEW_UNAVAILABLE`                                             |
+| 暂停密钥未配 / 合约未配 / 主网 / 无 RPC | 暂停 503 + reasonCode；列表 `pause.available: false`                                |
+| 审计表写不进去                          | 审核 / 暂停 503 `ADMIN_AUDIT_UNAVAILABLE`，不执行                                   |
+| 未配 `INTEL_PROMOTION_IMAGE_HOSTS`      | 活动位 `imageHosts: []`，`imageUrl` 只能 null                                       |
+| `NODE_ENV=production`                   | 批准 503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`；列表 `approval.available: false` |
 
 ## 7. 验收对照（设计 §3）
 

@@ -97,7 +97,7 @@ export interface V2ClientPolicyProjection {
   readonly contractVersion: typeof v2ContractVersion;
   readonly configVersion: string;
   readonly effectiveAt: string;
-  readonly defaultRoute: "community";
+  readonly defaultRoute: "chat";
   readonly navigation: {
     readonly primaryTabs: readonly V2PrimaryTab[];
   };
@@ -608,7 +608,7 @@ export function createV2ClientPolicyProjection(
     configVersion:
       config.v2ClientPolicy.configVersion ?? v2ProductConfigVersion,
     effectiveAt: config.v2ClientPolicy.effectiveAt ?? v2ProductEffectiveAt,
-    defaultRoute: "community",
+    defaultRoute: "chat",
     navigation: Object.freeze({ primaryTabs }),
     versionGate: versionGate(config, now),
     regionGate: unavailableRegionGate,

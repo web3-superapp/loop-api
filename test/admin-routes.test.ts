@@ -4,7 +4,10 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
-import { hashAdminPassword } from "../src/features/admin/admin-auth.js";
+import {
+  adminArgon2InFlight,
+  hashAdminPassword,
+} from "../src/features/admin/admin-auth.js";
 import { adminErrorCodes } from "../src/features/admin/admin-contract.js";
 import { AdminRepositoryUnavailableError } from "../src/features/admin/admin-repository.js";
 import type {
@@ -313,6 +316,61 @@ describe("Operator console routes (Decision 0102)", () => {
     ).toHaveLength(5);
   });
 
+  it("holds the lock under 200 concurrent logins and verifies one at a time (Decision 0105)", async () => {
+    const clock = { now: Date.parse("2026-10-08T00:00:00.000Z") };
+    const { app, repository } = await createApp({ clock });
+    const attempt = (secret: string) =>
+      app.inject({
+        method: "POST",
+        url: "/admin/v1/session",
+        payload: { username: "operator", password: secret },
+      });
+    const statuses = new Map<number, number>();
+    let waves = 0;
+    while ((statuses.get(423) ?? 0) === 0 && waves < 20) {
+      waves += 1;
+      const responses = await Promise.all(
+        Array.from({ length: 200 }, () => attempt("wrong-password-123")),
+      );
+      // One verification per wave; everything else is refused before argon2.
+      const verified = responses.filter(
+        (response) => response.statusCode !== 429,
+      );
+      expect(verified).toHaveLength(1);
+      for (const response of responses) {
+        statuses.set(
+          response.statusCode,
+          (statuses.get(response.statusCode) ?? 0) + 1,
+        );
+        if (response.statusCode === 429) {
+          const body = expectError(response, 429, "ADMIN_LOGIN_BUSY");
+          expect(body["detailsSafe"]).toEqual({ retryAfterSeconds: 1 });
+          expect(response.headers["retry-after"]).toBe("1");
+        }
+      }
+    }
+    // Exactly five failures were ever verified: four 401s, then the lock.
+    expect(waves).toBe(5);
+    expect(statuses.get(401)).toBe(4);
+    expect(statuses.get(423)).toBe(1);
+    expect(adminArgon2InFlight()).toBe(0);
+    expect(
+      repository.audit.filter((row) => row.action === "session.login_failed"),
+    ).toHaveLength(5);
+    // Locked: 200 more concurrent attempts, the right password included,
+    // are all 423 and none reaches argon2.
+    const locked = await Promise.all([
+      ...Array.from({ length: 199 }, () => attempt("wrong-password-123")),
+      attempt(password),
+    ]);
+    expect(new Set(locked.map((response) => response.statusCode))).toEqual(
+      new Set([423]),
+    );
+    expect(
+      repository.audit.filter((row) => row.action === "session.login_failed"),
+    ).toHaveLength(5);
+  });
+
   it("expires the session after 12 hours and refuses a forged one", async () => {
     const clock = { now: Date.parse("2026-10-08T00:00:00.000Z") };
     const { app } = await createApp({ clock });
@@ -492,6 +550,83 @@ describe("Operator console routes (Decision 0102)", () => {
     });
   });
 
+  it("filters promotion text and allow-lists image hosts (Decision 0105)", async () => {
+    const card = {
+      title: "社区周赛",
+      subtitle: "本周算力榜",
+      imageUrl: null as string | null,
+      deeplink: "/meme",
+      startsAt: "2026-01-01T00:00:00.000Z",
+      endsAt: "2099-01-01T00:00:00.000Z",
+      order: 1,
+    };
+    const imageUrl = "https://cdn.loop.example/promo/week.png";
+    // Without INTEL_PROMOTION_IMAGE_HOSTS only null is accepted.
+    {
+      const { app } = await createApp({ modules: "market" });
+      const cookie = await login(app);
+      const response = await app.inject({
+        method: "PUT",
+        url: "/admin/v1/settings/intel-promotions",
+        headers: { cookie },
+        payload: { items: [{ ...card, imageUrl }], updatedAt: null },
+      });
+      expect(
+        expectError(response, 422, "VALIDATION_FAILED")["detailsSafe"],
+      ).toEqual({
+        reasonCode: "ADMIN_PROMOTION_INVALID",
+        index: 0,
+        field: "imageUrl",
+      });
+    }
+    const { app, repository } = await createApp({
+      modules: "market",
+      env: { INTEL_PROMOTION_IMAGE_HOSTS: "cdn.loop.example" },
+    });
+    const cookie = await login(app);
+    const put = (items: unknown[]) =>
+      app.inject({
+        method: "PUT",
+        url: "/admin/v1/settings/intel-promotions",
+        headers: { cookie },
+        payload: {
+          items,
+          updatedAt:
+            repository.settings.get("intel_promotions")?.updatedAt ?? null,
+        },
+      });
+    for (const [index, item] of [
+      { ...card, title: "周赛\u202e反转" },
+      { ...card, subtitle: "第一行\n第二行" },
+      { ...card, title: "零宽\u200b字符" },
+      { ...card, imageUrl: "https://evil.example/x.png" },
+      { ...card, imageUrl: "https://cdn.loop.example:8443/x.png" },
+      { ...card, imageUrl: "https://user@cdn.loop.example/x.png" },
+      { ...card, imageUrl: `https://cdn.loop.example/${"a".repeat(500)}` },
+    ].entries()) {
+      const response = await put([item]);
+      expect(
+        expectError(response, 422, "VALIDATION_FAILED")["detailsSafe"],
+        `case ${index}`,
+      ).toMatchObject({ reasonCode: "ADMIN_PROMOTION_INVALID", index: 0 });
+    }
+    const saved = await put([{ ...card, imageUrl }]);
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({
+      imageHosts: ["cdn.loop.example"],
+      imageUrlMaximumLength: 512,
+      items: [expect.objectContaining({ imageUrl })],
+    });
+    const v2 = await app.inject({
+      method: "GET",
+      url: "/v2/intel/promotions",
+      headers: s7CommonHeaders(),
+    });
+    expect(v2.json()).toMatchObject({
+      items: [expect.objectContaining({ imageUrl })],
+    });
+  });
+
   it("reviews a community, writes a note and an audit row", async () => {
     const { app, repository } = await createApp();
     const pending = adminCommunityFixture({ verificationStatus: "pending" });
@@ -538,8 +673,15 @@ describe("Operator console routes (Decision 0102)", () => {
       },
       note: { decision: "reject", reasonCode: "material_mismatch" },
     });
-    expect(repository.audit.length).toBe(auditBefore + 1);
-    expect(repository.audit.at(-1)?.action).toBe("community.review.reject");
+    expect(repository.audit.length).toBe(auditBefore + 2);
+    expect(repository.audit.slice(-2).map((row) => row.action)).toEqual([
+      "community.review.requested",
+      "community.review.decided",
+    ]);
+    expect(repository.audit.at(-1)?.after).toMatchObject({
+      decision: "reject",
+      requestedAuditId: repository.audit.at(-2)?.auditId,
+    });
     const conflict = await review(verified.communityId, {
       decision: "reject",
       reasonCode: "policy_violation",
@@ -710,7 +852,7 @@ describe("Operator console routes (Decision 0102)", () => {
     expect(repository.formulas.get("draftV9")?.status).toBe("pending_approval");
   });
 
-  it("hides a MEME token and reports pause unavailable without the executor", async () => {
+  it("hides a MEME token and reports pause unavailable without the operator key", async () => {
     const { app, repository } = await createApp();
     const token = adminMemeFixture();
     repository.memeTokens.set(token.memeTokenId, token);
@@ -723,7 +865,7 @@ describe("Operator console routes (Decision 0102)", () => {
     expect(list.json()).toMatchObject({
       pause: {
         available: false,
-        reasonCode: "MEME_EXECUTOR_DISABLED",
+        reasonCode: "MEME_OPERATOR_KEY_MISSING",
         executorAddress: null,
       },
     });
@@ -758,7 +900,7 @@ describe("Operator console routes (Decision 0102)", () => {
     });
     expect(
       expectError(pause, 503, "CAPABILITY_UNAVAILABLE")["detailsSafe"],
-    ).toEqual({ reasonCode: "MEME_EXECUTOR_DISABLED" });
+    ).toEqual({ reasonCode: "MEME_OPERATOR_KEY_MISSING" });
   });
 
   it("broadcasts pause/unpause through the executor and audits it", async () => {
@@ -787,10 +929,21 @@ describe("Operator console routes (Decision 0102)", () => {
       executorAddress: sender.address,
     });
     expect(sender.calls).toEqual([`pause:${trading.tokenAddress}`]);
-    expect(repository.audit.at(-1)).toMatchObject({
-      action: "meme.pause",
+    const [requested, submitted] = repository.audit.slice(-2);
+    expect(requested).toMatchObject({
+      action: "meme.pause.requested",
       targetId: trading.memeTokenId,
+      after: { reasonCode: "operator_incident", reasonText: "排查异常" },
     });
+    expect(submitted).toMatchObject({
+      action: "meme.pause.submitted",
+      targetId: trading.memeTokenId,
+      after: {
+        requestedAuditId: requested?.auditId,
+        transactionHash: `0x${"ab".repeat(32)}`,
+      },
+    });
+    expect(ok.json()).toMatchObject({ audit: { seq: submitted?.seq } });
     expect((await post(paused.memeTokenId, "unpause")).statusCode).toBe(202);
     expect(
       expectError(
@@ -809,7 +962,7 @@ describe("Operator console routes (Decision 0102)", () => {
     expectError(await post(randomUUID(), "pause"), 404, "NOT_FOUND");
   });
 
-  it("reports a reverting dry run as a conflict without an audit row", async () => {
+  it("records requested + failed when the dry run reverts (Decision 0105)", async () => {
     const { app, repository } = await createApp({
       memePauseSender: fakeMemePauseSender("simulation_reverted"),
     });
@@ -826,7 +979,155 @@ describe("Operator console routes (Decision 0102)", () => {
     expect(expectError(response, 409, "ADMIN_CONFLICT")["detailsSafe"]).toEqual(
       { reasonCode: "MEME_PAUSE_SIMULATION_REVERTED" },
     );
-    expect(repository.audit.length).toBe(before);
+    expect(repository.audit.slice(before).map((row) => row.action)).toEqual([
+      "meme.pause.requested",
+      "meme.pause.failed",
+    ]);
+    expect(repository.audit.at(-1)?.after).toMatchObject({
+      errorCode: "MEME_PAUSE_SIMULATION_REVERTED",
+      requestedAuditId: repository.audit.at(-2)?.auditId,
+    });
+  });
+
+  it("records requested + failed when the broadcast fails or throws (Decision 0105)", async () => {
+    for (const [outcome, status, code] of [
+      ["failed", 503, "CAPABILITY_UNAVAILABLE"],
+      ["throws", 500, "INTERNAL_ERROR"],
+    ] as const) {
+      const sender = fakeMemePauseSender(outcome);
+      const { app, repository } = await createApp({ memePauseSender: sender });
+      const token = adminMemeFixture();
+      repository.memeTokens.set(token.memeTokenId, token);
+      const cookie = await login(app);
+      const before = repository.audit.length;
+      const response = await app.inject({
+        method: "POST",
+        url: `/admin/v1/meme/tokens/${token.memeTokenId}/pause`,
+        headers: { cookie },
+        payload: { reasonCode: "operator_incident" },
+      });
+      expectError(response, status, code);
+      expect(sender.calls).toHaveLength(1);
+      expect(repository.audit.slice(before).map((row) => row.action)).toEqual([
+        "meme.pause.requested",
+        "meme.pause.failed",
+      ]);
+    }
+  });
+
+  it("signs nothing and changes nothing when the intent audit row cannot be written (Decision 0105)", async () => {
+    const base = createInMemoryAdminRepository();
+    let auditDown = false;
+    const repository: InMemoryAdminRepository = {
+      ...base,
+      appendAudit: (input) =>
+        auditDown
+          ? Promise.reject(new AdminRepositoryUnavailableError())
+          : base.appendAudit(input),
+    };
+    const sender = fakeMemePauseSender();
+    const { app } = await createApp({ repository, memePauseSender: sender });
+    const token = adminMemeFixture();
+    const pending = adminCommunityFixture({ verificationStatus: "pending" });
+    repository.memeTokens.set(token.memeTokenId, token);
+    repository.communities.set(pending.communityId, pending);
+    const cookie = await login(app);
+    auditDown = true;
+    const pause = await app.inject({
+      method: "POST",
+      url: `/admin/v1/meme/tokens/${token.memeTokenId}/pause`,
+      headers: { cookie },
+      payload: { reasonCode: "operator_incident" },
+    });
+    expect(
+      expectError(pause, 503, "CAPABILITY_UNAVAILABLE")["detailsSafe"],
+    ).toEqual({ reasonCode: "ADMIN_AUDIT_UNAVAILABLE" });
+    expect(sender.calls).toEqual([]);
+    const review = await app.inject({
+      method: "POST",
+      url: `/admin/v1/communities/${pending.communityId}/review`,
+      headers: { cookie },
+      payload: { decision: "verify", reasonCode: "operator_manual_review" },
+    });
+    expect(
+      expectError(review, 503, "CAPABILITY_UNAVAILABLE")["detailsSafe"],
+    ).toEqual({ reasonCode: "ADMIN_AUDIT_UNAVAILABLE" });
+    expect(
+      repository.communities.get(pending.communityId)?.verificationStatus,
+    ).toBe("pending");
+    expect(repository.notes).toEqual([]);
+  });
+
+  it("refuses a second pause of a token while the first is in flight or unmined (Decision 0105)", async () => {
+    const sender = fakeMemePauseSender();
+    const { app, repository } = await createApp({ memePauseSender: sender });
+    const token = adminMemeFixture();
+    repository.memeTokens.set(token.memeTokenId, token);
+    const cookie = await login(app);
+    const post = () =>
+      app.inject({
+        method: "POST",
+        url: `/admin/v1/meme/tokens/${token.memeTokenId}/pause`,
+        headers: { cookie },
+        payload: { reasonCode: "operator_incident" },
+      });
+    // Two clicks at once: one reaches the signer, the other is 409.
+    let release = (): void => undefined;
+    sender.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = post();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await post();
+    expect(expectError(second, 409, "ADMIN_CONFLICT")["detailsSafe"]).toEqual({
+      reasonCode: "MEME_PAUSE_PENDING",
+    });
+    release();
+    sender.gate = null;
+    expect((await first).statusCode).toBe(202);
+    expect(sender.calls).toHaveLength(1);
+    // Broadcast but not mined (the token is still `trading` in the index).
+    sender.state = "pending";
+    const unmined = await post();
+    expect(expectError(unmined, 409, "ADMIN_CONFLICT")["detailsSafe"]).toEqual({
+      reasonCode: "MEME_PAUSE_PENDING",
+      transactionHash: `0x${"ab".repeat(32)}`,
+    });
+    // A failed state read is treated as pending.
+    sender.state = "unknown";
+    expectError(await post(), 409, "ADMIN_CONFLICT");
+    expect(sender.calls).toHaveLength(1);
+    // Mined (or dropped): the dry run decides again.
+    sender.state = "settled";
+    expect((await post()).statusCode).toBe(202);
+    expect(sender.calls).toHaveLength(2);
+  });
+
+  it("records requested and failed review rows when the review path refuses (Decision 0105)", async () => {
+    const { app, repository } = await createApp();
+    const verified = adminCommunityFixture();
+    repository.communities.set(verified.communityId, verified);
+    const cookie = await login(app);
+    const before = repository.audit.length;
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/v1/communities/${verified.communityId}/review`,
+      headers: { cookie },
+      payload: {
+        decision: "reject",
+        reasonCode: "policy_violation",
+        reasonText: "不符合规则",
+      },
+    });
+    expectError(response, 409, "ADMIN_CONFLICT");
+    expect(repository.audit.slice(before).map((row) => row.action)).toEqual([
+      "community.review.requested",
+      "community.review.failed",
+    ]);
+    expect(repository.audit.at(-1)?.after).toMatchObject({
+      errorCode: "community_data_stale",
+      requestedAuditId: repository.audit.at(-2)?.auditId,
+    });
   });
 
   it("pages the audit log newest first with filters", async () => {

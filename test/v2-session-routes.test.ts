@@ -264,7 +264,7 @@ describe("LOOP API V2 account sessions", () => {
     expect(policyResponse.statusCode).toBe(200);
     expect(policyResponse.json()).toMatchObject({
       contractVersion: "2.0",
-      defaultRoute: "community",
+      defaultRoute: "chat",
       navigation: {
         primaryTabs: ["chat", "square", "meme", "intel", "wallet"],
       },

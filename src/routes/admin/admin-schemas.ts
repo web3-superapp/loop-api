@@ -7,6 +7,7 @@ import {
 import {
   intelPromotionDeeplinkPatternSource,
   intelPromotionsConfigVersionPatternSource,
+  intelPromotionImageUrlMaximumLength,
   intelPromotionsMaximumItems,
 } from "../../features/market/intel-promotions.js";
 
@@ -70,6 +71,7 @@ export function adminErrors(
     ADMIN_SESSION_REQUIRED: 401,
     ADMIN_LOGIN_INVALID: 401,
     ADMIN_LOGIN_LOCKED: 423,
+    ADMIN_LOGIN_BUSY: 429,
     ADMIN_CONFLICT: 409,
     INVALID_REQUEST: 400,
     VALIDATION_FAILED: 422,
@@ -424,7 +426,14 @@ const promotionItemSchema = {
     title: { type: "string", minLength: 1, maxLength: 40 },
     subtitle: { type: "string", maxLength: 80 },
     imageUrl: {
-      anyOf: [{ type: "string", pattern: "^https://" }, { type: "null" }],
+      anyOf: [
+        {
+          type: "string",
+          pattern: "^https://",
+          maxLength: intelPromotionImageUrlMaximumLength,
+        },
+        { type: "null" },
+      ],
     },
     deeplink: { type: "string", pattern: intelPromotionDeeplinkPatternSource },
     startsAt: dateTimeSchema,
@@ -450,6 +459,16 @@ const promotionsProperties = {
   deeplinkPattern: { type: "string" },
   deeplinkChoices: { type: "array", items: { type: "string" } },
   maximumItems: { type: "integer", const: intelPromotionsMaximumItems },
+  imageHosts: {
+    type: "array",
+    items: { type: "string" },
+    description:
+      "INTEL_PROMOTION_IMAGE_HOSTS (Decision 0105): hosts an https `imageUrl` may use. Empty = `imageUrl` must be null.",
+  },
+  imageUrlMaximumLength: {
+    type: "integer",
+    const: intelPromotionImageUrlMaximumLength,
+  },
 } as const;
 const promotionsRequired = [
   "items",
@@ -461,6 +480,8 @@ const promotionsRequired = [
   "deeplinkPattern",
   "deeplinkChoices",
   "maximumItems",
+  "imageHosts",
+  "imageUrlMaximumLength",
 ] as const;
 
 export const intelPromotionsAdminResourceSchema = {
@@ -507,7 +528,12 @@ export const intelPromotionsRequestSchema = {
           },
           title: { type: "string", maxLength: 200 },
           subtitle: { type: "string", maxLength: 400 },
-          imageUrl: { type: ["string", "null"], maxLength: 2048 },
+          imageUrl: {
+            type: ["string", "null"],
+            maxLength: 2048,
+            description:
+              "null, or an https URL of at most 512 characters on an INTEL_PROMOTION_IMAGE_HOSTS host (else 422 ADMIN_PROMOTION_INVALID, `field: imageUrl`). Title and subtitle refuse control and format characters.",
+          },
           deeplink: { type: "string", maxLength: 256 },
           startsAt: { type: "string", maxLength: 64 },
           endsAt: { type: "string", maxLength: 64 },

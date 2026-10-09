@@ -53,6 +53,126 @@ export type MemePoolPriceReader = (input: {
   readonly poolAddress: string;
 }) => Promise<MemePoolPrice | null>;
 
+/** Decision 0105: the map key of one pool/token pair (lower-case). */
+export function memePoolPriceKey(input: {
+  readonly tokenAddress: string;
+  readonly poolAddress: string;
+}): string {
+  return `${input.poolAddress.toLowerCase()}:${input.tokenAddress.toLowerCase()}`;
+}
+
+/**
+ * Decision 0105: many pools in one batch (one multicall). The map holds a
+ * price, or null when that pool's read failed, under `memePoolPriceKey`.
+ */
+export type MemePoolPriceBatchReader = (
+  inputs: readonly {
+    readonly tokenAddress: string;
+    readonly poolAddress: string;
+  }[],
+) => Promise<ReadonlyMap<string, MemePoolPrice | null>>;
+
+export interface MemePoolPriceReaders {
+  readonly read: MemePoolPriceReader;
+  readonly readMany: MemePoolPriceBatchReader;
+}
+
+/**
+ * The single reader plus a batched one sharing its cache. Without
+ * `readSqrtPriceX96Many` the batch is the single reads run together.
+ */
+export function createMemePoolPriceReaders(options: {
+  readonly usd1Address: () => string | null;
+  readonly readSqrtPriceX96: (pool: string) => Promise<bigint>;
+  /** One multicall: the price of each pool, absent when its call failed. */
+  readonly readSqrtPriceX96Many?: (
+    pools: readonly string[],
+  ) => Promise<ReadonlyMap<string, bigint>>;
+  readonly cacheMs: number;
+  readonly now?: () => Date;
+}): MemePoolPriceReaders {
+  const now = options.now ?? ((): Date => new Date());
+  const cache = new Map<
+    string,
+    { readonly expiresAt: number; readonly price: MemePoolPrice }
+  >();
+  const single = createMemePoolPriceReader(options);
+  const readMany: MemePoolPriceBatchReader = async (inputs) => {
+    const result = new Map<string, MemePoolPrice | null>();
+    const usd1Address = options.usd1Address();
+    if (usd1Address === null) {
+      for (const input of inputs) {
+        result.set(memePoolPriceKey(input), null);
+      }
+      return result;
+    }
+    const at = now().getTime();
+    for (const [key, entry] of cache) {
+      if (entry.expiresAt <= at) {
+        cache.delete(key);
+      }
+    }
+    const missing = new Map<string, { token: string; pool: string }>();
+    for (const input of inputs) {
+      const key = memePoolPriceKey(input);
+      const hit = cache.get(key);
+      if (hit !== undefined) {
+        result.set(key, hit.price);
+      } else {
+        missing.set(key, {
+          token: input.tokenAddress.toLowerCase(),
+          pool: input.poolAddress.toLowerCase(),
+        });
+      }
+    }
+    if (missing.size === 0) {
+      return result;
+    }
+    if (options.readSqrtPriceX96Many === undefined) {
+      await Promise.all(
+        [...missing].map(async ([key, pair]) => {
+          result.set(
+            key,
+            await single({ tokenAddress: pair.token, poolAddress: pair.pool }),
+          );
+        }),
+      );
+      return result;
+    }
+    let roots: ReadonlyMap<string, bigint>;
+    try {
+      roots = await options.readSqrtPriceX96Many([
+        ...new Set([...missing.values()].map((pair) => pair.pool)),
+      ]);
+    } catch {
+      roots = new Map();
+    }
+    for (const [key, pair] of missing) {
+      const sqrtPriceX96 = roots.get(pair.pool);
+      const priceE18 =
+        sqrtPriceX96 === undefined
+          ? null
+          : memePoolPriceE18({
+              sqrtPriceX96,
+              tokenAddress: pair.token,
+              usd1Address,
+            });
+      if (priceE18 === null) {
+        result.set(key, null);
+        continue;
+      }
+      const price = Object.freeze({
+        priceE18,
+        observedAt: new Date(at).toISOString(),
+      });
+      cache.set(key, { expiresAt: at + options.cacheMs, price });
+      result.set(key, price);
+    }
+    return result;
+  };
+  return Object.freeze({ read: single, readMany });
+}
+
 export function createMemePoolPriceReader(options: {
   readonly usd1Address: () => string | null;
   readonly readSqrtPriceX96: (pool: string) => Promise<bigint>;

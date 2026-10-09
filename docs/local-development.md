@@ -392,13 +392,29 @@ curl -s "$BASE/admin/v1/overview" -H "cookie: loop_admin_session=…"
 ```
 
 - The password must be 12–256 characters. Five wrong logins lock every login
-  for 15 minutes (423); restarting the API clears the lock.
+  for 15 minutes (423). Only one login is verified at a time; a concurrent one
+  is 429 `ADMIN_LOGIN_BUSY` (Decision 0105). The lock and logout revocations
+  live in process memory: restarting the API clears the lock and makes a
+  logged-out, unexpired cookie valid again (accepted, Decision 0105).
 - The cookie is `Path=/admin; HttpOnly; SameSite=Strict; Max-Age=43200`, and
   `Secure` whenever `PUBLIC_BASE_URL` is https. Rotating `ADMIN_SESSION_SECRET`
   logs everyone out.
-- MEME pause/unpause additionally needs `MEME_GRADUATION_EXECUTOR_ENABLED=true`
-  and `LAUNCH_DEPLOYER_PRIVATE_KEY` **in the API env** (testnet 97 only);
-  without them the console shows `MEME_EXECUTOR_DISABLED`.
+- MEME pause/unpause signs with its own key, `MEME_OPERATOR_PRIVATE_KEY`
+  **in the API env** (testnet 97 only; Decision 0105). The API process no longer
+  reads `LAUNCH_DEPLOYER_PRIVATE_KEY` / `MEME_GRADUATION_EXECUTOR_ENABLED`
+  (worker only). Without the key the console shows `MEME_OPERATOR_KEY_MISSING`.
+  Setting it up on a deployment:
+  1. generate a fresh key outside Git (e.g. `cast wallet new`, or
+     `node -e "console.log('0x'+require('crypto').randomBytes(32).toString('hex'))"`)
+     and put it in the API env file only (`ops/api-dev.local.env`);
+  2. fund its address with a little tBNB for gas;
+  3. make it the curve owner: `transferOwnership(<operator address>)` signed by
+     the current owner (the deployer), then `acceptOwnership()` signed by the
+     operator key (the curve is `Ownable2Step`). Until then every dry run
+     reverts (409 `MEME_PAUSE_SIMULATION_REVERTED`). Note the owner also holds
+     `setTreasury` / `injectResidual`; `graduate` stays permissionless.
+- Intel promotion images: `INTEL_PROMOTION_IMAGE_HOSTS=cdn.example.com,…`
+  (lower-case host names). Blank = every `imageUrl` must be null.
 - Formula approval is refused under `NODE_ENV=production`, like
   `pnpm mining:approve-formula`.
 - Do not expose `/admin/*` publicly without Cloudflare Access or an IP

@@ -24,6 +24,15 @@ import {
  *   session.
  * - Five failed logins in a row lock every login for 15 minutes. The lock
  *   is per process and global (there is one account).
+ * - Decision 0105: a login attempt reserves its failure *before* argon2
+ *   runs (synchronously, so concurrent requests cannot all pass the lock
+ *   check), only one verification runs at a time (the rest are 429
+ *   ADMIN_LOGIN_BUSY), and argon2 itself never runs more than
+ *   `adminArgon2MaximumConcurrency` derivations in this process, so memory
+ *   stays bounded at that many × 19 MiB whatever the request rate.
+ * - The lock and the logout revocations live in this process's memory: a
+ *   restart clears both (accepted for one operator behind Cloudflare
+ *   Access; rotating ADMIN_SESSION_SECRET revokes every session).
  */
 
 /** OWASP-recommended argon2id baseline (19 MiB, t=2, p=1). */
@@ -35,7 +44,45 @@ export const adminArgon2Parameters = Object.freeze({
   saltLength: 16,
 });
 
-function argon2Derive(input: {
+/** Decision 0105: at most this many argon2 derivations run at once. */
+export const adminArgon2MaximumConcurrency = 2;
+
+/** Every argon2 slot is taken; the caller refuses instead of queueing. */
+export class AdminArgon2BusyError extends Error {
+  constructor() {
+    super("The administrator password verifier is busy");
+    this.name = "AdminArgon2BusyError";
+  }
+}
+
+let argon2InFlight = 0;
+
+/** Number of argon2 derivations running now (tests read it). */
+export function adminArgon2InFlight(): number {
+  return argon2InFlight;
+}
+
+async function argon2Derive(input: {
+  readonly password: string;
+  readonly salt: Buffer;
+  readonly memoryKiB: number;
+  readonly passes: number;
+  readonly parallelism: number;
+  readonly tagLength: number;
+}): Promise<Buffer> {
+  // The slot is taken synchronously, so no queue of 19 MiB buffers can form.
+  if (argon2InFlight >= adminArgon2MaximumConcurrency) {
+    throw new AdminArgon2BusyError();
+  }
+  argon2InFlight += 1;
+  try {
+    return await argon2DeriveUnbounded(input);
+  } finally {
+    argon2InFlight -= 1;
+  }
+}
+
+function argon2DeriveUnbounded(input: {
   readonly password: string;
   readonly salt: Buffer;
   readonly memoryKiB: number;
@@ -252,11 +299,31 @@ export function createAdminSessionCodec(input: {
   });
 }
 
+export type AdminLoginAdmission =
+  | { readonly status: "locked"; readonly retryAfterSeconds: number }
+  | { readonly status: "busy" }
+  | {
+      readonly status: "admitted";
+      /** Right credentials: the counter and the lock reset. */
+      succeed(): void;
+      /**
+       * Wrong credentials: the reserved failure stays counted. Returns the
+       * seconds of the lock this failure started (0 when not locked).
+       */
+      fail(): number;
+      /** The attempt never reached a verdict: its reservation is refunded. */
+      cancel(): void;
+    };
+
 export interface AdminLoginThrottle {
   /** Seconds until the lock lifts, or 0 when logins are accepted. */
   lockedForSeconds(): number;
-  recordFailure(): void;
-  recordSuccess(): void;
+  /**
+   * Decision 0105: one synchronous step that checks the lock, refuses a
+   * second concurrent attempt, and reserves this attempt's failure before
+   * any password work starts.
+   */
+  admit(): AdminLoginAdmission;
 }
 
 export function createAdminLoginThrottle(
@@ -271,27 +338,61 @@ export function createAdminLoginThrottle(
   const lockMs = (options.lockSeconds ?? adminLoginLockSeconds) * 1000;
   let failures = 0;
   let lockedUntil = 0;
+  let inFlight = false;
+
+  function lockedForSeconds(): number {
+    const remaining = lockedUntil - now().getTime();
+    if (remaining <= 0) {
+      if (lockedUntil !== 0) {
+        lockedUntil = 0;
+        failures = 0;
+      }
+      return 0;
+    }
+    return Math.ceil(remaining / 1000);
+  }
+
   return Object.freeze({
-    lockedForSeconds() {
-      const remaining = lockedUntil - now().getTime();
-      if (remaining <= 0) {
-        if (lockedUntil !== 0) {
-          lockedUntil = 0;
-          failures = 0;
-        }
-        return 0;
+    lockedForSeconds,
+    admit(): AdminLoginAdmission {
+      const locked = lockedForSeconds();
+      if (locked > 0) {
+        return { status: "locked", retryAfterSeconds: locked };
       }
-      return Math.ceil(remaining / 1000);
-    },
-    recordFailure() {
+      if (inFlight) {
+        return { status: "busy" };
+      }
+      inFlight = true;
       failures += 1;
-      if (failures >= maximumFailures) {
-        lockedUntil = now().getTime() + lockMs;
-      }
-    },
-    recordSuccess() {
-      failures = 0;
-      lockedUntil = 0;
+      let settled = false;
+      const settle = (): boolean => {
+        if (settled) {
+          return false;
+        }
+        settled = true;
+        inFlight = false;
+        return true;
+      };
+      return Object.freeze({
+        status: "admitted" as const,
+        succeed() {
+          if (settle()) {
+            failures = 0;
+            lockedUntil = 0;
+          }
+        },
+        fail() {
+          if (settle() && failures >= maximumFailures) {
+            lockedUntil = now().getTime() + lockMs;
+          }
+          return lockedForSeconds();
+        },
+        cancel() {
+          if (settle()) {
+            failures = Math.max(0, failures - 1);
+          }
+        },
+      });
     },
   });
 }

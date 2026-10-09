@@ -30,7 +30,9 @@ import {
 import { percentChange } from "../meme/meme-projection.js";
 import {
   memePoolMarketCapRaw,
+  memePoolPriceKey,
   type MemePoolPrice,
+  type MemePoolPriceBatchReader,
   type MemePoolPriceReader,
 } from "../meme/meme-pool-price.js";
 import {
@@ -548,6 +550,8 @@ export interface CreateMarketReadServiceInput {
   readonly memePoolPrices?: {
     readonly chainId: string;
     readonly read: MemePoolPriceReader;
+    /** Decision 0105: one batched read of a page's pools. */
+    readonly readMany?: MemePoolPriceBatchReader;
   } | null;
   /** Account wallets for `isOwn` on trades; `null` when the wallet module is not composed. */
   readonly wallets: AccountWalletRepository | null;
@@ -2373,7 +2377,7 @@ export function createMarketReadService(
       }
 
       const observedAt = now().toISOString();
-      const candidates = await categoryCandidates(chosenCategory);
+      const candidates = await categoryCandidates(chosenCategory, chosenSort);
       // Only assets of the chain the market Provider reads are priced; a
       // testnet Launch token is listed with its quote unavailable.
       const priced = candidates.filter(
@@ -2410,6 +2414,18 @@ export function createMarketReadService(
               ? quote.change24hPct
               : quote.volume24hUsd;
 
+      const slot0Deferred = new Map<
+        string,
+        {
+          readonly candidate: {
+            readonly asset: AssetRecord;
+            readonly graduatedPool: string | null;
+          };
+          readonly apply: (
+            quote: MarketQuoteProjection,
+          ) => MarketCategoryAssetRow;
+        }
+      >();
       const rows = await Promise.all(
         candidates.map(async (candidate): Promise<MarketCategoryAssetRow> => {
           const { asset } = candidate;
@@ -2448,16 +2464,22 @@ export function createMarketReadService(
             });
             // Decision 0103: a graduated MEME token off the market chain is
             // priced from its own pool; a failed read keeps the reason.
-            const pool = await memePoolQuote(candidate);
-            if (pool !== null) {
-              return Object.freeze({
-                assetId: asset.assetId,
-                symbol: asset.symbol,
-                name: asset.name,
-                logoUrl: logo.status === "available" ? logo.url : null,
-                quote: pool,
-                sparkline: unavailableSparkline(memePoolSparklineReasonCode),
-                ...community,
+            // Decision 0105: read once, batched, for the returned page only.
+            if (memePoolQuotable(candidate)) {
+              slot0Deferred.set(asset.assetId, {
+                candidate,
+                apply: (pool) =>
+                  Object.freeze({
+                    assetId: asset.assetId,
+                    symbol: asset.symbol,
+                    name: asset.name,
+                    logoUrl: logo.status === "available" ? logo.url : null,
+                    quote: pool,
+                    sparkline: unavailableSparkline(
+                      memePoolSparklineReasonCode,
+                    ),
+                    ...community,
+                  }),
               });
             }
             return Object.freeze({
@@ -2481,7 +2503,7 @@ export function createMarketReadService(
             address: asset.address,
             providerImage: facts.logoImage,
           });
-          const quote = quoteFrom(facts) ?? (await memePoolQuote(candidate));
+          const quote = quoteFrom(facts);
           const sparkline = !input.facts.candlesProviderEnabled
             ? unavailableSparkline(marketReasonCodes.geckoterminalDisabled)
             : sparklineRows === null
@@ -2495,6 +2517,23 @@ export function createMarketReadService(
                   staleGraceSeconds: input.staleGraceSeconds,
                   proxied: asset.address === null,
                 });
+          if (quote === null && memePoolQuotable(candidate)) {
+            // Decision 0103/0105: the pool's slot0 fills a missing quote on
+            // the returned page (one batched read); it is not a sort key.
+            slot0Deferred.set(asset.assetId, {
+              candidate,
+              apply: (pool) =>
+                Object.freeze({
+                  assetId: asset.assetId,
+                  symbol: asset.symbol,
+                  name: asset.name,
+                  logoUrl: logo.status === "available" ? logo.url : null,
+                  quote: pool,
+                  sparkline,
+                  ...community,
+                }),
+            });
+          }
           return Object.freeze({
             assetId: asset.assetId,
             symbol: asset.symbol,
@@ -2522,6 +2561,7 @@ export function createMarketReadService(
       });
       const page = pageMarketCategoryRows(rows, keyOf, after, pageSize);
       const last = page.items.at(-1);
+      const items = await fillMemePoolQuotes(page.items, slot0Deferred);
       let nextCursor: string | null = null;
       if (page.hasMore && last !== undefined) {
         const key = keyOf(last);
@@ -2540,7 +2580,7 @@ export function createMarketReadService(
       return Object.freeze({
         category: chosenCategory,
         sort: chosenSort,
-        items: page.items,
+        items,
         nextCursor,
         rules: Object.freeze({
           configVersion: marketCategoryRules.configVersion,
@@ -2555,27 +2595,85 @@ export function createMarketReadService(
   return Object.freeze(service);
 
   /**
-   * Decision 0103: the `pool_slot0` quote of a graduated MEME candidate on
-   * the launch slot, or null (no pool, no reader, other chain, read failed).
+   * Decision 0103: a graduated MEME candidate on the launch slot whose pool
+   * can be read for a `pool_slot0` quote.
    */
-  async function memePoolQuote(candidate: {
+  function memePoolQuotable(candidate: {
     readonly asset: AssetRecord;
     readonly graduatedPool: string | null;
-  }): Promise<MarketQuoteProjection | null> {
+  }): boolean {
     const reader = input.memePoolPrices ?? null;
-    if (
-      reader === null ||
-      candidate.graduatedPool === null ||
-      candidate.asset.address === null ||
-      candidate.asset.chainId !== reader.chainId
-    ) {
-      return null;
-    }
-    const price = await reader.read({
-      tokenAddress: candidate.asset.address,
-      poolAddress: candidate.graduatedPool,
+    return (
+      reader !== null &&
+      candidate.graduatedPool !== null &&
+      candidate.asset.address !== null &&
+      candidate.asset.chainId === reader.chainId
+    );
+  }
+
+  /**
+   * Decision 0105: the slot0 quotes of the returned page, read in one
+   * batch (one multicall where the reader offers it). A row whose read
+   * fails keeps its unavailable reason; rows off the page are never read.
+   */
+  async function fillMemePoolQuotes(
+    page: readonly MarketCategoryAssetRow[],
+    deferred: ReadonlyMap<
+      string,
+      {
+        readonly candidate: {
+          readonly asset: AssetRecord;
+          readonly graduatedPool: string | null;
+        };
+        readonly apply: (
+          quote: MarketQuoteProjection,
+        ) => MarketCategoryAssetRow;
+      }
+    >,
+  ): Promise<readonly MarketCategoryAssetRow[]> {
+    const reader = input.memePoolPrices ?? null;
+    const wanted = page.flatMap((row) => {
+      const entry = deferred.get(row.assetId);
+      return entry === undefined ? [] : [entry];
     });
-    return price === null ? null : memePoolQuoteFrom(price);
+    if (reader === null || wanted.length === 0) {
+      return page;
+    }
+    const requests = wanted.map((entry) => ({
+      tokenAddress: entry.candidate.asset.address as string,
+      poolAddress: entry.candidate.graduatedPool as string,
+    }));
+    const prices =
+      reader.readMany === undefined
+        ? new Map(
+            await Promise.all(
+              requests.map(
+                async (request) =>
+                  [
+                    memePoolPriceKey(request),
+                    await reader.read(request),
+                  ] as const,
+              ),
+            ),
+          )
+        : await reader.readMany(requests);
+    return Object.freeze(
+      page.map((row) => {
+        const entry = deferred.get(row.assetId);
+        if (entry === undefined) {
+          return row;
+        }
+        const price = prices.get(
+          memePoolPriceKey({
+            tokenAddress: entry.candidate.asset.address as string,
+            poolAddress: entry.candidate.graduatedPool as string,
+          }),
+        );
+        return price === undefined || price === null
+          ? row
+          : entry.apply(memePoolQuoteFrom(price));
+      }),
+    );
   }
 
   /**
@@ -2583,7 +2681,10 @@ export function createMarketReadService(
    * `candidateLimit`. A missing candidate source closes the category with
    * `CAPABILITY_UNAVAILABLE`; it is never answered as an empty list.
    */
-  async function categoryCandidates(category: MarketAssetCategory): Promise<
+  async function categoryCandidates(
+    category: MarketAssetCategory,
+    sort: MarketAssetSort,
+  ): Promise<
     readonly {
       readonly asset: AssetRecord;
       readonly community: MarketCategoryCommunityRecord | null;
@@ -2613,8 +2714,10 @@ export function createMarketReadService(
     try {
       if (category === "meme") {
         // Decision 0101: App-created MEME tokens ∪ Launch project tokens.
+        // Decision 0105: the curve bucket is cut by the requested sort.
         const memes = await repository.listMemeCandidates(
           marketCategoryRules.candidateLimit,
+          sort,
         );
         const curves = new Map(memes.map((row) => [row.assetId, row.curve]));
         const pools = new Map(

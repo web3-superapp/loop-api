@@ -3,6 +3,8 @@ import {
   createWalletClient,
   fallback,
   http,
+  TransactionNotFoundError,
+  TransactionReceiptNotFoundError,
   type Address,
   type Chain,
   type Hex,
@@ -21,10 +23,12 @@ import { MemeGraduationSenderRefusedError } from "./meme-graduation-sender.js";
 /**
  * The operator console's pause/unpause signer (Decision 0102). It signs
  * exactly two call shapes, `pause(token)` and `unpause(token)` on the
- * configured curve, with the same executor key and switch as the
- * graduation fallback (`MEME_GRADUATION_EXECUTOR_ENABLED` +
- * `LAUNCH_DEPLOYER_PRIVATE_KEY`, Decision 0101). Testnet only: BSC Mainnet
- * signing stays closed.
+ * configured curve. Decision 0105: it signs with its own key,
+ * `MEME_OPERATOR_PRIVATE_KEY`, never the deployer key the graduation
+ * fallback uses, so the two never race for one nonce. The curve is
+ * `Ownable`: the operator address must own it (transferOwnership +
+ * acceptOwnership), otherwise every dry run reverts. Testnet only: BSC
+ * Mainnet signing stays closed.
  *
  * A dry run comes first; a revert (already paused, not the owner, unknown
  * token) is reported without broadcasting. A broadcast transaction is
@@ -40,10 +44,18 @@ export type MemePauseOutcome =
   | { readonly status: "simulation_reverted" }
   | { readonly status: "failed"; readonly errorCode: string };
 
+/**
+ * Decision 0105: where a broadcast transaction stands. `pending` = known to
+ * the node but not mined; `settled` = mined (either way) or dropped;
+ * `unknown` = the read failed (callers treat it as pending).
+ */
+export type MemePauseTransactionState = "pending" | "settled" | "unknown";
+
 export interface MemePauseSender {
   /** Lowercase address of the executor account. */
   readonly address: string;
   submit(action: MemePauseAction, token: string): Promise<MemePauseOutcome>;
+  transactionState(hash: string): Promise<MemePauseTransactionState>;
 }
 
 export function createMemePauseSender(input: {
@@ -95,6 +107,27 @@ export function createMemePauseSender(input: {
         return { status: "failed", errorCode: "MEME_PAUSE_BROADCAST_FAILED" };
       }
       return { status: "submitted", transactionHash: hash.toLowerCase() };
+    },
+    async transactionState(hash: string): Promise<MemePauseTransactionState> {
+      if (!/^0x[0-9a-f]{64}$/u.test(hash)) {
+        return "unknown";
+      }
+      try {
+        await reader.getTransactionReceipt({ hash: hash as Hex });
+        return "settled";
+      } catch (error) {
+        if (!(error instanceof TransactionReceiptNotFoundError)) {
+          return "unknown";
+        }
+      }
+      try {
+        await reader.getTransaction({ hash: hash as Hex });
+        return "pending";
+      } catch (error) {
+        return error instanceof TransactionNotFoundError
+          ? "settled"
+          : "unknown";
+      }
     },
   });
 }

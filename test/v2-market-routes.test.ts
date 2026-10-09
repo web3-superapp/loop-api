@@ -3092,6 +3092,82 @@ describe("LOOP API V2 market module", () => {
       });
     });
 
+    it("reads slot0 once, batched, for the returned page only and cuts candidates by sort (Decision 0105)", async () => {
+      const poolA = "0x7777777777777777777777777777777777777777";
+      const poolB = "0x8888888888888888888888888888888888888888";
+      const second: AssetRecord = Object.freeze({
+        ...memeAsset,
+        assetId: "eip155:97:0x458d40a1a2b02d550c64e7a9b8dc599f8219d976",
+        address: "0x458d40a1a2b02d550c64e7a9b8dc599f8219d976",
+        symbol: "LTP2",
+      });
+      const chain: FakeCurveChain = {
+        curves: new Map(),
+        unavailable: false,
+        pools: new Map([
+          [poolA, 100n * (1n << 96n)],
+          [poolB, 100n * (1n << 96n)],
+        ]),
+      };
+      const base = createFakeMemeAdapter(chain);
+      const many = vi.fn((pools: readonly string[]) =>
+        Promise.resolve(
+          new Map(
+            pools.flatMap((pool) => {
+              const price = chain.pools?.get(pool);
+              return price === undefined ? [] : [[pool, price] as const];
+            }),
+          ),
+        ),
+      );
+      const single = vi.fn((pool: string) => base.readPoolSqrtPriceX96(pool));
+      const adapter: MemeContractAdapter = {
+        ...base,
+        readPoolSqrtPriceX96: single,
+        readPoolSqrtPriceX96Many: many,
+      };
+      const listMemeCandidates = vi.fn(() =>
+        Promise.resolve([
+          { assetId: memeAsset.assetId, curve: null, graduatedPool: poolA },
+          { assetId: second.assetId, curve: null, graduatedPool: poolB },
+        ]),
+      );
+      const { app } = await createApp(
+        fakes({
+          assets: [...registryRows, second],
+          pairsProvider: categoryPairsProvider(),
+          categories: categoriesFake({ listMemeCandidates }),
+        }),
+        { ...memeEnv, V2_MODULES_ENABLED: "market,chain,watchlist,meme" },
+        undefined,
+        adapter,
+      );
+      const first = await list(app, "category=meme&sort=volume24h&limit=1");
+      expect(first.statusCode).toBe(200);
+      expect(listMemeCandidates).toHaveBeenCalledWith(100, "volume24h");
+      expect(first.body.items).toHaveLength(1);
+      expect(first.body.items[0]).toMatchObject({
+        quote: { source: "pool_slot0", quality: "derived" },
+      });
+      // One batched read, for the one row on the page.
+      expect(many).toHaveBeenCalledTimes(1);
+      expect(many.mock.calls[0]?.[0]).toHaveLength(1);
+      expect(single).not.toHaveBeenCalled();
+      const next = await list(
+        app,
+        `category=meme&sort=volume24h&cursor=${encodeURIComponent(first.body.nextCursor ?? "")}`,
+      );
+      expect(next.body.items).toHaveLength(1);
+      expect(next.body.items[0]?.["assetId"]).not.toBe(
+        first.body.items[0]?.["assetId"],
+      );
+      expect(next.body.items[0]).toMatchObject({
+        quote: { source: "pool_slot0" },
+      });
+      expect(next.body.nextCursor).toBeNull();
+      expect(many).toHaveBeenCalledTimes(2);
+    });
+
     it("prices an ungraduated MEME launchpad token from its curve snapshot (Decision 0101)", async () => {
       const { app } = await createApp(
         fakes({
