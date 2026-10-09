@@ -1175,3 +1175,61 @@ describe("Community AI Provider configuration (Decision 0066, amended 2026-09-23
     expect(() => loadConfig(environment)).toThrow(ConfigurationError);
   });
 });
+
+describe("iOS application identifier (Decision 0106)", () => {
+  it("publishes no iOS app identifier without PASSKEY_IOS_TEAM_ID", () => {
+    for (const environment of [
+      validEnvironment(),
+      { ...validEnvironment(), PASSKEY_IOS_BUNDLE_ID: "com.cywd.loopapp" },
+    ]) {
+      const config = loadConfig(environment);
+      expect(config.passkeyRelyingParty.ios).toBeNull();
+      expect(config.appLinks.iosAppIds).toEqual([]);
+    }
+  });
+
+  it("derives one identifier for passkeys and app links from Team ID + bundle ID", () => {
+    const defaulted = loadConfig({
+      ...validEnvironment(),
+      PASSKEY_IOS_TEAM_ID: "abcde12345",
+    });
+    expect(defaulted.passkeyRelyingParty.ios?.appId).toBe(
+      "ABCDE12345.com.cywd.loopapp",
+    );
+    expect(defaulted.appLinks.iosAppIds).toEqual([
+      "ABCDE12345.com.cywd.loopapp",
+    ]);
+
+    const explicit = loadConfig({
+      ...validEnvironment(),
+      PASSKEY_IOS_TEAM_ID: "ZYXWV98765",
+      PASSKEY_IOS_BUNDLE_ID: "com.example.next",
+    });
+    expect(explicit.appLinks.iosAppIds).toEqual([
+      "ZYXWV98765.com.example.next",
+    ]);
+    expect(explicit.passkeyRelyingParty.ios?.appId).toBe(
+      "ZYXWV98765.com.example.next",
+    );
+  });
+
+  it("keeps the Android package independent of the iOS bundle ID", () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      PASSKEY_IOS_TEAM_ID: "ABCDE12345",
+    });
+    expect(config.appLinks.androidPackage).toBe("com.cywd.loop");
+  });
+
+  it("rejects a malformed Team ID or bundle ID at startup", () => {
+    for (const overrides of [
+      { PASSKEY_IOS_TEAM_ID: "ABCDE" },
+      { PASSKEY_IOS_TEAM_ID: "ABCDE12345", PASSKEY_IOS_BUNDLE_ID: "loopapp" },
+      { PASSKEY_IOS_BUNDLE_ID: "com.example.bad name" },
+    ]) {
+      expect(() => loadConfig({ ...validEnvironment(), ...overrides })).toThrow(
+        ConfigurationError,
+      );
+    }
+  });
+});

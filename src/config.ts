@@ -1006,13 +1006,17 @@ export interface PasskeyIosConfig {
 
 /**
  * Universal Links / App Links for shared LOOP ID links (Decision 0090). The
- * iOS application identifier, Android package, and the Development debug
- * keystore fingerprint are fixed public facts of the LOOP app build; only the
- * release signing fingerprint(s) and the optional download link for the
- * `/u/{loopId}` landing page come from the environment.
+ * Android package and the Development debug keystore fingerprint are fixed
+ * public facts of the LOOP app build; the iOS application identifier
+ * (Decision 0106), the release signing fingerprint(s), and the optional
+ * download link for the landing pages come from the environment.
  */
 export interface AppLinksConfig {
-  /** `<TEAMID>.<BUNDLEID>` identifiers claimed for `/u/*`. */
+  /**
+   * `<TEAMID>.<BUNDLEID>` identifiers claimed for `/u/*` and `/c/*`, derived
+   * from `PASSKEY_IOS_TEAM_ID` + `PASSKEY_IOS_BUNDLE_ID` (Decision 0106).
+   * Empty when no Team ID is configured: no iOS app is claimed at all.
+   */
   readonly iosAppIds: readonly string[];
   readonly androidPackage: string;
   /** Debug keystore first, then `ANDROID_RELEASE_CERT_SHA256` entries. */
@@ -1996,7 +2000,12 @@ function parseWalletGasReserve(value: string): WalletGasReserveConfig {
 }
 
 export const defaultPasskeyAndroidPackage = "com.cywd.loop";
-export const defaultPasskeyIosBundleId = "com.cywd.loop";
+/**
+ * Decision 0106: the iOS app moved to a new Apple account and bundle ID. The
+ * Team ID has no default; without `PASSKEY_IOS_TEAM_ID` no iOS app identifier
+ * is published anywhere.
+ */
+export const defaultPasskeyIosBundleId = "com.cywd.loopapp";
 
 const passkeyAndroidPackagePattern =
   /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
@@ -2039,17 +2048,23 @@ function parseCertificateFingerprints(
   return fingerprints;
 }
 
-/** Decision 0090: the LOOP iOS app (Team ID + bundle ID) claiming `/u/*`. */
-export const appLinksIosAppId = "867CN6U7W9.com.cywd.loop";
+/**
+ * Android package claiming `/u/*` and `/c/*` (Decision 0090). The iOS app
+ * identifier is no longer a constant: Decision 0106 derives it from
+ * `PASSKEY_IOS_TEAM_ID` + `PASSKEY_IOS_BUNDLE_ID`.
+ */
 export const appLinksAndroidPackage = "com.cywd.loop";
 /** Development debug keystore of the LOOP Android build (Decision 0090). */
 export const appLinksAndroidDebugFingerprint =
   "AE:60:82:E6:21:F5:9D:3E:63:96:F8:CB:4B:8D:86:28:7C:F6:2B:29:06:D5:2C:2E:5D:8E:A7:D4:DB:5E:3E:FA";
 
-function parseAppLinksConfig(data: {
-  readonly ANDROID_RELEASE_CERT_SHA256?: string | undefined;
-  readonly APP_DOWNLOAD_URL?: string | undefined;
-}): AppLinksConfig {
+function parseAppLinksConfig(
+  data: {
+    readonly ANDROID_RELEASE_CERT_SHA256?: string | undefined;
+    readonly APP_DOWNLOAD_URL?: string | undefined;
+  },
+  ios: PasskeyIosConfig | null,
+): AppLinksConfig {
   const release = parseCertificateFingerprints(
     "ANDROID_RELEASE_CERT_SHA256",
     data.ANDROID_RELEASE_CERT_SHA256,
@@ -2070,7 +2085,7 @@ function parseAppLinksConfig(data: {
     downloadUrl = url.toString();
   }
   return Object.freeze({
-    iosAppIds: Object.freeze([appLinksIosAppId]),
+    iosAppIds: Object.freeze(ios === null ? [] : [ios.appId]),
     androidPackage: appLinksAndroidPackage,
     androidCertificateFingerprints: Object.freeze([
       appLinksAndroidDebugFingerprint,
@@ -2645,6 +2660,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
 
   const bscChain = parseBscChainConfig(parsed.data);
 
+  const passkeyRelyingParty = parsePasskeyRelyingPartyConfig(parsed.data);
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,
     host: parsed.data.HOST,
@@ -2687,8 +2703,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
-    passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
-    appLinks: parseAppLinksConfig(parsed.data),
+    passkeyRelyingParty,
+    appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),

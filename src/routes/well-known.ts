@@ -16,13 +16,18 @@ import { errorResponseSchema } from "../core/http/schemas.js";
  * Bearer token, no `X-Loop-Contract-Version`, and no `Idempotency-Key`, and
  * they refuse a body that is not plain JSON.
  *
- * Decision 0090 adds the `/u/*` link association, whose identifiers are fixed
- * facts of the LOOP app build, so both files are now always published. The
- * passkey half stays fail-closed exactly as Decision 0063 ruled: without
- * `PASSKEY_IOS_TEAM_ID` the Apple file carries no `webcredentials`, and
- * without `PASSKEY_ANDROID_CERT_SHA256` the Android file carries no
- * `get_login_creds` statement.
+ * Decision 0090 adds the `/u/*` link association, so both files are always
+ * published. Decision 0106 removes the hard-coded iOS application identifier:
+ * the Apple file claims `<PASSKEY_IOS_TEAM_ID>.<PASSKEY_IOS_BUNDLE_ID>` and,
+ * without `PASSKEY_IOS_TEAM_ID`, claims no app at all (`applinks.details` is
+ * empty, no `webcredentials`) and the process logs one
+ * `APPLE_TEAM_ID_MISSING` warning at startup. The Android file is unaffected.
+ * Without `PASSKEY_ANDROID_CERT_SHA256` the Android file carries no
+ * `get_login_creds` statement (Decision 0063).
  */
+
+/** Startup warning code when no iOS app identifier can be published. */
+export const appleTeamIdMissingCode = "APPLE_TEAM_ID_MISSING";
 
 const handleAllUrlsRelation = "delegate_permission/common.handle_all_urls";
 const getLoginCredsRelation = "delegate_permission/common.get_login_creds";
@@ -105,7 +110,6 @@ const appleAppSiteAssociationResponseSchema = {
       properties: {
         details: {
           type: "array",
-          minItems: 1,
           items: {
             type: "object",
             additionalProperties: false,
@@ -156,6 +160,13 @@ export function registerWellKnownRoutes(
   app: FastifyInstance,
   config: AppConfig,
 ): void {
+  if (config.appLinks.iosAppIds.length === 0) {
+    app.log.warn(
+      { reasonCode: appleTeamIdMissingCode },
+      "PASSKEY_IOS_TEAM_ID is not configured; apple-app-site-association claims no iOS app",
+    );
+  }
+
   app.get(
     "/.well-known/assetlinks.json",
     {
@@ -214,14 +225,18 @@ export function registerWellKnownRoutes(
     },
     async (_request, reply) => {
       const ios = config.passkeyRelyingParty.ios;
+      const appIds = config.appLinks.iosAppIds;
       sendDiscoveryDocument(reply, {
         applinks: {
-          details: [
-            {
-              appIDs: [...config.appLinks.iosAppIds],
-              components: [...appleAppLinkComponents],
-            },
-          ],
+          details:
+            appIds.length === 0
+              ? []
+              : [
+                  {
+                    appIDs: [...appIds],
+                    components: [...appleAppLinkComponents],
+                  },
+                ],
         },
         ...(ios === null ? {} : { webcredentials: { apps: [ios.appId] } }),
       });

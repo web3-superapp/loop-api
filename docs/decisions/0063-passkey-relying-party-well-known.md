@@ -42,12 +42,12 @@ Fail closed means **absent**, not empty. An `assetlinks.json` with an empty fing
 
 ### Configuration
 
-| Key                           | Default         | Validation                                                                                          |
-| ----------------------------- | --------------- | --------------------------------------------------------------------------------------------------- |
-| `PASSKEY_ANDROID_PACKAGE`     | `com.cywd.loop` | dotted Android package name                                                                         |
-| `PASSKEY_ANDROID_CERT_SHA256` | unset           | comma-separated list, each entry 32 colon-separated hex byte pairs, upper-cased, unique, at most 10 |
-| `PASSKEY_IOS_TEAM_ID`         | unset           | ten characters, `[A-Z0-9]`, upper-cased                                                             |
-| `PASSKEY_IOS_BUNDLE_ID`       | `com.cywd.loop` | dotted bundle identifier                                                                            |
+| Key                           | Default                            | Validation                                                                                          |
+| ----------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `PASSKEY_ANDROID_PACKAGE`     | `com.cywd.loop`                    | dotted Android package name                                                                         |
+| `PASSKEY_ANDROID_CERT_SHA256` | unset                              | comma-separated list, each entry 32 colon-separated hex byte pairs, upper-cased, unique, at most 10 |
+| `PASSKEY_IOS_TEAM_ID`         | unset                              | ten characters, `[A-Z0-9]`, upper-cased                                                             |
+| `PASSKEY_IOS_BUNDLE_ID`       | `com.cywd.loopapp` (Decision 0106) | dotted bundle identifier                                                                            |
 
 A malformed value is a `ConfigurationError` at startup, not a silently dropped entry: publishing a subset of the fingerprints an operator intended is how a release build silently loses its passkeys. Lowercase hex is accepted and published upper-cased, because that is the form `keytool` prints and the form both platforms compare case-insensitively.
 
