@@ -1,0 +1,407 @@
+import { randomUUID } from "node:crypto";
+
+import type {
+  AssetRecord,
+  ChainRegistryRepository,
+} from "./database/chain-registry-repository.js";
+import type {
+  AssetPriceFact,
+  CachedFact,
+} from "./features/market/market-fact-service.js";
+import type { PairSnapshot } from "./integrations/market/market-data-provider.js";
+import {
+  miningReasonCodes,
+  type MiningFormulaDocument,
+  type MiningHoldingsSource,
+} from "./features/mining/mining-contract.js";
+import {
+  deriveDeclaredPairReferencePrice,
+  deriveStableReferencePrice,
+} from "./features/mining/mining-reference-pricing.js";
+import type { MiningRepository } from "./features/mining/mining-repository.js";
+import {
+  computeMiningSnapshot,
+  type MiningPriceInput,
+  type MiningSnapshotSkip,
+} from "./features/mining/mining-snapshot.js";
+
+/**
+ * The `mining-snapshot` lane (Decisions 0036 and 0043), default off behind
+ * `MINING_SNAPSHOT_ENABLED` in the standalone worker process; the same
+ * `runOnce` is what `pnpm mining:snapshot --confirm` executes once.
+ *
+ * Each tick reads the approved formula version. Without one the lane is
+ * idle (`MINING_FORMULA_BASELINE_PENDING`) and touches nothing else. With
+ * one it gathers the latest observed balances, reads a *fresh* reference
+ * price per formula-weighted asset, the community weight state of every
+ * bound community under that version, computes the snapshot through the
+ * pure `computeMiningSnapshot`, and writes it. It never settles a reward,
+ * never claims, and never estimates a price.
+ *
+ * A formula version may declare a reference pricing rule per asset
+ * (Decision 0059): a pegged stable may be priced from the inverted quote
+ * side of its deepest pair, and a declared pair is read by its own address.
+ * The lane only observes and reports; whether a derived price may enter a
+ * snapshot is decided by the pure computation against the version.
+ *
+ * A run that cannot value a positive weighted holding is `incomplete`
+ * (Decision 0057): it is recorded with its unread holdings and no number,
+ * never becomes the latest snapshot, and is reported through
+ * `onRunResult` so an operator can see it. Leaving the asset out would have
+ * published the holding as zero.
+ */
+
+export const MINING_SNAPSHOT_LANE = "mining-snapshot" as const;
+export const MINING_SNAPSHOT_IDLE_DELAY_MS = 300_000;
+export const MINING_SNAPSHOT_RETRY_BASE_DELAY_MS = 1_000;
+export const MINING_SNAPSHOT_RETRY_MAX_DELAY_MS = 300_000;
+
+export type MiningSnapshotRunKind =
+  "aborted" | "idle" | "incomplete" | "snapshotted";
+
+export interface MiningSnapshotRunResult {
+  readonly kind: MiningSnapshotRunKind;
+  readonly reasonCode: string | null;
+  /** The written snapshot, or the recorded incomplete attempt. */
+  readonly snapshotId: string | null;
+  readonly powerRowCount: number;
+  /** Policy exclusions (unweighted, pending or ambiguous community weight, unpriced zero balance). */
+  readonly skipped: readonly MiningSnapshotSkip[];
+  /** Positive weighted holdings without a usable price; non-empty exactly when `incomplete`. */
+  readonly unread: readonly MiningSnapshotSkip[];
+  /**
+   * The kinds of observed balance the written snapshot counted
+   * (Decision 0061); null for a run that published nothing.
+   */
+  readonly holdingsSource: MiningHoldingsSource | null;
+}
+
+export interface MiningSnapshotInfrastructureBackoff {
+  readonly reasonCode: "mining_snapshot_unavailable";
+  readonly consecutiveFailureCount: number;
+  readonly retryDelayMs: number;
+}
+
+export interface MiningSnapshotWorker {
+  readonly workerId: string;
+  readonly lane: typeof MINING_SNAPSHOT_LANE;
+  runOnce(signal?: AbortSignal): Promise<MiningSnapshotRunResult>;
+  run(signal: AbortSignal): Promise<void>;
+}
+
+/** The only price reads the lane performs, both required to be fresh. */
+export interface MiningPriceReader {
+  readAssetPrice(
+    asset: Pick<AssetRecord, "address" | "status">,
+    options: { readonly requireFresh: true },
+  ): Promise<AssetPriceFact>;
+  /** One declared pair, for a `kind: "pair"` reference pricing rule. */
+  readPair(
+    pairAddress: string,
+    options: { readonly requireFresh: true },
+  ): Promise<CachedFact<PairSnapshot>>;
+}
+
+export interface CreateMiningSnapshotWorkerOptions {
+  readonly repository: MiningRepository;
+  readonly registry: Pick<ChainRegistryRepository, "listAssets">;
+  readonly prices: MiningPriceReader;
+  /**
+   * Include the Development seed's `mock_seed` balances (Decision 0061).
+   * Default false: without it the lane sees only chain observations, which
+   * is the only thing a production stack may ever compute from. The
+   * configuration refuses to set it under `NODE_ENV=production`.
+   */
+  readonly includeMockSeedHoldings?: boolean;
+  readonly createUuid?: () => string;
+  readonly onInfrastructureBackoff?: (
+    event: MiningSnapshotInfrastructureBackoff,
+  ) => void;
+  /** Every completed tick, so the process can log an incomplete attempt. */
+  readonly onRunResult?: (result: MiningSnapshotRunResult) => void;
+}
+
+async function waitFor(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted ?? false;
+}
+
+function retryDelayMs(consecutiveFailureCount: number): number {
+  return Math.min(
+    MINING_SNAPSHOT_RETRY_BASE_DELAY_MS * 2 ** (consecutiveFailureCount - 1),
+    MINING_SNAPSHOT_RETRY_MAX_DELAY_MS,
+  );
+}
+
+function idle(reasonCode: string, skipped: readonly MiningSnapshotSkip[] = []) {
+  return Object.freeze({
+    kind: "idle" as const,
+    reasonCode,
+    snapshotId: null,
+    powerRowCount: 0,
+    skipped: Object.freeze([...skipped]),
+    unread: Object.freeze([]),
+    holdingsSource: null,
+  });
+}
+
+export function createMiningSnapshotWorker(
+  options: CreateMiningSnapshotWorkerOptions,
+): MiningSnapshotWorker {
+  const createUuid = options.createUuid ?? randomUUID;
+  const workerId = createUuid();
+  let inFlight: Promise<MiningSnapshotRunResult> | null = null;
+  let loopRunning = false;
+
+  /**
+   * One asset's reference price, exactly as observed. A version-declared
+   * pair (Decision 0059) is read by its own address and is authoritative for
+   * that asset; otherwise the asset's own pair list is read and, when it
+   * yields no base pair, a declared `stable` rule may invert the deepest
+   * pair in which the asset is the quote token. Nothing here decides
+   * whether a derived price is acceptable — the pure computation does.
+   */
+  async function readPrice(
+    asset: AssetRecord,
+    formula: MiningFormulaDocument,
+  ): Promise<MiningPriceInput> {
+    const rule = formula.referencePricing?.[asset.assetId];
+    const tokenAddress = asset.address;
+    if (rule?.kind === "pair" && tokenAddress !== null) {
+      const fact = await options.prices.readPair(rule.pairAddress, {
+        requireFresh: true,
+      });
+      const derivation =
+        fact.quality === "fresh"
+          ? deriveDeclaredPairReferencePrice({
+              rule,
+              tokenAddress,
+              pair: fact.value?.pair ?? null,
+            })
+          : ({ kind: "skip" } as const);
+      return Object.freeze({
+        assetId: asset.assetId,
+        priceUsd:
+          derivation.kind === "price" ? derivation.price.priceUsd : null,
+        quality:
+          derivation.kind === "price"
+            ? derivation.price.inverted
+              ? "derived"
+              : "fresh"
+            : fact.quality === "fresh"
+              ? "fresh"
+              : fact.quality,
+        fetchedAt: fact.fetchedAt,
+        source: fact.source,
+        proxyAssetId: null,
+        pairAddress:
+          derivation.kind === "price" ? derivation.price.pairAddress : null,
+        derivedInverted:
+          derivation.kind === "price" ? derivation.price.inverted : false,
+      });
+    }
+    const { fact, pair, proxyAsset } = await options.prices.readAssetPrice(
+      asset,
+      { requireFresh: true },
+    );
+    // Freshness is the Provider fact's own (for the native asset: WBNB's
+    // observation time). Whether a proxied price may be used is decided
+    // by the pure computation against the version's declared proxies
+    // (Decision 0044); the lane only reports what it observed.
+    const usable = fact.quality === "fresh";
+    if (
+      usable &&
+      pair === null &&
+      proxyAsset === null &&
+      rule?.kind === "stable" &&
+      tokenAddress !== null &&
+      fact.value !== null
+    ) {
+      const derivation = deriveStableReferencePrice({
+        rule,
+        tokenAddress: fact.value.tokenAddress,
+        pairs: fact.value.pairs,
+      });
+      if (derivation.kind === "price") {
+        return Object.freeze({
+          assetId: asset.assetId,
+          priceUsd: derivation.price.priceUsd,
+          quality: "derived" as const,
+          fetchedAt: fact.fetchedAt,
+          source: fact.source,
+          proxyAssetId: null,
+          pairAddress: derivation.price.pairAddress,
+          derivedInverted: derivation.price.inverted,
+        });
+      }
+    }
+    return Object.freeze({
+      assetId: asset.assetId,
+      priceUsd: usable ? (pair?.priceUsd ?? null) : null,
+      quality: usable
+        ? proxyAsset === null
+          ? "fresh"
+          : "proxied"
+        : fact.quality,
+      fetchedAt: fact.fetchedAt,
+      source: fact.source,
+      proxyAssetId: proxyAsset,
+      pairAddress: usable ? (pair?.pairAddress ?? null) : null,
+      derivedInverted: false,
+    });
+  }
+
+  async function execute(
+    signal?: AbortSignal,
+  ): Promise<MiningSnapshotRunResult> {
+    const formula = await options.repository.getApprovedFormula();
+    if (formula === null) {
+      return idle(miningReasonCodes.formulaBaselinePending);
+    }
+    if (isAborted(signal)) {
+      return Object.freeze({
+        kind: "aborted" as const,
+        reasonCode: null,
+        snapshotId: null,
+        powerRowCount: 0,
+        skipped: Object.freeze([]),
+        unread: Object.freeze([]),
+        holdingsSource: null,
+      });
+    }
+    const [balances, communityWeights] = await Promise.all([
+      options.repository.listBalanceInputs({
+        includeMockSeedHoldings: options.includeMockSeedHoldings ?? false,
+      }),
+      options.repository.listCommunityWeightInputs(formula.configVersion),
+    ]);
+    if (balances.length === 0) {
+      return idle(miningReasonCodes.noBalanceInputs);
+    }
+    // Only assets the formula weights can enter a snapshot (a community
+    // weight is a second factor, never a weight of its own), so only those
+    // need a price read.
+    const weightedAssetIds = new Set<string>(
+      Object.keys(formula.formula.assetWeights),
+    );
+    const candidateAssetIds = [
+      ...new Set(balances.map((balance) => balance.assetId)),
+    ].filter((assetId) => weightedAssetIds.has(assetId));
+    const assets = await options.registry.listAssets(candidateAssetIds);
+    const prices: MiningPriceInput[] = [];
+    for (const asset of assets) {
+      if (isAborted(signal)) {
+        break;
+      }
+      prices.push(await readPrice(asset, formula.formula));
+    }
+    const computation = computeMiningSnapshot(
+      { balances, prices, communityWeights },
+      { configVersion: formula.configVersion, document: formula.formula },
+    );
+    if (computation.kind === "unavailable") {
+      return idle(computation.reasonCode, computation.skipped);
+    }
+    if (computation.kind === "incomplete") {
+      // Fail closed: record what could not be valued and publish nothing.
+      const attempt = await options.repository.writeIncompleteSnapshot({
+        snapshotId: createUuid(),
+        blockNumber: computation.blockNumber,
+        blockHash: computation.blockHash,
+        formulaVersion: computation.formulaVersion,
+        priceVersion: computation.priceVersion,
+        unreadInputs: computation.unread,
+      });
+      return Object.freeze({
+        kind: "incomplete" as const,
+        reasonCode: miningReasonCodes.snapshotIncomplete,
+        snapshotId: attempt.snapshotId,
+        powerRowCount: 0,
+        skipped: computation.skipped,
+        unread: computation.unread,
+        holdingsSource: null,
+      });
+    }
+    const snapshot = await options.repository.writeSnapshot({
+      snapshotId: createUuid(),
+      blockNumber: computation.blockNumber,
+      blockHash: computation.blockHash,
+      formulaVersion: computation.formulaVersion,
+      priceVersion: computation.priceVersion,
+      totalPower: computation.totalPower,
+      powers: computation.powers,
+      holdingsSource: computation.holdingsSource,
+    });
+    return Object.freeze({
+      kind: "snapshotted" as const,
+      reasonCode: null,
+      snapshotId: snapshot.snapshotId,
+      powerRowCount: computation.powers.length,
+      skipped: computation.skipped,
+      unread: Object.freeze([]),
+      holdingsSource: computation.holdingsSource,
+    });
+  }
+
+  function runOnce(signal?: AbortSignal): Promise<MiningSnapshotRunResult> {
+    if (inFlight !== null) {
+      return inFlight;
+    }
+    const promise = execute(signal)
+      .then((result) => {
+        options.onRunResult?.(result);
+        return result;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    inFlight = promise;
+    return promise;
+  }
+
+  async function run(signal: AbortSignal): Promise<void> {
+    if (loopRunning) {
+      throw new Error("Mining snapshot worker loop is already running");
+    }
+    loopRunning = true;
+    let consecutiveFailureCount = 0;
+    try {
+      while (!signal.aborted) {
+        try {
+          await runOnce(signal);
+          consecutiveFailureCount = 0;
+          await waitFor(MINING_SNAPSHOT_IDLE_DELAY_MS, signal);
+        } catch {
+          consecutiveFailureCount += 1;
+          const delay = retryDelayMs(consecutiveFailureCount);
+          options.onInfrastructureBackoff?.({
+            reasonCode: "mining_snapshot_unavailable",
+            consecutiveFailureCount,
+            retryDelayMs: delay,
+          });
+          await waitFor(delay, signal);
+        }
+      }
+    } finally {
+      loopRunning = false;
+    }
+  }
+
+  return Object.freeze({ workerId, lane: MINING_SNAPSHOT_LANE, runOnce, run });
+}

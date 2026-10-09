@@ -1,0 +1,45 @@
+{
+  "schema_version": "loop.hyperliquid-spot.fixture-provenance/v1",
+  "classification": "public_nonsecret_test_evidence",
+  "runtime_fallback": false,
+  "files": [
+    {
+      "path": "provider-spot-meta-purr-testnet.json",
+      "sha256": "35d1e7e00423621aa1c63157eb73c5212beef609d45b1136dde03331af678f8f",
+      "source": "bounded projection of an unauthenticated live Hyperliquid Testnet POST /info spotMetaAndAssetCtxs response",
+      "capture_window_ended_at": "2026-08-26T06:46:05Z"
+    },
+    {
+      "path": "provider-l2-book-purr-testnet.json",
+      "sha256": "13758a1c6568de3aca2ebe40a98c25d5a7fa28ca9c00ee223986479d341780c1",
+      "source": "first three levels per side from an unauthenticated live Hyperliquid Testnet POST /info l2Book response",
+      "capture_window_ended_at": "2026-08-26T06:46:05Z"
+    },
+    {
+      "path": "signing-conformance-v1.json",
+      "sha256": "992d19bd38fe728b6e9de382fecf96d77ffb6eecb53fb8baf284d1a95622a062",
+      "source": "offline official hyperliquid-python-sdk 0.24.0 signing oracle",
+      "network_requests": 0
+    }
+  ],
+  "provider_capture": {
+    "origin": "https://api.hyperliquid-testnet.xyz",
+    "authentication": "none",
+    "credentials": "none",
+    "raw_complete_responses_committed": false,
+    "projection_rule": "retain only the documented PURR/USDC identity and a bounded three-level book while preserving selected provider field names, ordering, JSON types, and exact strings",
+    "runtime_use": "forbidden"
+  },
+  "signing_oracle": {
+    "repository": "https://github.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "version": "0.24.0",
+    "commit": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "signing_py_sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
+    "signing_test_py_sha256": "ea0d7b2e9e2a224b55e05b6d1abbcc727ce1f38e72572e607a4a7045bc01a042",
+    "poetry_lock_sha256": "1580d7eb44762dfd6598e32009319a7eb6da45070a4040b237526f21a1af7b6b",
+    "fixture_signer": "official public SDK test identity; key material omitted",
+    "verification_command": "python3 scripts/verify-hyperliquid-spot-signing-oracle.py --sdk-root <exact-official-checkout>",
+    "verification_status": "official_oracle_verified_runtime_adapter_not_selected",
+    "production_signer_conformance": "not_run"
+  }
+}

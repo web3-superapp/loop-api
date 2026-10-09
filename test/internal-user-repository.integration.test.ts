@@ -1,0 +1,222 @@
+import type { FastifyBaseLogger } from "fastify";
+import pg from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { loadConfig } from "../src/config.js";
+import {
+  createPostgresDatabase,
+  type Database,
+} from "../src/database/database.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
+
+const { Pool } = pg;
+const databaseUrl = requireIntegrationDatabaseUrl();
+
+const config = loadConfig({
+  NODE_ENV: "test",
+  API_DOCS_ENABLED: "false",
+  LOG_LEVEL: "silent",
+  DATABASE_URL: databaseUrl,
+});
+const logger = {
+  error: () => undefined,
+} as unknown as FastifyBaseLogger;
+const truncateControlPlane = `
+  truncate table
+    public.ops_jobs,
+    public.ops_audit,
+    public.ops_operations,
+    public.ops_mining_drafts,
+    public.ops_grants,
+    public.ops_operators,
+    public.community_ai_answer_reports,
+    public.community_ai_answers,
+    public.community_ai_usage,
+    public.push_deliveries,
+    public.device_push_token_commands,
+    public.device_push_tokens,
+    public.referral_events,
+    public.referral_edges,
+    public.invite_codes,
+    public.mining_reward_ledger,
+    public.mining_snapshot_powers,
+    public.mining_snapshots,
+    public.community_mining_weights,
+    public.venue_milestones,
+    public.refund_claims,
+    public.refund_liabilities,
+    public.entitlements,
+    public.launch_settlement_records,
+    public.purchase_records,
+    public.launch_round_allowlist_roots,
+    public.launch_allowlists,
+    public.launch_indexed_events,
+    public.launch_intents,
+    public.launch_rounds,
+    public.launch_configs,
+    public.launches,
+    public.launch_review_events,
+    public.launch_projects,
+    public.chat_group_membership_events,
+    public.voice_room_events,
+    public.voice_room_hand_raises,
+    public.voice_room_members,
+    public.voice_rooms,
+    public.community_channel_sync_jobs,
+    public.community_channel_personas,
+    public.community_channel_activity,
+    public.community_channel_members,
+    public.community_channels,
+    public.social_graph_events,
+    public.user_blocks,
+    public.follow_edges,
+    public.community_role_events,
+    public.community_memberships,
+    public.communities,
+    public.chat_operation_events,
+    public.communication_group_members,
+    public.direct_channels,
+    public.social_operation_events,
+    public.social_operations,
+    public.friendships,
+    public.friend_requests,
+    public.social_privacy_preferences,
+    public.chat_operations,
+    public.notifications,
+    public.notification_preferences_v2,
+    public.notification_preference_v2_versions,
+    public.price_alert_events,
+    public.notification_preferences,
+    public.notification_preference_versions,
+    public.price_alert_definitions,
+    public.watchlist_items,
+    public.watchlist_groups,
+    public.watchlist_versions,
+    public.group_alias_reservations,
+    public.communication_groups,
+    public.privacy_preferences_v2,
+    public.profile_activation_commands,
+    public.privacy_preferences,
+    public.user_profiles,
+    public.spot_agent_authorization_events,
+    public.spot_intent_events,
+    public.spot_agent_identity_events,
+    public.hyperliquid_signer_nonce_allocations,
+    public.hyperliquid_signer_nonce_state,
+    public.spot_agent_authorizations,
+    public.spot_intents,
+    public.spot_agent_identities,
+    public.perp_wallet_binding_events,
+    public.perp_wallet_bindings,
+    public.perp_agent_authorization_events,
+    public.perp_agent_authorizations,
+    public.perp_agent_identities,
+    public.perp_intent_events,
+    public.perp_intent_items,
+    public.perp_intents,
+    public.audit_events,
+    public.provider_operations,
+    public.idempotency_records,
+    public.issuance_rate_records,
+    public.device_session_events,
+    public.device_session_commands,
+    public.device_sessions,
+    public.support_ticket_events,
+    public.support_tickets,
+    public.account_settings,
+    public.swap_quotes,
+    public.wallet_intent_events,
+    public.wallet_intents,
+    public.approval_observations,
+    public.wallet_balance_snapshots,
+    public.account_wallets,
+    public.loop_users
+`;
+
+describe("PostgreSQL internal-user repository", () => {
+  let database: Database;
+  const inspectionPool = new Pool({ connectionString: databaseUrl });
+
+  beforeAll(() => {
+    database = createPostgresDatabase(config, logger);
+  });
+
+  beforeEach(async () => {
+    await inspectionPool.query(truncateControlPlane);
+  });
+
+  afterAll(async () => {
+    await database.close();
+    await inspectionPool.query(truncateControlPlane);
+    await inspectionPool.end();
+  });
+
+  it("returns one stable UUID for sequential calls", async () => {
+    const first = await database.internalUsers.getOrCreateByPrivyUserId(
+      "did:privy:sequential",
+    );
+    const second = await database.internalUsers.getOrCreateByPrivyUserId(
+      "did:privy:sequential",
+    );
+    const count = await inspectionPool.query<{ count: string }>(
+      "select count(*)::text as count from public.loop_users",
+    );
+
+    expect(first.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second).toEqual(first);
+    expect(count.rows[0]?.count).toBe("1");
+  });
+
+  it("returns one UUID under concurrent first bootstrap", async () => {
+    const users = await Promise.all(
+      Array.from({ length: 20 }, async () =>
+        database.internalUsers.getOrCreateByPrivyUserId("did:privy:concurrent"),
+      ),
+    );
+    const ids = new Set(users.map((user) => user.id));
+    const count = await inspectionPool.query<{ count: string }>(
+      "select count(*)::text as count from public.loop_users",
+    );
+
+    expect(ids.size).toBe(1);
+    expect(count.rows[0]?.count).toBe("1");
+  });
+
+  it("creates distinct UUIDs for distinct verified identities", async () => {
+    const first =
+      await database.internalUsers.getOrCreateByPrivyUserId("did:privy:first");
+    const second =
+      await database.internalUsers.getOrCreateByPrivyUserId("did:privy:second");
+
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it("finds only an existing verified identity without creating one", async () => {
+    const missing =
+      await database.internalUsers.findByPrivyUserId("did:privy:missing");
+    const created =
+      await database.internalUsers.getOrCreateByPrivyUserId(
+        "did:privy:existing",
+      );
+    const found =
+      await database.internalUsers.findByPrivyUserId("did:privy:existing");
+    const count = await inspectionPool.query<{ count: string }>(
+      "select count(*)::text as count from public.loop_users",
+    );
+
+    expect(missing).toBeNull();
+    expect(found).toEqual(created);
+    expect(count.rows[0]?.count).toBe("1");
+  });
+
+  it("rejects an invalid provider ID before insertion", async () => {
+    await expect(
+      database.internalUsers.getOrCreateByPrivyUserId("x".repeat(256)),
+    ).rejects.toThrow();
+    const count = await inspectionPool.query<{ count: string }>(
+      "select count(*)::text as count from public.loop_users",
+    );
+
+    expect(count.rows[0]?.count).toBe("0");
+  });
+});

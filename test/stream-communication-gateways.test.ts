@@ -1,0 +1,1891 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  createStreamCallGateway,
+  createUnavailableStreamCallGateway,
+  StreamCallGatewayUnavailableError,
+  StreamCallProjectionMismatchError,
+} from "../src/integrations/stream/call-gateway.js";
+import {
+  createStreamCommunityChannelGateway,
+  createUnavailableStreamCommunityChannelGateway,
+  StreamChannelGatewayUnavailableError,
+  StreamChannelProjectionMismatchError,
+  StreamChannelRequestRejectedError,
+} from "../src/integrations/stream/channel-gateway.js";
+
+const apiKey = "stream_test_api_key";
+const apiSecret = "stream_test_api_secret";
+const communityChannelId = "loop_community_0123456789abcdef0123456789abcdef";
+const groupChannelId = "loop_group_0123456789abcdef0123456789abcdef";
+const callId = "loop_voice_0123456789abcdef0123456789abcdef";
+const hostUserId = "loop_6d12a86e413447e69312c5ef75a30f55";
+const memberUserId = "loop_f7bf09f6017146b99acd5ad494f211bd";
+
+function signal(): AbortSignal {
+  return new AbortController().signal;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText: status === 200 ? "OK" : "Error",
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function channelResponse(
+  channelId: string,
+  kind: "community" | "group",
+  memberCount = 2,
+): Record<string, unknown> {
+  return {
+    duration: "1ms",
+    channel: {
+      id: channelId,
+      type: "messaging",
+      cid: `messaging:${channelId}`,
+      created_by: { id: hostUserId },
+      custom: {
+        loop_channel_kind: kind,
+        loop_channel_schema_version: 1,
+        name: "Frog Holders",
+      },
+      member_count: memberCount,
+    },
+    members: [],
+  };
+}
+
+function callResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    duration: "1ms",
+    created: true,
+    members: [],
+    own_capabilities: [],
+    call: {
+      id: callId,
+      type: "audio_room",
+      cid: `audio_room:${callId}`,
+      backstage: true,
+      custom: {
+        loop_call_kind: "communityVoiceRoom",
+        loop_call_schema_version: 1,
+      },
+      ...overrides,
+    },
+  };
+}
+
+function requestedUrl(fetchMock: ReturnType<typeof vi.fn>, index = 0): URL {
+  const call: unknown = fetchMock.mock.calls[index];
+  const value: unknown = Array.isArray(call) ? call[0] : undefined;
+  if (typeof value !== "string") {
+    throw new Error("Expected the Stream SDK to call fetch with a URL string");
+  }
+  return new URL(value);
+}
+
+function requestBody(
+  fetchMock: ReturnType<typeof vi.fn>,
+  index: number,
+): unknown {
+  const call: unknown = fetchMock.mock.calls[index];
+  const init: unknown = Array.isArray(call) ? call[1] : undefined;
+  if (typeof init !== "object" || init === null) {
+    throw new Error("Expected request init");
+  }
+  const body = (init as RequestInit).body;
+  if (typeof body !== "string") {
+    throw new Error("Expected a JSON request body");
+  }
+  return JSON.parse(body) as unknown;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("Stream community channel gateway", () => {
+  it("fails closed without credentials", async () => {
+    const gateway = createUnavailableStreamCommunityChannelGateway();
+    const unavailable = new StreamChannelGatewayUnavailableError();
+
+    await expect(
+      gateway.upsertCommunityChannel({
+        channelId: communityChannelId,
+        createdByStreamUserId: hostUserId,
+        name: "Frog Holders",
+        signal: signal(),
+      }),
+    ).rejects.toEqual(unavailable);
+    await expect(
+      gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(unavailable);
+    await expect(
+      gateway.removeMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(unavailable);
+  });
+
+  it("fails closed on partial credentials", async () => {
+    const gateway = createStreamCommunityChannelGateway({
+      apiKey: "",
+      apiSecret,
+    });
+    await expect(
+      gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("upserts the joining Stream user before adding it to the channel", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(channelResponse(communityChannelId, "community", 2_500)),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).resolves.toEqual({
+      channelId: communityChannelId,
+      streamCid: `messaging:${communityChannelId}`,
+      memberCount: 2_500,
+      confirmedPersonaStreamUserIds: [],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestedUrl(fetchMock, 0).pathname).toBe("/api/v2/users");
+    // The joiner is published with an ID and nothing else: LOOP never sends
+    // profile facts to Stream.
+    expect(requestBody(fetchMock, 0)).toEqual({
+      users: { [memberUserId]: { id: memberUserId } },
+    });
+    expect(requestedUrl(fetchMock, 1).pathname).toBe(
+      `/api/v2/chat/channels/messaging/${communityChannelId}`,
+    );
+    expect(requestBody(fetchMock, 1)).toEqual({
+      user_id: hostUserId,
+      add_members: [{ user_id: memberUserId }],
+    });
+  });
+
+  it("attaches the persona as member custom on add and confirms it from the echo", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...channelResponse(communityChannelId, "community", 3),
+          members: [
+            {
+              user_id: memberUserId,
+              user: { id: memberUserId },
+              custom: {
+                loop_group_alias_id: personaId,
+                loop_group_alias: "Harbor-4821",
+                loop_group_alias_version: 1,
+              },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    const projection = await gateway.addMembers({
+      channelId: communityChannelId,
+      actingStreamUserId: hostUserId,
+      memberStreamUserIds: [memberUserId],
+      memberPersonas: [
+        { streamUserId: memberUserId, personaId, alias: "Harbor-4821" },
+      ],
+      signal: signal(),
+    });
+
+    // The Stream user is still upserted `{id}`-only: the persona lives on
+    // the channel member, never on the user object.
+    expect(requestBody(fetchMock, 0)).toEqual({
+      users: { [memberUserId]: { id: memberUserId } },
+    });
+    expect(requestBody(fetchMock, 1)).toEqual({
+      user_id: hostUserId,
+      add_members: [
+        {
+          user_id: memberUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+    });
+    expect(projection.confirmedPersonaStreamUserIds).toEqual([memberUserId]);
+  });
+
+  it("leaves the persona unconfirmed when the echo is missing or differs", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const echoes: readonly unknown[] = [
+      [],
+      [{ user_id: memberUserId, custom: {} }],
+      [
+        {
+          user_id: memberUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Owl-0001",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+      [
+        {
+          user_id: hostUserId,
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      ],
+    ];
+    for (const members of echoes) {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({
+            duration: "1ms",
+            users: { [memberUserId]: { id: memberUserId } },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members,
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      const projection = await gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        memberPersonas: [
+          { streamUserId: memberUserId, personaId, alias: "Harbor-4821" },
+        ],
+        signal: signal(),
+      });
+
+      expect(projection.confirmedPersonaStreamUserIds).toEqual([]);
+      expect(projection.memberCount).toBe(3);
+    }
+  });
+
+  it("rejects a persona that names a member outside the batch or a malformed alias", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+
+    for (const memberPersonas of [
+      [{ streamUserId: hostUserId, personaId, alias: "Harbor-4821" }],
+      [{ streamUserId: memberUserId, personaId, alias: "loop_abc" }],
+      [
+        {
+          streamUserId: memberUserId,
+          personaId: "not-a-uuid",
+          alias: "Owl-0001",
+        },
+      ],
+      [
+        { streamUserId: memberUserId, personaId, alias: "Owl-0001" },
+        { streamUserId: memberUserId, personaId, alias: "Owl-0002" },
+      ],
+    ]) {
+      await expect(
+        gateway.addMembers({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          memberPersonas,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("projects a persona onto an existing member and requires the exact echo", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        duration: "1ms",
+        channel_member: {
+          user_id: memberUserId,
+          user: { id: memberUserId },
+          custom: {
+            loop_group_alias_id: personaId,
+            loop_group_alias: "Harbor-4821",
+            loop_group_alias_version: 1,
+          },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.projectMemberPersona({
+        channelId: communityChannelId,
+        streamUserId: memberUserId,
+        personaId,
+        alias: "Harbor-4821",
+        signal: signal(),
+      }),
+    ).resolves.toBeUndefined();
+
+    const url = requestedUrl(fetchMock, 0);
+    expect(url.pathname).toBe(
+      `/api/v2/chat/channels/messaging/${communityChannelId}/member`,
+    );
+    expect(url.searchParams.get("user_id")).toBe(memberUserId);
+    expect(requestBody(fetchMock, 0)).toEqual({
+      set: {
+        loop_group_alias_id: personaId,
+        loop_group_alias: "Harbor-4821",
+        loop_group_alias_version: 1,
+      },
+    });
+  });
+
+  it("does not confirm a persona projection whose echo differs, and classifies provider answers", async () => {
+    const personaId = "b5d6f0c2-2d1e-4c3a-9f6b-7a8c9d0e1f2a";
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    const input = () => ({
+      channelId: communityChannelId,
+      streamUserId: memberUserId,
+      personaId,
+      alias: "Harbor-4821",
+      signal: signal(),
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          channel_member: {
+            user_id: memberUserId,
+            custom: { loop_group_alias: "Owl-0001" },
+          },
+        }),
+      ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelGatewayUnavailableError(),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 16, message: "member not found", StatusCode: 404 },
+            404,
+          ),
+        ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelRequestRejectedError(),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 9, message: "rate limited", StatusCode: 429 },
+            429,
+          ),
+        ),
+    );
+    await expect(gateway.projectMemberPersona(input())).rejects.toEqual(
+      new StreamChannelGatewayUnavailableError(),
+    );
+
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().projectMemberPersona(
+        input(),
+      ),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("reports a deterministic client rejection as terminal", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { code: 4, message: "UpdateChannel failed", StatusCode: 400 },
+          400,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelRequestRejectedError());
+  });
+
+  it("keeps a quota answer and a provider fault retryable", async () => {
+    for (const status of [429, 500]) {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({
+            duration: "1ms",
+            users: { [memberUserId]: { id: memberUserId } },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({ code: 9, message: "try later" }, status),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.addMembers({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    }
+  });
+
+  it("removes a member and accepts the group channel kind", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(channelResponse(groupChannelId, "group")),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.removeMembers({
+        channelId: groupChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).resolves.toMatchObject({ channelId: groupChannelId });
+    expect(requestBody(fetchMock, 0)).toEqual({
+      user_id: hostUserId,
+      remove_members: [memberUserId],
+    });
+  });
+
+  it("rejects a channel whose authoritative kind does not match", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [memberUserId]: { id: memberUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(channelResponse(communityChannelId, "group")),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelProjectionMismatchError());
+  });
+
+  it("refuses a channel ID that is not a LOOP community or group channel", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.addMembers({
+        channelId: "loop_direct_0123456789abcdef0123456789abcdef",
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("community channel roles (Decision 0091)", () => {
+    function usersOk(): Response {
+      return jsonResponse({
+        duration: "1ms",
+        users: { [memberUserId]: { id: memberUserId } },
+      });
+    }
+
+    it("sends the channel role on add_members and confirms it with assign_roles", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(usersOk())
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members: [
+              {
+                user_id: memberUserId,
+                channel_role: "channel_moderator",
+              },
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await gateway.addMembers({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        memberStreamUserIds: [memberUserId],
+        channelRole: "channel_moderator",
+        signal: signal(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(requestBody(fetchMock, 1)).toEqual({
+        user_id: hostUserId,
+        add_members: [
+          { user_id: memberUserId, channel_role: "channel_moderator" },
+        ],
+      });
+      expect(requestedUrl(fetchMock, 2).pathname).toBe(
+        `/api/v2/chat/channels/messaging/${communityChannelId}`,
+      );
+      expect(requestBody(fetchMock, 2)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: memberUserId, channel_role: "channel_moderator" },
+        ],
+      });
+    });
+
+    it("demotes with the same add and treats a contradicting echo as unavailable", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(usersOk())
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            ...channelResponse(communityChannelId, "community", 3),
+            members: [
+              { user_id: memberUserId, channel_role: "channel_moderator" },
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.addMembers({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          channelRole: "channel_member",
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      expect(requestBody(fetchMock, 2)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: memberUserId, channel_role: "channel_member" },
+        ],
+      });
+    });
+
+    it("refuses a channel role on a group channel or an unknown role before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.addMembers({
+          channelId: groupChannelId,
+          actingStreamUserId: hostUserId,
+          memberStreamUserIds: [memberUserId],
+          channelRole: "channel_moderator",
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      await expect(
+        gateway.assignMemberChannelRoles({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          assignments: [
+            {
+              streamUserId: memberUserId,
+              channelRole: "admin" as "channel_member",
+            },
+          ],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("promotes a friend-group creator in its own group channel", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(groupChannelId, "group", 3)),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await gateway.assignMemberChannelRoles({
+        channelId: groupChannelId,
+        actingStreamUserId: hostUserId,
+        assignments: [
+          { streamUserId: hostUserId, channelRole: "channel_moderator" },
+        ],
+        signal: signal(),
+      });
+      expect(requestedUrl(fetchMock, 0).pathname).toBe(
+        `/api/v2/chat/channels/messaging/${groupChannelId}`,
+      );
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: hostUserId, channel_role: "channel_moderator" },
+        ],
+      });
+    });
+
+    it("assigns roles to existing members in one update", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(channelResponse(communityChannelId, "community", 3)),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await gateway.assignMemberChannelRoles({
+        channelId: communityChannelId,
+        actingStreamUserId: hostUserId,
+        assignments: [
+          { streamUserId: hostUserId, channelRole: "channel_moderator" },
+          { streamUserId: memberUserId, channelRole: "channel_member" },
+        ],
+        signal: signal(),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        assign_roles: [
+          { user_id: hostUserId, channel_role: "channel_moderator" },
+          { user_id: memberUserId, channel_role: "channel_member" },
+        ],
+      });
+    });
+
+    it("reads member roles read-only and drops members that were not asked for", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          members: [
+            { user_id: hostUserId, channel_role: "channel_member" },
+            { user_id: memberUserId, channel_role: "channel_moderator" },
+          ],
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.readMemberChannelRoles({
+          channelId: communityChannelId,
+          streamUserIds: [hostUserId],
+          signal: signal(),
+        }),
+      ).resolves.toEqual([
+        { streamUserId: hostUserId, channelRole: "channel_member" },
+      ]);
+      const url = requestedUrl(fetchMock, 0);
+      expect(url.pathname).toBe("/api/v2/chat/members");
+      expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
+        type: "messaging",
+        id: communityChannelId,
+        filter_conditions: { id: { $in: [hostUserId] } },
+        sort: [{ field: "created_at", direction: 1 }],
+        limit: 1,
+      });
+    });
+
+    it("fails closed without credentials", async () => {
+      const gateway = createUnavailableStreamCommunityChannelGateway();
+      await expect(
+        gateway.readMemberChannelRoles({
+          channelId: communityChannelId,
+          streamUserIds: [hostUserId],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      await expect(
+        gateway.assignMemberChannelRoles({
+          channelId: communityChannelId,
+          actingStreamUserId: hostUserId,
+          assignments: [
+            { streamUserId: hostUserId, channelRole: "channel_moderator" },
+          ],
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    });
+  });
+
+  describe("community channel presence (Decision 0047)", () => {
+    function memberPage(online: readonly boolean[]): Record<string, unknown> {
+      return {
+        duration: "1ms",
+        members: online.map((flag, index) => ({
+          user_id: `loop_${index.toString(16).padStart(32, "0")}`,
+          user: {
+            id: `loop_${index.toString(16).padStart(32, "0")}`,
+            online: flag,
+          },
+        })),
+      };
+    }
+
+    it("fails closed without credentials", async () => {
+      await expect(
+        createUnavailableStreamCommunityChannelGateway().readCommunityChannelPresence(
+          { channelId: communityChannelId, signal: signal() },
+        ),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+    });
+
+    /** Answers each member page by its offset, as Stream does. */
+    function pagedFetch(pages: readonly Record<string, unknown>[]) {
+      return vi.fn((url: string) => {
+        const payload = JSON.parse(
+          new URL(url).searchParams.get("payload") ?? "null",
+        ) as { readonly offset: number };
+        return Promise.resolve(
+          jsonResponse(pages[payload.offset / 100] ?? memberPage([])),
+        );
+      });
+    }
+
+    it("counts the members whose Stream user is online across pages, read-only", async () => {
+      const fullPage = memberPage(
+        Array.from({ length: 100 }, (_, index) => index % 10 === 0),
+      );
+      const fetchMock = pagedFetch([fullPage, memberPage([true, false, true])]);
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: communityChannelId,
+          signal: signal(),
+        }),
+      ).resolves.toEqual({
+        status: "observed",
+        channelId: communityChannelId,
+        onlineMemberCount: 12,
+        memberCount: 103,
+      });
+      // A full first page asks the rest of the budget together (Decision
+      // 0088); pages after the first short one are not counted.
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      for (const index of [0, 1, 2, 3, 4]) {
+        const url = requestedUrl(fetchMock, index);
+        expect(url.pathname).toBe("/api/v2/chat/members");
+        expect(JSON.parse(url.searchParams.get("payload") ?? "null")).toEqual({
+          type: "messaging",
+          id: communityChannelId,
+          filter_conditions: {},
+          sort: [{ field: "created_at", direction: 1 }],
+          limit: 100,
+          offset: index * 100,
+        });
+      }
+    });
+
+    it("asks only one page when the first page is short", async () => {
+      const fetchMock = pagedFetch([memberPage([true, false, true])]);
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: communityChannelId,
+          signal: signal(),
+        }),
+      ).resolves.toMatchObject({ onlineMemberCount: 2, memberCount: 3 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks the remaining pages together, not one after another", async () => {
+      const fullPage = memberPage(Array.from({ length: 100 }, () => false));
+      let inFlight = 0;
+      let peak = 0;
+      const release: (() => void)[] = [];
+      const fetchMock = vi.fn((url: string) => {
+        const payload = JSON.parse(
+          new URL(url).searchParams.get("payload") ?? "null",
+        ) as { readonly offset: number };
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise<Response>((resolve) => {
+          release.push(() => {
+            inFlight -= 1;
+            resolve(
+              jsonResponse(
+                payload.offset < 300 ? fullPage : memberPage([true]),
+              ),
+            );
+          });
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      const pending = gateway.readCommunityChannelPresence({
+        channelId: communityChannelId,
+        signal: signal(),
+      });
+      for (let turn = 0; turn < 20 && fetchMock.mock.calls.length < 5; turn++) {
+        for (const next of release.splice(0, release.length)) {
+          next();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      for (const next of release.splice(0, release.length)) {
+        next();
+      }
+      await expect(pending).resolves.toMatchObject({
+        status: "observed",
+        onlineMemberCount: 1,
+        memberCount: 301,
+      });
+      expect(peak).toBe(4);
+    });
+
+    it("reports a channel with more members than the paging budget instead of a partial total", async () => {
+      const fullPage = memberPage(Array.from({ length: 100 }, () => true));
+      const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(fullPage)));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: communityChannelId,
+          signal: signal(),
+        }),
+      ).resolves.toEqual({
+        status: "bound_exceeded",
+        channelId: communityChannelId,
+        memberBound: 500,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    });
+
+    it("treats a member without an online flag as a projection mismatch, never as offline", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            jsonResponse({
+              duration: "1ms",
+              members: [{ user_id: hostUserId, user: { id: hostUserId } }],
+            }),
+          ),
+        ),
+      );
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: communityChannelId,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelProjectionMismatchError());
+    });
+
+    it("keeps a provider fault unavailable and a deterministic rejection terminal", async () => {
+      for (const [status, expected] of [
+        [500, new StreamChannelGatewayUnavailableError()],
+        [404, new StreamChannelRequestRejectedError()],
+      ] as const) {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(() =>
+            Promise.resolve(
+              jsonResponse({ code: 16, message: "not found" }, status),
+            ),
+          ),
+        );
+        const gateway = createStreamCommunityChannelGateway({
+          apiKey,
+          apiSecret,
+        });
+        await expect(
+          gateway.readCommunityChannelPresence({
+            channelId: communityChannelId,
+            signal: signal(),
+          }),
+        ).rejects.toEqual(expected);
+      }
+    });
+
+    it("rejects a non-community channel ID before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.readCommunityChannelPresence({
+          channelId: groupChannelId,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("Stream audio_room call gateway", () => {
+  it("fails closed without credentials", async () => {
+    const gateway = createUnavailableStreamCallGateway();
+    const unavailable = new StreamCallGatewayUnavailableError();
+
+    await expect(
+      gateway.createAudioRoom({
+        callId,
+        createdByStreamUserId: hostUserId,
+        signal: signal(),
+      }),
+    ).rejects.toEqual(unavailable);
+    await expect(gateway.endCall({ callId, signal: signal() })).rejects.toEqual(
+      unavailable,
+    );
+    await expect(gateway.goLive({ callId, signal: signal() })).rejects.toEqual(
+      unavailable,
+    );
+    await expect(
+      gateway.queryMembers({ callId, signal: signal() }),
+    ).rejects.toEqual(unavailable);
+    await expect(
+      gateway.observeSession({ callId, signal: signal() }),
+    ).rejects.toEqual(unavailable);
+  });
+
+  it("creates a backstage audio_room with the host as its only member", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [hostUserId]: { id: hostUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(callResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.createAudioRoom({
+        callId,
+        createdByStreamUserId: hostUserId,
+        signal: signal(),
+      }),
+    ).resolves.toEqual({
+      callId,
+      callCid: `audio_room:${callId}`,
+      backstage: true,
+    });
+    expect(requestBody(fetchMock, 1)).toMatchObject({
+      data: {
+        created_by_id: hostUserId,
+        members: [{ user_id: hostUserId, role: "admin" }],
+        custom: {
+          loop_call_kind: "communityVoiceRoom",
+          loop_call_schema_version: 1,
+        },
+        settings_override: { backstage: { enabled: true } },
+      },
+    });
+  });
+
+  it("carries the host on the user role with explicit permissions when the application has no admin role", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          duration: "1ms",
+          users: { [hostUserId]: { id: hostUserId } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ code: 4, message: 'role "admin" is invalid' }, 400),
+      )
+      .mockResolvedValueOnce(jsonResponse(callResponse()))
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.createAudioRoom({
+        callId,
+        createdByStreamUserId: hostUserId,
+        signal: signal(),
+      }),
+    ).resolves.toMatchObject({ callId });
+    expect(requestBody(fetchMock, 2)).toMatchObject({
+      data: { members: [{ user_id: hostUserId, role: "user" }] },
+    });
+    expect(requestBody(fetchMock, 3)).toEqual({
+      user_id: hostUserId,
+      grant_permissions: ["send-audio", "mute-users", "end-call"],
+      revoke_permissions: [],
+    });
+  });
+
+  it("maps a LOOP listener to the Stream user role and a speaker to speaker", async () => {
+    for (const [role, streamRole] of [
+      ["listener", "user"],
+      ["speaker", "speaker"],
+    ] as const) {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await gateway.updateCallMembers({
+        callId,
+        addStreamUserIds: [memberUserId],
+        removeStreamUserIds: [],
+        role,
+        signal: signal(),
+      });
+
+      expect(requestBody(fetchMock, 0)).toEqual({
+        update_members: [{ user_id: memberUserId, role: streamRole }],
+        remove_members: [],
+      });
+    }
+  });
+
+  it("prefers the admin role for a host member and falls back once", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ code: 4, message: 'role "admin" is invalid' }, 400),
+      )
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }))
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await gateway.updateCallMembers({
+      callId,
+      addStreamUserIds: [hostUserId],
+      removeStreamUserIds: [],
+      role: "host",
+      signal: signal(),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(requestBody(fetchMock, 0)).toMatchObject({
+      update_members: [{ user_id: hostUserId, role: "admin" }],
+    });
+    expect(requestBody(fetchMock, 1)).toMatchObject({
+      update_members: [{ user_id: hostUserId, role: "user" }],
+    });
+    expect(requestBody(fetchMock, 2)).toEqual({
+      user_id: hostUserId,
+      grant_permissions: ["send-audio", "mute-users", "end-call"],
+      revoke_permissions: [],
+    });
+  });
+
+  it("never falls back for a non-host role or for a retryable answer", async () => {
+    const listenerFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ code: 4, message: 'role "user" is invalid' }, 400),
+      );
+    vi.stubGlobal("fetch", listenerFetch);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.updateCallMembers({
+        callId,
+        addStreamUserIds: [memberUserId],
+        removeStreamUserIds: [],
+        role: "listener",
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    expect(listenerFetch).toHaveBeenCalledTimes(1);
+
+    const quotaFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ code: 9, message: "slow down" }, 429),
+      );
+    vi.stubGlobal("fetch", quotaFetch);
+
+    await expect(
+      gateway.updateCallMembers({
+        callId,
+        addStreamUserIds: [hostUserId],
+        removeStreamUserIds: [],
+        role: "host",
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    expect(quotaFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("grants only the reviewed send-audio permission", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await gateway.updateUserPermissions({
+      callId,
+      streamUserId: memberUserId,
+      grantPermissions: ["send-audio"],
+      revokePermissions: [],
+      signal: signal(),
+    });
+
+    expect(requestBody(fetchMock, 0)).toEqual({
+      user_id: memberUserId,
+      grant_permissions: ["send-audio"],
+      revoke_permissions: [],
+    });
+  });
+
+  it("mutes every participant's audio in one call", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await gateway.muteUsers({
+      callId,
+      mutedByStreamUserId: hostUserId,
+      signal: signal(),
+    });
+
+    expect(requestBody(fetchMock, 0)).toEqual({
+      audio: true,
+      mute_all_users: true,
+      muted_by_id: hostUserId,
+    });
+  });
+
+  it("mutes one member's audio through the same endpoint with user_ids (Decision 0052)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await gateway.muteUser({
+      callId,
+      mutedByStreamUserId: hostUserId,
+      streamUserId: memberUserId,
+      signal: signal(),
+    });
+
+    expect(requestBody(fetchMock, 0)).toEqual({
+      audio: true,
+      user_ids: [memberUserId],
+      muted_by_id: hostUserId,
+    });
+    await expect(
+      gateway.muteUser({
+        callId,
+        mutedByStreamUserId: hostUserId,
+        streamUserId: "not-a-loop-user",
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("sendCallEvent (Decision 0069)", () => {
+    const custom = {
+      loop_event_kind: "voiceRoomHandRaise",
+      loop_event_schema_version: 1,
+      voice_room_id: "8c7b6a59-4d3e-4f21-8a0b-1c2d3e4f5a6b",
+      hand_raise_id: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+      sequence: "7",
+      state: "pending",
+    };
+
+    it("sends one custom event on the call under the named user", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ duration: "1ms" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await gateway.sendCallEvent({
+        callId,
+        sentByStreamUserId: hostUserId,
+        custom,
+        signal: signal(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        requestedUrl(fetchMock, 0).pathname.endsWith(
+          `/video/call/audio_room/${callId}/event`,
+        ),
+      ).toBe(true);
+      expect(requestBody(fetchMock, 0)).toEqual({
+        user_id: hostUserId,
+        custom,
+      });
+    });
+
+    it("refuses a nested, empty, or oversized payload and a foreign sender before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      for (const input of [
+        { custom: { nested: { inner: 1 } } },
+        { custom: {} },
+        { custom: { text: "x".repeat(257) } },
+        { custom: { "Bad-Key": 1 } },
+        { custom: { ok: 1 }, sentByStreamUserId: "not-a-loop-user" },
+        { custom: { ok: 1 }, callId: "default" },
+      ]) {
+        await expect(
+          gateway.sendCallEvent({
+            callId,
+            sentByStreamUserId: hostUserId,
+            signal: signal(),
+            ...input,
+          } as never),
+        ).rejects.toEqual(
+          new StreamCallGatewayUnavailableError("invalid_input"),
+        );
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("sanitizes a provider rejection into the unavailable error with a coarse reason", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ code: 16, message: "not allowed" }, 403),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      await expect(
+        gateway.sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom,
+          signal: signal(),
+        }),
+      ).rejects.toMatchObject({
+        name: "StreamCallGatewayUnavailableError",
+        reason: "rejected",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        gateway.sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom: {},
+          signal: signal(),
+        }),
+      ).rejects.toMatchObject({ reason: "invalid_input" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await expect(
+        createUnavailableStreamCallGateway().sendCallEvent({
+          callId,
+          sentByStreamUserId: hostUserId,
+          custom,
+          signal: signal(),
+        }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    });
+  });
+
+  it("projects an observed member count with its own observedAt", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        duration: "1ms",
+        members: [{ user_id: hostUserId }, { user_id: memberUserId }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    const observation = await gateway.queryMembers({
+      callId,
+      signal: signal(),
+    });
+
+    expect(observation).toMatchObject({ memberCount: 2, complete: true });
+    expect(Date.parse(observation.observedAt)).not.toBeNaN();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accumulates member pages and stops when Stream reports no next page", async () => {
+    const page = (next?: string) =>
+      jsonResponse({
+        duration: "1ms",
+        members: Array.from({ length: 100 }, (_, index) => ({
+          user_id: `loop_${index.toString(16).padStart(32, "0")}`,
+        })),
+        ...(next === undefined ? {} : { next }),
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(page("cursor-1"))
+      .mockResolvedValueOnce(page("cursor-2"))
+      .mockResolvedValueOnce(page());
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.queryMembers({ callId, signal: signal() }),
+    ).resolves.toMatchObject({ memberCount: 300, complete: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports an incomplete observation beyond the bounded page budget", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          members: Array.from({ length: 100 }, (_, index) => ({
+            user_id: `loop_${index.toString(16).padStart(32, "0")}`,
+          })),
+          next: "cursor-more",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.queryMembers({ callId, signal: signal() }),
+    ).resolves.toMatchObject({ memberCount: 1_000, complete: false });
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+  });
+
+  it("sanitizes a provider failure into the unavailable error", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ message: "boom" }, 500));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(gateway.endCall({ callId, signal: signal() })).rejects.toEqual(
+      new StreamCallGatewayUnavailableError(),
+    );
+  });
+
+  it("refuses a call ID that is not a LOOP voice room", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+    await expect(
+      gateway.endCall({ callId: "default", signal: signal() }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
+    await expect(
+      gateway.observeSession({ callId: "default", signal: signal() }),
+    ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("goLive (Decision 0054)", () => {
+    it("takes the call out of backstage with one empty go_live write and projects the answer", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(callResponse({ backstage: false })),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).resolves.toEqual({
+        callId,
+        callCid: `audio_room:${callId}`,
+        backstage: false,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(request[1].method).toBe("POST");
+      expect(
+        requestedUrl(fetchMock).pathname.endsWith(
+          `/video/call/audio_room/${callId}/go_live`,
+        ),
+      ).toBe(true);
+      expect(requestBody(fetchMock, 0)).toEqual({});
+    });
+
+    it("reports backstage truthfully when Stream answers but the call is still in backstage", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(callResponse({ backstage: true })));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ backstage: true });
+    });
+
+    it("sanitizes a deterministic rejection into the unavailable error without a retry", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { code: 17, message: "not allowed to go live", StatusCode: 403 },
+            403,
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallGatewayUnavailableError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("sanitizes the SDK timeout into the unavailable error", async () => {
+      const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+        // The SDK passes `AbortSignal.timeout(3000)`; behave as fetch does
+        // once that signal fires.
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+        const error = new Error("The operation was aborted due to timeout");
+        error.name = "TimeoutError";
+        return Promise.reject(error);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toMatchObject({
+        name: "StreamCallGatewayUnavailableError",
+        reason: "timeout",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a go_live answer for a different call as a projection mismatch", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callResponse({
+            id: "loop_voice_ffffffffffffffffffffffffffffffff",
+            cid: "audio_room:loop_voice_ffffffffffffffffffffffffffffffff",
+            backstage: false,
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.goLive({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("refuses a foreign call ID and an aborted signal before touching the provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+      const aborted = new AbortController();
+      aborted.abort();
+
+      await expect(
+        gateway.goLive({ callId: "default", signal: signal() }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError("invalid_input"));
+      await expect(
+        gateway.goLive({ callId, signal: aborted.signal }),
+      ).rejects.toThrow();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("observeSession", () => {
+    const callBody = (session?: Record<string, unknown>) => ({
+      duration: "1ms",
+      members: [{ user_id: hostUserId }, { user_id: memberUserId }],
+      own_capabilities: [],
+      call: {
+        id: callId,
+        type: "audio_room",
+        cid: `audio_room:${callId}`,
+        backstage: true,
+        ...(session === undefined ? {} : { session }),
+      },
+    });
+
+    it("reports zero participants and no session when Stream has no live session", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(callBody()));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      const observation = await gateway.observeSession({
+        callId,
+        signal: signal(),
+      });
+
+      expect(observation).toMatchObject({
+        participantCount: 0,
+        sessionActive: false,
+      });
+      expect(Date.parse(observation.observedAt)).not.toBeNaN();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(request[1].method ?? "GET").toBe("GET");
+      expect(request[0]).toContain(`/video/call/audio_room/${callId}`);
+    });
+
+    it("sums the per-role participant counts of the live session, not the member list", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            started_at: "2026-09-17T09:00:00.000Z",
+            participants: [{ user_session_id: "a" }],
+            participants_count_by_role: { admin: 1, user: 2 },
+            accepted_by: {},
+            missed_by: {},
+            rejected_by: {},
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 3, sessionActive: true });
+    });
+
+    it("falls back to the participant list when the per-role map is absent", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            participants: [{ user_session_id: "a" }, { user_session_id: "b" }],
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 2, sessionActive: true });
+    });
+
+    it("reports zero participants once the session has ended", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            ended_at: "2026-09-17T09:30:00.000Z",
+            participants: [],
+            participants_count_by_role: { user: 4 },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).resolves.toMatchObject({ participantCount: 0, sessionActive: false });
+    });
+
+    it("rejects a session whose counts are not non-negative integers", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse(
+          callBody({
+            id: "session-1",
+            participants_count_by_role: { user: "many" },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("rejects a call projection for a different call", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          ...callBody(),
+          call: { id: "other", type: "audio_room" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamCallProjectionMismatchError);
+    });
+
+    it("sanitizes a provider failure into the unavailable error", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ message: "boom" }, 500));
+      vi.stubGlobal("fetch", fetchMock);
+      const gateway = createStreamCallGateway({ apiKey, apiSecret });
+
+      await expect(
+        gateway.observeSession({ callId, signal: signal() }),
+      ).rejects.toEqual(new StreamCallGatewayUnavailableError());
+    });
+  });
+});
+
+describe("community channel message read (Decision 0066)", () => {
+  const since = new Date("2026-09-15T00:00:00.000Z");
+
+  it("fails closed without credentials", async () => {
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().readCommunityChannelMessages(
+        {
+          channelId: communityChannelId,
+          since,
+          limit: 100,
+          signal: signal(),
+        },
+      ),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("returns the LOOP account behind each message and never the Stream ID", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          channels: [
+            {
+              channel: { id: communityChannelId, type: "messaging" },
+              messages: [
+                {
+                  id: "m1",
+                  type: "regular",
+                  text: "  今天的进展如何  ",
+                  created_at: "2026-09-20T10:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m2",
+                  type: "regular",
+                  text: "too old",
+                  created_at: "2026-09-01T10:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m3",
+                  type: "deleted",
+                  text: "gone",
+                  created_at: "2026-09-20T11:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m4",
+                  type: "regular",
+                  text: "   ",
+                  created_at: "2026-09-20T12:00:00.000Z",
+                  user: { id: memberUserId },
+                },
+                {
+                  id: "m5",
+                  type: "regular",
+                  text: "系统播报",
+                  created_at: "2026-09-20T13:00:00.000Z",
+                  user: { id: "service_account" },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+
+    const messages = await gateway.readCommunityChannelMessages({
+      channelId: communityChannelId,
+      since,
+      limit: 100,
+      signal: signal(),
+    });
+    expect(messages).toEqual([
+      {
+        authorUserId: "f7bf09f6-0171-46b9-9acd-5ad494f211bd",
+        text: "今天的进展如何",
+        createdAt: "2026-09-20T10:00:00.000Z",
+      },
+      {
+        authorUserId: null,
+        text: "系统播报",
+        createdAt: "2026-09-20T13:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(memberUserId);
+  });
+
+  it("refuses a channel ID that is not a community channel", async () => {
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.readCommunityChannelMessages({
+        channelId: groupChannelId,
+        since,
+        limit: 100,
+        signal: signal(),
+      }),
+    ).rejects.toEqual(new StreamChannelGatewayUnavailableError());
+  });
+
+  it("treats a malformed channel answer as a projection mismatch", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          duration: "1ms",
+          channels: [{ channel: { id: communityChannelId } }],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.readCommunityChannelMessages({
+        channelId: communityChannelId,
+        since,
+        limit: 100,
+        signal: signal(),
+      }),
+    ).rejects.toBeInstanceOf(StreamChannelProjectionMismatchError);
+  });
+});

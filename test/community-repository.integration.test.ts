@@ -1,0 +1,3031 @@
+import { randomUUID } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { runner } from "node-pg-migrate";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { loadConfig } from "../src/config.js";
+import {
+  createPostgresCommunityRepository,
+  listVerifiedCommunitiesWithoutChannel,
+} from "../src/database/community-repository.js";
+import {
+  createPostgresDatabase,
+  type PostgresDatabase,
+} from "../src/database/database.js";
+import { createPostgresProfileV2Repository } from "../src/database/profile-v2-repository.js";
+import { createPostgresCommunityChannelSyncRepository } from "../src/database/communication-repository.js";
+import { createPostgresCommunityChannelRoleRepository } from "../src/database/community-channel-role-repository.js";
+import {
+  commandDigest,
+  updateCommunityDigestParts,
+  type CreateCommunityValues,
+} from "../src/features/community/community-contract.js";
+import {
+  CommunityDataStaleError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+  CommunityPermissionDeniedError,
+  CommunityProfileRequiredError,
+  CommunityRepositoryUnavailableError,
+  CommunitySlugTakenError,
+  CommunityTargetUnavailableError,
+  type CommunityRepository,
+} from "../src/features/community/community-repository.js";
+import { profileActivationDigest } from "../src/features/profile/profile-v2-contract.js";
+import type { ProfileV2Repository } from "../src/features/profile/profile-v2-repository.js";
+import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
+
+const { Client, Pool } = pg;
+
+const databaseUrl = requireIntegrationDatabaseUrl();
+const migrationsDirectory = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../migrations",
+);
+
+function databaseConnectionUrl(source: string, databaseName: string): string {
+  const url = new URL(source);
+  url.pathname = `/${databaseName}`;
+  return url.toString();
+}
+
+async function migrate(targetDatabaseUrl: string): Promise<void> {
+  await runner({
+    databaseUrl: targetDatabaseUrl,
+    dir: migrationsDirectory,
+    direction: "up",
+    migrationsTable: "pgmigrations",
+    log: () => undefined,
+  });
+}
+
+async function dropTemporaryDatabase(databaseName: string): Promise<void> {
+  const admin = new Client({
+    connectionString: databaseConnectionUrl(databaseUrl, "postgres"),
+  });
+  await admin.connect();
+  try {
+    await admin.query(`drop database if exists "${databaseName}" with (force)`);
+  } finally {
+    await admin.end();
+  }
+}
+
+function postgresError(error: unknown): {
+  readonly code: string | undefined;
+  readonly constraint: string | undefined;
+} {
+  const record =
+    typeof error === "object" && error !== null
+      ? (error as Record<string, unknown>)
+      : {};
+  return {
+    code: typeof record["code"] === "string" ? record["code"] : undefined,
+    constraint:
+      typeof record["constraint"] === "string"
+        ? record["constraint"]
+        : undefined,
+  };
+}
+
+function communityValues(slug: string, name: string): CreateCommunityValues {
+  return Object.freeze({
+    name,
+    slug,
+    description: null,
+    logoRef: null,
+    boundAssetKey: null,
+  });
+}
+
+describe("PostgreSQL V2 community and social graph repository", () => {
+  const databaseName = `loop_community_${randomUUID().replaceAll("-", "")}`;
+  let temporaryDatabaseUrl: string;
+  let pool: InstanceType<typeof Pool>;
+  let database: PostgresDatabase;
+  let repository: CommunityRepository;
+  let profiles: ProfileV2Repository;
+
+  beforeAll(async () => {
+    const admin = new Client({
+      connectionString: databaseConnectionUrl(databaseUrl, "postgres"),
+    });
+    await admin.connect();
+    try {
+      await admin.query(`create database "${databaseName}"`);
+    } finally {
+      await admin.end();
+    }
+    temporaryDatabaseUrl = databaseConnectionUrl(databaseUrl, databaseName);
+    try {
+      await migrate(temporaryDatabaseUrl);
+    } catch (error) {
+      await dropTemporaryDatabase(databaseName);
+      throw error;
+    }
+    pool = new Pool({ connectionString: temporaryDatabaseUrl });
+    database = createPostgresDatabase(
+      loadConfig({
+        NODE_ENV: "test",
+        API_DOCS_ENABLED: "false",
+        LOG_LEVEL: "silent",
+        DATABASE_URL: temporaryDatabaseUrl,
+      }),
+      { error: () => undefined },
+    );
+    repository = createPostgresCommunityRepository(pool);
+    profiles = createPostgresProfileV2Repository(pool);
+  }, 60_000);
+
+  afterAll(async () => {
+    await database.close();
+    await pool.end();
+    await dropTemporaryDatabase(databaseName);
+  });
+
+  async function createAccount(
+    label: string,
+    aliasOverride?: string,
+  ): Promise<{
+    readonly userId: string;
+    readonly publicProfileId: string;
+  }> {
+    const user = await database.internalUsers.getOrCreateByPrivyUserId(
+      `did:privy:community:${label}:${randomUUID()}`,
+    );
+    const alias = aliasOverride ?? `member_${randomUUID().slice(0, 8)}`;
+    await profiles.activateProfile({
+      ownerUserId: user.id,
+      idempotencyKey: randomUUID(),
+      requestSha256: profileActivationDigest(
+        { alias, avatarRef: null, interests: [] },
+        "2.0",
+      ),
+      requestId: randomUUID(),
+      profile: { alias, avatarRef: null, interests: [] },
+    });
+    const result = await pool.query<{ public_profile_id: string }>({
+      text: `
+        select public_profile_id
+        from public.user_profiles
+        where owner_user_id = $1
+      `,
+      values: [user.id],
+    });
+    const publicProfileId = result.rows[0]?.public_profile_id;
+    if (publicProfileId === undefined) {
+      throw new Error("The activated profile has no public profile ID");
+    }
+    await pool.query({
+      text: `
+        insert into public.privacy_preferences_v2 (owner_user_id, discoverable)
+        values ($1, true)
+        on conflict (owner_user_id) do update set discoverable = true
+      `,
+      values: [user.id],
+    });
+    return { userId: user.id, publicProfileId };
+  }
+
+  async function createCommunity(
+    ownerUserId: string,
+    slug: string,
+    name = "Frog Holders",
+  ): Promise<string> {
+    const values = communityValues(slug, name);
+    const detail = await repository.createCommunity({
+      ownerUserId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "createCommunity", [
+        values.name,
+        values.slug,
+        "",
+        "",
+        "",
+      ]),
+      requestId: randomUUID(),
+      ...values,
+    });
+    return detail.community.communityId;
+  }
+
+  function join(ownerUserId: string, communityId: string): Promise<unknown> {
+    return repository.joinCommunity({
+      ownerUserId,
+      communityId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "joinCommunity", [communityId]),
+      requestId: randomUUID(),
+    });
+  }
+
+  function follow(
+    ownerUserId: string,
+    targetPublicProfileId: string,
+  ): Promise<unknown> {
+    return repository.follow({
+      ownerUserId,
+      targetPublicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        targetPublicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+  }
+
+  async function memberCount(communityId: string): Promise<number> {
+    const result = await pool.query<{ member_count: number }>({
+      text: `select member_count from public.communities where community_id = $1`,
+      values: [communityId],
+    });
+    return result.rows[0]?.member_count ?? -1;
+  }
+
+  it("creates a pending community with the applicant as its only owner", async () => {
+    const owner = await createAccount("owner");
+    const communityId = await createCommunity(owner.userId, "frog-holders");
+    const detail = await repository.getCommunity({
+      viewerUserId: owner.userId,
+      communityId,
+    });
+
+    expect(detail.community.verificationStatus).toBe("pending");
+    expect(detail.community.memberCount).toBe(1);
+    expect(detail.viewerMembership).toMatchObject({
+      role: "owner",
+      status: "active",
+    });
+
+    const audit = await pool.query<{ event_type: string; to_role: string }>({
+      text: `
+        select event_type, to_role
+        from public.community_role_events
+        where community_id = $1
+      `,
+      values: [communityId],
+    });
+    expect(audit.rows).toEqual([
+      { event_type: "community_created", to_role: "owner" },
+    ]);
+  });
+
+  it("refuses a community application from an account without an activated profile", async () => {
+    const user = await database.internalUsers.getOrCreateByPrivyUserId(
+      `did:privy:community:no-profile:${randomUUID()}`,
+    );
+    await expect(
+      createCommunity(user.id, "no-profile-community"),
+    ).rejects.toBeInstanceOf(CommunityProfileRequiredError);
+  });
+
+  it("enforces the unique slug", async () => {
+    const owner = await createAccount("slug-owner");
+    await createCommunity(owner.userId, "unique-slug");
+    const second = await createAccount("slug-owner-2");
+    await expect(
+      createCommunity(second.userId, "unique-slug"),
+    ).rejects.toBeInstanceOf(CommunitySlugTakenError);
+  });
+
+  it("rejects a second owner row and a self-follow at the database level", async () => {
+    const owner = await createAccount("constraint-owner");
+    const other = await createAccount("constraint-other");
+    const communityId = await createCommunity(owner.userId, "constraints");
+
+    const secondOwner = await pool
+      .query({
+        text: `
+          insert into public.community_memberships (
+            community_id, owner_user_id, role, status
+          ) values ($1, $2, 'owner', 'active')
+        `,
+        values: [communityId, other.userId],
+      })
+      .then(
+        () => null,
+        (error: unknown) => postgresError(error),
+      );
+    expect(secondOwner?.code).toBe("23505");
+    expect(secondOwner?.constraint).toBe("community_memberships_one_owner_idx");
+
+    const selfFollow = await pool
+      .query({
+        text: `
+          insert into public.follow_edges (follower_user_id, followee_user_id)
+          values ($1, $1)
+        `,
+        values: [owner.userId],
+      })
+      .then(
+        () => null,
+        (error: unknown) => postgresError(error),
+      );
+    expect(selfFollow?.code).toBe("23514");
+  });
+
+  it("maintains member_count inside the transaction under concurrent joins", async () => {
+    const owner = await createAccount("count-owner");
+    const communityId = await createCommunity(owner.userId, "count-community");
+    const joiners = await Promise.all(
+      Array.from({ length: 8 }, async (_value, index) =>
+        createAccount(`count-joiner-${String(index)}`),
+      ),
+    );
+
+    await Promise.all(
+      joiners.map(async (joiner) => join(joiner.userId, communityId)),
+    );
+    expect(await memberCount(communityId)).toBe(9);
+
+    const page = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(page.counts.all).toBe(9);
+    expect(page.counts.owner).toBe(1);
+    expect(page.items[0]?.role).toBe("owner");
+  });
+
+  it("never repeats a member across keyset pages", async () => {
+    const owner = await createAccount("keyset-owner");
+    const communityId = await createCommunity(owner.userId, "keyset-members");
+    for (let index = 0; index < 4; index += 1) {
+      const joiner = await createAccount(`keyset-joiner-${String(index)}`);
+      await join(joiner.userId, communityId);
+    }
+
+    const seen: string[] = [];
+    let after:
+      | {
+          readonly lastRoleRank: number;
+          readonly lastJoinedAt: string;
+          readonly lastMembershipId: string;
+        }
+      | undefined;
+    for (let request = 0; request < 5; request += 1) {
+      const pageRecord = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 2,
+        ...(after === undefined ? {} : { after }),
+      });
+      if (pageRecord.items.length === 0) {
+        break;
+      }
+      seen.push(...pageRecord.items.map((item) => item.membershipId));
+      const last = pageRecord.items.at(-1);
+      if (last === undefined) {
+        break;
+      }
+      after = {
+        lastRoleRank: last.role === "owner" ? 0 : last.role === "admin" ? 1 : 2,
+        lastJoinedAt: last.joinedAt,
+        lastMembershipId: last.membershipId,
+      };
+    }
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen).size).toBe(5);
+  });
+
+  it("narrows the member directory to an alias prefix without changing the counts", async () => {
+    const owner = await createAccount("prefix-owner", "Frogger");
+    const communityId = await createCommunity(owner.userId, "prefix-community");
+    const maxi = await createAccount("prefix-maxi", "frog maxi");
+    const fullwidth = await createAccount(
+      "prefix-fullwidth",
+      "\uFF26\uFF32\uFF2F\uFF27\uFF39",
+    );
+    const toad = await createAccount("prefix-toad", "Toad Only");
+    for (const account of [maxi, fullwidth, toad]) {
+      await join(account.userId, communityId);
+    }
+
+    const hit = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "fro",
+    });
+    expect(
+      hit.items.map((item) => item.profile.publicProfileId).sort(),
+    ).toEqual(
+      [owner.publicProfileId, maxi.publicProfileId, fullwidth.publicProfileId]
+        .slice()
+        .sort(),
+    );
+    // The owner still sorts first inside the narrowed page.
+    expect(hit.items[0]?.role).toBe("owner");
+    // The segment counts describe the whole directory, not the query.
+    expect(hit.counts.all).toBe(4);
+
+    const miss = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "zzz",
+    });
+    expect(miss.items).toEqual([]);
+    expect(miss.counts.all).toBe(4);
+
+    // The prefix is normalized exactly like the stored key, so a fullwidth or
+    // upper-case query reaches the same rows.
+    for (const prefix of ["FRO", "\uFF26\uFF32\uFF2F", "  fro  "]) {
+      const equivalent = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+        aliasPrefix: prefix,
+      });
+      expect(equivalent.items.length, prefix).toBe(3);
+    }
+  });
+
+  it("matches a member alias prefix literally and never as a pattern", async () => {
+    const owner = await createAccount("wildcard-owner", "Wildcard Owner");
+    const communityId = await createCommunity(owner.userId, "wildcard-members");
+    const percent = await createAccount("wildcard-percent", "100%_pure");
+    await join(percent.userId, communityId);
+
+    const literal = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+      aliasPrefix: "100%_",
+    });
+    expect(literal.items.map((item) => item.profile.alias)).toEqual([
+      "100%_pure",
+    ]);
+
+    for (const pattern of ["%", "_", "\\"]) {
+      const wildcard = await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+        aliasPrefix: pattern,
+      });
+      expect(wildcard.items, pattern).toEqual([]);
+    }
+  });
+
+  it("keyset pages a narrowed member directory", async () => {
+    const owner = await createAccount("paged-owner", "Owner Only");
+    const communityId = await createCommunity(owner.userId, "paged-members");
+    const joiners = [];
+    for (let index = 0; index < 3; index += 1) {
+      const joiner = await createAccount(
+        `paged-joiner-${String(index)}`,
+        `Frog ${String(index)}`,
+      );
+      await join(joiner.userId, communityId);
+      joiners.push(joiner);
+    }
+
+    const first = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 2,
+      aliasPrefix: "frog",
+    });
+    expect(first.items).toHaveLength(2);
+    const last = first.items[1];
+    if (last === undefined) {
+      throw new Error("The narrowed page is missing its second row");
+    }
+    const second = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 2,
+      aliasPrefix: "frog",
+      after: {
+        lastRoleRank: 2,
+        lastJoinedAt: last.joinedAt,
+        lastMembershipId: last.membershipId,
+      },
+    });
+    expect(second.items).toHaveLength(1);
+    expect(
+      [...first.items, ...second.items].map(
+        (item) => item.profile.publicProfileId,
+      ),
+    ).toEqual(joiners.map((joiner) => joiner.publicProfileId));
+  });
+
+  it("replays an identical join and conflicts on a different digest", async () => {
+    const owner = await createAccount("replay-owner");
+    const joiner = await createAccount("replay-joiner");
+    const communityId = await createCommunity(owner.userId, "replay-community");
+    const key = randomUUID();
+    const digest = commandDigest("community", "joinCommunity", [communityId]);
+
+    await repository.joinCommunity({
+      ownerUserId: joiner.userId,
+      communityId,
+      idempotencyKey: key,
+      requestSha256: digest,
+      requestId: randomUUID(),
+    });
+    await repository.joinCommunity({
+      ownerUserId: joiner.userId,
+      communityId,
+      idempotencyKey: key,
+      requestSha256: digest,
+      requestId: randomUUID(),
+    });
+    expect(await memberCount(communityId)).toBe(2);
+
+    await expect(
+      repository.joinCommunity({
+        ownerUserId: joiner.userId,
+        communityId,
+        idempotencyKey: key,
+        requestSha256: commandDigest("community", "joinCommunity", [
+          "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityIdempotencyConflictError);
+  });
+
+  it("applies the permission matrix and refuses an owner as a target", async () => {
+    const owner = await createAccount("gov-owner");
+    const admin = await createAccount("gov-admin");
+    const member = await createAccount("gov-member");
+    const communityId = await createCommunity(owner.userId, "governance");
+    await join(admin.userId, communityId);
+    await join(member.userId, communityId);
+
+    const govern = (
+      actorUserId: string,
+      targetPublicProfileId: string,
+      action:
+        | "assignAdmin"
+        | "revokeAdmin"
+        | "transferOwnership"
+        | "mute"
+        | "unmute"
+        | "ban"
+        | "unban",
+    ) =>
+      repository.governMember({
+        actorUserId,
+        communityId,
+        targetPublicProfileId,
+        action,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          targetPublicProfileId,
+          action,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    await govern(owner.userId, admin.publicProfileId, "assignAdmin");
+    await expect(
+      govern(admin.userId, owner.publicProfileId, "ban"),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+    await expect(
+      govern(member.userId, admin.publicProfileId, "mute"),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+    await expect(
+      govern(admin.userId, member.publicProfileId, "assignAdmin"),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+
+    await govern(admin.userId, member.publicProfileId, "mute");
+    await expect(
+      govern(admin.userId, member.publicProfileId, "mute"),
+    ).rejects.toBeInstanceOf(CommunityDataStaleError);
+    await govern(admin.userId, member.publicProfileId, "unmute");
+
+    expect(await memberCount(communityId)).toBe(3);
+    await govern(admin.userId, member.publicProfileId, "ban");
+    expect(await memberCount(communityId)).toBe(2);
+    const afterBan = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(afterBan.counts.all).toBe(2);
+    expect(afterBan.items).toHaveLength(2);
+    expect(
+      afterBan.items.some(
+        (item) => item.profile.publicProfileId === member.publicProfileId,
+      ),
+    ).toBe(false);
+    const bannedRow = await pool.query<{ role: string; status: string }>({
+      text: `
+        select role, status
+        from public.community_memberships
+        where community_id = $1 and owner_user_id = $2
+      `,
+      values: [communityId, member.userId],
+    });
+    expect(bannedRow.rows[0]).toEqual({ role: "member", status: "banned" });
+
+    const events = await pool.query<{ event_type: string }>({
+      text: `
+        select event_type
+        from public.community_role_events
+        where community_id = $1
+        order by occurred_at, event_id
+      `,
+      values: [communityId],
+    });
+    expect(events.rows.map((row) => row.event_type)).toEqual([
+      "community_created",
+      "member_joined",
+      "member_joined",
+      "role_changed",
+      "member_muted",
+      "member_unmuted",
+      "member_banned",
+    ]);
+  });
+
+  it("shows banned memberships only to governance and restores them on unban", async () => {
+    const owner = await createAccount("unban-owner");
+    const member = await createAccount("unban-member");
+    const bystander = await createAccount("unban-bystander");
+    const communityId = await createCommunity(owner.userId, "unbans");
+    await join(member.userId, communityId);
+    await join(bystander.userId, communityId);
+    const joinedAt = (
+      await repository.listMembers({
+        viewerUserId: owner.userId,
+        communityId,
+        role: "all",
+        limit: 50,
+      })
+    ).items.find(
+      (item) => item.profile.publicProfileId === member.publicProfileId,
+    )?.joinedAt;
+    expect(joinedAt).toBeDefined();
+
+    const govern = (actorUserId: string, action: "ban" | "unban") =>
+      repository.governMember({
+        actorUserId,
+        communityId,
+        targetPublicProfileId: member.publicProfileId,
+        action,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          member.publicProfileId,
+          action,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    await govern(owner.userId, "ban");
+
+    const bannedView = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "banned",
+      limit: 50,
+    });
+    expect(bannedView.items).toHaveLength(1);
+    expect(bannedView.items[0]).toMatchObject({
+      status: "banned",
+      role: "member",
+      joinedAt,
+    });
+    // The banned view never changes the non-banned segment counts.
+    expect(bannedView.counts.all).toBe(2);
+    const defaultView = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(defaultView.items.some((item) => item.status === "banned")).toBe(
+      false,
+    );
+    // A plain member may not read the governance view.
+    await expect(
+      repository.listMembers({
+        viewerUserId: bystander.userId,
+        communityId,
+        role: "banned",
+        limit: 50,
+      }),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+
+    const unbanned = await govern(owner.userId, "unban");
+    expect(unbanned.target).toMatchObject({
+      role: "member",
+      status: "active",
+      joinedAt,
+    });
+    const afterUnban = await repository.listMembers({
+      viewerUserId: owner.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(afterUnban.counts.all).toBe(3);
+    expect(
+      afterUnban.items.find(
+        (item) => item.profile.publicProfileId === member.publicProfileId,
+      ),
+    ).toMatchObject({ role: "member", status: "active", joinedAt });
+    expect(
+      (
+        await repository.listMembers({
+          viewerUserId: owner.userId,
+          communityId,
+          role: "banned",
+          limit: 50,
+        })
+      ).items,
+    ).toHaveLength(0);
+
+    const events = await pool.query<{ event_type: string }>({
+      text: `
+        select event_type
+        from public.community_role_events
+        where community_id = $1
+        order by occurred_at, event_id
+      `,
+      values: [communityId],
+    });
+    expect(events.rows.map((row) => row.event_type)).toContain(
+      "member_unbanned",
+    );
+  });
+
+  it("keeps a banned account out and refuses an owner leaving", async () => {
+    const owner = await createAccount("ban-owner");
+    const member = await createAccount("ban-member");
+    const communityId = await createCommunity(owner.userId, "bans");
+    await join(member.userId, communityId);
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: member.publicProfileId,
+      action: "ban",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        member.publicProfileId,
+        "ban",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(join(member.userId, communityId)).rejects.toBeInstanceOf(
+      CommunityPermissionDeniedError,
+    );
+    await expect(
+      repository.leaveCommunity({
+        ownerUserId: owner.userId,
+        communityId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "leaveCommunity", [
+          communityId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+  });
+
+  it("transfers ownership and demotes the previous owner to admin", async () => {
+    const owner = await createAccount("transfer-owner");
+    const successor = await createAccount("transfer-successor");
+    const communityId = await createCommunity(owner.userId, "transfers");
+    await join(successor.userId, communityId);
+
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: successor.publicProfileId,
+      action: "transferOwnership",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        successor.publicProfileId,
+        "transferOwnership",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    const page = await repository.listMembers({
+      viewerUserId: successor.userId,
+      communityId,
+      role: "all",
+      limit: 50,
+    });
+    expect(page.viewerMembership?.role).toBe("owner");
+    const previous = page.items.find(
+      (item) => item.profile.publicProfileId === owner.publicProfileId,
+    );
+    expect(previous?.role).toBe("admin");
+    expect(page.counts.owner).toBe(1);
+  });
+
+  it("audits both role changes of an ownership transfer under one command", async () => {
+    const owner = await createAccount("transfer-audit-owner");
+    const successor = await createAccount("transfer-audit-successor");
+    const communityId = await createCommunity(owner.userId, "transfer-audit");
+    await join(successor.userId, communityId);
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: successor.publicProfileId,
+      action: "assignAdmin",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        successor.publicProfileId,
+        "assignAdmin",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    const idempotencyKey = randomUUID();
+    const requestSha256 = commandDigest("community", "governMember", [
+      communityId,
+      successor.publicProfileId,
+      "transferOwnership",
+    ]);
+    const transfer = (): Promise<unknown> =>
+      repository.governMember({
+        actorUserId: owner.userId,
+        communityId,
+        targetPublicProfileId: successor.publicProfileId,
+        action: "transferOwnership",
+        idempotencyKey,
+        requestSha256,
+        requestId: randomUUID(),
+      });
+    const roleEvents = async (): Promise<readonly Record<string, unknown>[]> =>
+      (
+        await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              actor_user_id,
+              target_user_id,
+              from_role,
+              to_role,
+              reason_code,
+              idempotency_record_id,
+              request_id
+            from public.community_role_events
+            where community_id = $1 and event_type = 'role_changed'
+            order by occurred_at, event_id
+          `,
+          values: [communityId],
+        })
+      ).rows;
+
+    await transfer();
+    const audited = await roleEvents();
+    expect(
+      audited.map((row) => [
+        row["target_user_id"],
+        row["from_role"],
+        row["to_role"],
+        row["reason_code"],
+      ]),
+    ).toEqual([
+      [successor.userId, "member", "admin", "action_assignadmin"],
+      [owner.userId, "owner", "admin", "action_transferownership_released"],
+      [successor.userId, "admin", "owner", "action_transferownership"],
+    ]);
+    // Both halves of the transfer name the previous owner as the actor and
+    // share one command record and one request, so the pair reconstructs as a
+    // single irreversible action rather than as two unrelated demotions.
+    const transferred = audited.slice(1);
+    expect(transferred.map((row) => row["actor_user_id"])).toEqual([
+      owner.userId,
+      owner.userId,
+    ]);
+    expect(
+      new Set(transferred.map((row) => row["idempotency_record_id"])).size,
+    ).toBe(1);
+    expect(transferred[0]?.["idempotency_record_id"]).not.toBe(
+      audited[0]?.["idempotency_record_id"],
+    );
+    expect(new Set(transferred.map((row) => row["request_id"])).size).toBe(1);
+
+    // Replaying the same command returns the stored outcome; the pair stays a
+    // pair instead of becoming four rows.
+    await transfer();
+    expect(await roleEvents()).toEqual(audited);
+
+    // The pair is allowed because its two rows name different subjects. One
+    // command still cannot append two rows about the same account.
+    const duplicate = await pool
+      .query({
+        text: `
+          insert into public.community_role_events (
+            community_id,
+            actor_user_id,
+            target_user_id,
+            event_type,
+            from_role,
+            to_role,
+            idempotency_record_id,
+            request_id
+          )
+          values ($1, $2, $2, 'role_changed', 'owner', 'admin', $3, $4)
+        `,
+        values: [
+          communityId,
+          owner.userId,
+          transferred[0]?.["idempotency_record_id"],
+          randomUUID(),
+        ],
+      })
+      .then(
+        () => null,
+        (error: unknown) => postgresError(error),
+      );
+    expect(duplicate).toEqual({
+      code: "23505",
+      constraint: "community_role_events_idempotency_unique",
+    });
+  });
+
+  it("removes both follow edges when a block is created", async () => {
+    const first = await createAccount("block-first");
+    const second = await createAccount("block-second");
+
+    await repository.follow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    await repository.follow({
+      ownerUserId: second.userId,
+      targetPublicProfileId: first.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "follow", [
+        first.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 1,
+      followers: 1,
+    });
+
+    await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 0,
+      followers: 0,
+    });
+    expect(await repository.countBlocks(first.userId)).toEqual({ user: 1 });
+
+    await expect(
+      repository.follow({
+        ownerUserId: first.userId,
+        targetPublicProfileId: second.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "follow", [
+          second.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
+  it("hides a non-discoverable account from follow and search", async () => {
+    const viewer = await createAccount("search-viewer");
+    const hidden = await createAccount("search-hidden");
+    await pool.query({
+      text: `
+        update public.privacy_preferences_v2
+        set discoverable = false
+        where owner_user_id = $1
+      `,
+      values: [hidden.userId],
+    });
+
+    await expect(
+      repository.follow({
+        ownerUserId: viewer.userId,
+        targetPublicProfileId: hidden.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "follow", [
+          hidden.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+
+    const results = await repository.searchUsers({
+      viewerUserId: viewer.userId,
+      prefix: "member_",
+      limit: 20,
+    });
+    expect(
+      results.some(
+        (item) => item.profile.publicProfileId === hidden.publicProfileId,
+      ),
+    ).toBe(false);
+  });
+
+  it("admits a non-discoverable recipient to message requests but not to follow (Decision 0090)", async () => {
+    const sender = await createAccount("s98-mr-sender");
+    const hiddenOpen = await createAccount("s98-mr-hidden-open");
+    const hiddenClosed = await createAccount("s98-mr-hidden-closed");
+    const hiddenBlocked = await createAccount("s98-mr-hidden-blocked");
+    for (const account of [hiddenOpen, hiddenClosed, hiddenBlocked]) {
+      await pool.query({
+        text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
+        values: [account.userId],
+      });
+    }
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        ) values ($1, 'disabled', 'friends', 'friends')
+      `,
+      values: [hiddenClosed.userId],
+    });
+    await repository.blockUser({
+      ownerUserId: hiddenBlocked.userId,
+      stableId: sender.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        sender.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const send = (targetPublicProfileId: string) =>
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          targetPublicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    const sent = await send(hiddenOpen.publicProfileId);
+    expect(sent.profile.publicProfileId).toBe(hiddenOpen.publicProfileId);
+    const inbox = await repository.listMessageRequests({
+      ownerUserId: hiddenOpen.userId,
+      limit: 20,
+    });
+    expect(inbox.map((item) => item.messageRequestId)).toEqual([
+      sent.messageRequestId,
+    ]);
+
+    await expect(send(hiddenClosed.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(hiddenBlocked.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(
+      follow(sender.userId, hiddenOpen.publicProfileId),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
+  describe("LOOP ID exact match (Decision 0090)", () => {
+    async function loopIdOf(userId: string): Promise<string> {
+      const result = await pool.query<{ loop_id: string }>({
+        text: `select loop_id from public.loop_users where id = $1`,
+        values: [userId],
+      });
+      const loopId = result.rows[0]?.loop_id;
+      if (loopId === undefined) {
+        throw new Error("The account has no LOOP ID");
+      }
+      return loopId;
+    }
+
+    function searchByLoopId(
+      viewerUserId: string,
+      loopId: string,
+      includeExactMatch = true,
+    ) {
+      return repository.searchUsers({
+        viewerUserId,
+        prefix: loopId,
+        limit: 20,
+        exactLoopId: loopId,
+        includeExactMatch,
+      });
+    }
+
+    it("pins the exact account first and never repeats it in the alias rows", async () => {
+      const viewer = await createAccount("loopid-viewer");
+      const target = await createAccount("loopid-target", "zz_target");
+      const loopId = await loopIdOf(target.userId);
+      // An alias that starts with the same text as the LOOP ID sorts in the
+      // prefix branch; the pinned account is always in front of it.
+      const fan = await createAccount(
+        "loopid-fan",
+        `${loopId.toLowerCase()}_fan`,
+      );
+
+      const first = await searchByLoopId(viewer.userId, loopId);
+      expect(
+        first.map((item) => [
+          item.profile.publicProfileId,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([
+        [target.publicProfileId, true],
+        [fan.publicProfileId, false],
+      ]);
+      expect(first[0]?.profile.loopId).toBe(loopId);
+
+      // Later pages carry only the alias rows.
+      const later = await searchByLoopId(viewer.userId, loopId, false);
+      expect(later.map((item) => item.profile.publicProfileId)).toEqual([
+        fan.publicProfileId,
+      ]);
+
+      // The pinned row counts against the page size.
+      const one = await repository.searchUsers({
+        viewerUserId: viewer.userId,
+        prefix: loopId,
+        limit: 1,
+        exactLoopId: loopId,
+        includeExactMatch: true,
+      });
+      expect(one.map((item) => item.profile.publicProfileId)).toEqual([
+        target.publicProfileId,
+      ]);
+    });
+
+    it("finds nobody for an unknown LOOP ID", async () => {
+      const viewer = await createAccount("loopid-unknown-viewer");
+      await expect(
+        searchByLoopId(viewer.userId, "LOOP-ZZZZZZZZ"),
+      ).resolves.toEqual([]);
+    });
+
+    it("finds a non-discoverable account by its exact LOOP ID but not by alias prefix", async () => {
+      const viewer = await createAccount("loopid-hidden-viewer");
+      const hidden = await createAccount("loopid-hidden", "qq_hidden_s98");
+      const loopId = await loopIdOf(hidden.userId);
+      await pool.query({
+        text: `
+          update public.privacy_preferences_v2
+          set discoverable = false
+          where owner_user_id = $1
+        `,
+        values: [hidden.userId],
+      });
+
+      const exact = await searchByLoopId(viewer.userId, loopId);
+      expect(
+        exact.map((item) => [
+          item.profile.publicProfileId,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([[hidden.publicProfileId, true]]);
+
+      await expect(
+        repository.searchUsers({
+          viewerUserId: viewer.userId,
+          prefix: "qq_hidden",
+          limit: 20,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("finds an account with no privacy row by its exact LOOP ID", async () => {
+      const viewer = await createAccount("loopid-norow-viewer");
+      const target = await createAccount("loopid-norow", "qq_norow_s98");
+      await pool.query({
+        text: `delete from public.privacy_preferences_v2 where owner_user_id = $1`,
+        values: [target.userId],
+      });
+
+      const exact = await searchByLoopId(
+        viewer.userId,
+        await loopIdOf(target.userId),
+      );
+      expect(exact.map((item) => item.profile.publicProfileId)).toEqual([
+        target.publicProfileId,
+      ]);
+      await expect(
+        repository.searchUsers({
+          viewerUserId: viewer.userId,
+          prefix: "qq_norow",
+          limit: 20,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("excludes the viewer and blocked accounts from an exact match", async () => {
+      const viewer = await createAccount("loopid-self-viewer");
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(viewer.userId)),
+      ).resolves.toEqual([]);
+
+      const blocker = await createAccount("loopid-blocker");
+      const blockedByViewer = await createAccount("loopid-blocked");
+      await repository.blockUser({
+        ownerUserId: viewer.userId,
+        stableId: blockedByViewer.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "block", [
+          "user",
+          blockedByViewer.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+      await repository.blockUser({
+        ownerUserId: blocker.userId,
+        stableId: viewer.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "block", [
+          "user",
+          viewer.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(blockedByViewer.userId)),
+      ).resolves.toEqual([]);
+      await expect(
+        searchByLoopId(viewer.userId, await loopIdOf(blocker.userId)),
+      ).resolves.toEqual([]);
+    });
+
+    it("leaves a plain alias search unchanged", async () => {
+      const viewer = await createAccount("loopid-alias-viewer");
+      const target = await createAccount("loopid-alias-target", "qq_alias_s98");
+      const results = await repository.searchUsers({
+        viewerUserId: viewer.userId,
+        prefix: "qq_alias",
+        limit: 20,
+      });
+      expect(
+        results.map((item) => [
+          item.profile.publicProfileId,
+          item.searchKey,
+          item.exactLoopIdMatch,
+        ]),
+      ).toEqual([[target.publicProfileId, "qq_alias_s98", false]]);
+    });
+  });
+
+  it("sends a message request under the V2 admission rules and replays by key", async () => {
+    const sender = await createAccount("send-sender");
+    const recipient = await createAccount("send-recipient");
+    const hidden = await createAccount("send-hidden");
+    const closed = await createAccount("send-closed");
+    await pool.query({
+      text: `update public.privacy_preferences_v2 set discoverable = false where owner_user_id = $1`,
+      values: [hidden.userId],
+    });
+    // Decision 0070: the recipient never wrote a social privacy row, which is
+    // the open default; `closed` explicitly turned message requests off.
+    await pool.query({
+      text: `
+        insert into public.social_privacy_preferences (
+          owner_user_id, friend_requests, group_invites, direct_messages
+        ) values ($1, 'disabled', 'friends', 'friends')
+      `,
+      values: [closed.userId],
+    });
+    const recipientRows = await pool.query({
+      text: `select 1 from public.social_privacy_preferences where owner_user_id = $1`,
+      values: [recipient.userId],
+    });
+    expect(recipientRows.rowCount).toBe(0);
+
+    const send = (
+      targetPublicProfileId: string,
+      idempotencyKey = randomUUID(),
+    ) =>
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId,
+        idempotencyKey,
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          targetPublicProfileId,
+        ]),
+        requestId: randomUUID(),
+      });
+
+    // Decision 0090: a non-discoverable target still receives a request
+    // (it is reached by an exact LOOP ID); the sender itself and a target
+    // with `friendRequests` disabled are the same non-enumerating failure.
+    const toHidden = await send(hidden.publicProfileId);
+    expect(toHidden.profile.publicProfileId).toBe(hidden.publicProfileId);
+    await expect(send(sender.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+    await expect(send(closed.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityTargetUnavailableError,
+    );
+
+    const key = randomUUID();
+    const sent = await send(recipient.publicProfileId, key);
+    expect(sent.profile.publicProfileId).toBe(recipient.publicProfileId);
+    expect(Date.parse(sent.expiresAt)).toBeGreaterThan(
+      Date.parse(sent.createdAt),
+    );
+
+    // The recipient sees exactly that request, projected from the sender side.
+    const inbox = await repository.listMessageRequests({
+      ownerUserId: recipient.userId,
+      limit: 20,
+    });
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.messageRequestId).toBe(sent.messageRequestId);
+    expect(inbox[0]?.profile.publicProfileId).toBe(sender.publicProfileId);
+
+    // The same key returns the original request; a new key hits the pending row.
+    await expect(send(recipient.publicProfileId, key)).resolves.toEqual(sent);
+    await expect(send(recipient.publicProfileId)).rejects.toBeInstanceOf(
+      CommunityDataStaleError,
+    );
+
+    const events = await pool.query<{ event_type: string; subject_id: string }>(
+      {
+        text: `
+        select event_type, subject_id
+        from public.social_graph_events
+        where actor_user_id = $1 and event_type = 'message_request_sent'
+        order by subject_id
+      `,
+        values: [sender.userId],
+      },
+    );
+    // One event per created request: the non-discoverable target (Decision
+    // 0090) and the recipient; the replay and the refusals write none.
+    expect(events.rows).toEqual(
+      [
+        {
+          event_type: "message_request_sent",
+          subject_id: toHidden.messageRequestId,
+        },
+        {
+          event_type: "message_request_sent",
+          subject_id: sent.messageRequestId,
+        },
+      ].sort((left, right) => left.subject_id.localeCompare(right.subject_id)),
+    );
+  });
+
+  it("refuses a message request across a block in either direction", async () => {
+    const sender = await createAccount("send-blocked-sender");
+    const recipient = await createAccount("send-blocked-recipient");
+    await repository.blockUser({
+      ownerUserId: recipient.userId,
+      stableId: sender.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        sender.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(
+      repository.sendMessageRequest({
+        ownerUserId: sender.userId,
+        targetPublicProfileId: recipient.publicProfileId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "sendMessageRequest", [
+          recipient.publicProfileId,
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityTargetUnavailableError);
+  });
+
+  it("reports a message request as reject plus block plus audit in one transaction", async () => {
+    const recipient = await createAccount("dm-recipient");
+    const requester = await createAccount("dm-requester");
+    const inserted = await pool.query<{ friend_request_id: string }>({
+      text: `
+        insert into public.friend_requests (
+          requester_user_id, recipient_user_id, expires_at
+        )
+        values ($1, $2, clock_timestamp() + interval '7 days')
+        returning friend_request_id
+      `,
+      values: [requester.userId, recipient.userId],
+    });
+    const messageRequestId = inserted.rows[0]?.friend_request_id ?? "";
+
+    const pending = await repository.listMessageRequests({
+      ownerUserId: recipient.userId,
+      limit: 20,
+    });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.profile.publicProfileId).toBe(requester.publicProfileId);
+
+    const decision = await repository.decideMessageRequest({
+      ownerUserId: recipient.userId,
+      messageRequestId,
+      decision: "report",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "decideMessageRequest", [
+        messageRequestId,
+        "report",
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(decision).toEqual({
+      messageRequestId,
+      decision: "report",
+      blocked: true,
+    });
+
+    const stored = await pool.query<{ status: string }>({
+      text: `select status from public.friend_requests where friend_request_id = $1`,
+      values: [messageRequestId],
+    });
+    expect(stored.rows[0]?.status).toBe("rejected");
+    expect(await repository.countBlocks(recipient.userId)).toEqual({
+      user: 1,
+    });
+    const audit = await pool.query<{
+      event_type: string;
+      result_status: string;
+    }>({
+      text: `
+        select event_type, result_status
+        from public.social_graph_events
+        where actor_user_id = $1 and subject_id = $2
+      `,
+      values: [recipient.userId, messageRequestId],
+    });
+    expect(audit.rows).toEqual([
+      { event_type: "message_request_reported", result_status: "reported" },
+    ]);
+    expect(
+      await repository.listMessageRequests({
+        ownerUserId: recipient.userId,
+        limit: 20,
+      }),
+    ).toHaveLength(0);
+
+    await expect(
+      repository.decideMessageRequest({
+        ownerUserId: recipient.userId,
+        messageRequestId,
+        decision: "accept",
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "decideMessageRequest", [
+          messageRequestId,
+          "accept",
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityDataStaleError);
+  });
+
+  it("rejects an append-only audit mutation", async () => {
+    const owner = await createAccount("audit-owner");
+    const communityId = await createCommunity(owner.userId, "audit-guard");
+    const failure = await pool
+      .query({
+        text: `
+          update public.community_role_events
+          set event_type = 'member_left'
+          where community_id = $1
+        `,
+        values: [communityId],
+      })
+      .then(
+        () => null,
+        (error: unknown) => postgresError(error),
+      );
+    expect(failure?.code).toBe("55000");
+  });
+
+  it("verifies a community only through the operator path and writes an audit row", async () => {
+    const owner = await createAccount("verify-owner");
+    const communityId = await createCommunity(owner.userId, "verify-me");
+
+    const verified = await repository.verifyCommunity({
+      communityId,
+      requestId: randomUUID(),
+      reasonCode: "operator_manual_review",
+    });
+    expect(verified.community.verificationStatus).toBe("verified");
+    expect(verified.changed).toBe(true);
+    expect(verified.ownerUserId).toBe(owner.userId);
+    expect(verified.eventId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(verified.community.application.reviewedAt).not.toBeNull();
+    expect(verified.community.application.rejectedReason).toBeNull();
+
+    const audit = await pool.query<{ actor_type: string; reason_code: string }>(
+      {
+        text: `
+          select actor_type, reason_code
+          from public.community_role_events
+          where community_id = $1 and event_type = 'community_verified'
+        `,
+        values: [communityId],
+      },
+    );
+    expect(audit.rows).toEqual([
+      { actor_type: "operator", reason_code: "operator_manual_review" },
+    ]);
+
+    const discoverable = await repository.searchCommunities({
+      viewerUserId: owner.userId,
+      prefix: "verify",
+      verification: "verified",
+      limit: 20,
+    });
+    expect(
+      discoverable.some((item) => item.community.communityId === communityId),
+    ).toBe(true);
+  });
+
+  it("hides an unverified community from a stranger and shows it to a member", async () => {
+    const owner = await createAccount("hidden-owner");
+    const stranger = await createAccount("hidden-stranger");
+    const communityId = await createCommunity(owner.userId, "still-pending");
+
+    const strangerView = await repository.searchCommunities({
+      viewerUserId: stranger.userId,
+      prefix: "still",
+      verification: "all",
+      limit: 20,
+    });
+    expect(strangerView).toHaveLength(0);
+
+    const ownerView = await repository.searchCommunities({
+      viewerUserId: owner.userId,
+      prefix: "still",
+      verification: "all",
+      limit: 20,
+    });
+    expect(ownerView[0]?.community.communityId).toBe(communityId);
+    expect(ownerView[0]?.viewerJoined).toBe(true);
+  });
+
+  it("orders discovery by verifiable facts in both sorts and both filters", async () => {
+    const owner = await createAccount("discover-owner");
+    const stranger = await createAccount("discover-stranger");
+    const verifiedId = await createCommunity(
+      owner.userId,
+      "discover-verified",
+      "Discover Verified",
+    );
+    const pendingId = await createCommunity(
+      owner.userId,
+      "discover-pending",
+      "Discover Pending",
+    );
+    await repository.verifyCommunity({
+      communityId: verifiedId,
+      requestId: randomUUID(),
+      reasonCode: "operator_manual_review",
+    });
+
+    for (const sort of ["members", "newest"] as const) {
+      const strangerView = await repository.listCommunities({
+        viewerUserId: stranger.userId,
+        sort,
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+      });
+      const ids = strangerView.map((item) => item.communityId);
+      expect(ids).toContain(verifiedId);
+      expect(ids).not.toContain(pendingId);
+      expect(
+        strangerView.every((item) => item.verificationStatus === "verified"),
+      ).toBe(true);
+    }
+
+    const strangerAll = await repository.listCommunities({
+      viewerUserId: stranger.userId,
+      sort: "members",
+      verification: "all",
+      membership: "all",
+      limit: 50,
+    });
+    expect(strangerAll.map((item) => item.communityId)).not.toContain(
+      pendingId,
+    );
+
+    const ownerAll = await repository.listCommunities({
+      viewerUserId: owner.userId,
+      sort: "newest",
+      verification: "all",
+      membership: "all",
+      limit: 50,
+    });
+    expect(ownerAll.map((item) => item.communityId)).toContain(pendingId);
+  });
+
+  it("pages discovery with a stable keyset in both sorts", async () => {
+    const owner = await createAccount("paging-owner");
+    const created: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const communityId = await createCommunity(
+        owner.userId,
+        `paging-${String(index)}`,
+        `Paging ${String(index)}`,
+      );
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      created.push(communityId);
+    }
+
+    for (const sort of ["members", "newest"] as const) {
+      const first = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort,
+        verification: "verified",
+        membership: "all",
+        limit: 1,
+      });
+      expect(first).toHaveLength(1);
+      const head = first[0];
+      if (head === undefined) {
+        throw new Error("The first discovery page is empty");
+      }
+      const second = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort,
+        verification: "verified",
+        membership: "all",
+        limit: 1,
+        after: {
+          lastSortValue:
+            sort === "members" ? String(head.memberCount) : head.createdAt,
+          lastCommunityId: head.communityId,
+        },
+      });
+      expect(second).toHaveLength(1);
+      expect(second[0]?.communityId).not.toBe(head.communityId);
+    }
+    expect(created).toHaveLength(3);
+  });
+
+  it("aggregates the community home from joined and verified discover rows", async () => {
+    const owner = await createAccount("home-owner");
+    const joiner = await createAccount("home-joiner");
+    const communityId = await createCommunity(
+      owner.userId,
+      "home-community",
+      "Home Community",
+    );
+    await repository.verifyCommunity({
+      communityId,
+      requestId: randomUUID(),
+      reasonCode: "operator_manual_review",
+    });
+
+    const strangerHome = await repository.getCommunityHome({
+      viewerUserId: joiner.userId,
+      joinedLimit: 50,
+      ownedLimit: 50,
+      discoverLimit: 50,
+    });
+    expect(strangerHome.joined).toHaveLength(0);
+    expect(strangerHome.discover.map((item) => item.communityId)).toContain(
+      communityId,
+    );
+    expect(
+      strangerHome.discover.every(
+        (item) => item.verificationStatus === "verified",
+      ),
+    ).toBe(true);
+    expect(Date.parse(strangerHome.observedAt)).toBeGreaterThan(0);
+    const bounded = await repository.getCommunityHome({
+      viewerUserId: joiner.userId,
+      joinedLimit: 50,
+      ownedLimit: 50,
+      discoverLimit: 5,
+    });
+    expect(bounded.discover.length).toBeLessThanOrEqual(5);
+
+    await join(joiner.userId, communityId);
+    const joinedHome = await repository.getCommunityHome({
+      viewerUserId: joiner.userId,
+      joinedLimit: 50,
+      ownedLimit: 50,
+      discoverLimit: 50,
+    });
+    expect(
+      joinedHome.joined.map((entry) => entry.community.communityId),
+    ).toContain(communityId);
+    expect(joinedHome.joined[0]?.viewerMembership?.role).toBe("member");
+    expect(joinedHome.discover.map((item) => item.communityId)).not.toContain(
+      communityId,
+    );
+  });
+
+  it("keeps the personal follow graph untouched when a member is banned", async () => {
+    const owner = await createAccount("ban-follow-owner");
+    const member = await createAccount("ban-follow-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "ban-follow",
+      "Ban Follow",
+    );
+    await join(member.userId, communityId);
+    await follow(owner.userId, member.publicProfileId);
+    await follow(member.userId, owner.publicProfileId);
+    expect(await repository.countConnections(owner.userId)).toEqual({
+      following: 1,
+      followers: 1,
+    });
+
+    await repository.governMember({
+      actorUserId: owner.userId,
+      communityId,
+      targetPublicProfileId: member.publicProfileId,
+      action: "ban",
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "governMember", [
+        communityId,
+        member.publicProfileId,
+        "ban",
+      ]),
+      requestId: randomUUID(),
+    });
+
+    // A ban is community scoped; only POST /v2/blocks drops follow edges.
+    expect(await repository.countConnections(owner.userId)).toEqual({
+      following: 1,
+      followers: 1,
+    });
+  });
+
+  it("does not restore a follow edge when a block is removed", async () => {
+    const first = await createAccount("unblock-first");
+    const second = await createAccount("unblock-second");
+    await follow(first.userId, second.publicProfileId);
+    const blockDigest = commandDigest("socialGraph", "block", [
+      "user",
+      second.publicProfileId,
+    ]);
+    await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 0,
+      followers: 0,
+    });
+
+    await repository.unblockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unblock", [
+        "user",
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(await repository.countBlocks(first.userId)).toEqual({ user: 0 });
+    expect(await repository.countConnections(first.userId)).toEqual({
+      following: 0,
+      followers: 0,
+    });
+  });
+
+  it("replays follow and block from the audit row after the state reverses", async () => {
+    const first = await createAccount("replay-follow-first");
+    const second = await createAccount("replay-follow-second");
+    const followKey = randomUUID();
+    const followDigest = commandDigest("socialGraph", "follow", [
+      second.publicProfileId,
+    ]);
+    await repository.follow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: followKey,
+      requestSha256: followDigest,
+      requestId: randomUUID(),
+    });
+    await repository.unfollow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unfollow", [
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const replayed = await repository.follow({
+      ownerUserId: first.userId,
+      targetPublicProfileId: second.publicProfileId,
+      idempotencyKey: followKey,
+      requestSha256: followDigest,
+      requestId: randomUUID(),
+    });
+    expect(replayed.profile.publicProfileId).toBe(second.publicProfileId);
+    expect(replayed.viewerFollows).toBe(false);
+
+    const blockKey = randomUUID();
+    const blockDigest = commandDigest("socialGraph", "block", [
+      "user",
+      second.publicProfileId,
+    ]);
+    await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: blockKey,
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    await repository.unblockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "unblock", [
+        "user",
+        second.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+    const replayedBlock = await repository.blockUser({
+      ownerUserId: first.userId,
+      stableId: second.publicProfileId,
+      idempotencyKey: blockKey,
+      requestSha256: blockDigest,
+      requestId: randomUUID(),
+    });
+    expect(replayedBlock.stableId).toBe(second.publicProfileId);
+    expect(await repository.countBlocks(first.userId)).toEqual({ user: 0 });
+  });
+
+  it("decrements member_count when a member leaves", async () => {
+    const owner = await createAccount("leave-owner");
+    const member = await createAccount("leave-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "leave-community",
+      "Leave Community",
+    );
+    await join(member.userId, communityId);
+    expect(await memberCount(communityId)).toBe(2);
+
+    const detail = await repository.leaveCommunity({
+      ownerUserId: member.userId,
+      communityId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("community", "leaveCommunity", [
+        communityId,
+      ]),
+      requestId: randomUUID(),
+    });
+    expect(detail.viewerMembership).toBeNull();
+    expect(detail.community.memberCount).toBe(1);
+    expect(await memberCount(communityId)).toBe(1);
+  });
+
+  it("refuses to accept a message request across a block", async () => {
+    const recipient = await createAccount("accept-block-recipient");
+    const requester = await createAccount("accept-block-requester");
+    const inserted = await pool.query<{ friend_request_id: string }>({
+      text: `
+        insert into public.friend_requests (
+          requester_user_id, recipient_user_id, expires_at
+        )
+        values ($1, $2, clock_timestamp() + interval '7 days')
+        returning friend_request_id
+      `,
+      values: [requester.userId, recipient.userId],
+    });
+    const messageRequestId = inserted.rows[0]?.friend_request_id ?? "";
+    await repository.blockUser({
+      ownerUserId: recipient.userId,
+      stableId: requester.publicProfileId,
+      idempotencyKey: randomUUID(),
+      requestSha256: commandDigest("socialGraph", "block", [
+        "user",
+        requester.publicProfileId,
+      ]),
+      requestId: randomUUID(),
+    });
+
+    await expect(
+      repository.decideMessageRequest({
+        ownerUserId: recipient.userId,
+        messageRequestId,
+        decision: "accept",
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("socialGraph", "decideMessageRequest", [
+          messageRequestId,
+          "accept",
+        ]),
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(CommunityDataStaleError);
+    const friendship = await pool.query({
+      text: `
+        select 1
+        from public.friendships
+        where accepted_friend_request_id = $1
+      `,
+      values: [messageRequestId],
+    });
+    expect(friendship.rowCount).toBe(0);
+  });
+
+  it("lets only the owner edit the community profile", async () => {
+    const owner = await createAccount("edit-owner");
+    const member = await createAccount("edit-member");
+    const communityId = await createCommunity(
+      owner.userId,
+      "edit-community",
+      "Edit Community",
+    );
+    await join(member.userId, communityId);
+
+    const edit = (
+      actorUserId: string,
+      values: Parameters<typeof repository.updateCommunity>[0]["values"],
+    ) =>
+      repository.updateCommunity({
+        ownerUserId: actorUserId,
+        communityId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "updateCommunity", [
+          communityId,
+          ...updateCommunityDigestParts(values),
+        ]),
+        requestId: randomUUID(),
+        values,
+      });
+
+    await expect(
+      edit(member.userId, { name: "Hijacked" }),
+    ).rejects.toBeInstanceOf(CommunityPermissionDeniedError);
+
+    const updated = await edit(owner.userId, {
+      description: "Frogs, updated",
+      boundAssetKey: null,
+    });
+    expect(updated.community.description).toBe("Frogs, updated");
+    expect(updated.community.name).toBe("Edit Community");
+    expect(updated.community.slug).toBe("edit-community");
+    expect(updated.community.verificationStatus).toBe("pending");
+
+    const audit = await pool.query<{ reason_code: string }>({
+      text: `
+        select reason_code
+        from public.community_role_events
+        where community_id = $1 and event_type = 'community_profile_updated'
+      `,
+      values: [communityId],
+    });
+    expect(audit.rows).toEqual([{ reason_code: "owner_profile_edit" }]);
+  });
+
+  it("hides an unverified community from a stranger on every read path", async () => {
+    const owner = await createAccount("visibility-owner");
+    const stranger = await createAccount("visibility-stranger");
+    const communityId = await createCommunity(
+      owner.userId,
+      "visibility-pending",
+      "Visibility Pending",
+    );
+
+    await expect(
+      repository.getCommunity({
+        viewerUserId: stranger.userId,
+        communityId,
+      }),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    await expect(
+      repository.listMembers({
+        viewerUserId: stranger.userId,
+        communityId,
+        role: "all",
+        limit: 20,
+      }),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+
+    await expect(
+      repository.getCommunity({ viewerUserId: owner.userId, communityId }),
+    ).resolves.toMatchObject({
+      community: { verificationStatus: "pending" },
+    });
+  });
+
+  it("pages the viewer's own memberships with membership=joined", async () => {
+    const owner = await createAccount("joined-owner");
+    const joiner = await createAccount("joined-joiner");
+    const mine = await createCommunity(owner.userId, "joined-mine", "Mine");
+    const theirs = await createCommunity(
+      joiner.userId,
+      "joined-theirs",
+      "Theirs",
+    );
+    for (const communityId of [mine, theirs]) {
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+    }
+
+    await join(owner.userId, theirs);
+
+    // Decision 0073: `joined` is the non-owner memberships and `owned` the
+    // communities the viewer owns; a community is in exactly one group.
+    const joinedOnly = await repository.listCommunities({
+      viewerUserId: owner.userId,
+      sort: "newest",
+      verification: "verified",
+      membership: "joined",
+      limit: 50,
+    });
+    const joinedIds = joinedOnly.map((item) => item.communityId);
+    expect(joinedIds).toContain(theirs);
+    expect(joinedIds).not.toContain(mine);
+
+    const ownedOnly = await repository.listCommunities({
+      viewerUserId: owner.userId,
+      sort: "newest",
+      verification: "all",
+      membership: "owned",
+      limit: 50,
+    });
+    const ownedIds = ownedOnly.map((item) => item.communityId);
+    expect(ownedIds).toContain(mine);
+    expect(ownedIds).not.toContain(theirs);
+    expect(ownedOnly[0]?.application.reviewedAt).not.toBeNull();
+  });
+
+  it("lists a verified community without a channel and repairs it through verifyCommunity", async () => {
+    const owner = await createAccount("seeded-owner");
+    const member = await createAccount("seeded-member");
+    const communityId = await createCommunity(owner.userId, "seeded-verified");
+    await join(member.userId, communityId);
+    // A seed writes the verified state directly, so `verifyCommunity` never
+    // ran and no channel row exists: exactly the state the operator script
+    // repairs.
+    await pool.query({
+      text: `
+        update public.communities
+        set verification_status = 'verified',
+            verified_at = clock_timestamp(),
+            reviewed_at = clock_timestamp()
+        where community_id = $1
+      `,
+      values: [communityId],
+    });
+    const before = await listVerifiedCommunitiesWithoutChannel(pool);
+    expect(before).toContainEqual({
+      communityId,
+      slug: "seeded-verified",
+      name: "Frog Holders",
+      memberCount: 2,
+    });
+
+    const record = await repository.verifyCommunity({
+      communityId,
+      requestId: randomUUID(),
+      reasonCode: "operator_channel_provision",
+    });
+    expect(record.community.verificationStatus).toBe("verified");
+    expect(record.changed).toBe(false);
+    expect(record.eventId).toBeNull();
+
+    const channel = await pool.query<{ stream_channel_id: string }>({
+      text: `select stream_channel_id from public.community_channels where community_id = $1`,
+      values: [communityId],
+    });
+    expect(channel.rows).toHaveLength(1);
+    const jobs = await pool.query<{ owner_user_id: string; kind: string }>({
+      text: `
+        select owner_user_id, kind from public.community_channel_sync_jobs
+        where community_id = $1 order by owner_user_id
+      `,
+      values: [communityId],
+    });
+    expect(jobs.rows.map((row) => row.kind)).toEqual(["add", "add"]);
+    expect(new Set(jobs.rows.map((row) => row.owner_user_id))).toEqual(
+      new Set([owner.userId, member.userId]),
+    );
+    // The repair never writes a second verification audit row.
+    const audits = await pool.query<{ count: string }>({
+      text: `
+        select count(*)::text as count from public.community_role_events
+        where community_id = $1 and event_type = 'community_verified'
+      `,
+      values: [communityId],
+    });
+    expect(audits.rows[0]?.count).toBe("0");
+
+    const after = await listVerifiedCommunitiesWithoutChannel(pool);
+    expect(after.map((row) => row.communityId)).not.toContain(communityId);
+  });
+
+  describe("Stream channel role sync (Decision 0091)", () => {
+    async function settleJobs(communityId: string): Promise<void> {
+      await pool.query({
+        text: `
+          update public.community_channels
+          set provisioned_at = coalesce(provisioned_at, clock_timestamp())
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+      await pool.query({
+        text: `
+          update public.community_channel_sync_jobs
+          set state = 'succeeded', lease_worker_id = null, lease_expires_at = null
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+      await pool.query({
+        text: `
+          update public.community_channel_members
+          set state = case when state = 'pending' then 'synced' else state end
+          where community_id = $1
+        `,
+        values: [communityId],
+      });
+    }
+
+    async function pendingJobs(
+      communityId: string,
+    ): Promise<readonly { owner_user_id: string; kind: string }[]> {
+      const result = await pool.query<{ owner_user_id: string; kind: string }>({
+        text: `
+          select owner_user_id, kind from public.community_channel_sync_jobs
+          where community_id = $1 and state = 'pending'
+          order by owner_user_id
+        `,
+        values: [communityId],
+      });
+      return result.rows;
+    }
+
+    function govern(
+      actorUserId: string,
+      communityId: string,
+      targetPublicProfileId: string,
+      action: "assignAdmin" | "revokeAdmin" | "mute" | "transferOwnership",
+    ): Promise<unknown> {
+      return repository.governMember({
+        actorUserId,
+        communityId,
+        targetPublicProfileId,
+        action,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          targetPublicProfileId,
+          action,
+        ]),
+        requestId: randomUUID(),
+      });
+    }
+
+    async function claimRoles(
+      communityId: string,
+    ): Promise<Map<string, { kind: string; role: string }>> {
+      const jobs = await createPostgresCommunityChannelSyncRepository(
+        pool,
+      ).claimDueJobs({ workerId: randomUUID(), leaseSeconds: 30, limit: 100 });
+      return new Map(
+        jobs
+          .filter((job) => job.communityId === communityId)
+          .map((job) => [
+            job.ownerUserId,
+            { kind: job.kind, role: job.memberChannelRole },
+          ]),
+      );
+    }
+
+    it("carries the membership's channel role on join, promotion, demotion, and leave", async () => {
+      const owner = await createAccount("role-sync-owner");
+      const member = await createAccount("role-sync-member");
+      const communityId = await createCommunity(owner.userId, "role-sync");
+      await join(member.userId, communityId);
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+
+      // Join / verification: owner moderates, member does not.
+      const initial = await claimRoles(communityId);
+      expect(initial.get(owner.userId)).toEqual({
+        kind: "add",
+        role: "channel_moderator",
+      });
+      expect(initial.get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_member",
+      });
+      await settleJobs(communityId);
+
+      // Promotion re-enqueues the idempotent add as channel_moderator.
+      await govern(
+        owner.userId,
+        communityId,
+        member.publicProfileId,
+        "assignAdmin",
+      );
+      expect(await pendingJobs(communityId)).toEqual([
+        { owner_user_id: member.userId, kind: "add" },
+      ]);
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_moderator",
+      });
+      await settleJobs(communityId);
+      const roles = createPostgresCommunityChannelRoleRepository(pool);
+      const synced = await roles.listSyncedMemberRoles({
+        limit: 100,
+        after: null,
+      });
+      expect(
+        synced
+          .filter((row) => row.communityId === communityId)
+          .map((row) => [row.ownerUserId, row.desiredChannelRole]),
+      ).toEqual(
+        expect.arrayContaining([
+          [owner.userId, "channel_moderator"],
+          [member.userId, "channel_moderator"],
+        ]),
+      );
+
+      // Mute keeps the channel role: nothing is enqueued.
+      await govern(owner.userId, communityId, member.publicProfileId, "mute");
+      expect(await pendingJobs(communityId)).toEqual([]);
+
+      // Demotion re-enqueues the add as channel_member.
+      await govern(
+        owner.userId,
+        communityId,
+        member.publicProfileId,
+        "revokeAdmin",
+      );
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "add",
+        role: "channel_member",
+      });
+      await settleJobs(communityId);
+
+      // Leaving removes the member; the remove carries no elevated role.
+      await repository.leaveCommunity({
+        ownerUserId: member.userId,
+        communityId,
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "leaveCommunity", [
+          communityId,
+        ]),
+        requestId: randomUUID(),
+      });
+      expect((await claimRoles(communityId)).get(member.userId)).toEqual({
+        kind: "remove",
+        role: "channel_member",
+      });
+    });
+
+    it("does not re-sync an ownership transfer between two moderators", async () => {
+      const owner = await createAccount("role-transfer-owner");
+      const admin = await createAccount("role-transfer-admin");
+      const communityId = await createCommunity(owner.userId, "role-transfer");
+      await join(admin.userId, communityId);
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await govern(
+        owner.userId,
+        communityId,
+        admin.publicProfileId,
+        "assignAdmin",
+      );
+      await settleJobs(communityId);
+
+      await govern(
+        owner.userId,
+        communityId,
+        admin.publicProfileId,
+        "transferOwnership",
+      );
+      expect(await pendingJobs(communityId)).toEqual([]);
+    });
+  });
+
+  it("raises NOT_FOUND semantics for an unknown community", async () => {
+    const viewer = await createAccount("missing-viewer");
+    await expect(
+      repository.getCommunity({
+        viewerUserId: viewer.userId,
+        communityId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      }),
+    ).rejects.toBeInstanceOf(CommunityNotFoundError);
+  });
+
+  describe("discover orderings that need a fact (Decision 0061)", () => {
+    const boundAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const configVersion = "miningFormulaOrderingTestOnly";
+
+    async function seedMiningSnapshot(rows: {
+      readonly snapshotId: string;
+      readonly powers: readonly {
+        readonly ownerUserId: string;
+        readonly power: string;
+      }[];
+    }): Promise<void> {
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values (
+            $1, 'eip155:56', '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82',
+            'Cake', 'PancakeSwap Token', 18, 'pending', 'chain_call',
+            122037728, now()
+          )
+          on conflict (asset_id) do nothing
+        `,
+        values: [boundAsset],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_formula_versions (
+            config_version, formula, weight_range, price_guard_rules, status,
+            effective_at, approved_at
+          )
+          values ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, 'pending_approval', null, null)
+          on conflict (config_version) do nothing
+        `,
+        values: [
+          configVersion,
+          JSON.stringify({
+            kind: "holding_times_reference_price_times_weight",
+            expressionKey: "k",
+            dailyOutputKey: "k",
+            assetWeights: { [boundAsset]: "1" },
+            referralBoost: { status: "pending_approval" },
+          }),
+          JSON.stringify({
+            loop: { status: "approved", descriptionKey: "k" },
+            community: { status: "pending_approval", descriptionKey: "k" },
+            reviewFactorKeys: [],
+          }),
+        ],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_snapshots (
+            snapshot_id, block_number, block_hash, formula_version,
+            price_version, total_power, account_count, status, holdings_source
+          )
+          values ($1, 100, $2, $3, 'dexscreener:2026-09-21T00:00:00.000Z',
+            '0', $4, 'complete', 'chain')
+          on conflict (snapshot_id) do nothing
+        `,
+        values: [
+          rows.snapshotId,
+          `0x${"e".repeat(64)}`,
+          configVersion,
+          rows.powers.length,
+        ],
+      });
+      for (const power of rows.powers) {
+        await pool.query({
+          text: `
+            insert into public.mining_snapshot_powers (
+              snapshot_id, owner_user_id, asset_id, holding,
+              reference_price_usd, reference_price_quality, weight, power,
+              block_number
+            )
+            values ($1, $2, $3, '1', '1', 'fresh', '1', $4, 100)
+            on conflict do nothing
+          `,
+          values: [rows.snapshotId, power.ownerUserId, boundAsset, power.power],
+        });
+      }
+    }
+
+    it("orders by the community's power under the snapshot and lists the unweighted after it", async () => {
+      const owner = await createAccount("ordering-owner");
+      const member = await createAccount("ordering-member");
+      const snapshotId = randomUUID();
+      const strong = await createCommunity(
+        owner.userId,
+        `order-strong-${randomUUID().slice(0, 6)}`,
+        "Strong",
+      );
+      const weak = await createCommunity(
+        owner.userId,
+        `order-weak-${randomUUID().slice(0, 6)}`,
+        "Weak",
+      );
+      const unweighted = await createCommunity(
+        owner.userId,
+        `order-none-${randomUUID().slice(0, 6)}`,
+        "Unweighted",
+      );
+      for (const communityId of [strong, weak, unweighted]) {
+        await repository.verifyCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+        });
+        await pool.query({
+          text: `update public.communities set bound_asset_key = $2 where community_id = $1`,
+          values: [communityId, boundAsset],
+        });
+      }
+      // Only the stronger community has the second member, so its sum is
+      // larger; the stored power already carries each community's weight.
+      await join(member.userId, strong);
+      await seedMiningSnapshot({
+        snapshotId,
+        powers: [
+          { ownerUserId: owner.userId, power: "10" },
+          { ownerUserId: member.userId, power: "5" },
+        ],
+      });
+      // Only the two weighted communities carry an approved weight; the
+      // stronger one weights its members' power higher.
+      await pool.query({
+        text: `
+          insert into public.community_mining_weights (
+            community_id, status, weight, config_version, reviewed_at, bound_asset_id
+          )
+          values ($1, 'approved', '2', $3, now(), $4), ($2, 'approved', '0.5', $3, now(), $4)
+          on conflict (config_version, community_id) do update set
+            status = excluded.status, weight = excluded.weight,
+            config_version = excluded.config_version,
+            reviewed_at = excluded.reviewed_at
+        `,
+        values: [strong, weak, configVersion, boundAsset],
+      });
+      await pool.query({
+        text: `update public.mining_formula_versions set status = 'approved', effective_at = now(), approved_at = now() where config_version = $1`,
+        values: [configVersion],
+      });
+      // The stronger community keeps both members' power; the weaker one
+      // keeps only the member's, so the order is strong, weak, unweighted.
+      await pool.query({
+        text: `delete from public.mining_snapshot_powers where snapshot_id = $1 and owner_user_id = $2`,
+        values: [snapshotId, owner.userId],
+      });
+      await pool.query({
+        text: `
+          insert into public.mining_snapshot_powers (
+            snapshot_id, owner_user_id, asset_id, holding,
+            reference_price_usd, reference_price_quality, weight, power,
+            block_number
+          )
+          values ($1, $2, $3, '1', '1', 'fresh', '1', '30', 100)
+        `,
+        values: [snapshotId, owner.userId, boundAsset],
+      });
+
+      const page = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "miningPower",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        miningOrdering: { snapshotId, configVersion },
+      });
+      const ordered = page
+        .map((item) => item.communityId)
+        .filter((id) => [strong, weak, unweighted].includes(id));
+      expect(ordered).toEqual([strong, weak, unweighted]);
+      const strongRow = page.find((item) => item.communityId === strong);
+      expect(strongRow?.ordering).toMatchObject({
+        miningPower: "35",
+        miningParticipantCount: 2,
+        miningWeight: "2",
+        miningWeightConfigVersion: configVersion,
+      });
+      // A community without an approved weight carries no number at all.
+      expect(
+        page.find((item) => item.communityId === unweighted)?.ordering,
+      ).toMatchObject({ miningPower: null, miningWeight: null });
+
+      // The keyset continues from the ranked rows into the unranked ones.
+      const head = page[0];
+      if (head === undefined) {
+        throw new Error("The mining ordering page is empty");
+      }
+      const second = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "miningPower",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        miningOrdering: { snapshotId, configVersion },
+        after: {
+          lastSortValue: head.ordering?.miningPower ?? "-1",
+          lastCommunityId: head.communityId,
+        },
+      });
+      expect(second.map((item) => item.communityId)).not.toContain(
+        head.communityId,
+      );
+    });
+
+    it("orders by the observed activity, ignores a stale observation, and reports whether anything is observed", async () => {
+      const owner = await createAccount("activity-owner");
+      const loud = await createCommunity(
+        owner.userId,
+        `act-loud-${randomUUID().slice(0, 6)}`,
+        "Loud",
+      );
+      const quiet = await createCommunity(
+        owner.userId,
+        `act-quiet-${randomUUID().slice(0, 6)}`,
+        "Quiet",
+      );
+      const stale = await createCommunity(
+        owner.userId,
+        `act-stale-${randomUUID().slice(0, 6)}`,
+        "Stale",
+      );
+      for (const communityId of [loud, quiet, stale]) {
+        await repository.verifyCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+        });
+      }
+      const channelId = (communityId: string): string =>
+        `loop_community_${communityId.replaceAll("-", "")}`;
+      await pool.query({
+        text: `
+          insert into public.community_channel_activity (
+            community_id, stream_channel_id, window_days,
+            recent_message_count, recent_count_bounded, total_message_count,
+            last_message_at, observed_at
+          )
+          values
+            ($1, $4, 7, 90, false, 900, now(), now()),
+            ($2, $5, 7, 3, false, null, null, now()),
+            ($3, $6, 7, 5000, true, null, null, now() - interval '2 days')
+        `,
+        values: [
+          loud,
+          quiet,
+          stale,
+          channelId(loud),
+          channelId(quiet),
+          channelId(stale),
+        ],
+      });
+
+      const observation = await repository.getCommunityActivityObservation({
+        maxAgeSeconds: 21_600,
+      });
+      expect(observation.observedCommunityCount).toBeGreaterThanOrEqual(2);
+      expect(observation.latestObservedAt).not.toBeNull();
+
+      const page = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "activity",
+        verification: "verified",
+        membership: "all",
+        limit: 50,
+        activityMaxAgeSeconds: 21_600,
+      });
+      const ordered = page
+        .map((item) => item.communityId)
+        .filter((id) => [loud, quiet, stale].includes(id));
+      // The stale observation does not order anything: its community sorts
+      // with the unobserved ones, behind both fresh counts.
+      expect(ordered.slice(0, 2)).toEqual([loud, quiet]);
+      expect(ordered).toContain(stale);
+      expect(
+        page.find((item) => item.communityId === loud)?.ordering,
+      ).toMatchObject({ activityMessageCount: 90, activityBounded: false });
+      expect(
+        page.find((item) => item.communityId === stale)?.ordering,
+      ).toMatchObject({ activityMessageCount: null });
+    });
+
+    it("refuses a mining ordering the caller did not resolve", async () => {
+      const owner = await createAccount("ordering-refusal");
+      await expect(
+        repository.listCommunities({
+          viewerUserId: owner.userId,
+          sort: "miningPower",
+          verification: "verified",
+          membership: "all",
+          limit: 10,
+        }),
+      ).rejects.toBeInstanceOf(CommunityRepositoryUnavailableError);
+    });
+  });
+
+  describe("application review and resubmission (Decision 0073)", () => {
+    const reason = "Name collides with a listed token; pick another";
+
+    async function auditRows(communityId: string): Promise<
+      readonly {
+        event_type: string;
+        actor_type: string;
+        reason_code: string | null;
+        note: string | null;
+      }[]
+    > {
+      const result = await pool.query<{
+        event_type: string;
+        actor_type: string;
+        reason_code: string | null;
+        note: string | null;
+      }>({
+        text: `
+          select event_type, actor_type, reason_code, note
+          from public.community_role_events
+          where community_id = $1
+            and event_type in (
+              'community_verified',
+              'community_rejected',
+              'community_resubmitted'
+            )
+          order by occurred_at asc, event_id asc
+        `,
+        values: [communityId],
+      });
+      return result.rows;
+    }
+
+    function resubmit(ownerUserId: string, communityId: string, key?: string) {
+      return repository.resubmitCommunity({
+        ownerUserId,
+        communityId,
+        idempotencyKey: key ?? randomUUID(),
+        requestSha256: commandDigest("community", "resubmitCommunity", [
+          communityId,
+        ]),
+        requestId: randomUUID(),
+      });
+    }
+
+    it("creates an application with the submission time and no review", async () => {
+      const owner = await createAccount("review-fresh");
+      const communityId = await createCommunity(owner.userId, "review-fresh");
+      const detail = await repository.getCommunity({
+        viewerUserId: owner.userId,
+        communityId,
+      });
+      expect(detail.community.verificationStatus).toBe("pending");
+      expect(detail.community.application).toEqual({
+        submittedAt: detail.community.createdAt,
+        reviewedAt: null,
+        rejectedReason: null,
+      });
+    });
+
+    it("rejects a pending application with the reason on the row and on the audit note", async () => {
+      const owner = await createAccount("review-reject");
+      const communityId = await createCommunity(owner.userId, "review-reject");
+
+      const rejected = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "policy_name_clash",
+        reason: `  ${reason}  `,
+      });
+      expect(rejected.changed).toBe(true);
+      expect(rejected.ownerUserId).toBe(owner.userId);
+      expect(rejected.eventId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(rejected.community.verificationStatus).toBe("rejected");
+      expect(rejected.community.application.rejectedReason).toBe(reason);
+      expect(rejected.community.application.reviewedAt).not.toBeNull();
+      expect(rejected.community.application.submittedAt).toBe(
+        rejected.community.createdAt,
+      );
+      expect(await auditRows(communityId)).toEqual([
+        {
+          event_type: "community_rejected",
+          actor_type: "operator",
+          reason_code: "policy_name_clash",
+          note: reason,
+        },
+      ]);
+
+      // A second rejection changes nothing and audits nothing.
+      const again = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "policy_name_clash",
+        reason: "another reason",
+      });
+      expect(again.changed).toBe(false);
+      expect(again.eventId).toBeNull();
+      expect(again.community.application.rejectedReason).toBe(reason);
+      expect(await auditRows(communityId)).toHaveLength(1);
+
+      // The owner still sees it; a stranger still cannot.
+      const stranger = await createAccount("review-stranger");
+      await expect(
+        repository.getCommunity({
+          viewerUserId: stranger.userId,
+          communityId,
+        }),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+    });
+
+    it("refuses to reject a verified community and refuses an unsafe reason", async () => {
+      const owner = await createAccount("review-verified");
+      const communityId = await createCommunity(
+        owner.userId,
+        "review-verified",
+      );
+      await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await expect(
+        repository.rejectCommunity({
+          communityId,
+          requestId: randomUUID(),
+          reasonCode: "operator_manual_review",
+          reason,
+        }),
+      ).rejects.toBeInstanceOf(CommunityDataStaleError);
+
+      const pendingOwner = await createAccount("review-unsafe");
+      const pending = await createCommunity(
+        pendingOwner.userId,
+        "review-unsafe",
+      );
+      for (const bad of ["", "   ", "x".repeat(281), "bad\u0000reason"]) {
+        await expect(
+          repository.rejectCommunity({
+            communityId: pending,
+            requestId: randomUUID(),
+            reasonCode: "operator_manual_review",
+            reason: bad,
+          }),
+        ).rejects.toBeInstanceOf(CommunityRepositoryUnavailableError);
+      }
+      const detail = await repository.getCommunity({
+        viewerUserId: pendingOwner.userId,
+        communityId: pending,
+      });
+      expect(detail.community.verificationStatus).toBe("pending");
+      expect(await auditRows(pending)).toEqual([]);
+    });
+
+    it("lets only the owner resubmit a rejected application, once per key, and clears the review", async () => {
+      const owner = await createAccount("resubmit-owner");
+      const admin = await createAccount("resubmit-admin");
+      const member = await createAccount("resubmit-member");
+      const stranger = await createAccount("resubmit-stranger");
+      const communityId = await createCommunity(owner.userId, "resubmit-me");
+      await join(admin.userId, communityId);
+      await join(member.userId, communityId);
+      await repository.governMember({
+        actorUserId: owner.userId,
+        communityId,
+        targetPublicProfileId: admin.publicProfileId,
+        action: "assignAdmin",
+        idempotencyKey: randomUUID(),
+        requestSha256: commandDigest("community", "governMember", [
+          communityId,
+          admin.publicProfileId,
+          "assignAdmin",
+        ]),
+        requestId: randomUUID(),
+      });
+
+      // Pending: nothing to resubmit.
+      await expect(resubmit(owner.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityDataStaleError,
+      );
+
+      const rejected = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason,
+      });
+      const rejectedAt = rejected.community.application.reviewedAt;
+
+      await expect(resubmit(admin.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityPermissionDeniedError,
+      );
+      await expect(resubmit(member.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityPermissionDeniedError,
+      );
+      await expect(
+        resubmit(stranger.userId, communityId),
+      ).rejects.toBeInstanceOf(CommunityNotFoundError);
+
+      const key = randomUUID();
+      const resubmitted = await resubmit(owner.userId, communityId, key);
+      expect(resubmitted.community.verificationStatus).toBe("pending");
+      expect(resubmitted.community.application.rejectedReason).toBeNull();
+      expect(resubmitted.community.application.reviewedAt).toBeNull();
+      expect(
+        Date.parse(resubmitted.community.application.submittedAt),
+      ).toBeGreaterThan(Date.parse(resubmitted.community.createdAt));
+      expect(
+        Date.parse(resubmitted.community.application.submittedAt),
+      ).toBeGreaterThanOrEqual(Date.parse(rejectedAt ?? ""));
+      expect(resubmitted.viewerMembership?.role).toBe("owner");
+
+      // Replay under the same key returns the state without a second audit.
+      const replay = await resubmit(owner.userId, communityId, key);
+      expect(replay.community.verificationStatus).toBe("pending");
+      // A second, differently keyed resubmission finds nothing to do.
+      await expect(resubmit(owner.userId, communityId)).rejects.toBeInstanceOf(
+        CommunityDataStaleError,
+      );
+      // The same key with a different digest is a conflict.
+      await expect(
+        repository.resubmitCommunity({
+          ownerUserId: owner.userId,
+          communityId,
+          idempotencyKey: key,
+          requestSha256: commandDigest("community", "resubmitCommunity", [
+            communityId,
+            "other",
+          ]),
+          requestId: randomUUID(),
+        }),
+      ).rejects.toBeInstanceOf(CommunityIdempotencyConflictError);
+
+      const audits = await auditRows(communityId);
+      expect(audits.map((row) => row.event_type)).toEqual([
+        "community_rejected",
+        "community_resubmitted",
+      ]);
+      // The reason survives on the audit row after the community forgot it.
+      expect(audits[0]?.note).toBe(reason);
+      expect(audits[1]).toMatchObject({
+        actor_type: "member",
+        reason_code: "owner_resubmission",
+        note: null,
+      });
+
+      // A second rejection is a second audit row and a fresh reason.
+      const secondRejection = await repository.rejectCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason: "Still too close to a listed token",
+      });
+      expect(secondRejection.changed).toBe(true);
+      expect(secondRejection.eventId).not.toBe(rejected.eventId);
+      expect(secondRejection.community.application.rejectedReason).toBe(
+        "Still too close to a listed token",
+      );
+
+      // Verifying a rejected community closes the review and clears the reason.
+      const verified = await repository.verifyCommunity({
+        communityId,
+        requestId: randomUUID(),
+        reasonCode: "operator_reconsidered",
+      });
+      expect(verified.changed).toBe(true);
+      expect(verified.community.application.rejectedReason).toBeNull();
+      expect(verified.community.application.reviewedAt).not.toBeNull();
+      expect(
+        (await auditRows(communityId)).map((row) => row.event_type),
+      ).toEqual([
+        "community_rejected",
+        "community_resubmitted",
+        "community_rejected",
+        "community_verified",
+      ]);
+    });
+
+    it("keeps the review columns paired with the status at the database level", async () => {
+      const owner = await createAccount("review-pairing");
+      const communityId = await createCommunity(owner.userId, "review-pairing");
+      for (const statement of [
+        `update public.communities set rejected_reason = 'x' where community_id = $1`,
+        `update public.communities set reviewed_at = clock_timestamp() where community_id = $1`,
+        `update public.communities set verification_status = 'rejected' where community_id = $1`,
+        `update public.communities set rejected_reason = '${"x".repeat(281)}', reviewed_at = clock_timestamp(), verification_status = 'rejected' where community_id = $1`,
+      ]) {
+        await expect(
+          pool.query({ text: statement, values: [communityId] }),
+        ).rejects.toMatchObject({ code: "23514" });
+      }
+      await expect(
+        pool.query({
+          text: `
+            update public.community_role_events set note = 'late edit'
+            where community_id = $1
+          `,
+          values: [communityId],
+        }),
+      ).rejects.toMatchObject({ code: "55000" });
+    });
+
+    it("splits the home aggregate into owned and joined and pages each through listCommunities", async () => {
+      const owner = await createAccount("home-split-owner");
+      const other = await createAccount("home-split-other");
+      const mine = await createCommunity(owner.userId, "home-split-mine");
+      const theirs = await createCommunity(other.userId, "home-split-theirs");
+      await repository.verifyCommunity({
+        communityId: theirs,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+      });
+      await join(owner.userId, theirs);
+      await repository.rejectCommunity({
+        communityId: mine,
+        requestId: randomUUID(),
+        reasonCode: "operator_manual_review",
+        reason,
+      });
+
+      const home = await repository.getCommunityHome({
+        viewerUserId: owner.userId,
+        joinedLimit: 50,
+        ownedLimit: 50,
+        discoverLimit: 5,
+      });
+      expect(home.joined.map((entry) => entry.community.communityId)).toEqual([
+        theirs,
+      ]);
+      expect(home.joined[0]?.viewerMembership?.role).toBe("member");
+      expect(home.owned.map((entry) => entry.community.communityId)).toEqual([
+        mine,
+      ]);
+      expect(home.owned[0]?.viewerMembership?.role).toBe("owner");
+      expect(home.owned[0]?.community.application.rejectedReason).toBe(reason);
+      expect(home.ownedTruncated).toBe(false);
+      expect(home.discover.map((item) => item.communityId)).not.toContain(
+        theirs,
+      );
+
+      const second = await createCommunity(owner.userId, "home-split-second");
+      const bounded = await repository.getCommunityHome({
+        viewerUserId: owner.userId,
+        joinedLimit: 50,
+        ownedLimit: 1,
+        discoverLimit: 5,
+      });
+      // Newest submission first, and the bound reports the overflow.
+      expect(bounded.owned.map((entry) => entry.community.communityId)).toEqual(
+        [second],
+      );
+      expect(bounded.ownedTruncated).toBe(true);
+
+      const ownedPage = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "newest",
+        verification: "all",
+        membership: "owned",
+        limit: 50,
+      });
+      expect(ownedPage.map((item) => item.communityId)).toEqual([second, mine]);
+      const joinedPage = await repository.listCommunities({
+        viewerUserId: owner.userId,
+        sort: "newest",
+        verification: "all",
+        membership: "joined",
+        limit: 50,
+      });
+      expect(joinedPage.map((item) => item.communityId)).toEqual([theirs]);
+    });
+  });
+});

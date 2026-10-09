@@ -7,15 +7,79 @@ prototype research in `contracts/integration-catalog/` and
 ## Provider boundaries
 
 - Privy is the identity credential, wallet, authorization, and signing provider.
-- Hyperliquid is the Core-whitelist perpetual market provider.
+- Hyperliquid native Spot on Testnet is the current approved trading target.
+  Retained Core-whitelist Perp routes remain compatibility behavior only; no
+  new Perp product work is approved.
 - Stream Chat + Stream Video/Audio Rooms is the current Chat and voice provider.
 - LOOP implements thin adapters, policy mapping, orchestration, and projections;
   it does not implement replacement wallet, matching, Chat, RTC, or SFU cores.
 
-The repository currently has no production backend runtime, installed live
-provider composition, deployed endpoint, provider credentials, connected data
-path, or credentialed sandbox/testnet/device evidence. Contract paths such as
-`POST /v1/chat/token` are target interfaces only.
+The repository now has a local Fastify runtime, the Development
+`POST /v1/bootstrap` Privy verification boundary, and implemented Stream token
+HTTP interfaces backed by persistent issuance policy and the exact licensed
+official server SDK. It also has six strict
+Hyperliquid Testnet private-read HTTP interfaces with server-owned wallet
+authority, freshness, decimal-string, Core-market, and opaque-cursor checks. It
+also has a durable master-wallet binding lifecycle, fresh exact Privy wallet
+resolution, and a lossless fixed-Testnet private reader guarded by a global
+weighted quota. The reader is default-off. The repository still has no
+production deployment, successful real-token physical-device evidence,
+Stream client connection evidence, nonempty Testnet-account end-to-end
+evidence, or private trading mutation path. The configured Development Stream
+credential pair passes an official read-only App lookup locally, but no real
+phone token has exercised the token routes. Stream remains
+`blocked-provider`;
+Hyperliquid private reads are implemented but not yet “integrated” under the
+evidence definition below.
+
+Decision 0023 adds a Development-only, non-disclosing operator smoke runner for
+the remaining Privy-to-Stream backend credential chain. It reads a current
+Privy token only from standard input and validates stable bootstrap plus Chat
+and Video token contracts without printing identities or credentials. The
+runner is implemented, but it does not close any evidence gate until a real
+phone-issued token completes it; mobile Stream connection evidence remains
+separate.
+
+Decision 0014 approves a separate twelve-route Hyperliquid native Spot Testnet
+contract for one reviewed capped IOC buy or sell, one shared master-wallet
+binding authority, a per-owner/binding-epoch Agent handoff, persistent nonce
+allocation, one provider write attempt, and read-only reconciliation. The route
+contracts, persistence, read-only reconciliation, and generated OpenAPI are now
+implemented, but the main HTTP runtime selects unavailable Spot services. The
+low-level Node signer and fixed-Testnet one-attempt writer now pass offline
+official-Python-vector conformance and remain uncomposed. Credentialed Agent,
+just-before-send, Testnet write, crash, and reconciliation gates still block
+runtime enablement.
+Decision 0020 adds a strict post-signature, pre-writer admission boundary and a
+durable coordinator-only `rejected/not_required` outcome when LOOP can prove
+the Exchange writer was never invoked. Any writer invocation still becomes
+`unknown` and read-only reconciliation; no second write is allowed. The guard
+port is not a production guard and the runtime remains unavailable. After this
+verified safety slice, Hyperliquid product work is frozen pending an explicit
+scope decision; the freeze does not claim a credentialed Testnet transaction.
+Decision 0015 keeps Mainnet absent as a separate future release project rather
+than a URL or runtime flag.
+Decision 0018 adds an uncomposed Agent-authorization issuance coordinator. It
+uses dual policy/wallet checks, repository-first replay, reserved-identity
+reuse, database-owned nonces, and the official JSON safe-integer typed-data
+nonce. A single eight-second admission deadline is checked with the database
+clock before every guarded SQL statement and commit; a prepared handoff is
+rechecked before return, and replay is re-confirmed after the second authority
+observations, without enabling a Privy allocator, signature recovery, relay,
+reconciliation, or runtime provider write.
+
+The generic reconciliation loop now has a separate process entry point and
+runtime image. Its default-off fixed-Testnet capability can reconcile only a
+Core limit `order` through strict cloid-bound Info evidence and atomically
+finalize generic plus Perp records. Market orders and unsupported Perp actions
+are operator-held before a provider call. Decision 0016 also enables bounded,
+database-only expiry and retirement maintenance for renewable Spot Agent
+generations by default. Decision 0022 also adds default-on, database-only
+retention for the shared issuance quota table: every window remains for seven
+complete days after it ends, and cleanup uses bounded skip-locked batches
+without returning subject HMACs. The worker has no provider writer, replay path,
+transfer finalizer, or deployment; provider-read and local maintenance
+operability are not provider-integration evidence.
 
 ## Identity model
 
@@ -23,11 +87,73 @@ The durable LOOP account key is a random, opaque internal user ID. Stream user
 IDs and other provider subjects are derived or mapped server-side from that
 internal identity.
 
+Bootstrap derives the future Stream subject as
+`loop_<lowercase-internal-uuid-without-hyphens>`. Returning that subject does not
+connect Stream or mint a Chat/Video token.
+
 Wallets are bindable, replaceable credentials. A user may attach, rotate, or
 remove an eligible wallet without replacing the internal account, social graph,
 Chat identity, preferences, or audit ownership. Client-selected wallet addresses
 must not become database primary keys, Stream user IDs, or trusted authorization
 claims.
+
+The current lifecycle supports the Privy embedded Ethereum master wallet only.
+An explicit version-checked PUT may select a sole eligible wallet or refresh the
+exact stored wallet; it never accepts authority from the client. The API exposes
+only binding state, monotonic epoch, fixed-or-null account kind, and last
+verification time. Interactive selection among multiple wallets and subaccounts
+requires a separate decision.
+
+Decision 0024 approves one authenticated public-alias discovery surface and one
+immutable alias per user and Stream Chat group. A public alias is returned only
+when the owner has both a non-null profile alias and `discoverable=true`; public
+aliases may be duplicated and results expose only an opaque public-profile ID,
+alias, and opaque avatar reference. Group aliases are unique after normalized
+comparison within one group, persist across leave/rejoin, and cannot be changed
+after their first durable reservation.
+
+The group boundary resolves only an existing fixed-type `messaging` Stream
+channel after Stream verifies the caller as a current member. It does not create
+a channel or add a member. LOOP PostgreSQL is authoritative for alias
+immutability and uniqueness; Stream channel-member custom data is a
+`pending`/`confirmed` presentation projection only. Every group search verifies
+the requester and every returned candidate as current Stream members and
+returns no cross-group correlation fields. Because the same stable Stream user
+ID remains behind every persona, this is a product/UI pseudonym model, not
+strong unlinkability. Direct Stream user search and client mutation of reserved
+member fields are launch-blocking permission checks.
+
+Both public and group search use a minimum two-code-point normalized prefix,
+bounded 1-through-20 results, no result total or cursor, and independent
+user-minute, IP-minute, and user-day quotas. Quota subjects reuse the existing
+server-only quota secret under an independent HMAC domain; raw user IDs and IPs
+are not persisted. Public capacities are 30/60/300 for
+user-minute/IP-minute/user-day; group capacities are 60/120/600. Wallet/address
+search, QR lookup, alias history,
+following/followers, contacts, and a custom social graph remain outside this
+decision.
+
+## Local personalization and inactive alerts
+
+Decision 0009 selects LOOP PostgreSQL as the narrow system of record for the
+current user's mutable alias/opaque avatar reference, privacy preferences,
+grouped ordered Watchlist, inactive price-alert definitions, notification
+preferences, and sanitized alert-event history.
+
+This ownership is deliberately local and non-authoritative. Alias is display
+data, asset keys are references rather than market facts, and
+`copy_trade_visibility` does not authorize following or trading. Profile and
+Watchlist replacements use optimistic versions; alert creation uses a UUID
+idempotency key and canonical decimal-string threshold.
+
+No alert can be activated in the current runtime. There is no selected price
+fact/evaluator/scheduler, no trigger writer, no Firebase device registration or
+delivery, and no notification inbox. An enabled preference records user intent
+while the API continues to report delivery unavailable. General public
+profiles, relationship discovery, following/followers/blocklist, copy-trading
+authorization, account export/delete, and retention automation require separate
+decisions. Decision 0024 approves only its exact alias-search and group-persona
+routes; it does not approve those wider capabilities.
 
 ## Stream large-group Go/No-Go
 

@@ -1,0 +1,79 @@
+{
+  "schema_version": "loop.hyperliquid-spot.provider-fixture/v1",
+  "classification": "public_testnet_provider_capture",
+  "runtime_fallback": false,
+  "network": "testnet",
+  "provider": "hyperliquid",
+  "capture_window_ended_at": "2026-08-26T06:46:05Z",
+  "request": {
+    "method": "POST",
+    "path": "/info",
+    "body": {
+      "type": "spotMetaAndAssetCtxs"
+    }
+  },
+  "projection": "The complete live response was reduced to the PURR/USDC pair, its two referenced tokens, and its corresponding first asset context. Provider field names, JSON types, and exact decimal strings are preserved.",
+  "response": [
+    {
+      "tokens": [
+        {
+          "name": "USDC",
+          "szDecimals": 8,
+          "weiDecimals": 8,
+          "index": 0,
+          "tokenId": "0xeb62eee3685fc4c43992febcd9e75443",
+          "isCanonical": true,
+          "evmContract": {
+            "address": "0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206",
+            "evm_extra_wei_decimals": -2
+          },
+          "fullName": null,
+          "deployerTradingFeeShare": "0.0"
+        },
+        {
+          "name": "PURR",
+          "szDecimals": 0,
+          "weiDecimals": 5,
+          "index": 1,
+          "tokenId": "0xc4bf3f870c0e9465323c0b6ed28096c2",
+          "isCanonical": true,
+          "evmContract": {
+            "address": "0xa9056c15938f9aff34cd497c722ce33db0c2fd57",
+            "evm_extra_wei_decimals": 13
+          },
+          "fullName": "Hypurr",
+          "deployerTradingFeeShare": "0.0"
+        }
+      ],
+      "universe": [
+        {
+          "tokens": [1, 0],
+          "name": "PURR/USDC",
+          "index": 0,
+          "isCanonical": true
+        }
+      ]
+    },
+    [
+      {
+        "prevDayPx": "4.6252",
+        "dayNtlVlm": "1021.7579",
+        "markPx": "4.6252",
+        "midPx": "4.60235",
+        "circulatingSupply": "198729671.633980006",
+        "coin": "PURR/USDC",
+        "totalSupply": "198732569.6749300063",
+        "dayBaseVlm": "221.0"
+      }
+    ]
+  ],
+  "derived_identity_expectation": {
+    "base_token_index": 1,
+    "base_token_id": "0xc4bf3f870c0e9465323c0b6ed28096c2",
+    "quote_token_index": 0,
+    "quote_token_id": "0xeb62eee3685fc4c43992febcd9e75443",
+    "spot_pair_index": 0,
+    "exchange_order_asset": 10000,
+    "coin": "PURR/USDC"
+  }
+}

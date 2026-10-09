@@ -1,0 +1,3581 @@
+import type { FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { buildApp } from "../src/app.js";
+import { loadConfig } from "../src/config.js";
+import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
+import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
+import {
+  createUnavailableChainRegistryRepository,
+  type AssetRecord,
+} from "../src/database/chain-registry-repository.js";
+import {
+  createUnavailableControlPlaneRepository,
+  IssuanceQuotaExceededError,
+  type ControlPlaneRepository,
+} from "../src/database/control-plane-repository.js";
+import type { Database } from "../src/database/database.js";
+import { createUnavailablePerpIntentRepository } from "../src/database/perp-intent-repository.js";
+import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
+import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
+import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import {
+  CommunityDataStaleError,
+  CommunityIdempotencyConflictError,
+  CommunityNotFoundError,
+  CommunityPermissionDeniedError,
+  CommunityProfileRequiredError,
+  CommunityRepositoryUnavailableError,
+  CommunitySlugTakenError,
+  CommunityTargetUnavailableError,
+  type CommunityRecord,
+  type CommunityRepository,
+  type MembershipRecord,
+} from "../src/features/community/community-repository.js";
+import { commandDigest } from "../src/features/community/community-contract.js";
+import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
+import { buildMiningDevBaselineDocuments } from "../src/features/mining/mining-dev-baseline.js";
+import {
+  createUnavailableMiningRepository,
+  type MiningRepository,
+} from "../src/features/mining/mining-repository.js";
+import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
+import { createUnavailableCommunicationRepository } from "../src/features/communication/communication-repository.js";
+import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import {
+  createUnavailableStreamCommunityChannelGateway,
+  StreamChannelGatewayUnavailableError,
+  type StreamCommunityChannelGateway,
+} from "../src/integrations/stream/channel-gateway.js";
+
+const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
+const otherAccountId = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
+const communityId = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+const targetProfileId = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
+const messageRequestId = "7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6";
+const validToken = "header.payload.signature";
+const cursorSecret = "0123456789abcdef0123456789abcdef";
+const quotaSecret = "fedcba9876543210fedcba9876543210";
+const createdAt = "2026-09-07T01:00:00.000Z";
+const requestIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function idempotencyKey(suffix = "a"): string {
+  return `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${suffix}`;
+}
+
+const community: CommunityRecord = Object.freeze({
+  communityId,
+  name: "Frog Holders",
+  slug: "frog-holders",
+  description: null,
+  logoRef: "avatar:preset/community-03",
+  verificationStatus: "verified",
+  boundAssetKey: null,
+  memberCount: 2,
+  createdAt,
+  configVersion: "communityV1",
+  application: Object.freeze({
+    submittedAt: createdAt,
+    reviewedAt: "2026-09-07T02:00:00.000Z",
+    rejectedReason: null,
+  }),
+});
+
+const ownerMembership: MembershipRecord = Object.freeze({
+  role: "owner",
+  status: "active",
+  joinedAt: createdAt,
+});
+
+const profile = Object.freeze({
+  publicProfileId: targetProfileId,
+  loopId: "LOOP-7HJKMNPQ",
+  alias: "frog_maxi",
+  avatarRef: "avatar:preset/people-03",
+});
+
+function testConfig(overrides: Readonly<Record<string, string>> = {}) {
+  return loadConfig({
+    NODE_ENV: "test",
+    API_DOCS_ENABLED: "false",
+    LOG_LEVEL: "silent",
+    V2_MODULES_ENABLED: "community,search",
+    V2_CURSOR_HMAC_SECRET: cursorSecret,
+    STREAM_TOKEN_QUOTA_HMAC_SECRET: quotaSecret,
+    PRIVY_APP_ID: "app_test",
+    PRIVY_APP_SECRET: "secret_test",
+    DATABASE_URL:
+      "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    ...overrides,
+  });
+}
+
+function commonHeaders(
+  overrides: Readonly<Record<string, string | undefined>> = {},
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${validToken}`,
+    "x-loop-client-version": "1.2.3",
+    "x-loop-contract-version": "2.0",
+  };
+  for (const [name, value] of Object.entries(overrides)) {
+    if (value === undefined) {
+      delete headers[name];
+    } else {
+      headers[name] = value;
+    }
+  }
+  return headers;
+}
+
+function commandHeaders(
+  overrides: Readonly<Record<string, string | undefined>> = {},
+): Record<string, string> {
+  return commonHeaders({ "idempotency-key": idempotencyKey(), ...overrides });
+}
+
+function communityRepositoryFake() {
+  const createCommunityMock = vi.fn(() =>
+    Promise.resolve({
+      community: { ...community, verificationStatus: "pending" as const },
+      viewerMembership: ownerMembership,
+    }),
+  );
+  const updateCommunityMock = vi.fn(() =>
+    Promise.resolve({ community, viewerMembership: ownerMembership }),
+  );
+  const resubmitCommunityMock = vi.fn<CommunityRepository["resubmitCommunity"]>(
+    () =>
+      Promise.resolve({
+        community: {
+          ...community,
+          verificationStatus: "pending" as const,
+          application: {
+            submittedAt: "2026-09-08T01:00:00.000Z",
+            reviewedAt: null,
+            rejectedReason: null,
+          },
+        },
+        viewerMembership: ownerMembership,
+      }),
+  );
+  const governMemberMock = vi.fn(() =>
+    Promise.resolve({
+      community,
+      actorMembership: ownerMembership,
+      target: null,
+    }),
+  );
+  const listCommunitiesMock = vi.fn(() => Promise.resolve([community]));
+  const sendMessageRequestMock = vi.fn(() =>
+    Promise.resolve({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+    }),
+  );
+  const listMembersMock = vi.fn<CommunityRepository["listMembers"]>(() =>
+    Promise.resolve({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "owner" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    }),
+  );
+  const repository: CommunityRepository = {
+    listCommunities: listCommunitiesMock,
+    getCommunityActivityObservation: vi.fn(() =>
+      Promise.resolve({
+        observedCommunityCount: 0,
+        latestObservedAt: null,
+      }),
+    ),
+    getCommunityHome: vi.fn(() =>
+      Promise.resolve({
+        joined: [
+          {
+            community,
+            viewerMembership: { ...ownerMembership, role: "member" as const },
+          },
+        ],
+        joinedTruncated: true,
+        owned: [
+          {
+            community: {
+              ...community,
+              verificationStatus: "rejected" as const,
+              application: {
+                submittedAt: createdAt,
+                reviewedAt: "2026-09-07T02:00:00.000Z",
+                rejectedReason: "Name collides with a listed token",
+              },
+            },
+            viewerMembership: ownerMembership,
+          },
+        ],
+        ownedTruncated: false,
+        discover: [community],
+        observedAt: createdAt,
+      }),
+    ),
+    getCommunity: vi.fn(() =>
+      Promise.resolve({ community, viewerMembership: ownerMembership }),
+    ),
+    createCommunity: createCommunityMock,
+    updateCommunity: updateCommunityMock,
+    joinCommunity: vi.fn(() =>
+      Promise.resolve({ community, viewerMembership: ownerMembership }),
+    ),
+    leaveCommunity: vi.fn(() =>
+      Promise.resolve({ community, viewerMembership: null }),
+    ),
+    resubmitCommunity: resubmitCommunityMock,
+    listMembers: listMembersMock,
+    governMember: governMemberMock,
+    follow: vi.fn(() =>
+      Promise.resolve({ profile, createdAt, viewerFollows: true }),
+    ),
+    unfollow: vi.fn(() => Promise.resolve(profile)),
+    listConnections: vi.fn(() =>
+      Promise.resolve([{ profile, createdAt, viewerFollows: true }]),
+    ),
+    countConnections: vi.fn(() =>
+      Promise.resolve({ following: 1, followers: 4 }),
+    ),
+    blockUser: vi.fn(() =>
+      Promise.resolve({
+        kind: "user" as const,
+        stableId: targetProfileId,
+        profile,
+        reasonCode: "user_request",
+        createdAt,
+      }),
+    ),
+    unblockUser: vi.fn(() => Promise.resolve()),
+    listBlocks: vi.fn(() =>
+      Promise.resolve([
+        {
+          kind: "user" as const,
+          stableId: targetProfileId,
+          profile,
+          reasonCode: "user_request",
+          createdAt,
+        },
+      ]),
+    ),
+    countBlocks: vi.fn(() => Promise.resolve({ user: 1 })),
+    listMessageRequests: vi.fn(() =>
+      Promise.resolve([
+        {
+          messageRequestId,
+          profile,
+          createdAt,
+          expiresAt: "2026-09-14T01:00:00.000Z",
+        },
+      ]),
+    ),
+    sendMessageRequest: sendMessageRequestMock,
+    decideMessageRequest: vi.fn(() =>
+      Promise.resolve({
+        messageRequestId,
+        decision: "report" as const,
+        blocked: true,
+      }),
+    ),
+    searchUsers: vi.fn(() =>
+      Promise.resolve([
+        { profile, searchKey: "frog_maxi", exactLoopIdMatch: false },
+      ]),
+    ),
+    searchCommunities: vi.fn(() =>
+      Promise.resolve([
+        { community, searchKey: "frog holders", viewerJoined: true },
+      ]),
+    ),
+    verifyCommunity: vi.fn(() =>
+      Promise.resolve({
+        community,
+        ownerUserId: accountId,
+        eventId: null,
+        changed: false,
+      }),
+    ),
+    rejectCommunity: vi.fn(() =>
+      Promise.resolve({
+        community,
+        ownerUserId: accountId,
+        eventId: null,
+        changed: false,
+      }),
+    ),
+  };
+  return {
+    repository,
+    resubmitCommunityMock,
+    listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
+    createCommunityMock,
+    updateCommunityMock,
+    governMemberMock,
+  };
+}
+
+function fakes(options: { readonly quotaExceeded?: boolean } = {}) {
+  const verifyAccessToken = vi.fn(() =>
+    Promise.resolve({ privyUserId: "did:privy:verified-user" }),
+  );
+  const findByPrivyUserId = vi.fn<InternalUserRepository["findByPrivyUserId"]>(
+    () => Promise.resolve({ id: accountId }),
+  );
+  const consumeIssuanceQuota = vi.fn<
+    ControlPlaneRepository["consumeIssuanceQuota"]
+  >(() =>
+    options.quotaExceeded === true
+      ? Promise.reject(new IssuanceQuotaExceededError())
+      : Promise.resolve([]),
+  );
+  const {
+    repository: communityRepository,
+    listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
+    createCommunityMock,
+    updateCommunityMock,
+    resubmitCommunityMock,
+    governMemberMock,
+  } = communityRepositoryFake();
+  const database = {
+    alerts: createUnavailableAlertRepository(),
+    agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
+    controlPlane: {
+      ...createUnavailableControlPlaneRepository(),
+      consumeIssuanceQuota,
+    },
+    deviceSessions: createUnavailableDeviceSessionRepository(),
+    perpWalletBindings: createUnavailablePerpWalletBindingRepository(),
+    perpIntents: createUnavailablePerpIntentRepository(),
+    profiles: createUnavailableProfileRepository(),
+    community: communityRepository,
+    watchlists: createUnavailableWatchlistRepository(),
+    internalUsers: {
+      findByPrivyUserId,
+      getOrCreateByPrivyUserId: vi.fn<
+        InternalUserRepository["getOrCreateByPrivyUserId"]
+      >(() => Promise.resolve({ id: accountId })),
+    },
+    ping: vi.fn(() => Promise.resolve()),
+    close: vi.fn(() => Promise.resolve()),
+  } satisfies Database;
+  const privyAccessTokenVerifier = {
+    verifyAccessToken,
+  } satisfies PrivyAccessTokenVerifier;
+
+  return {
+    communityRepository,
+    listCommunitiesMock,
+    listMembersMock,
+    sendMessageRequestMock,
+    createCommunityMock,
+    updateCommunityMock,
+    resubmitCommunityMock,
+    governMemberMock,
+    consumeIssuanceQuota,
+    database,
+    privyAccessTokenVerifier,
+    verifyAccessToken,
+  };
+}
+
+const usdtAssetId = "eip155:56:0x55d398326f99059ff775485246999027b3197955";
+const usd1AssetId = "eip155:56:0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d";
+const wbnbAssetId = "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+
+function registryAsset(input: {
+  readonly assetId: string;
+  readonly address: string | null;
+  readonly symbol: string;
+  readonly name: string;
+  readonly status?: AssetRecord["status"];
+}): AssetRecord {
+  return Object.freeze({
+    assetId: input.assetId,
+    chainId: "eip155:56",
+    address: input.address,
+    symbol: input.symbol,
+    name: input.name,
+    decimals: 18,
+    status: input.status ?? "pending",
+    sourceKind: input.address === null ? "chain_native" : "chain_call",
+    sourceBlockNumber: "1",
+    sourceVerifiedAt: null,
+    updatedAt: "2026-09-23T00:00:00.000Z",
+  });
+}
+
+/** Registry fake: the readable rows the search domain filters in memory. */
+function registryWithAssets() {
+  const assets: readonly AssetRecord[] = [
+    registryAsset({
+      assetId: "eip155:56:native",
+      address: null,
+      symbol: "BNB",
+      name: "BNB",
+    }),
+    registryAsset({
+      assetId: wbnbAssetId,
+      address: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      symbol: "WBNB",
+      name: "Wrapped BNB",
+    }),
+    registryAsset({
+      assetId: usdtAssetId,
+      address: "0x55d398326f99059ff775485246999027b3197955",
+      symbol: "USDT",
+      name: "Tether USD",
+    }),
+    registryAsset({
+      assetId: usd1AssetId,
+      address: "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+      symbol: "USD1",
+      name: "World Liberty Financial USD",
+      status: "verified",
+    }),
+  ];
+  return {
+    ...createUnavailableChainRegistryRepository(),
+    listReadableAssets: vi.fn(() => Promise.resolve(assets)),
+  };
+}
+
+function expectOperationalHeaders(response: {
+  readonly headers: Record<string, string | string[] | number | undefined>;
+}): void {
+  expect(response.headers["cache-control"]).toBe("no-store");
+  expect(response.headers["x-request-id"]).toMatch(requestIdPattern);
+}
+
+describe("LOOP API V2 community, social, and search modules", () => {
+  const apps: FastifyInstance[] = [];
+
+  afterEach(async () => {
+    await Promise.all(apps.splice(0).map(async (app) => app.close()));
+  });
+
+  async function createApp(
+    dependencies: Omit<ReturnType<typeof fakes>, "database"> & {
+      readonly database: Database;
+      readonly streamCommunityChannelGateway?: StreamCommunityChannelGateway;
+    } = fakes(),
+    overrides: Readonly<Record<string, string>> = {},
+  ) {
+    const app = await buildApp({
+      config: testConfig(overrides),
+      contractSurface: "v2",
+      database: dependencies.database,
+      privyAccessTokenVerifier: dependencies.privyAccessTokenVerifier,
+      ...(dependencies.streamCommunityChannelGateway === undefined
+        ? {}
+        : {
+            streamCommunityChannelGateway:
+              dependencies.streamCommunityChannelGateway,
+          }),
+      logger: false,
+    });
+    apps.push(app);
+    return { app, ...dependencies };
+  }
+
+  it("registers no community or search route when the modules are disabled", async () => {
+    const { app, verifyAccessToken } = await createApp(fakes(), {
+      V2_MODULES_ENABLED: "",
+    });
+    for (const [method, url] of [
+      ["GET", "/v2/community/home"],
+      ["GET", "/v2/communities"],
+      ["POST", "/v2/communities"],
+      ["GET", "/v2/communities/3fa85f64-5717-4562-b3fc-2c963f66afa6/members"],
+      ["GET", "/v2/connections"],
+      ["GET", "/v2/blocks"],
+      ["GET", "/v2/message-requests"],
+      ["GET", "/v2/mining/referral/rules"],
+      ["GET", "/v2/search?domain=users&q=fr"],
+    ] as const) {
+      const response = await app.inject({
+        method,
+        url,
+        headers: commandHeaders(),
+        ...(method === "GET" ? {} : { payload: {} }),
+      });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.json()).toMatchObject({
+        code: "NOT_FOUND",
+        category: "validation",
+      });
+    }
+    expect(verifyAccessToken).not.toHaveBeenCalled();
+
+    const capabilities = await app.inject({
+      method: "GET",
+      url: "/v2/meta/capabilities",
+    });
+    const entries = capabilities.json<{
+      capabilities: {
+        capabilityId: string;
+        availability: string;
+        reasonCode: string | null;
+      }[];
+    }>().capabilities;
+    expect(
+      entries.find((entry) => entry.capabilityId === "community"),
+    ).toMatchObject({
+      availability: "deferred",
+      reasonCode: "V2_COMMUNITY_RUNTIME_DEFERRED",
+    });
+    expect(
+      entries.find((entry) => entry.capabilityId === "search"),
+    ).toMatchObject({
+      availability: "deferred",
+      reasonCode: "V2_SEARCH_RUNTIME_DEFERRED",
+    });
+  });
+
+  it("publishes community and search as available and the two derived facts as unavailable", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/meta/capabilities",
+    });
+    const entries = response.json<{
+      capabilities: {
+        capabilityId: string;
+        availability: string;
+        reasonCode: string | null;
+      }[];
+    }>().capabilities;
+    const byId = Object.fromEntries(
+      entries.map((entry) => [entry.capabilityId, entry]),
+    );
+    expect(byId["community"]).toMatchObject({
+      availability: "available",
+      reasonCode: null,
+    });
+    expect(byId["search"]).toMatchObject({
+      availability: "available",
+      reasonCode: null,
+    });
+    // Decision 0043: communityMining follows the formula fact; this app does
+    // not enable `mining`, so nothing can be in force and it stays blocked.
+    expect(byId["communityMining"]).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      evidence: { status: "notApplicable", reasonCode: null },
+    });
+    expect(byId["communityPresence"]).toMatchObject({
+      availability: "unavailable",
+      reasonCode: "STREAM_PRESENCE_NOT_CONNECTED",
+    });
+  });
+
+  it("fails the community capability closed without a cursor secret", async () => {
+    const { app } = await createApp(fakes(), {
+      V2_CURSOR_HMAC_SECRET: "",
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/meta/capabilities",
+    });
+    const entries = response.json<{
+      capabilities: { capabilityId: string; reasonCode: string | null }[];
+    }>().capabilities;
+    expect(
+      entries.find((entry) => entry.capabilityId === "community"),
+    ).toMatchObject({ reasonCode: "COMMUNITY_RUNTIME_UNAVAILABLE" });
+  });
+
+  it("projects the community home aggregate with unavailable Stream facts", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/community/home",
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expectOperationalHeaders(response);
+    const body = response.json<Record<string, unknown>>();
+    expect(body["unread"]).toEqual({
+      status: "unavailable",
+      reasonCode: "STREAM_UNREAD_NOT_CONNECTED",
+    });
+    expect(body["liveVoice"]).toEqual({
+      status: "unavailable",
+      reasonCode: "STREAM_VOICE_NOT_CONNECTED",
+    });
+    expect(body["joined"]).toMatchObject({ truncated: true });
+    expect(body["freshness"]).toEqual({
+      observedAt: createdAt,
+      source: "database",
+    });
+    expect(body["recommendation"]).toMatchObject({
+      ruleVersion: "rule:verified-members-v1",
+    });
+    expect(JSON.stringify(body)).not.toContain("profile_code");
+  });
+
+  it("returns the fixed identity projection without profile_code or a wallet", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      viewer: Record<string, unknown>;
+      counts: Record<string, unknown>;
+      items: { profile: Record<string, unknown>; miningPower: unknown }[];
+    }>();
+    expect(Object.keys(body.items[0]?.profile ?? {}).sort()).toEqual([
+      "alias",
+      "avatarRef",
+      "loopId",
+      "publicProfileId",
+    ]);
+    expect(body.items[0]?.miningPower).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+    });
+    expect(body.counts["online"]).toEqual({
+      status: "unavailable",
+      reasonCode: "STREAM_PRESENCE_NOT_CONNECTED",
+    });
+    expect(body.viewer).toEqual({
+      membership: { role: "owner", status: "active", joinedAt: createdAt },
+      canInviteAdmin: true,
+      canMute: true,
+      canBan: true,
+    });
+  });
+
+  it("publishes each member row's own governance commands, not the viewer's flags", async () => {
+    const adminMembership: MembershipRecord = {
+      role: "admin",
+      status: "active",
+      joinedAt: createdAt,
+    };
+    const otherAdminId = "5f4e3d2c-1b0a-4987-8765-43210fedcba9";
+    const memberId = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+    const ownerId = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: adminMembership,
+      // The viewer is the admin whose own row carries `targetProfileId`.
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: "11111111-1111-4111-8111-111111111111",
+          role: "owner" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: ownerId },
+        },
+        {
+          membershipId: "22222222-2222-4222-8222-222222222222",
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: otherAdminId },
+        },
+        {
+          membershipId: "33333333-3333-4333-8333-333333333333",
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+        {
+          membershipId: "44444444-4444-4444-8444-444444444444",
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: memberId },
+        },
+        {
+          membershipId: "55555555-5555-4555-8555-555555555555",
+          role: "member" as const,
+          status: "muted" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: memberId },
+        },
+        {
+          membershipId: "66666666-6666-4666-8666-666666666666",
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+          profile: { ...profile, publicProfileId: null },
+        },
+      ],
+      counts: { all: 6, owner: 1, admin: 2 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      viewer: Record<string, unknown>;
+      items: {
+        role: string;
+        status: string;
+        isSelf: boolean;
+        actions: string[];
+      }[];
+    }>();
+    expect(Object.keys(body.items[0] ?? {}).sort()).toEqual([
+      "actions",
+      "isSelf",
+      "joinedAt",
+      "miningPower",
+      "profile",
+      "role",
+      "status",
+    ]);
+    // The viewer-level flags still say this admin may mute and ban somewhere
+    // in the community...
+    expect(body.viewer).toMatchObject({ canMute: true, canBan: true });
+    // ...but no row the matrix denies carries the command.
+    expect(body.items.map((item) => item.actions)).toEqual([
+      // The owner is never a target.
+      [],
+      // Another admin: the cell that used to offer a doomed mute and ban.
+      [],
+      // The viewer's own row.
+      [],
+      ["mute", "ban"],
+      ["unmute", "ban"],
+      // No public profile ID, so no command can name the row.
+      [],
+    ]);
+    expect(body.items[2]?.isSelf).toBe(true);
+  });
+
+  it("gives a banned row exactly one published command", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: null,
+      items: [
+        {
+          membershipId: communityId,
+          role: "member" as const,
+          status: "banned" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      response.json<{ items: { actions: string[] }[] }>().items[0]?.actions,
+    ).toEqual(["unban"]);
+  });
+
+  it("passes the banned governance filter through and projects the banned status", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [
+        {
+          membershipId: communityId,
+          role: "member" as const,
+          status: "banned" as const,
+          joinedAt: createdAt,
+          profile,
+        },
+      ],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app, listMembersMock } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "banned" }),
+    );
+    expect(
+      response.json<{ items: { status: string }[] }>().items[0]?.status,
+    ).toBe("banned");
+  });
+
+  it("denies the banned governance filter to a viewer who may not ban", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockRejectedValue(
+      new CommunityPermissionDeniedError(),
+    );
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?role=banned`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("requires exactly one canonical Idempotency-Key on every write", async () => {
+    const { app } = await createApp();
+    for (const headers of [
+      commonHeaders(),
+      commandHeaders({ "idempotency-key": "not-a-uuid" }),
+      commandHeaders({
+        "idempotency-key": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+      }),
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("rejects an Idempotency-Key on a read", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/communities",
+      headers: commandHeaders(),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("maps every repository failure onto its V2 catalog code", async () => {
+    const cases = [
+      [new CommunityPermissionDeniedError(), 403, "PERMISSION_DENIED"],
+      [new CommunityProfileRequiredError(), 409, "PROFILE_ACTIVATION_REQUIRED"],
+      [new CommunityNotFoundError(), 404, "NOT_FOUND"],
+      [new CommunityTargetUnavailableError(), 404, "NOT_FOUND"],
+      [new CommunityDataStaleError(), 409, "DATA_STALE"],
+      [new CommunityIdempotencyConflictError(), 409, "IDEMPOTENCY_CONFLICT"],
+      [new CommunitySlugTakenError(), 409, "RESOURCE_CONFLICT"],
+      [
+        new CommunityRepositoryUnavailableError(),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+      ],
+    ] as const;
+    for (const [error, statusCode, code] of cases) {
+      const dependencies = fakes();
+      dependencies.communityRepository.joinCommunity = vi.fn(() =>
+        Promise.reject(error),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode, code).toBe(statusCode);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
+  it("rejects a reserved community name before any write", async () => {
+    const { app, createCommunityMock } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/communities",
+      headers: commandHeaders(),
+      payload: {
+        name: "LOOP Official",
+        slug: "loop-official",
+        description: null,
+        logoRef: null,
+        boundAssetKey: null,
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "ALIAS_RESERVED" });
+    expect(createCommunityMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the bound asset key and creates a pending community", async () => {
+    const { app, createCommunityMock } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/communities",
+      headers: commandHeaders(),
+      payload: {
+        name: "Frog Holders",
+        slug: "frog-holders",
+        description: "  Frogs only  ",
+        logoRef: "avatar:preset/community-03",
+        boundAssetKey: "eip155:56:0xAABBCCDDEEFF00112233445566778899AABBCCDD",
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      community: { verificationStatus: "pending" },
+    });
+    expect(createCommunityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boundAssetKey: "eip155:56:0xaabbccddeeff00112233445566778899aabbccdd",
+        description: "Frogs only",
+      }),
+    );
+  });
+
+  it("keeps contract and domain blocks unavailable in every verb", async () => {
+    const { app } = await createApp();
+    for (const kind of ["contract", "domain"] as const) {
+      const list = await app.inject({
+        method: "GET",
+        url: `/v2/blocks?kind=${kind}`,
+        headers: commonHeaders(),
+      });
+      expect(list.statusCode).toBe(503);
+      expect(list.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+
+      for (const method of ["POST", "DELETE"] as const) {
+        const response = await app.inject({
+          method,
+          url: "/v2/blocks",
+          headers: commandHeaders(),
+          payload: { kind, stableId: "0x1234" },
+        });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          code: "CAPABILITY_UNAVAILABLE",
+        });
+      }
+    }
+  });
+
+  it("reports a message-request report as rejected plus blocked", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/message-requests/${messageRequestId}/decision`,
+      headers: commandHeaders(),
+      payload: { decision: "report" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      messageRequestId,
+      decision: "report",
+      blocked: true,
+      contractVersion: "2.0",
+    });
+  });
+
+  it("sends a message request and projects it like a directory item", async () => {
+    const { app, sendMessageRequestMock } = await createApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/message-requests",
+      headers: commandHeaders(),
+      payload: { targetPublicProfileId: targetProfileId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      messageRequestId,
+      profile,
+      createdAt,
+      expiresAt: "2026-09-14T01:00:00.000Z",
+      preview: {
+        status: "unavailable",
+        reasonCode: "MESSAGE_PREVIEW_DEFERRED",
+      },
+      aiModeration: {
+        status: "unavailable",
+        reasonCode: "AI_MODERATION_DEFERRED",
+      },
+      contractVersion: "2.0",
+    });
+    expect(sendMessageRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPublicProfileId: targetProfileId }),
+    );
+  });
+
+  it("rejects a malformed or unknown-property message-request body", async () => {
+    const { app } = await createApp();
+    for (const payload of [
+      {},
+      { targetPublicProfileId: "not-a-uuid" },
+      { targetPublicProfileId: targetProfileId, note: "hi" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("maps an ineligible message-request target onto NOT_FOUND and a stale pair onto DATA_STALE", async () => {
+    for (const [error, status, code] of [
+      [new CommunityTargetUnavailableError(), 404, "NOT_FOUND"],
+      [new CommunityDataStaleError(), 409, "DATA_STALE"],
+    ] as const) {
+      const dependencies = fakes();
+      dependencies.sendMessageRequestMock.mockRejectedValue(error);
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/message-requests",
+        headers: commandHeaders(),
+        payload: { targetPublicProfileId: targetProfileId },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
+  it("hides message preview and AI moderation behind unavailable", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/message-requests",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      items: { preview: unknown; aiModeration: unknown }[];
+    }>();
+    expect(body.items[0]?.preview).toEqual({
+      status: "unavailable",
+      reasonCode: "MESSAGE_PREVIEW_DEFERRED",
+    });
+    expect(body.items[0]?.aiModeration).toEqual({
+      status: "unavailable",
+      reasonCode: "AI_MODERATION_DEFERRED",
+    });
+  });
+
+  it("answers the two deferred search domains with 200, their own reason code, and no quota", async () => {
+    const { app, consumeIssuanceQuota } = await createApp();
+    for (const [domain, reasonCode] of [
+      ["launch", "LAUNCH_PROJECT_DIRECTORY_PENDING"],
+      ["dapps", "DAPP_DIRECTORY_NOT_INTEGRATED"],
+    ] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=${domain}&q=frog`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        domain,
+        status: "unavailable",
+        reasonCode,
+        results: [],
+        nextCursor: null,
+        contractVersion: "2.0",
+      });
+    }
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("answers the assets domain unavailable when no Asset Registry is composed", async () => {
+    const { app, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=usdt",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      domain: "assets",
+      status: "unavailable",
+      reasonCode: "ASSET_REGISTRY_NOT_COMPOSED",
+      results: [],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("searches the Asset Registry by symbol, name, or address prefix without the alias quota", async () => {
+    const dependencies = fakes();
+    // `market` serves the logo proxy the rows' logos point at (Decision 0089).
+    const { app, consumeIssuanceQuota } = await createApp(
+      {
+        ...dependencies,
+        database: {
+          ...dependencies.database,
+          chainRegistry: registryWithAssets(),
+        },
+      },
+      { V2_MODULES_ENABLED: "community,search,market" },
+    );
+
+    const bySymbol = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=US",
+      headers: commonHeaders(),
+    });
+    expect(bySymbol.statusCode).toBe(200);
+    expectOperationalHeaders(bySymbol);
+    expect(bySymbol.json()).toEqual({
+      domain: "assets",
+      status: "available",
+      reasonCode: null,
+      results: [
+        {
+          resultType: "asset",
+          stableId: usd1AssetId,
+          displaySnapshot: {
+            title: "USD1",
+            subtitle: "World Liberty Financial USD",
+            avatarRef: null,
+            logo: {
+              status: "available",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d.png",
+              source: "trustwallet",
+              observedAt: null,
+            },
+            memberCount: null,
+            verificationStatus: "verified",
+          },
+          destination: { kind: "assetDetail", assetId: usd1AssetId },
+        },
+        {
+          resultType: "asset",
+          stableId: usdtAssetId,
+          displaySnapshot: {
+            title: "USDT",
+            subtitle: "Tether USD",
+            avatarRef: null,
+            logo: {
+              status: "available",
+              url: "http://127.0.0.1:3000/v2/market/logos/eip155:56/0x55d398326f99059ff775485246999027b3197955.png",
+              source: "trustwallet",
+              observedAt: null,
+            },
+            memberCount: null,
+            verificationStatus: "pending",
+          },
+          destination: { kind: "assetDetail", assetId: usdtAssetId },
+        },
+      ],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+
+    const byName = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=tether",
+      headers: commonHeaders(),
+    });
+    expect(byName.json()).toMatchObject({
+      status: "available",
+      results: [{ stableId: usdtAssetId }],
+    });
+
+    const byAddress = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=assets&q=${encodeURIComponent("0x55D398")}`,
+      headers: commonHeaders(),
+    });
+    expect(byAddress.json()).toMatchObject({
+      status: "available",
+      results: [{ stableId: usdtAssetId }],
+    });
+
+    const native = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=bnb",
+      headers: commonHeaders(),
+    });
+    expect(native.json()).toMatchObject({
+      results: [
+        { stableId: "eip155:56:native", displaySnapshot: { title: "BNB" } },
+        { stableId: wbnbAssetId, displaySnapshot: { title: "WBNB" } },
+      ],
+    });
+
+    const none = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=zzz",
+      headers: commonHeaders(),
+    });
+    expect(none.json()).toEqual({
+      domain: "assets",
+      status: "available",
+      reasonCode: null,
+      results: [],
+      nextCursor: null,
+      contractVersion: "2.0",
+    });
+
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("pages asset results with an owner-bound cursor and rejects a one-character query", async () => {
+    const dependencies = fakes();
+    const { app } = await createApp({
+      ...dependencies,
+      database: {
+        ...dependencies.database,
+        chainRegistry: registryWithAssets(),
+      },
+    });
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=bnb&limit=1",
+      headers: commonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{
+      results: { stableId: string }[];
+      nextCursor: string | null;
+    }>();
+    expect(firstBody.results.map((row) => row.stableId)).toEqual([
+      "eip155:56:native",
+    ]);
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+
+    const second = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=assets&q=bnb&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({
+      results: [{ stableId: wbnbAssetId }],
+      nextCursor: null,
+    });
+
+    const tooShort = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=assets&q=u",
+      headers: commonHeaders(),
+    });
+    expect(tooShort.statusCode).toBe(400);
+    expect(tooShort.json()).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("consumes the shared public search quota for users and communities", async () => {
+    const { app, consumeIssuanceQuota } = await createApp();
+    for (const domain of ["users", "communities"] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=${domain}&q=frog`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ status: "available" });
+    }
+    expect(consumeIssuanceQuota).toHaveBeenCalledTimes(2);
+    expect(
+      consumeIssuanceQuota.mock.calls.every(
+        ([input]) => input.capability === "public_alias_search",
+      ),
+    ).toBe(true);
+  });
+
+  it("rate limits search from the same quota bucket", async () => {
+    const { app } = await createApp(fakes({ quotaExceeded: true }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=users&q=frog",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({
+      code: "RATE_LIMITED",
+      category: "rateLimit",
+    });
+  });
+
+  it("returns a canonical destination and never a client-built route", async () => {
+    const { app } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=communities&q=frog",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      results: {
+        resultType: string;
+        stableId: string;
+        destination: Record<string, unknown>;
+      }[];
+    }>();
+    expect(body.results[0]).toMatchObject({
+      resultType: "community",
+      stableId: communityId,
+      destination: { kind: "communityProfile" },
+    });
+  });
+
+  it("rejects a short search prefix and an unknown domain", async () => {
+    const { app } = await createApp();
+    const short = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=users&q=f",
+      headers: commonHeaders(),
+    });
+    expect(short.statusCode).toBe(400);
+    expect(short.json()).toMatchObject({ code: "INVALID_REQUEST" });
+
+    const unknown = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=chat&q=frog",
+      headers: commonHeaders(),
+    });
+    expect(unknown.statusCode).toBe(400);
+  });
+
+  it("binds a list cursor to the owner, route, and filter", async () => {
+    const dependencies = fakes();
+    dependencies.communityRepository.listCommunities = vi.fn(() =>
+      Promise.resolve(
+        Array.from({ length: 21 }, (_value, index) => ({
+          ...community,
+          communityId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+          memberCount: 100 - index,
+        })),
+      ),
+    );
+    const { app } = await createApp(dependencies);
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/communities?sort=members&verification=verified",
+      headers: commonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+    expect(cursor).not.toBeNull();
+
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/communities?sort=members&verification=verified&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(200);
+
+    const wrongFilter = await app.inject({
+      method: "GET",
+      url: `/v2/communities?sort=newest&verification=verified&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(wrongFilter.statusCode).toBe(400);
+    expect(wrongFilter.json()).toMatchObject({ code: "INVALID_REQUEST" });
+
+    const wrongRoute = await app.inject({
+      method: "GET",
+      url: `/v2/connections?direction=following&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(wrongRoute.statusCode).toBe(400);
+
+    const withLimit = await app.inject({
+      method: "GET",
+      url: `/v2/communities?sort=members&verification=verified&limit=5&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(withLimit.statusCode).toBe(400);
+  });
+
+  it("invalidates a cursor issued for another account", async () => {
+    const dependencies = fakes();
+    dependencies.communityRepository.listCommunities = vi.fn(() =>
+      Promise.resolve(
+        Array.from({ length: 21 }, (_value, index) => ({
+          ...community,
+          communityId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+          memberCount: 100 - index,
+        })),
+      ),
+    );
+    const { app, database } = await createApp(dependencies);
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/communities?sort=members&verification=verified",
+      headers: commonHeaders(),
+    });
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+
+    database.internalUsers.findByPrivyUserId = vi.fn(() =>
+      Promise.resolve({ id: otherAccountId }),
+    );
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/communities?sort=members&verification=verified&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(400);
+    expect(replayed.json()).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("passes each governance verb to the repository as its matrix action", async () => {
+    const { app, governMemberMock } = await createApp();
+    const cases = [
+      ["POST", "role", { role: "admin" }, "assignAdmin"],
+      ["POST", "role", { role: "member" }, "revokeAdmin"],
+      ["POST", "role", { role: "owner" }, "transferOwnership"],
+      ["POST", "mute", undefined, "mute"],
+      ["DELETE", "mute", undefined, "unmute"],
+      ["POST", "ban", undefined, "ban"],
+      ["DELETE", "ban", undefined, "unban"],
+    ] as const;
+    for (const [method, path, payload, action] of cases) {
+      const response = await app.inject({
+        method,
+        url: `/v2/communities/${communityId}/members/${targetProfileId}/${path}`,
+        headers: commandHeaders(),
+        ...(payload === undefined ? {} : { payload }),
+      });
+      expect(response.statusCode, action).toBe(200);
+      expect(governMemberMock).toHaveBeenCalledWith(
+        expect.objectContaining({ action }),
+      );
+    }
+  });
+
+  it("edits the community profile through the owner-only PATCH route", async () => {
+    const { app, updateCommunityMock } = await createApp();
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders(),
+      payload: { description: "  Frogs, updated  ", boundAssetKey: null },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(updateCommunityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: { description: "Frogs, updated", boundAssetKey: null },
+      }),
+    );
+
+    for (const payload of [
+      {},
+      { slug: "renamed" },
+      { verificationStatus: "verified" },
+    ]) {
+      const rejected = await app.inject({
+        method: "PATCH",
+        url: `/v2/communities/${communityId}`,
+        headers: commandHeaders(),
+        payload,
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+
+    const reserved = await app.inject({
+      method: "PATCH",
+      url: `/v2/communities/${communityId}`,
+      headers: commandHeaders(),
+      payload: { name: "LOOP Official" },
+    });
+    expect(reserved.statusCode).toBe(422);
+    expect(reserved.json()).toMatchObject({ code: "ALIAS_RESERVED" });
+  });
+
+  it("pages the caller's own memberships with membership=joined", async () => {
+    const { app, listCommunitiesMock } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/communities?membership=joined",
+      headers: commonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(listCommunitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ membership: "joined" }),
+    );
+    const rejected = await app.inject({
+      method: "GET",
+      url: "/v2/communities?membership=mine",
+      headers: commonHeaders(),
+    });
+    expect(rejected.statusCode).toBe(400);
+  });
+
+  it("keeps a users search cursor valid when verification changes", async () => {
+    const dependencies = fakes();
+    dependencies.communityRepository.searchUsers = vi.fn(() =>
+      Promise.resolve(
+        Array.from({ length: 21 }, (_value, index) => ({
+          profile: {
+            ...profile,
+            publicProfileId: `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${String(index).padStart(2, "0")}`,
+          },
+          searchKey: `frog_${String(index).padStart(2, "0")}`,
+          exactLoopIdMatch: false,
+        })),
+      ),
+    );
+    const { app } = await createApp(dependencies);
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/search?domain=users&q=frog",
+      headers: commonHeaders(),
+    });
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+    expect(cursor).not.toBeNull();
+
+    // `verification` only narrows the communities domain, so it must not be
+    // bound into a users cursor.
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/search?domain=users&q=frog&verification=all&cursor=${encodeURIComponent(cursor ?? "")}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(200);
+  });
+
+  describe("LOOP ID exact match (Decision 0090)", () => {
+    const pinnedProfile = {
+      ...profile,
+      publicProfileId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e99",
+      loopId: "LOOP-FE3EMCPE" as const,
+      alias: "pinned_friend" as const,
+    };
+
+    it.each([
+      ["LOOP-FE3EMCPE", "LOOP-FE3EMCPE"],
+      ["loop-fe3emcpe", "LOOP-FE3EMCPE"],
+      ["  Loop-Fe3eMcPe  ", "LOOP-FE3EMCPE"],
+    ])(
+      "asks the repository for the exact account for %j",
+      async (raw, expected) => {
+        const dependencies = fakes();
+        const searchUsers = vi.fn(() =>
+          Promise.resolve([
+            {
+              profile: pinnedProfile,
+              searchKey: "pinned_friend",
+              exactLoopIdMatch: true,
+            },
+            {
+              profile,
+              searchKey: "loop-fe3emcpe_fan",
+              exactLoopIdMatch: false,
+            },
+          ]),
+        );
+        dependencies.communityRepository.searchUsers = searchUsers;
+        const { app } = await createApp(dependencies);
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/search?domain=users&q=${encodeURIComponent(raw)}`,
+          headers: commonHeaders(),
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(searchUsers).toHaveBeenCalledWith(
+          expect.objectContaining({
+            exactLoopId: expected,
+            includeExactMatch: true,
+          }),
+        );
+        const body = response.json<{
+          results: {
+            stableId: string;
+            displaySnapshot: { subtitle: string };
+          }[];
+        }>();
+        expect(Object.keys(response.json<object>()).sort()).toEqual([
+          "contractVersion",
+          "domain",
+          "nextCursor",
+          "reasonCode",
+          "results",
+          "status",
+        ]);
+        expect(body.results[0]).toMatchObject({
+          stableId: pinnedProfile.publicProfileId,
+          displaySnapshot: { subtitle: "LOOP-FE3EMCPE" },
+        });
+        expect(body.results).toHaveLength(2);
+      },
+    );
+
+    it.each([
+      "frog",
+      "LOOP-FE3EMCP",
+      "LOOP-FE3EMCPE1",
+      "LOOP-ABCDE",
+      "LOOP FE3EMCPE",
+    ])("keeps the alias-prefix behaviour for %j", async (raw) => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(() =>
+        Promise.resolve([
+          { profile, searchKey: "frog_maxi", exactLoopIdMatch: false },
+        ]),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const input = (
+        searchUsers.mock.calls as unknown as [Record<string, unknown>][]
+      )[0]?.[0];
+      expect(input).toBeDefined();
+      expect(input).not.toHaveProperty("exactLoopId");
+      expect(input).not.toHaveProperty("includeExactMatch");
+    });
+
+    it("does not pin the exact account again on the next page", async () => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(
+        (input: { includeExactMatch?: boolean | undefined }) =>
+          Promise.resolve(
+            input.includeExactMatch === true
+              ? [
+                  {
+                    profile: pinnedProfile,
+                    searchKey: "pinned_friend",
+                    exactLoopIdMatch: true,
+                  },
+                  ...Array.from({ length: 20 }, (_value, index) => ({
+                    profile: {
+                      ...profile,
+                      publicProfileId: `9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e${String(index).padStart(2, "0")}`,
+                    },
+                    searchKey: `loop-fe3emcpe_${String(index).padStart(2, "0")}`,
+                    exactLoopIdMatch: false,
+                  })),
+                ]
+              : [],
+          ),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/search?domain=users&q=LOOP-FE3EMCPE",
+        headers: commonHeaders(),
+      });
+      const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+      expect(cursor).not.toBeNull();
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=LOOP-FE3EMCPE&cursor=${encodeURIComponent(cursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(second.statusCode).toBe(200);
+      expect(searchUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          exactLoopId: "LOOP-FE3EMCPE",
+          includeExactMatch: false,
+          after: {
+            lastSearchKey: "loop-fe3emcpe_18",
+            lastPublicProfileId: "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e18",
+          },
+        }),
+      );
+    });
+
+    it("starts the alias rows from the top when a page held only the pinned account", async () => {
+      const dependencies = fakes();
+      const searchUsers = vi.fn(
+        (input: { includeExactMatch?: boolean | undefined }) =>
+          Promise.resolve(
+            input.includeExactMatch === true
+              ? [
+                  {
+                    profile: pinnedProfile,
+                    searchKey: null,
+                    exactLoopIdMatch: true,
+                  },
+                  {
+                    profile,
+                    searchKey: "loop-fe3emcpe_a",
+                    exactLoopIdMatch: false,
+                  },
+                ]
+              : [],
+          ),
+      );
+      dependencies.communityRepository.searchUsers = searchUsers;
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/search?domain=users&q=LOOP-FE3EMCPE&limit=1",
+        headers: commonHeaders(),
+      });
+      expect(first.statusCode).toBe(200);
+      const firstBody = first.json<{
+        results: { stableId: string }[];
+        nextCursor: string | null;
+      }>();
+      expect(firstBody.results.map((item) => item.stableId)).toEqual([
+        pinnedProfile.publicProfileId,
+      ]);
+      expect(firstBody.nextCursor).not.toBeNull();
+
+      await app.inject({
+        method: "GET",
+        url: `/v2/search?domain=users&q=LOOP-FE3EMCPE&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      const lastInput = (
+        searchUsers.mock.calls as unknown as [Record<string, unknown>][]
+      ).at(-1)?.[0];
+      expect(lastInput).toMatchObject({
+        exactLoopId: "LOOP-FE3EMCPE",
+        includeExactMatch: false,
+        limit: 2,
+      });
+      expect(lastInput).not.toHaveProperty("after");
+    });
+  });
+
+  it("passes the member alias prefix through as the trimmed raw text", async () => {
+    const { app, listMembersMock, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=${encodeURIComponent("  Frog  ")}`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ aliasPrefix: "Frog", role: "all" }),
+    );
+    expect(consumeIssuanceQuota).toHaveBeenCalledTimes(1);
+    expect(consumeIssuanceQuota.mock.calls[0]?.[0].capability).toBe(
+      "public_alias_search",
+    );
+  });
+
+  it("never asks the repository for a prefix when q is absent", async () => {
+    const { app, listMembersMock, consumeIssuanceQuota } = await createApp();
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listMembersMock).toHaveBeenCalledTimes(1);
+    expect(
+      Object.hasOwn(listMembersMock.mock.calls[0]?.[0] ?? {}, "aliasPrefix"),
+    ).toBe(false);
+    expect(consumeIssuanceQuota).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty member page when the prefix matches nobody", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: [],
+      counts: { all: 2, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=zzz`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      items: unknown[];
+      counts: Record<string, unknown>;
+      nextCursor: string | null;
+    }>();
+    expect(body.items).toEqual([]);
+    expect(body.nextCursor).toBeNull();
+    // The segment counts describe the whole directory, so they do not shrink
+    // with the query.
+    expect(body.counts["all"]).toBe(2);
+  });
+
+  it("accepts a one code point prefix and normalizes it like the alias key", async () => {
+    const { app, listMembersMock } = await createApp();
+    for (const [raw, expected] of [
+      ["f", "f"],
+      ["\uFF26\uFF32\uFF2F", "\uFF26\uFF32\uFF2F"],
+      ["  frog  maxi  ", "frog  maxi"],
+    ] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, raw).toBe(200);
+      expect(listMembersMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ aliasPrefix: expected }),
+      );
+    }
+  });
+
+  it("rejects an empty, over-long, or control-character member prefix", async () => {
+    const { app, listMembersMock } = await createApp();
+    for (const raw of [
+      "",
+      "   ",
+      "a".repeat(41),
+      "fr\u0000og",
+      "fr\u200bog",
+      "fr\u2028og",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(raw)}`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, JSON.stringify(raw)).toBe(400);
+      expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    expect(listMembersMock).not.toHaveBeenCalled();
+  });
+
+  it("rate limits the member search from the shared alias quota", async () => {
+    const { app } = await createApp(fakes({ quotaExceeded: true }));
+    const response = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=frog`,
+      headers: commonHeaders(),
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({
+      code: "RATE_LIMITED",
+      category: "rateLimit",
+    });
+  });
+
+  it("binds the member cursor to the alias prefix", async () => {
+    const dependencies = fakes();
+    dependencies.listMembersMock.mockResolvedValue({
+      community,
+      viewerMembership: ownerMembership,
+      viewerPublicProfileId: targetProfileId,
+      items: Array.from({ length: 21 }, (_value, index) => ({
+        membershipId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+        role: "member" as const,
+        status: "active" as const,
+        joinedAt: createdAt,
+        profile,
+      })),
+      counts: { all: 21, owner: 1, admin: 0 },
+    });
+    const { app } = await createApp(dependencies);
+
+    const first = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=fr`,
+      headers: commonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+    expect(cursor).not.toBeNull();
+    const encoded = encodeURIComponent(cursor ?? "");
+
+    const replayed = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=fr&cursor=${encoded}`,
+      headers: commonHeaders(),
+    });
+    expect(replayed.statusCode).toBe(200);
+
+    // The bound prefix is the normalized key, so case and outer whitespace
+    // continue the same page.
+    const equivalent = await app.inject({
+      method: "GET",
+      url: `/v2/communities/${communityId}/members?q=${encodeURIComponent(" FR ")}&cursor=${encoded}`,
+      headers: commonHeaders(),
+    });
+    expect(equivalent.statusCode).toBe(200);
+
+    for (const query of ["q=fro", "", "q=fr&role=admin"]) {
+      const rejected = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members?${query}${query === "" ? "" : "&"}cursor=${encoded}`,
+        headers: commonHeaders(),
+      });
+      expect(rejected.statusCode, query).toBe(400);
+      expect(rejected.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("rejects unknown body and query fields", async () => {
+    const { app } = await createApp();
+    const body = await app.inject({
+      method: "POST",
+      url: "/v2/communities",
+      headers: commandHeaders(),
+      payload: {
+        name: "Frog Holders",
+        slug: "frog-holders",
+        description: null,
+        logoRef: null,
+        boundAssetKey: null,
+        verificationStatus: "verified",
+      },
+    });
+    expect(body.statusCode).toBe(400);
+
+    const query = await app.inject({
+      method: "GET",
+      url: "/v2/communities?unknown=1",
+      headers: commonHeaders(),
+    });
+    expect(query.statusCode).toBe(400);
+  });
+
+  describe("Mining Power projections under the development baseline (Decision 0043)", () => {
+    const documents = buildMiningDevBaselineDocuments(["eip155:56:native"]);
+    const approvedAt = "2026-09-15T08:00:00.000Z";
+    const snapshotId = "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    const publicMemberId = "5f4e3d2c-1b0a-4987-8765-43210fedcba9";
+    const privateMemberId = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+    const absentMemberId = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+    function miningFake(overrides: Partial<MiningRepository> = {}) {
+      return {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: vi.fn(() =>
+          Promise.resolve({
+            configVersion: documents.configVersion,
+            formula: documents.formula,
+            weightRange: documents.weightRange,
+            priceGuardRules: documents.priceGuardRules,
+            status: "approved" as const,
+            effectiveAt: approvedAt,
+            approvedAt,
+            createdAt: approvedAt,
+          }),
+        ),
+        getLatestSnapshot: vi.fn(() =>
+          Promise.resolve({
+            snapshotId,
+            blockNumber: "122037728",
+            blockHash: `0x${"c".repeat(64)}`,
+            formulaVersion: documents.configVersion,
+            priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
+            totalPower: "4000",
+            accountCount: 3,
+            computedAt: "2026-09-15T13:30:00.000Z",
+            holdingsSource: "chain" as const,
+          }),
+        ),
+        getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+        hasActiveWallet: vi.fn(() => Promise.resolve(false)),
+        getCommunityStanding: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId:
+              "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            weight: "1.5",
+            power: "230.5",
+            participantCount: 2,
+            position: 1,
+          }),
+        ),
+        getCommunityWeight: vi.fn(() =>
+          Promise.resolve({
+            communityId,
+            communityName: "Frog Holders",
+            boundAssetId:
+              "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+            status: "approved" as const,
+            weight: "1.5",
+            configVersion: documents.configVersion,
+            reviewedAt: "2026-09-15T09:00:00.000Z",
+          }),
+        ),
+        // The mining community page reads the caller's own rows; none here.
+        listAccountPowers: vi.fn(() => Promise.resolve([])),
+        listMemberPowers: vi.fn(() =>
+          Promise.resolve([
+            {
+              publicProfileId: targetProfileId,
+              ownerUserId: accountId,
+              totalPower: "12.5",
+              visibleToOthers: false,
+            },
+            {
+              publicProfileId: publicMemberId,
+              ownerUserId: "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d",
+              totalPower: "3000",
+              visibleToOthers: true,
+            },
+            {
+              publicProfileId: privateMemberId,
+              ownerUserId: "d64786bb-408d-415d-8a69-6277d56c921b",
+              totalPower: "999",
+              visibleToOthers: false,
+            },
+            {
+              publicProfileId: absentMemberId,
+              ownerUserId: "3fa85f64-5717-4562-b3fc-2c963f66afa7",
+              totalPower: null,
+              visibleToOthers: true,
+            },
+          ]),
+        ),
+        ...overrides,
+      };
+    }
+
+    function memberRows(dependencies: ReturnType<typeof fakes>) {
+      dependencies.listMembersMock.mockResolvedValue({
+        community,
+        viewerMembership: {
+          role: "member",
+          status: "active",
+          joinedAt: createdAt,
+        },
+        viewerPublicProfileId: targetProfileId,
+        items: [
+          {
+            membershipId: "11111111-1111-4111-8111-111111111111",
+            role: "owner" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: publicMemberId },
+          },
+          {
+            membershipId: "22222222-2222-4222-8222-222222222222",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: privateMemberId },
+          },
+          {
+            membershipId: "33333333-3333-4333-8333-333333333333",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile,
+          },
+          {
+            membershipId: "44444444-4444-4444-8444-444444444444",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: absentMemberId },
+          },
+          {
+            membershipId: "55555555-5555-4555-8555-555555555555",
+            role: "member" as const,
+            status: "active" as const,
+            joinedAt: createdAt,
+            profile: { ...profile, publicProfileId: null },
+          },
+        ],
+        counts: { all: 5, owner: 1, admin: 0 },
+      });
+    }
+
+    /** Hand-written expectation for the community subject (Decision 0045). */
+    const communityPower = {
+      status: "available",
+      subject: "community",
+      power: "230.5",
+      snapshotId,
+      formulaVersion: documents.configVersion,
+      computedAt: "2026-09-15T13:30:00.000Z",
+      scope: "development_baseline",
+      stale: false,
+      weight: {
+        status: "approved",
+        value: "1.5",
+        configVersion: documents.configVersion,
+        reviewedAt: "2026-09-15T09:00:00.000Z",
+      },
+      participants: { status: "available", count: 2 },
+    } as const;
+
+    /** Hand-written expectation for an account subject (member or connection). */
+    function accountPower(power: string) {
+      return {
+        status: "available",
+        subject: "account",
+        power,
+        snapshotId,
+        formulaVersion: documents.configVersion,
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+        stale: false,
+      } as const;
+    }
+
+    it("publishes the community's power and each member's own power under the privacy rule", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual(
+        communityPower,
+      );
+      const members = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(members.statusCode).toBe(200);
+      const rows = members.json<{
+        items: {
+          profile: { publicProfileId: string | null };
+          miningPower: unknown;
+        }[];
+      }>().items;
+      expect(rows.map((row) => row.miningPower)).toEqual([
+        accountPower("3000"),
+        { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
+        // The viewer's own row is visible to the viewer even while private.
+        accountPower("12.5"),
+        { status: "unavailable", reasonCode: "MINING_ACCOUNT_NOT_IN_SNAPSHOT" },
+        {
+          status: "unavailable",
+          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        },
+      ]);
+      expect(members.body).not.toContain('"999"');
+      // Neither field explains one person's total power, so the account
+      // subject carries neither (Decision 0045).
+      expect(rows[0]?.miningPower).not.toHaveProperty("weight");
+      expect(rows[0]?.miningPower).not.toHaveProperty("participants");
+    });
+
+    it("projects a connection's own power in the account shape (Decision 0045)", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            community: {
+              ...dependencies.communityRepository,
+              listConnections: vi.fn(() =>
+                Promise.resolve([
+                  {
+                    profile: { ...profile, publicProfileId: publicMemberId },
+                    createdAt,
+                    viewerFollows: true,
+                  },
+                  {
+                    profile: { ...profile, publicProfileId: privateMemberId },
+                    createdAt,
+                    viewerFollows: false,
+                  },
+                ]),
+              ),
+            },
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/connections?direction=following",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const rows = response.json<{ items: { miningPower: unknown }[] }>().items;
+      expect(rows.map((row) => row.miningPower)).toEqual([
+        accountPower("3000"),
+        { status: "unavailable", reasonCode: "MINING_POWER_PRIVATE" },
+      ]);
+    });
+
+    it("publishes the community's weight and participants from the same source as the mining page (Decision 0045)", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake(),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const [detail, joined, members, miningPage] = await Promise.all([
+        app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        }),
+        app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/join`,
+          headers: commandHeaders(),
+        }),
+        app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}/members`,
+          headers: commonHeaders(),
+        }),
+        app.inject({
+          method: "GET",
+          url: `/v2/mining/communities/${communityId}`,
+          headers: commonHeaders(),
+        }),
+      ]);
+      expect(detail.statusCode).toBe(200);
+      expect(joined.statusCode).toBe(200);
+      expect(members.statusCode).toBe(200);
+      expect(miningPage.statusCode).toBe(200);
+      const fromDetail = detail.json<{
+        miningPower: { weight: unknown; participants: unknown; power: string };
+      }>().miningPower;
+      // Every route that returns the community resource projects the same
+      // Mining Power object.
+      expect(joined.json<{ miningPower: unknown }>().miningPower).toEqual(
+        fromDetail,
+      );
+      // The card and the mining page cannot disagree: same weight object,
+      // same participants object, same power string.
+      const page = miningPage.json<{
+        weight: unknown;
+        participants: unknown;
+        communityPower: { status: string; value: string };
+      }>();
+      expect(fromDetail.weight).toEqual(page.weight);
+      expect(fromDetail.participants).toEqual(page.participants);
+      expect(page.communityPower).toEqual({
+        status: "available",
+        value: fromDetail.power,
+      });
+      // A member row inside the same directory answers with the same
+      // snapshot and scope as the community it belongs to.
+      const firstRow = members.json<{
+        items: {
+          miningPower: {
+            snapshotId: string;
+            formulaVersion: string;
+            computedAt: string;
+            scope: unknown;
+          };
+        }[];
+      }>().items[0]?.miningPower;
+      expect(firstRow).toMatchObject({
+        snapshotId,
+        formulaVersion: documents.configVersion,
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+      });
+    });
+
+    it("publishes scope null under a version that declares none", async () => {
+      const dependencies = fakes();
+      memberRows(dependencies);
+      const formulaWithoutScope = { ...documents.formula, scope: undefined };
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningFake({
+              getApprovedFormula: vi.fn(() =>
+                Promise.resolve({
+                  configVersion: documents.configVersion,
+                  formula: formulaWithoutScope,
+                  weightRange: documents.weightRange,
+                  priceGuardRules: documents.priceGuardRules,
+                  status: "approved" as const,
+                  effectiveAt: approvedAt,
+                  approvedAt,
+                  createdAt: approvedAt,
+                }),
+              ),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.json<{ miningPower: unknown }>().miningPower).toEqual({
+        ...communityPower,
+        scope: null,
+      });
+      const members = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(
+        members.json<{ items: { miningPower: unknown }[] }>().items[0]
+          ?.miningPower,
+      ).toEqual({ ...accountPower("3000"), scope: null });
+    });
+
+    it("stays unavailable without a formula in force, a bound asset, or the mining module", async () => {
+      const pending = fakes();
+      memberRows(pending);
+      const pendingApp = await createApp(
+        {
+          ...pending,
+          database: {
+            ...pending.database,
+            mining: miningFake({
+              getApprovedFormula: vi.fn(() => Promise.resolve(null)),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const pendingDetail = await pendingApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(
+        pendingDetail.json<{ miningPower: unknown }>().miningPower,
+      ).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      });
+      // The unavailable branch is byte-identical to the S20 wire form:
+      // exactly two keys in this order, no subject/scope/weight/participants.
+      expect(pendingDetail.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"MINING_FORMULA_BASELINE_PENDING"}',
+      );
+      const pendingMembers = await pendingApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      for (const row of pendingMembers.json<{
+        items: { miningPower: unknown }[];
+      }>().items) {
+        expect(row.miningPower).toEqual({
+          status: "unavailable",
+          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+        });
+      }
+      const unbound = fakes();
+      memberRows(unbound);
+      const unboundApp = await createApp(
+        {
+          ...unbound,
+          database: {
+            ...unbound.database,
+            mining: miningFake({
+              getCommunityStanding: vi.fn(() => Promise.resolve(null)),
+              getCommunityWeight: vi.fn(() =>
+                Promise.resolve({
+                  communityId,
+                  communityName: "Frog Holders",
+                  boundAssetId: null,
+                  status: "pending_review" as const,
+                  weight: null,
+                  configVersion: null,
+                  reviewedAt: null,
+                }),
+              ),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const unboundDetail = await unboundApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(
+        unboundDetail.json<{ miningPower: unknown }>().miningPower,
+      ).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_ASSET_NOT_BOUND",
+      });
+      expect(unboundDetail.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"COMMUNITY_ASSET_NOT_BOUND"}',
+      );
+      const privateRow = await unboundApp.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/members`,
+        headers: commonHeaders(),
+      });
+      expect(privateRow.body).toContain(
+        '"miningPower":{"status":"unavailable","reasonCode":"MINING_POWER_PRIVATE"}',
+      );
+      // Without the mining module the community module composes no reader.
+      const withoutModule = await createApp(fakes());
+      const noModule = await withoutModule.app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(noModule.json<{ miningPower: unknown }>().miningPower).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+      });
+    });
+  });
+
+  describe("Discover orderings that need a fact (Decision 0061)", () => {
+    const documents = buildMiningDevBaselineDocuments(["eip155:56:native"]);
+    const approvedAt = "2026-09-15T08:00:00.000Z";
+    const snapshotId = "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+
+    function miningRepository(overrides: Partial<MiningRepository> = {}) {
+      return {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: vi.fn(() =>
+          Promise.resolve({
+            configVersion: documents.configVersion,
+            formula: documents.formula,
+            weightRange: documents.weightRange,
+            priceGuardRules: documents.priceGuardRules,
+            status: "approved" as const,
+            effectiveAt: approvedAt,
+            approvedAt,
+            createdAt: approvedAt,
+          }),
+        ),
+        getLatestSnapshot: vi.fn(() =>
+          Promise.resolve({
+            snapshotId,
+            blockNumber: "122037728",
+            blockHash: `0x${"c".repeat(64)}`,
+            formulaVersion: documents.configVersion,
+            priceVersion: "dexscreener:2026-09-15T13:28:43.489Z",
+            totalPower: "4000",
+            accountCount: 3,
+            computedAt: "2026-09-15T13:30:00.000Z",
+            holdingsSource: "chain" as const,
+          }),
+        ),
+        getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+        ...overrides,
+      } satisfies MiningRepository;
+    }
+
+    /** A ranked community and one the version does not weight. */
+    const rankedCommunity = {
+      ...community,
+      ordering: {
+        miningPower: "230.5",
+        miningParticipantCount: 2,
+        miningWeight: "1.5",
+        miningWeightConfigVersion: documents.configVersion,
+        miningWeightReviewedAt: "2026-09-15T09:00:00.000Z",
+        activityMessageCount: null,
+        activityBounded: null,
+        activityObservedAt: null,
+      },
+    };
+    const unweightedCommunity = {
+      ...community,
+      communityId: "7d0f1e2a-3b4c-4d5e-8f90-a1b2c3d4e5f6",
+      slug: "quiet-holders",
+      boundAssetKey: "eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+      ordering: {
+        miningPower: null,
+        miningParticipantCount: null,
+        miningWeight: null,
+        miningWeightConfigVersion: null,
+        miningWeightReviewedAt: null,
+        activityMessageCount: null,
+        activityBounded: null,
+        activityObservedAt: null,
+      },
+    };
+
+    it("orders by the mining snapshot and attaches the power that produced the order", async () => {
+      const dependencies = fakes();
+      const listCommunities = vi.fn(() =>
+        Promise.resolve([rankedCommunity, unweightedCommunity]),
+      );
+      dependencies.communityRepository.listCommunities = listCommunities;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: { ...dependencies.database, mining: miningRepository() },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=miningPower",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "miningPower",
+        basis: {
+          kind: "miningSnapshot",
+          snapshotId,
+          formulaVersion: documents.configVersion,
+          computedAt: "2026-09-15T13:30:00.000Z",
+          scope: "development_baseline",
+          stale: false,
+        },
+      });
+      expect(body.items[0]?.["miningPower"]).toEqual({
+        status: "available",
+        subject: "community",
+        power: "230.5",
+        snapshotId,
+        formulaVersion: documents.configVersion,
+        computedAt: "2026-09-15T13:30:00.000Z",
+        scope: "development_baseline",
+        stale: false,
+        weight: {
+          status: "approved",
+          value: "1.5",
+          configVersion: documents.configVersion,
+          reviewedAt: "2026-09-15T09:00:00.000Z",
+        },
+        participants: { status: "available", count: 2 },
+      });
+      // A community the version does not weight is listed, never zeroed.
+      expect(body.items[1]?.["miningPower"]).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+      });
+      expect(listCommunities).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sort: "miningPower",
+          miningOrdering: {
+            snapshotId,
+            configVersion: documents.configVersion,
+          },
+        }),
+      );
+    });
+
+    it("publishes sort=miningPower as unavailable, with no items, while no snapshot carries numbers", async () => {
+      const dependencies = fakes();
+      const listCommunities = dependencies.listCommunitiesMock;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            mining: miningRepository({
+              getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,mining" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=miningPower",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [],
+        nextCursor: null,
+        ordering: {
+          status: "unavailable",
+          sort: "miningPower",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+        },
+      });
+      // The page was never read: an ordering nobody can apply reads nothing.
+      expect(listCommunities).not.toHaveBeenCalled();
+    });
+
+    it("orders by observed channel activity and says what the count is worth", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityActivityObservation = vi.fn(
+        () =>
+          Promise.resolve({
+            observedCommunityCount: 2,
+            latestObservedAt: "2026-09-21T09:15:00.000Z",
+          }),
+      );
+      dependencies.communityRepository.listCommunities = vi.fn(() =>
+        Promise.resolve([
+          {
+            ...community,
+            ordering: {
+              ...unweightedCommunity.ordering,
+              activityMessageCount: 41,
+              activityBounded: false,
+              activityObservedAt: "2026-09-21T09:15:00.000Z",
+            },
+          },
+          {
+            ...unweightedCommunity,
+            ordering: { ...unweightedCommunity.ordering },
+          },
+        ]),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "activity",
+        basis: {
+          kind: "channelActivity",
+          windowDays: 7,
+          observedCommunityCount: 2,
+          observedAt: "2026-09-21T09:15:00.000Z",
+        },
+      });
+      expect(body.items[0]?.["activity"]).toEqual({
+        status: "available",
+        messageCount: 41,
+        windowDays: 7,
+        bounded: false,
+        observedAt: "2026-09-21T09:15:00.000Z",
+      });
+      expect(body.items[1]?.["activity"]).toEqual({
+        status: "unavailable",
+        reasonCode: "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED",
+      });
+    });
+
+    it("publishes sort=activity as unavailable while nothing was observed", async () => {
+      const dependencies = fakes();
+      const listCommunities = dependencies.listCommunitiesMock;
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [],
+        nextCursor: null,
+        ordering: {
+          status: "unavailable",
+          sort: "activity",
+          reasonCode: "COMMUNITY_ACTIVITY_NOT_OBSERVED",
+        },
+      });
+      expect(listCommunities).not.toHaveBeenCalled();
+    });
+
+    it("names the ordering of the two stored sorts and attaches no ordering fact to their rows", async () => {
+      const { app } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=members",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly ordering: Record<string, unknown>;
+        readonly items: readonly Record<string, unknown>[];
+      }>();
+      expect(body.ordering).toEqual({
+        status: "available",
+        sort: "members",
+        basis: { kind: "stored" },
+      });
+      expect(body.items[0]).not.toHaveProperty("miningPower");
+      expect(body.items[0]).not.toHaveProperty("activity");
+    });
+
+    it("refuses a cursor issued under another ordering", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityActivityObservation = vi.fn(
+        () =>
+          Promise.resolve({
+            observedCommunityCount: 1,
+            latestObservedAt: "2026-09-21T09:15:00.000Z",
+          }),
+      );
+      dependencies.communityRepository.listCommunities = vi.fn(() =>
+        Promise.resolve(
+          Array.from({ length: 21 }, (_value, index) => ({
+            ...community,
+            communityId: `3fa85f64-5717-4562-b3fc-2c963f66af${String(index).padStart(2, "0")}`,
+            ordering: {
+              ...unweightedCommunity.ordering,
+              activityMessageCount: 100 - index,
+              activityBounded: false,
+              activityObservedAt: "2026-09-21T09:15:00.000Z",
+            },
+          })),
+        ),
+      );
+      const { app } = await createApp(dependencies);
+      const first = await app.inject({
+        method: "GET",
+        url: "/v2/communities?sort=activity",
+        headers: commonHeaders(),
+      });
+      const cursor = first.json<{ nextCursor: string | null }>().nextCursor;
+      expect(cursor).not.toBeNull();
+      const crossed = await app.inject({
+        method: "GET",
+        url: `/v2/communities?sort=members&cursor=${encodeURIComponent(cursor ?? "")}`,
+        headers: commonHeaders(),
+      });
+      expect(crossed.statusCode).toBe(400);
+      expect(crossed.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    });
+  });
+
+  describe("Community presence from Stream member connections (Decision 0047)", () => {
+    const streamChannelId = `loop_community_${communityId.replaceAll("-", "")}`;
+    const observedAtPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+    function communicationFake(
+      channel: {
+        readonly provisioned: boolean;
+        readonly state: "created" | "failed" | "capacityPending";
+      } | null,
+      viewerPersona: {
+        readonly alias: string;
+        readonly projectionState: "pending" | "confirmed";
+      } | null = null,
+    ) {
+      return {
+        ...createUnavailableCommunicationRepository(),
+        readCommunityChannel: vi.fn(() =>
+          Promise.resolve({
+            channel:
+              channel === null
+                ? null
+                : {
+                    communityId,
+                    streamChannelId,
+                    state: channel.state,
+                    memberCap: 3_000,
+                    provisioned: channel.provisioned,
+                  },
+            viewerMemberState: "synced" as const,
+            viewerIsCommunityMember: true,
+            viewerPersona,
+            currentVoiceRoomId: null,
+            currentVoiceRoomProvisioned: false,
+          }),
+        ),
+      };
+    }
+
+    function presenceGateway(
+      readCommunityChannelPresence: StreamCommunityChannelGateway["readCommunityChannelPresence"],
+    ): StreamCommunityChannelGateway {
+      return {
+        ...createUnavailableStreamCommunityChannelGateway(),
+        readCommunityChannelPresence,
+      };
+    }
+
+    async function presenceApp(
+      channel: Parameters<typeof communicationFake>[0],
+      gateway: StreamCommunityChannelGateway,
+      overrides: Readonly<Record<string, string>> = {},
+      viewerPersona: Parameters<typeof communicationFake>[1] = null,
+    ) {
+      const dependencies = fakes();
+      return createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            communication: communicationFake(channel, viewerPersona),
+          },
+          streamCommunityChannelGateway: gateway,
+        },
+        { V2_MODULES_ENABLED: "community,search,communication", ...overrides },
+      );
+    }
+
+    it("carries the viewer's own community persona in the chat block (Decision 0055)", async () => {
+      const gateway = presenceGateway(
+        vi.fn(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 1,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const cases: readonly (readonly [
+        Parameters<typeof communicationFake>[1],
+        unknown,
+      ])[] = [
+        [null, null],
+        [
+          { alias: "Harbor-4821", projectionState: "confirmed" },
+          { alias: "Harbor-4821", projectionState: "confirmed" },
+        ],
+        [
+          { alias: "Owl-0007", projectionState: "pending" },
+          { alias: "Owl-0007", projectionState: "pending" },
+        ],
+      ];
+      for (const [stored, expected] of cases) {
+        const { app } = await presenceApp(
+          { provisioned: true, state: "created" },
+          gateway,
+          {},
+          stored,
+        );
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json<{ chat: unknown }>().chat).toEqual({
+          status: "available",
+          channelCid: `messaging:${streamChannelId}`,
+          memberState: "synced",
+          reasonCode: null,
+          viewerPersona: expected,
+        });
+      }
+    });
+
+    it("keeps the viewer's persona on the syncing and unavailable chat states too", async () => {
+      const gateway = presenceGateway(
+        vi.fn(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 1,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const stored = { alias: "Owl-0007", projectionState: "pending" as const };
+      const cases: readonly (readonly [
+        Parameters<typeof communicationFake>[0],
+        { status: string; reasonCode: string },
+      ])[] = [
+        [
+          { provisioned: false, state: "created" },
+          {
+            status: "syncing",
+            reasonCode: "COMMUNITY_CHANNEL_NOT_PROVISIONED",
+          },
+        ],
+        [
+          { provisioned: true, state: "failed" },
+          {
+            status: "unavailable",
+            reasonCode: "COMMUNITY_CHANNEL_PROVISION_FAILED",
+          },
+        ],
+      ];
+      for (const [channel, expected] of cases) {
+        const { app } = await presenceApp(channel, gateway, {}, stored);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json<{ chat: unknown }>().chat).toEqual({
+          status: expected.status,
+          channelCid: null,
+          memberState: "synced",
+          reasonCode: expected.reasonCode,
+          viewerPersona: { alias: "Owl-0007", projectionState: "pending" },
+        });
+      }
+    });
+
+    it("starts the record, channel and presence reads together and reuses one Stream observation (Decision 0088)", async () => {
+      const order: string[] = [];
+      let releaseRecord: (() => void) | undefined;
+      const read = vi.fn<
+        StreamCommunityChannelGateway["readCommunityChannelPresence"]
+      >(() => {
+        order.push("presence");
+        return Promise.resolve({
+          status: "observed" as const,
+          channelId: streamChannelId,
+          onlineMemberCount: 5,
+          memberCount: 9,
+        });
+      });
+      const dependencies = fakes();
+      const storedGetCommunity =
+        dependencies.communityRepository.getCommunity.bind(
+          dependencies.communityRepository,
+        );
+      const communication = communicationFake({
+        provisioned: true,
+        state: "created",
+      });
+      const readChannel = communication.readCommunityChannel;
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            community: {
+              ...dependencies.communityRepository,
+              getCommunity: (input) => {
+                order.push("record:start");
+                return new Promise((resolve, reject) => {
+                  releaseRecord = () => {
+                    order.push("record:end");
+                    storedGetCommunity(input).then(resolve, reject);
+                  };
+                });
+              },
+            },
+            communication: {
+              ...communication,
+              readCommunityChannel: vi.fn(() => {
+                order.push("channel");
+                return readChannel();
+              }),
+            },
+          },
+          streamCommunityChannelGateway: presenceGateway(read),
+        },
+        { V2_MODULES_ENABLED: "community,search,communication" },
+      );
+      const pending = app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      for (let turn = 0; turn < 50 && !order.includes("presence"); turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      // Stream was asked while the record read was still open.
+      expect([...order].sort()).toEqual([
+        "channel",
+        "presence",
+        "record:start",
+      ]);
+      expect(order.at(-1)).toBe("presence");
+      releaseRecord?.();
+      const detail = await pending;
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<{ onlineCount: unknown }>().onlineCount).toMatchObject(
+        { status: "available", count: 5 },
+      );
+
+      // A second detail read inside the window reuses the observation.
+      const again = app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      for (let turn = 0; turn < 50 && releaseRecord === undefined; turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      for (let turn = 0; turn < 50; turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        if (order.filter((entry) => entry === "record:start").length === 2) {
+          break;
+        }
+      }
+      releaseRecord?.();
+      const second = await again;
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ onlineCount: unknown }>().onlineCount).toEqual(
+        detail.json<{ onlineCount: unknown }>().onlineCount,
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes the observed count with its timestamp and source on the detail read only", async () => {
+      const read = vi.fn<
+        StreamCommunityChannelGateway["readCommunityChannelPresence"]
+      >(() =>
+        Promise.resolve({
+          status: "observed" as const,
+          channelId: streamChannelId,
+          onlineMemberCount: 3,
+          memberCount: 41,
+        }),
+      );
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(read),
+      );
+
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.statusCode).toBe(200);
+      const onlineCount = detail.json<{
+        onlineCount: {
+          status: string;
+          count: number;
+          observedAt: string;
+          source: string;
+        };
+      }>().onlineCount;
+      expect(onlineCount).toEqual({
+        status: "available",
+        count: 3,
+        observedAt: expect.stringMatching(observedAtPattern) as string,
+        source: "stream_member_presence",
+      });
+      expect(Date.parse(onlineCount.observedAt)).toBeLessThanOrEqual(
+        Date.now(),
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[0]).toMatchObject({
+        channelId: streamChannelId,
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+
+      // A write returns the same resource shape but observes nothing.
+      const joined = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(joined.statusCode).toBe(200);
+      expect(joined.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"STREAM_PRESENCE_NOT_OBSERVED"}',
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("publishes a real zero when Stream reports no connected member", async () => {
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(() =>
+          Promise.resolve({
+            status: "observed" as const,
+            channelId: streamChannelId,
+            onlineMemberCount: 0,
+            memberCount: 2,
+          }),
+        ),
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.json<{ onlineCount: unknown }>().onlineCount).toMatchObject(
+        { status: "available", count: 0, source: "stream_member_presence" },
+      );
+    });
+
+    it("keeps the three failure reasons apart and leaves the rest of the resource intact", async () => {
+      const cases: readonly [
+        Parameters<typeof communicationFake>[0],
+        StreamCommunityChannelGateway,
+        string,
+      ][] = [
+        // The community has no Stream channel yet.
+        [null, presenceGateway(vi.fn()), "COMMUNITY_CHANNEL_NOT_PROVISIONED"],
+        [
+          { provisioned: false, state: "created" },
+          presenceGateway(vi.fn()),
+          "COMMUNITY_CHANNEL_NOT_PROVISIONED",
+        ],
+        [
+          { provisioned: true, state: "failed" },
+          presenceGateway(vi.fn()),
+          "COMMUNITY_CHANNEL_PROVISION_FAILED",
+        ],
+        // Stream answered with a fault.
+        [
+          { provisioned: true, state: "created" },
+          presenceGateway(() =>
+            Promise.reject(new StreamChannelGatewayUnavailableError()),
+          ),
+          "STREAM_PRESENCE_READ_FAILED",
+        ],
+        // More members than the read is allowed to page.
+        [
+          { provisioned: true, state: "created" },
+          presenceGateway(() =>
+            Promise.resolve({
+              status: "bound_exceeded" as const,
+              channelId: streamChannelId,
+              memberBound: 500,
+            }),
+          ),
+          "STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED",
+        ],
+      ];
+      for (const [channel, gateway, reasonCode] of cases) {
+        const { app } = await presenceApp(channel, gateway);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(detail.statusCode, reasonCode).toBe(200);
+        expect(detail.body, reasonCode).toContain(
+          `"onlineCount":{"status":"unavailable","reasonCode":"${reasonCode}"}`,
+        );
+        const body = detail.json<{
+          community: { communityId: string };
+          viewer: { membership: { role: string } | null };
+          chat: { status: string };
+          contractVersion: string;
+        }>();
+        expect(body.community.communityId).toBe(communityId);
+        expect(body.viewer).toMatchObject({ membership: { role: "owner" } });
+        expect(body.contractVersion).toBe("2.0");
+      }
+    });
+
+    it("reports STREAM_PRESENCE_NOT_CONNECTED without Stream, from the field and the capability alike", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            communication: communicationFake({
+              provisioned: true,
+              state: "created",
+            }),
+          },
+        },
+        { V2_MODULES_ENABLED: "community,search,communication" },
+      );
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"STREAM_PRESENCE_NOT_CONNECTED"}',
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toEqual({
+        capabilityId: "communityPresence",
+        availability: "unavailable",
+        reasonCode: "STREAM_PRESENCE_NOT_CONNECTED",
+        evidence: { status: "notApplicable", reasonCode: null },
+      });
+    });
+
+    it("opens the communityPresence capability when Stream and the communication runtime are composed", async () => {
+      const { app } = await presenceApp(
+        { provisioned: true, state: "created" },
+        presenceGateway(vi.fn()),
+        {
+          STREAM_API_KEY: "stream_test_api_key",
+          STREAM_API_SECRET: "s".repeat(32),
+        },
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toEqual({
+        capabilityId: "communityPresence",
+        availability: "available",
+        reasonCode: null,
+        evidence: { status: "notApplicable", reasonCode: null },
+      });
+    });
+
+    it("fails the capability closed when Stream is configured but the communication runtime is not", async () => {
+      const dependencies = fakes();
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          streamCommunityChannelGateway: presenceGateway(vi.fn()),
+        },
+        {
+          V2_MODULES_ENABLED: "community,search",
+          STREAM_API_KEY: "stream_test_api_key",
+          STREAM_API_SECRET: "s".repeat(32),
+        },
+      );
+      const capabilities = await app.inject({
+        method: "GET",
+        url: "/v2/meta/capabilities",
+      });
+      const entry = capabilities
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find(
+          (candidate) => candidate.capabilityId === "communityPresence",
+        );
+      expect(entry).toMatchObject({
+        availability: "unavailable",
+        reasonCode: "COMMUNICATION_RUNTIME_UNAVAILABLE",
+      });
+      // No channel record can exist without the communication runtime.
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(detail.body).toContain(
+        '"onlineCount":{"status":"unavailable","reasonCode":"COMMUNICATION_RUNTIME_UNAVAILABLE"}',
+      );
+    });
+  });
+
+  describe("community application progress (Decision 0073)", () => {
+    it("splits the home aggregate into joined (non-owner) and owned (with review state)", async () => {
+      const { app } = await createApp();
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/community/home",
+        headers: commonHeaders(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        joined: { items: { membership: { role: string } }[] };
+        owned: {
+          items: {
+            community: { verificationStatus: string };
+            membership: { role: string };
+            application: Record<string, unknown>;
+          }[];
+          truncated: boolean;
+        };
+      }>();
+      expect(body.joined.items.map((item) => item.membership.role)).toEqual([
+        "member",
+      ]);
+      expect(body.owned.truncated).toBe(false);
+      expect(body.owned.items).toHaveLength(1);
+      expect(body.owned.items[0]).toMatchObject({
+        community: { verificationStatus: "rejected" },
+        membership: { role: "owner" },
+        application: {
+          status: "rejected",
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: "Name collides with a listed token",
+        },
+      });
+      expect(
+        Object.keys(body.owned.items[0]?.application ?? {}).sort(),
+      ).toEqual(["rejectedReason", "reviewedAt", "status", "submittedAt"]);
+    });
+
+    it("drops an owned row whose membership is not the owner's, never mislabelling it", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.getCommunityHome = vi.fn(() =>
+        Promise.resolve({
+          joined: [],
+          joinedTruncated: false,
+          owned: [
+            {
+              community,
+              viewerMembership: {
+                role: "admin" as const,
+                status: "active" as const,
+                joinedAt: createdAt,
+              },
+            },
+          ],
+          ownedTruncated: true,
+          discover: [],
+          observedAt: createdAt,
+        }),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/community/home",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        owned: { items: [], truncated: true },
+      });
+    });
+
+    it("projects the application block to the owner only", async () => {
+      const { app } = await createApp();
+      const asOwner = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}`,
+        headers: commonHeaders(),
+      });
+      expect(asOwner.statusCode).toBe(200);
+      expect(asOwner.json()).toMatchObject({
+        application: {
+          status: "verified",
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: null,
+        },
+      });
+
+      const rejectedCommunity = {
+        ...community,
+        verificationStatus: "rejected" as const,
+        application: {
+          submittedAt: createdAt,
+          reviewedAt: "2026-09-07T02:00:00.000Z",
+          rejectedReason: "Slug looks like an impersonation",
+        },
+      };
+      for (const membership of [
+        null,
+        {
+          role: "admin" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+        },
+        {
+          role: "member" as const,
+          status: "active" as const,
+          joinedAt: createdAt,
+        },
+      ]) {
+        const dependencies = fakes();
+        dependencies.communityRepository.getCommunity = vi.fn(() =>
+          Promise.resolve({
+            community: rejectedCommunity,
+            viewerMembership: membership,
+          }),
+        );
+        const { app: other } = await createApp(dependencies);
+        const response = await other.inject({
+          method: "GET",
+          url: `/v2/communities/${communityId}`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({ application: null });
+        // The reason never leaks through any other field either.
+        expect(response.body).not.toContain("impersonation");
+        expect(response.body).not.toContain("submittedAt");
+      }
+    });
+
+    it("pages the caller's own communities with membership=owned and attaches the review state", async () => {
+      const dependencies = fakes();
+      const pending = {
+        ...community,
+        verificationStatus: "pending" as const,
+        application: {
+          submittedAt: "2026-09-08T01:00:00.000Z",
+          reviewedAt: null,
+          rejectedReason: null,
+        },
+      };
+      const listCommunities = vi.fn(() => Promise.resolve([pending]));
+      dependencies.communityRepository.listCommunities = listCommunities;
+      const { app } = await createApp(dependencies);
+      const owned = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=owned&verification=all",
+        headers: commonHeaders(),
+      });
+      expect(owned.statusCode).toBe(200);
+      expect(listCommunities).toHaveBeenCalledWith(
+        expect.objectContaining({ membership: "owned", verification: "all" }),
+      );
+      expect(owned.json()).toMatchObject({
+        items: [
+          {
+            communityId,
+            verificationStatus: "pending",
+            application: {
+              status: "pending",
+              submittedAt: "2026-09-08T01:00:00.000Z",
+              reviewedAt: null,
+              rejectedReason: null,
+            },
+          },
+        ],
+      });
+
+      const joined = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=joined&verification=all",
+        headers: commonHeaders(),
+      });
+      expect(joined.statusCode).toBe(200);
+      expect(
+        joined.json<{ items: Record<string, unknown>[] }>().items[0],
+      ).not.toHaveProperty("application");
+
+      const discover = await app.inject({
+        method: "GET",
+        url: "/v2/communities?verification=all",
+        headers: commonHeaders(),
+      });
+      expect(discover.statusCode).toBe(200);
+      expect(discover.body).not.toContain("submittedAt");
+
+      const unknown = await app.inject({
+        method: "GET",
+        url: "/v2/communities?membership=created",
+        headers: commonHeaders(),
+      });
+      expect(unknown.statusCode).toBe(400);
+    });
+
+    it("resubmits a rejected application through the owner-only command", async () => {
+      const { app, resubmitCommunityMock } = await createApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expectOperationalHeaders(response);
+      expect(resubmitCommunityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerUserId: accountId,
+          communityId,
+          idempotencyKey: idempotencyKey(),
+          requestSha256: commandDigest("community", "resubmitCommunity", [
+            communityId,
+          ]),
+        }),
+      );
+      expect(response.json()).toMatchObject({
+        community: { verificationStatus: "pending" },
+        application: {
+          status: "pending",
+          submittedAt: "2026-09-08T01:00:00.000Z",
+          reviewedAt: null,
+          rejectedReason: null,
+        },
+        onlineCount: {
+          status: "unavailable",
+          reasonCode: "STREAM_PRESENCE_NOT_OBSERVED",
+        },
+      });
+
+      const withoutKey = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commonHeaders(),
+      });
+      expect(withoutKey.statusCode).toBe(400);
+      const withBody = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/resubmit`,
+        headers: commandHeaders(),
+        payload: { name: "Edited" },
+      });
+      expect(withBody.statusCode).toBe(400);
+      expect(resubmitCommunityMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("maps the resubmit state machine and permission refusals onto catalog codes", async () => {
+      const cases = [
+        [new CommunityDataStaleError(), 409, "DATA_STALE"],
+        [new CommunityPermissionDeniedError(), 403, "PERMISSION_DENIED"],
+        [new CommunityNotFoundError(), 404, "NOT_FOUND"],
+        [new CommunityIdempotencyConflictError(), 409, "IDEMPOTENCY_CONFLICT"],
+      ] as const;
+      for (const [error, statusCode, code] of cases) {
+        const dependencies = fakes();
+        dependencies.resubmitCommunityMock.mockRejectedValue(error);
+        const { app } = await createApp(dependencies);
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/resubmit`,
+          headers: commandHeaders(),
+        });
+        expect(response.statusCode, code).toBe(statusCode);
+        expect(response.json()).toMatchObject({ code });
+        expect(Object.keys(response.json()).sort()).toEqual([
+          "category",
+          "code",
+          "correlationId",
+          "detailsSafe",
+          "providerReferenceSafe",
+          "retryable",
+          "userMessageKey",
+        ]);
+      }
+    });
+  });
+});

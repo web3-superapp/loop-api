@@ -1,5 +1,15 @@
 # LOOP Stream Chat contract
 
+> **Runtime status notice — 2026-08-29:** Decisions 0003, 0004, and 0021
+> supersede this contract's earlier server-token transport and Node runtime
+> status. The private backend now pins the separately reviewed and accepted
+> `@stream-io/node-sdk@0.7.63`, composes its ordinary one-hour user-token issuer,
+> and uses the Native Privy Bearer contract. Local signing is not credentialed
+> Stream or device evidence. The acceptance recorded by Decision 0021 covers
+> only that Node SDK version; it does not accept or enable the Flutter SDKs
+> catalogued below. Flutter, provider end-to-end, Chat/Video behavior, and the
+> large-group gates in this contract remain pending.
+
 Stream is the sole communication authority for production Chat and Stream Video/Audio Rooms. LOOP does not implement a parallel message store, socket protocol, delivery engine, member database, moderation service, attachment CDN, custom communication-authentication core, participant presence system, SFU/WebRTC transport, or media reconnect engine. The LOOP BFF does own one narrow authentication responsibility: use the Stream-supported server token mechanism and server-only secret to mint short-lived provider user tokens for authenticated internal user IDs. It does not invent a token format, expose the secret, or become an independent Chat identity authority. This directory is a reviewable provider contract, not a chat backend or RTC backend.
 
 ## Current scope status

@@ -1,0 +1,1140 @@
+# 前端联调：V2 社区、社交图与搜索（S3 / D3–D6）
+
+本文是 `community` 与 `search` 两个模块（决策 0031）的前端交接契约。权威机器
+契约为 `openapi/loop-api.v2.json`。通用规则（Base URL、`X-Request-ID`、错误体
+七字段）沿用 `docs/frontend-v2-session-api.md` 与 `docs/api-v2-conventions.md`。
+
+覆盖页面：`community`、`community-discover`、`community-profile`、
+`community-members`、`search`、`connections`、`blocklist`、`dm-requests`、
+`referral`。
+
+## 1. Base URL、启用条件与 headers
+
+- Development：`https://api-dev.quant-dinger.cc`；本机 `http://127.0.0.1:3000`
+  （或 `PORT` 指定端口）。
+- 后端 `V2_MODULES_ENABLED` 必须包含 `community`（社区 + 社交图 + referral 规则）
+  与 `search`（`GET /v2/search`）。未启用时对应路径全部返回 `404 NOT_FOUND`
+  （V2 错误体），且不会校验 Bearer。
+- 前端必须先读 `GET /v2/meta/capabilities`：
+
+| capabilityId        | 期望                                                                                                                                                                                         | UI 含义                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `community`         | `available`（模块启用 + 仓储 + cursor 密钥都就绪）                                                                                                                                           | 社区页可用                                                           |
+| `search`            | `available`（再加公共搜索配额）                                                                                                                                                              | 搜索页可用                                                           |
+| `communityMining`   | 恒为 `unavailable`（`MINING_FORMULA_BASELINE_PENDING`）                                                                                                                                      | 算力卡片、算力数字一律显示 unavailable                               |
+| `communityPresence` | 后端配置了 Stream 且 `communication` 运行时就绪时为 `available`（决策 0047）；无 Stream 凭据为 `STREAM_PRESENCE_NOT_CONNECTED`，有凭据但通信运行时缺失为 `COMMUNICATION_RUNTIME_UNAVAILABLE` | 社区详情页可以显示在线人数；`unavailable` 时在线人数显示 unavailable |
+
+`unavailable` + `COMMUNITY_RUNTIME_UNAVAILABLE` / `SEARCH_RUNTIME_UNAVAILABLE`
+表示模块已启用但后端依赖未配齐；`deferred` 表示模块未启用。两种情况都不要
+调用本模块接口，也不要回退 fixture。
+
+- 读接口 header：
+
+```text
+Authorization: Bearer <current Privy access token>
+X-Loop-Contract-Version: 2.0
+X-Loop-Client-Version: 1.0.0
+```
+
+- 写接口在上述基础上必须再带**恰好一个**规范小写 UUIDv4：
+
+```text
+Idempotency-Key: <canonical lowercase UUIDv4 for this logical operation>
+```
+
+- 读接口带 `Idempotency-Key` 返回 `400 INVALID_REQUEST`；写接口缺失、重复或
+  非规范 UUIDv4 同样 `400`。未知 `X-Loop-*` header、未知 query、未知 body 字段
+  一律 `400 INVALID_REQUEST`。
+- 所有响应 `Cache-Control: no-store`，`X-Request-ID` 为服务端生成的 UUID，错误体
+  `correlationId` 与之相等。
+
+## 2. 前置条件：必须先激活 V2 资料
+
+社区与社交图的所有写操作（申请社区、加入、退出、治理、关注、屏蔽）都要求当前
+账号已经完成 `POST /v2/profile/loop-id`（`profileStatus === "active"`）。否则返回：
+
+```json
+{
+  "code": "PROFILE_ACTIVATION_REQUIRED",
+  "category": "conflict",
+  "retryable": false,
+  "userMessageKey": "errors.profile.activationRequired",
+  "correlationId": "…",
+  "detailsSafe": null,
+  "providerReferenceSafe": null
+}
+```
+
+前端应把用户送到 `loop-id-setup` 完成激活后重试，不要当成服务不可用。
+
+另外，`privacy_preferences_v2.discoverable` 默认 `false`（决策 0030 fail-closed）。
+**未开启 `discoverable` 的账号无法被关注、也不会出现在 `domain=users` 的别名前缀搜索结果里**
+（按精确 LOOP ID 仍可搜到、仍可收到好友申请，决策 0090）
+（统一返回 `404 NOT_FOUND`，不可枚举）。`connections` 与 `blocklist` 页面要在文案里
+提示用户：想被别人找到需要在隐私设置里打开"可被发现"。
+成员目录、取关、屏蔽不受此限制。
+
+## 3. 通用投影
+
+### 身份投影（固定四字段）
+
+所有涉及"另一个人"的地方都是同一个对象，**不下发 `profile_code`、钱包地址、
+Privy ID、Stream ID**：
+
+```json
+{
+  "publicProfileId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f",
+  "loopId": "LOOP-7HJKMNPQ",
+  "alias": "frog_maxi",
+  "avatarRef": "avatar:preset/people-03"
+}
+```
+
+`publicProfileId` 是唯一可以作为命令目标的稳定 ID。`alias` 与 `avatarRef` 可为
+`null`，此时用 `loopId` 兜底显示，禁止显示"—"以外的编造值。
+
+### unavailable 投影
+
+```json
+{ "status": "unavailable", "reasonCode": "STREAM_PRESENCE_NOT_CONNECTED" }
+```
+
+出现该对象的字段一律显示 unavailable 说明，**不显示 0、不显示假数据**。本模块
+用到的 `reasonCode`：
+
+| reasonCode                                                                                                       | 出现位置                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `STREAM_UNREAD_NOT_CONNECTED`                                                                                    | `home.unread`                                                                                      |
+| `STREAM_VOICE_NOT_CONNECTED`                                                                                     | `home.liveVoice`                                                                                   |
+| `STREAM_PRESENCE_NOT_CONNECTED`                                                                                  | `community.onlineCount`（后端无 Stream 凭据）、`members.counts.online`（成员列表暂不观测）         |
+| `STREAM_PRESENCE_NOT_OBSERVED`                                                                                   | 写接口返回的 `community.onlineCount`（create/patch/join/leave 不观测，详情页重新 GET）             |
+| `COMMUNICATION_RUNTIME_UNAVAILABLE` / `COMMUNITY_CHANNEL_NOT_PROVISIONED` / `COMMUNITY_CHANNEL_PROVISION_FAILED` | `community.onlineCount`（没有可询问的官方频道）                                                    |
+| `STREAM_PRESENCE_READ_FAILED` / `STREAM_PRESENCE_READ_TIMEOUT` / `STREAM_PRESENCE_MEMBER_BOUND_EXCEEDED`         | `community.onlineCount`（Stream 查询失败 / 超过 3 s 预算 / 成员数超过 500 的分页上限）             |
+| `MINING_FORMULA_BASELINE_PENDING`                                                                                | `community.miningPower`、成员/关注行 `miningPower`（无生效公式或未启用 `mining` 模块）             |
+| `MINING_SNAPSHOT_NOT_AVAILABLE` / `MINING_SNAPSHOT_STALE` / `MINING_SNAPSHOT_INCOMPLETE`                         | 同上（有公式但没有本版本的完整快照；`INCOMPLETE` = 最近一次计算有持仓读不到价、未发布，决策 0057） |
+| `COMMUNITY_ASSET_NOT_BOUND` / `COMMUNITY_WEIGHT_PENDING_REVIEW`                                                  | `community.miningPower`（社区未绑定资产 / 权重未批准）                                             |
+| `MINING_POWER_PRIVATE` / `MINING_ACCOUNT_NOT_IN_SNAPSHOT` / `MINING_RUNTIME_UNAVAILABLE`                         | 成员/关注行 `miningPower`                                                                          |
+| `COMMUNITY_ANNOUNCEMENTS_DEFERRED`                                                                               | `community.announcements`                                                                          |
+| `COMMUNITY_LINKS_DEFERRED`                                                                                       | `community.officialLinks`                                                                          |
+| `MESSAGE_PREVIEW_DEFERRED`                                                                                       | `message-requests[].preview`                                                                       |
+| `AI_MODERATION_DEFERRED`                                                                                         | `message-requests[].aiModeration`                                                                  |
+| `ASSET_REGISTRY_NOT_COMPOSED`                                                                                    | `search?domain=assets`（后端没有组合资产注册表；决策 0071 起该域正常可用）                         |
+| `LAUNCH_PROJECT_DIRECTORY_PENDING`                                                                               | `search?domain=launch`（Launch 模块已上线但还没有项目目录可搜；02 合约方案未到）                   |
+| `DAPP_DIRECTORY_NOT_INTEGRATED`                                                                                  | `search?domain=dapps`（没有接入任何 DApp 目录 Provider）                                           |
+| `REFERRAL_GRAPH_DEFERRED`                                                                                        | `referral.edges`                                                                                   |
+| `INVITE_CODE_DEFERRED`                                                                                           | `referral.inviteCode`                                                                              |
+
+### 社区投影
+
+```json
+{
+  "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Frog Holders",
+  "slug": "frog-holders",
+  "description": null,
+  "logoRef": "avatar:preset/community-03",
+  "verificationStatus": "verified",
+  "boundAssetKey": null,
+  "memberCount": 128,
+  "createdAt": "2026-09-07T01:00:00.000Z",
+  "configVersion": "communityV1"
+}
+```
+
+- `verificationStatus`：`pending | verified | rejected`。只有 `verified` 显示
+  验证 stamp；`pending` 在 `community-discover` 里显示"审核中"，且只有申请人
+  自己和已加入者能看到。
+- `boundAssetKey`：`null` 表示未绑定资产 → **`community-profile` 不渲染 Token
+  Card，显示"未绑定资产"**。非 `null` 时是 `eip155:<chainId>:<0x 小写地址>`，
+  D10 之前后端不解析它，前端也不得据此展示价格、市值、持有人等任何事实。
+- `memberCount` 来自 PostgreSQL，是唯一可信的成员数字。
+
+### 申请进度投影 `application`（S79b，决策 0073）
+
+```json
+{
+  "status": "rejected",
+  "submittedAt": "2026-09-22T01:00:00.000Z",
+  "reviewedAt": "2026-09-23T08:00:00.000Z",
+  "rejectedReason": "社区名与已上市代币冲突，请换一个名称"
+}
+```
+
+- 只下发给**当前 owner**：`GET /v2/communities/{id}` 对 owner 是这个对象、对其他人
+  固定 `null`；`home.owned[].application` 与 `GET /v2/communities?membership=owned`
+  每行的 `application` 必带。发现列表、搜索、成员目录**永远没有**这个字段。
+- `status` 与 `community.verificationStatus` 同值：`pending` 审核中、`rejected` 已驳回、
+  `verified` 已通过。
+- `submittedAt` 是本次申请的提交时间（重新提交后前移；首次等于 `createdAt`）。
+- `reviewedAt`：审核时间，`pending` 时为 `null`。
+- `rejectedReason`：运营填写的驳回原因（1–280 码点），只在 `rejected` 且运营给了原因时
+  非 `null`；`pending`/`verified` 恒 `null`。原文照显，不要拼接。
+- **文案建议**：`pending` →「审核中 · 提交于 {submittedAt}」；`rejected` →
+  「已驳回 · {reviewedAt}」+ 原因区块 + 「修改后重新提交」按钮；`verified` →
+  验证 stamp，不再显示申请状态。三态都不显示 fixture 数字。
+
+### 分页 cursor
+
+列表返回 `nextCursor`（`string | null`）。规则：
+
+- cursor 绑定到"当前账号 + 该路由 + 该筛选组合"，换账号、换路由、换筛选、
+  过期（600 秒）都返回 `400 INVALID_REQUEST` → 前端重新从第一页拉取。
+- **`cursor` 与 `limit` 互斥**：翻页时只传 `cursor`（页大小已经编码在里面），
+  同时传会 `400`。
+
+## 4. 接口清单
+
+### 4.1 `GET /v2/community/home` — `community` 页
+
+无 query。
+
+```json
+{
+  "joined": {
+    "items": [{ "community": { … }, "membership": { "role": "member", "status": "active", "joinedAt": "…" } }],
+    "truncated": false
+  },
+  "owned": {
+    "items": [
+      {
+        "community": { "verificationStatus": "pending", … },
+        "membership": { "role": "owner", "status": "active", "joinedAt": "…" },
+        "application": { "status": "pending", "submittedAt": "…", "reviewedAt": null, "rejectedReason": null }
+      }
+    ],
+    "truncated": false
+  },
+  "discover": [{ … }],
+  "unread": { "status": "unavailable", "reasonCode": "STREAM_UNREAD_NOT_CONNECTED" },
+  "liveVoice": { "status": "unavailable", "reasonCode": "STREAM_VOICE_NOT_CONNECTED" },
+  "freshness": { "observedAt": "2026-09-08T01:00:00.000Z", "source": "database" },
+  "recommendation": { "recommendationId": "…", "ruleVersion": "rule:verified-members-v1" },
+  "contractVersion": "2.0"
+}
+```
+
+`discover` 最多 5 条，只含 `verified` 且当前账号未加入的社区。
+
+**「我的社区」拆成两组（S79b，决策 0073）**：`joined` 是当前账号以 admin/member 身份
+加入的社区；`owned` 是当前账号**是 owner** 的社区（含 `pending`/`rejected`/`verified`），
+按 `application.submittedAt` 倒序，每行必带 `application`。同一社区只会出现在其中一组：
+自己创建的社区不再出现在 `joined` 里。「我」页「我的社区」= `joined` 组 +「我创建的」
+= `owned` 组，「我创建的」每行显示 `application.status` 对应的审核状态。转让所有权后
+该社区移到新 owner 的 `owned`。
+`joined.truncated`/`owned.truncated === true` 表示超过本聚合承载量（各 50），"查看全部"
+分别走 `GET /v2/communities?membership=joined` 与 `?membership=owned`（游标分页）。主卡文案只能用
+`joined.items.length` 与 `memberCount` 这类真实数字，没有数字时显示 `—`。
+消息面板的未读/语音/陌生人请求条目在 D7 之前显示 unavailable。
+
+### 4.2 `GET /v2/communities` — `community-discover` 页
+
+| query          | 取值                                                 | 默认       |
+| -------------- | ---------------------------------------------------- | ---------- |
+| `sort`         | `members` \| `newest` \| `miningPower` \| `activity` | `members`  |
+| `verification` | `verified` \| `all`                                  | `verified` |
+| `membership`   | `all` \| `joined` \| `owned`                         | `all`      |
+| `limit`        | 1–50                                                 | 20         |
+| `cursor`       | 上一页 `nextCursor`                                  | —          |
+
+四个 seg 现在有四个排序（决策 0061）：「成员最多」`members`、「新社区」`newest`、
+「算力最高」`miningPower`、「讨论最多」`activity`。**没有「增长最快」**——没有任何
+可观测来源，不要加这个 seg。
+`verification=all` 额外包含调用者自己创建或已加入的非 verified 社区；
+`membership=joined` 把结果收窄到调用者以 admin/member 身份加入的社区，
+`membership=owned` 收窄到调用者当前是 owner 的社区（每行多一个 `application`，
+通常配 `verification=all` 才能看到 `pending`/`rejected`），分别供 `community` 首页
+"查看全部已加入"与"我创建的"使用；同一社区只会出现在其中一个筛选里。
+
+响应 `{ items[], nextCursor, ordering, recommendation, contractVersion }`。
+`recommendation.ruleVersion` 固定 `rule:verified-members-v1`，前端如展示"推荐
+依据"必须引用它，不得自称算法推荐。
+
+#### `ordering`：这一页到底按什么排的（**新增必读字段**）
+
+```jsonc
+// members / newest
+{ "status": "available", "sort": "members", "basis": { "kind": "stored" } }
+
+// miningPower：排序依据是哪一份快照
+{ "status": "available", "sort": "miningPower",
+  "basis": { "kind": "miningSnapshot", "snapshotId": "…",
+             "formulaVersion": "miningFormula-devBaseline-2026-09-21-r4",
+             "computedAt": "2026-09-21T09:00:00.000Z",
+             "scope": "development_baseline", "stale": false } }
+
+// activity：窗口 + 最新一次观测时间 + 有观测的社区数
+{ "status": "available", "sort": "activity",
+  "basis": { "kind": "channelActivity", "windowDays": 7,
+             "observedCommunityCount": 26,
+             "observedAt": "2026-09-21T09:15:00.000Z" } }
+
+// 排序依据不存在：200，但 items 为空、没有游标
+{ "items": [], "nextCursor": null,
+  "ordering": { "status": "unavailable", "sort": "activity",
+                "reasonCode": "COMMUNITY_ACTIVITY_NOT_OBSERVED" } }
+```
+
+**`items: []` 不等于「没有社区」。** 先读 `ordering.status`：`unavailable` 时渲染
+该 seg 的 unavailable 态（可引导切回「成员最多」），**不要**渲染空列表文案。
+`reasonCode` 取值：
+
+| `reasonCode`                      | 含义                                         |
+| --------------------------------- | -------------------------------------------- |
+| `COMMUNITY_ACTIVITY_NOT_OBSERVED` | 没有任何社区有新鲜的频道活跃度观测           |
+| `MINING_FORMULA_BASELINE_PENDING` | 没有生效中的挖矿公式版本                     |
+| `MINING_SNAPSHOT_NOT_AVAILABLE`   | 该版本下还没有完整快照                       |
+| `MINING_SNAPSHOT_INCOMPLETE`      | 最新一次快照没能给所有持仓定价，什么都没发布 |
+| `MINING_SNAPSHOT_STALE`           | 最新完整快照属于另一个版本                   |
+| `MINING_RUNTIME_UNAVAILABLE`      | 挖矿读路径本身不可用                         |
+
+`basis.stale === true`（miningPower）表示排序用的是上一份完整快照，更新的那次
+运行没完成——和挖矿页的 `snapshot.stale` 同一个意思，文案要一致。
+
+#### 排序字段回带到每一条 item（**新增可选字段**）
+
+`sort=miningPower` 时每条 item 多一个 `miningPower`，形状与
+`GET /v2/communities/{id}.miningPower` 完全一致（`subject: "community"`，带
+`weight`/`participants`/`stale`/`scope`）：
+
+```jsonc
+{
+  "communityId": "…",
+  "name": "…",
+  "memberCount": 311,
+  "miningPower": {
+    "status": "available",
+    "subject": "community",
+    "power": "230.5",
+    "snapshotId": "…",
+    "formulaVersion": "…",
+    "computedAt": "…",
+    "scope": "development_baseline",
+    "stale": false,
+    "weight": {
+      "status": "approved",
+      "value": "1.5",
+      "configVersion": "…",
+      "reviewedAt": "…",
+    },
+    "participants": { "status": "available", "count": 2 },
+  },
+}
+```
+
+没有获批权重的社区**仍然在列表里**（排在所有有算力的社区之后），
+`miningPower` 是 `{ "status": "unavailable", "reasonCode": "COMMUNITY_ASSET_NOT_BOUND" }`
+或 `COMMUNITY_WEIGHT_PENDING_REVIEW`。`power: "0"` 是「观测到的零」，
+和「不可用」是两件事，不要渲染成同一个样子。
+
+`sort=activity` 时每条 item 多一个 `activity`：
+
+```jsonc
+{
+  "activity": {
+    "status": "available",
+    "messageCount": 41,
+    "windowDays": 7,
+    "bounded": false,
+    "observedAt": "2026-09-21T09:15:00.000Z",
+  },
+}
+```
+
+`bounded: true` 表示这一页消息被读满了、窗口没读完，`messageCount` 是**下界**，
+文案必须写成「≥ N 条」之类，不能写成精确值。没有新鲜观测的社区是
+`{ "status": "unavailable", "reasonCode": "COMMUNITY_ACTIVITY_CHANNEL_NOT_OBSERVED" }`。
+
+`sort=members` / `sort=newest` 的 item **不带**这两个字段（不是 null，是不存在）。
+
+#### 游标
+
+游标绑定排序：在 `sort=activity` 下拿到的 `nextCursor` 用到 `sort=members` 上会
+`400 INVALID_REQUEST`。切 seg 必须重新从第一页拉。`limit` 与 `cursor` 互斥。
+
+### 4.3 `POST /v2/communities` — 申请社区
+
+写 header + body：
+
+```json
+{
+  "name": "Frog Holders",
+  "slug": "frog-holders",
+  "description": null,
+  "logoRef": "avatar:preset/community-03",
+  "boundAssetKey": null
+}
+```
+
+五个字段全部必填（可为 `null` 的是后三个）。`name` 1–40 码点、与别名同一套字符
+安全与保留词规则；`slug` `^[a-z0-9-]{3,32}$` 且全局唯一；`description` ≤280 码点；
+`logoRef` 只接受 `avatar:preset/community-01..12`；`boundAssetKey` 形如
+`eip155:56:0x…`（服务端转小写）。
+
+成功 `201`，返回社区资源，`verificationStatus` 恒为 `pending`，申请人即 owner。
+**API 没有自助认证路径**，`verified` 只能由运维脚本设置。
+
+错误：`422 ALIAS_RESERVED`（名称撞保留词）、`422 ALIAS_BLOCKED`（撞运营屏蔽词）、
+`409 RESOURCE_CONFLICT`（slug 已被别的社区占用，提示用户换一个）、
+`422 VALIDATION_FAILED`（归一化后长度越界）、
+`400 INVALID_REQUEST`（字段形状不合法）、`409 PROFILE_ACTIVATION_REQUIRED`。
+
+### 4.3b `PATCH /v2/communities/{communityId}` — 编辑社区资料（owner 专属）
+
+写 header + 部分字段 body（至少一个，未出现的字段不变）：
+
+```json
+{
+  "name": "Frog Holders",
+  "description": "Frogs only",
+  "logoRef": null,
+  "boundAssetKey": null
+}
+```
+
+校验规则与创建一致。`slug` 与 `verificationStatus` **不可通过本接口修改**
+（出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。仅 owner 可调用，
+admin/member → `403 PERMISSION_DENIED`。成功返回 4.4 的社区资源，服务端写一条
+`community_profile_updated` 审计。`pending`/`rejected` 状态下同样可编辑，且编辑
+**不会**改变审核状态：被驳回后先 PATCH 改资料，再调 4.3c 重新提交。
+
+### 4.3c `POST /v2/communities/{communityId}/resubmit` — 重新提交申请（owner 专属）
+
+写接口（带 `Idempotency-Key`，**无 body、无 query**），只做一件事：把 `rejected` 的申请
+改回 `pending`——清空 `application.rejectedReason` 与 `reviewedAt`，`submittedAt` 改为现在，
+写一条 `community_resubmitted` 审计；驳回原因保留在审计里。返回 4.4 的社区资源
+（`application.status === "pending"`，`onlineCount` 固定 `STREAM_PRESENCE_NOT_OBSERVED`）。
+
+| 情况                                    | 响应                         |
+| --------------------------------------- | ---------------------------- |
+| 当前不是 `rejected`（pending/verified） | `409 DATA_STALE`（刷新详情） |
+| 非 owner、被封禁                        | `403 PERMISSION_DENIED`      |
+| 社区不存在 / 对调用者不可见             | `404 NOT_FOUND`              |
+| 带 body 或 query、缺 `Idempotency-Key`  | `400 INVALID_REQUEST`        |
+| 同 key 不同请求                         | `409 IDEMPOTENCY_CONFLICT`   |
+
+为什么不是 PATCH：PATCH 是资料编辑，契约写明 `verificationStatus` 不可经它改变；把状态
+迁移藏在一次改名里，会让「改个简介」意外触发重新审核。重新提交是一次明确的、可审计的
+状态命令，所以单独成接口。
+
+### 4.4 `GET /v2/communities/{communityId}` — `community-profile` 页
+
+```json
+{
+  "community": { … },
+  "viewer": {
+    "membership": { "role": "member", "status": "active", "joinedAt": "…" },
+    "canInviteAdmin": false,
+    "canMute": false,
+    "canBan": false
+  },
+  "application": null,
+  "miningPower": { "status": "unavailable", "reasonCode": "MINING_FORMULA_BASELINE_PENDING" },
+  "onlineCount": { "status": "unavailable", "reasonCode": "STREAM_PRESENCE_NOT_CONNECTED" },
+  "announcements": { "status": "unavailable", "reasonCode": "COMMUNITY_ANNOUNCEMENTS_DEFERRED" },
+  "officialLinks": { "status": "unavailable", "reasonCode": "COMMUNITY_LINKS_DEFERRED" },
+  "contractVersion": "2.0"
+}
+```
+
+`onlineCount`（决策 0047）只在 **`GET /v2/communities/{communityId}`** 上观测；它是一次
+观测值，不是存储的事实：**`count` = 该社区官方 Stream 频道的成员中，此刻与 Stream 保持
+着连接的人数**（不是"正在看这个频道"，不是"最近活跃"，也不是 LOOP 成员数）。
+`observedAt` 必带，`source` 固定为 `stream_member_presence`，前端按 `source` 判断含义，
+不要把它读成"频道观看者"。开发库 `builders-guild` 2026-09-16 的真实响应片段（一个成员
+连着 Stream 时）：
+
+```json
+{
+  "onlineCount": {
+    "status": "available",
+    "count": 1,
+    "observedAt": "2026-09-16T06:44:39.224Z",
+    "source": "stream_member_presence"
+  }
+}
+```
+
+同一频道无人连接时返回的是真实的 `count: 0`（`observedAt` 同样是新的）。
+
+**复用窗口（决策 0088）**：同一频道的一次 Stream 观测在后端进程内复用 **最多 30 s**
+（过半后命中时在后台再读一次，下一次请求拿到新值）；`observedAt` 永远是 Stream 真正被
+读取的时刻，所以它可能比响应时间早至多 30 s。形状、枚举与原因码不变；前端若要显示
+"x 秒前"，以 `observedAt` 为准。失败 / 超时不复用，下一次请求会重新问 Stream。`count` 只在
+Stream 报告 0 时才为 0；Stream 未配置、没有频道、查询失败、超时（3 s）、成员超过 500
+的分页上限，全部是 `{"status":"unavailable","reasonCode":...}`，见上表；不要用 0 或
+fixture 顶替。写接口（create / patch / join / leave）返回的同一字段固定为
+`STREAM_PRESENCE_NOT_OBSERVED`，需要数字时重新 GET 详情。`members.counts.online`
+这一版仍为 `STREAM_PRESENCE_NOT_CONNECTED`（列表不逐行打 Stream，后续走缓存方案）。
+
+`miningPower`（决策 0043、0045）在有生效公式与快照时为 `subject: "community"` 分支，
+社区行自己就能解释"为什么是这个数"（开发库 `mock-defi-morning` 实际投影）：
+
+```json
+{
+  "status": "available",
+  "subject": "community",
+  "power": "0",
+  "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+  "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+  "computedAt": "2026-09-15T14:58:54.366Z",
+  "scope": "development_baseline",
+  "weight": {
+    "status": "approved",
+    "value": "0.8",
+    "configVersion": "miningFormula-devBaseline-2026-09-15-r2",
+    "reviewedAt": "2026-09-15T14:58:52.089Z"
+  },
+  "participants": { "status": "available", "count": 0 }
+}
+```
+
+`power` 是社区未封禁成员在绑定资产上的算力之和（decimal 字符串）；`scope` 与 mining 摘要页同源，
+`"development_baseline"` 时必须打"开发基线"标签；`weight`、`participants` 与
+`GET /v2/mining/communities/{id}` 的同名字段同形同源。成员行与关注行的 `miningPower` 是
+`subject: "account"` 分支（同前五个字段加 `scope`，不带 `weight`/`participants`），为对方个人总算力，
+对方 `miningPowerVisibility: self` 时为 `MINING_POWER_PRIVATE`。`unavailable` 分支仍是
+`{status, reasonCode}` 两个字段。S51（决策 0057）起两个 `available` 分支都多一个 `stale: boolean`
+（服务端总是给，schema 可选）：`true` 表示数字来自最新**完整**快照、之后有一次未完成/已作废的计算，卡片上标
+"数据截至 `computedAt`"；"持仓读不到"永远不会以 `power: "0"` 出现。完整规则、全部 reasonCode 与三条路由的
+开发库样例见 `docs/frontend-v2-mining-api.md` §4。
+
+`viewer.membership === null` 表示未加入（显示"加入"按钮）。`status === "muted"`
+表示被禁言，`banned` 表示被封禁。
+
+`application`（S79b，决策 0073）：调用者是当前 owner 时为 §3 的申请进度对象，否则
+`null`。owner 视角的 `community-profile` 顶部按 `application.status` 显示「审核中」
+或「已驳回」横幅（驳回横幅带 `rejectedReason` 原文与「修改后重新提交」入口 → 4.3c）；
+非 owner 看到的 `pending` 社区只显示"审核中"标记，永远看不到原因。
+
+### 4.5 `POST /v2/communities/{id}/join` / `DELETE /v2/communities/{id}/membership`
+
+都是写接口（带 `Idempotency-Key`，无 body），返回同 4.4 的社区资源。
+
+- 重复 join 幂等成功；被封禁账号 join 返回 `403 PERMISSION_DENIED`。
+- owner 退出返回 `403 PERMISSION_DENIED`（必须先转让）；本来就不是成员返回
+  `409 DATA_STALE`。
+
+### 4.6 `GET /v2/communities/{id}/members` — `community-members` 页
+
+| query    | 取值                                    | 默认  |
+| -------- | --------------------------------------- | ----- |
+| `role`   | `all` \| `owner` \| `admin` \| `banned` | `all` |
+| `q`      | 成员别名前缀，1–40 码点                 | —     |
+| `limit`  | 1–50                                    | 20    |
+| `cursor` | 上一页 `nextCursor`                     | —     |
+
+```json
+{
+  "community": { … },
+  "viewer": { "membership": { … }, "canInviteAdmin": true, "canMute": true, "canBan": true },
+  "counts": {
+    "all": 128,
+    "owner": 1,
+    "admin": 3,
+    "online": { "status": "unavailable", "reasonCode": "STREAM_PRESENCE_NOT_CONNECTED" }
+  },
+  "items": [
+    {
+      "profile": { … },
+      "role": "owner",
+      "status": "active",
+      "joinedAt": "…",
+      "isSelf": false,
+      "actions": [],
+      "miningPower": {
+        "status": "available",
+        "subject": "account",
+        "power": "0",
+        "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+        "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+        "computedAt": "2026-09-15T14:58:54.366Z",
+        "scope": "development_baseline"
+      }
+    }
+  ],
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+排序固定 owner → admin → member，同组按 `joinedAt` 升序。seg 计数用
+`counts.all/owner/admin`，"在线"seg 禁用。
+
+**`role=banned`（解封入口，2026-09-08 新增）**：`all`/`owner`/`admin` 三种视图
+只列 `status` 为 `active`/`muted` 的成员，**不含被封禁者**；要拿到被封禁成员，
+必须显式传 `role=banned`，此时 `items[].status` 全部是 `"banned"`。该视图只对
+`viewer.canBan === true`（owner/admin）开放，其他调用者返回
+`403 PERMISSION_DENIED`。`counts.all/owner/admin` 始终是**非封禁**目录的计数，
+不随 `role=banned` 改变（被封禁者不计入），所以"已封禁"seg 不要显示计数徽标，
+用翻页结果本身呈现。cursor 与 `role` 绑定，切换 seg 必须丢弃旧 cursor。
+
+**`q` 成员搜索（2026-09-10 新增，决策 0040）**：可选参数，只按**成员别名前缀**
+匹配，永远不是子串匹配，也不搜聊天内容、`loopId` 或钱包地址。原始文本先去首尾
+空白，再按 NFKC 归一化、转小写、把连续 ASCII 空格折成一个，归一化后必须是
+**1–40 个码点**；含控制字符、格式字符（含零宽）、代理项、行/段分隔符的一律
+`400 INVALID_REQUEST`。`%`、`_`、`\` 按字面量匹配，不当通配符。没有别名的成员
+（`profile.alias === null`）永远不会被命中。
+
+- 归一化与后端 `user_profiles.alias_search_key` 用的是同一个函数
+  （`unicode17_nfkc_lower_ws_v1`），所以 `FRO`、`ｆｒｏ`、`  fro  ` 命中同一批人。
+- `counts.all/owner/admin` **不随 `q` 变化**，始终是整个非封禁目录的计数；空结果
+  只看 `items.length === 0`，不要用 counts 判断。
+- `q` 与 `role`、`limit`、`cursor` 可共存。**cursor 同时绑定 `q`**：改了 `q`
+  （包括加上或去掉 `q`）后继续用旧 cursor 一律 `400 INVALID_REQUEST`，客户端每次
+  改查询词必须丢弃旧 cursor 从第一页重新拉。大小写与首尾空白不同但归一化后相同的
+  查询词算同一个 `q`，旧 cursor 仍然有效。
+- 带 `q` 的请求消耗与 `GET /v2/search` 同一个公共别名搜索配额（每账号 30/分钟、
+  每 IP 60/分钟、每账号 300/天），超限 `429 RATE_LIMITED`；不带 `q` 的普通目录
+  翻页不计入配额。客户端必须做 300ms 防抖 + 单飞，不要按键即发。
+- 服务端未配置配额密钥时，带 `q` 的请求 `503 CAPABILITY_UNAVAILABLE`（fail
+  closed），不带 `q` 的目录仍然可用。
+
+`q` 的完整错误码：`400 INVALID_REQUEST`（长度/字符/cursor 不匹配）、
+`401 AUTH_REQUIRED|AUTH_INVALID`、`403 PERMISSION_DENIED`（只在 `role=banned`）、
+`404 NOT_FOUND`、`429 RATE_LIMITED`、`503 CAPABILITY_UNAVAILABLE`。
+
+`isSelf === true` 的那一行不可导航。
+
+**`items[].actions` —— 每行的治理动作清单（2026-09-14 新增，必填字段）**
+
+`actions` 是**这一行**当前可执行的治理动作，服务端按 4.7 的 actor × 动作 ×
+目标角色权限矩阵，再叠加目标当前状态的前置条件（与写接口执行的是同一对判断）
+逐行算出。取值来自固定枚举：
+
+`"assignAdmin"` | `"revokeAdmin"` | `"transferOwnership"` | `"mute"` |
+`"unmute"` | `"ban"` | `"unban"`
+
+顺序固定为上表顺序，数组元素不重复。**前端只渲染这个清单，不得再自行推导任何
+一个动作的可用性**：
+
+- 空数组 = 这一行不提供任何治理动作。owner 行、`isSelf === true` 的行、
+  `profile.publicProfileId === null` 的行、以及权限矩阵不允许的组合（例如
+  admin 看另一个 admin）都会返回 `[]`，前端不需要也不应该再写这些判断。
+- 被封禁的行只会返回 `["unban"]`。
+- 状态前置条件已经算进去了：已禁言的行不会出现 `"mute"`，只会出现 `"unmute"`；
+  非活跃成员不会出现 `"transferOwnership"`。
+- 动作名到写接口的映射：`assignAdmin` → `POST .../role {"role":"admin"}`，
+  `revokeAdmin` → `{"role":"member"}`，`transferOwnership` → `{"role":"owner"}`，
+  `mute`/`unmute` → `POST`/`DELETE .../mute`，`ban`/`unban` →
+  `POST`/`DELETE .../ban`。
+- 这是**投影而不是授权**：写接口仍会用同一张矩阵重新校验。清单只保证前端不再
+  给出注定 `403` 的入口。
+
+`viewer.canInviteAdmin/canMute/canBan` 是**观察者级**标记（"这个人在本社区里
+是否拥有某项权限"），不带目标维度，只用于决定是否显示"已封禁"seg
+（`viewer.canBan`）这类页面级入口。**不要用它们决定任何一行的动作**——之前正是
+这么做才让 admin 对另一个 admin 显示了禁言/封禁，点下去必然 403。
+
+成员行的 `profile.publicProfileId` 可能为 `null`（该成员没有资料行）：这种行仍会
+列出并计入 `counts`，保证计数与可翻页行数一致，但 **不可作为任何治理动作的目标**，
+此时 `actions` 恒为 `[]`，用 `loopId` 显示。
+
+### 4.7 治理写接口
+
+| 方法     | 路径                                                  | body       | 语义                                        |
+| -------- | ----------------------------------------------------- | ---------- | ------------------------------------------- |
+| `POST`   | `/v2/communities/{id}/members/{publicProfileId}/role` | `{"role"}` | `admin` 任命 / `member` 撤销 / `owner` 转让 |
+| `POST`   | `/v2/communities/{id}/members/{publicProfileId}/mute` | 无         | 禁言                                        |
+| `DELETE` | `/v2/communities/{id}/members/{publicProfileId}/mute` | 无         | 解除禁言                                    |
+| `POST`   | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 封禁                                        |
+| `DELETE` | `/v2/communities/{id}/members/{publicProfileId}/ban`  | 无         | 解除封禁 = 恢复为活跃成员                   |
+
+全部返回 4.6 的成员列表首页，前端直接用它刷新页面。
+
+**封禁 / 解封的成员资格语义（2026-09-08 修订）**：
+
+- 封禁 **不删除**成员行：成员保持在库里，`status` 变成 `banned`，`role` 归为
+  `member`，`joinedAt` 不变；被封禁者自己读 `GET /v2/communities/{id}` 仍能看到
+  `viewer.membership.status === "banned"`。默认成员目录不含这一行，只有
+  `role=banned` 视图能看到。后端同时把该账号从社区官方 Stream 频道移除。
+- 解封 **恢复成员资格**：该行变回 `role: "member"`, `status: "active"`，
+  `joinedAt` 仍是最初加入时间（不会被重置），**不需要**重新 join；后端同时把该
+  账号重新加回官方频道（频道尚未 provisioned 时该动作为空操作）。解封后
+  `viewer.membership` 不再是 `null`。
+- 封禁与解封都是**社区范围**的：都不改动个人关注图（关注/取关只受
+  `POST /v2/blocks` 影响）。
+
+（此前的行为是"解封=删除成员行"，前端必须按上面的新语义实现解封 UI。）
+
+权限矩阵（服务端唯一真相，前端只做可见性）：
+
+| 操作者 \ 动作 | 任命 admin | 撤销 admin | 转让 owner    | 禁言          | 解除禁言      | 封禁          | 解除封禁      | 编辑资料 | 自己退出 |
+| ------------- | ---------- | ---------- | ------------- | ------------- | ------------- | ------------- | ------------- | -------- | -------- |
+| `owner`       | member     | admin      | admin, member | admin, member | admin, member | admin, member | admin, member | 是       | 否       |
+| `admin`       | —          | —          | —             | member        | member        | member        | member        | 否       | 是       |
+| `member`      | —          | —          | —             | —             | —             | —             | —             | 否       | 是       |
+
+单元格是"可以作用的目标角色"。owner 永远不能成为任何治理动作的目标；
+自己不能对自己执行治理动作；被封禁的操作者没有任何权限；被禁言的操作者
+保留治理权限（禁言只影响聊天）。
+
+这张表是服务端的唯一真相，**前端不需要复刻它**：4.6 的 `items[].actions`
+就是这张表按行算好的结果，前端照单渲染即可。
+
+错误：越权 `403 PERMISSION_DENIED`；状态不允许（禁言已禁言者、撤销非 admin、
+解封未封禁者、转让给非活跃成员）`409 DATA_STALE` → 刷新后重试；目标不在该
+社区 `404 NOT_FOUND`。所有动作走 `LoopSheet` 二次确认。
+
+### 4.8 `POST/DELETE /v2/connections/follow/{publicProfileId}` — `connections` 页
+
+写 header，无 body。返回：
+
+```json
+{ "profile": { … }, "viewerFollows": true, "contractVersion": "2.0" }
+```
+
+关注是单向的、不需要对方同意。目标不存在、未激活资料、未开启 `discoverable`、
+是自己、或与自己存在任一方向的屏蔽 → 统一 `404 NOT_FOUND`（不可枚举）。
+取关幂等，不做上述可发现性检查。
+
+### 4.9 `GET /v2/connections`
+
+| query       | 取值                       | 默认        |
+| ----------- | -------------------------- | ----------- |
+| `direction` | `following` \| `followers` | `following` |
+| `limit`     | 1–50                       | 20          |
+| `cursor`    | 上一页 `nextCursor`        | —           |
+
+```json
+{
+  "direction": "following",
+  "items": [
+    {
+      "profile": { … },
+      "createdAt": "…",
+      "viewerFollows": true,
+      "miningPower": {
+        "status": "available",
+        "subject": "account",
+        "power": "0",
+        "snapshotId": "0e358b31-e49f-48b9-89b2-c5c908c3ad5e",
+        "formulaVersion": "miningFormula-devBaseline-2026-09-15-r2",
+        "computedAt": "2026-09-15T14:58:54.366Z",
+        "scope": "development_baseline"
+      }
+    }
+  ],
+  "counts": { "following": 24, "followers": 108 },
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+两个 seg 的计数用 `counts`。行内 `miningPower` 与成员行同形（`subject: "account"`，决策 0045），
+对方不公开时为 `MINING_POWER_PRIVATE`。被自己屏蔽的账号不出现
+在列表里。行点击进入 `dm`（D7 之前 `dm` 是 unavailable 占位并给出说明）。
+
+### 4.10 `GET/POST/DELETE /v2/blocks` — `blocklist` 页
+
+- `GET /v2/blocks?kind=user&limit=&cursor=`：
+
+```json
+{
+  "kind": "user",
+  "items": [{ "kind": "user", "stableId": "…", "profile": { … }, "reasonCode": "user_request", "createdAt": "…" }],
+  "counts": { "user": 2 },
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+- `POST /v2/blocks` / `DELETE /v2/blocks` body `{"kind": "user", "stableId": "<publicProfileId>"}`，
+  返回 `{ "block": … | null, "contractVersion": "2.0" }`。
+- **`kind=contract` 与 `kind=domain` 在三个方法上都返回
+  `503 CAPABILITY_UNAVAILABLE`**：两个 seg 置灰并解释，不显示任何条目。
+- 屏蔽优先于关注与 DM。本步在**读侧**生效：同一事务里删除双向关注边，并让对方
+  在关注/粉丝列表、用户搜索、陌生人请求列表中消失；跨屏蔽 `accept` 陌生人请求
+  返回 `409 DATA_STALE`（不会建立关系）。**写侧拦截（阻止对方发起会话/消息）在
+  D7 的 v2 发送接口实现**，本步不改 v1 创建路径。
+- 解除屏蔽**不会**恢复关注，需要重新关注。
+- 封禁成员是社区范围的动作，**不会**改变个人关注关系；只有 `POST /v2/blocks`
+  会断开关注边。
+- `reasonCode`：`user_request`（用户手动屏蔽）或 `message_request_report`
+  （举报陌生人请求产生）。
+
+### 4.11 `GET /v2/message-requests` + 决策 — `dm-requests` 页
+
+```json
+{
+  "items": [
+    {
+      "messageRequestId": "…",
+      "profile": { … },
+      "createdAt": "…",
+      "expiresAt": "…",
+      "preview": { "status": "unavailable", "reasonCode": "MESSAGE_PREVIEW_DEFERRED" },
+      "aiModeration": { "status": "unavailable", "reasonCode": "AI_MODERATION_DEFERRED" }
+    }
+  ],
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+消息正文预览与 AI 巡查标记本步没有后端，整块显示 unavailable，**不得渲染原型
+里的示例文案与"AI 巡查标记为诈骗"卡片**。
+
+`POST /v2/message-requests/{messageRequestId}/decision`，body
+`{"decision": "accept" | "ignore" | "report"}`：
+
+```json
+{
+  "messageRequestId": "…",
+  "decision": "report",
+  "blocked": true,
+  "contractVersion": "2.0"
+}
+```
+
+- `accept`：接受（后端在 V1 好友表上建立关系）。任一方向存在屏蔽时返回
+  `409 DATA_STALE`，不会建立关系。
+- `ignore`：拒绝并进入 24 小时冷却。
+- `report`：拒绝 + 屏蔽发起人 + 写审计，同一事务；`blocked: true`。成功后 Toast
+  "已举报并屏蔽"，并从列表移除。
+- 已处理或已过期 → `409 DATA_STALE`；不存在或不属于当前账号 → `404 NOT_FOUND`。
+
+**`POST /v2/message-requests`（2026-09-08 新增，发起陌生人请求）**
+
+body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
+响应就是上面 `items[]` 的**单条**加 `contractVersion`：
+
+```json
+{
+  "messageRequestId": "…",
+  "profile": { … },
+  "createdAt": "…",
+  "expiresAt": "…",
+  "preview": { "status": "unavailable", "reasonCode": "MESSAGE_PREVIEW_DEFERRED" },
+  "aiModeration": { "status": "unavailable", "reasonCode": "AI_MODERATION_DEFERRED" },
+  "contractVersion": "2.0"
+}
+```
+
+- `profile` 是**对方（收件人）**的身份投影；列表接口里的 `profile` 是发起人，
+  因为那是收件人视角。两者字段完全一致。
+- 准入（决策 0090，2026-09-28 起）：对方资料已激活、双方均未屏蔽、不能是自己，
+  且对方隐私中心的 `friendRequests` 不是 `disabled`（决策 0070，**默认开启**，缺行即开启）。
+  **不再要求对方 `discoverable=true`**——这与「关注」不同，关注仍要求。
+  **任何不可达都返回同一个 `404 NOT_FOUND`**（不可枚举），前端不要
+  据此推断对方是否存在。`discoverable` 默认仍是 `false`，但它只影响别名搜索与关注；
+  想拒绝陌生人好友申请的用户应关闭「允许陌生人发好友申请」。
+- 已是好友、任一方向已有 pending 请求、处于 24 小时拒绝冷却 → `409 DATA_STALE`，
+  提示刷新后再试。
+- 同一个 `Idempotency-Key` 重放返回**首次创建的那条**请求（即使对方已处理）。
+- 请求有效期 7 天（`expiresAt`），由后端固定，前端不要自己算。
+- 不要再调用 v1 `POST /v1/friend-requests`：它按 v1 隐私表判定资格，V2 账号一律
+  拿到 404。
+
+### 4.12 `GET /v2/search` — `search` 页（`search` 模块）
+
+| query          | 取值                                                        | 默认       |
+| -------------- | ----------------------------------------------------------- | ---------- |
+| `domain`       | `users` \| `communities` \| `assets` \| `launch` \| `dapps` | 必填       |
+| `q`            | 归一化后 2–40 码点的前缀（`assets` 域 2–64）                | 必填       |
+| `verification` | `verified` \| `all`（仅 `communities`）                     | `verified` |
+| `limit`        | 1–20                                                        | 20         |
+| `cursor`       | 上一页 `nextCursor`                                         | —          |
+
+```json
+{
+  "domain": "communities",
+  "status": "available",
+  "reasonCode": null,
+  "results": [
+    {
+      "resultType": "community",
+      "stableId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "displaySnapshot": {
+        "title": "Frog Holders",
+        "subtitle": "frog-holders",
+        "avatarRef": "avatar:preset/community-03",
+        "memberCount": 128,
+        "verificationStatus": "verified"
+      },
+      "destination": { "kind": "communityProfile" }
+    }
+  ],
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+- `users`：`resultType: "user"`，`stableId` 是 `publicProfileId`，
+  `displaySnapshot.title` 是 alias（无 alias 时是 loopId），`subtitle` 是 loopId，
+  `memberCount`/`verificationStatus` 为 `null`。只返回已激活且 `discoverable`
+  的账号，排除双向屏蔽。
+- **`users` 域的 LOOP ID 精确匹配（决策 0090，S98）**：`q` 去掉首尾空白后若形如
+  `LOOP-` + 8 位字母或数字（大小写不敏感，例如 `loop-fe3emcpe`、` LOOP-FE3EMCPE`），
+  后端先按转大写后的 LOOP ID 精确查找账号，命中时它是**第一页的第一条**，
+  其后照常是别名前缀结果（同一账号不会出现两次；它占第一页 `limit` 的一个名额，
+  后续页不再出现）。响应形状不变，没有新字段，客户端不需要区分“精确命中”。
+  - 精确命中**不看 `discoverable`**（主代理裁决 2026-09-28）：只要对方资料已激活、
+    不是本人、双方均未屏蔽，按 LOOP ID 就能搜到；「可被发现」只管别名前缀搜索。
+    查不到时就是空 `results`（与“账号不存在”无法区分，这是有意的防枚举）。
+    本人的 LOOP ID 搜不到自己。
+  - 搜到后发好友申请（`POST /v2/message-requests`，见 4.11 节）**不看 `discoverable`**
+    （主代理裁决 2026-09-28）：只要对方没关「允许陌生人发好友申请」、双方未屏蔽即可。
+    **关注**（4.8 节）仍要求对方 `discoverable=true`，对未开启的账号返回 `404 NOT_FOUND`。
+  - 其它形状（`LOOP-ABCDE` 5 位邀请码、`LOOP FE3EMCPE`、9 位等）行为与以前一样，
+    只做别名前缀匹配。
+  - 请求示例：`GET /v2/search?domain=users&q=LOOP-FE3EMCPE`（headers 同本节其它
+    请求：`Authorization: Bearer <Privy token>`、`X-Loop-Contract-Version: 2.0`、
+    `X-Loop-Client-Version`）。命中时：
+
+    ```json
+    {
+      "domain": "users",
+      "status": "available",
+      "reasonCode": null,
+      "results": [
+        {
+          "resultType": "user",
+          "stableId": "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e99",
+          "displaySnapshot": {
+            "title": "pinned_friend",
+            "subtitle": "LOOP-FE3EMCPE",
+            "avatarRef": "avatar:preset/people-03",
+            "logo": null,
+            "memberCount": null,
+            "verificationStatus": null
+          },
+          "destination": { "kind": "publicProfile" }
+        }
+      ],
+      "nextCursor": null,
+      "contractVersion": "2.0"
+    }
+    ```
+
+  - 错误码与其它 `users` 查询完全相同（`INVALID_REQUEST`、`RATE_LIMITED`、
+    `UNAUTHENTICATED`、`CAPABILITY_UNAVAILABLE` 等，见第 3 节）；消耗同一个公共搜索配额。
+- `communities`：只返回 `verified`；`verification=all` 只对当前账号已加入的社区
+  额外放行。匹配 name 前缀或 slug 前缀。
+- **`assets`（决策 0071，2026-09-23 起可用）**：搜的是资产注册表（`pnpm asset:register`
+  登记的 11 个 + 原生 BNB，`blocked` 的不出现），不是链上全量代币。按前缀匹配
+  symbol（精确 > 前缀）→ name（开头 > 任一单词开头，"bnb" 能找到 "Wrapped BNB"）→
+  合约地址（带 `0x` 任意长度，或不带 `0x` 至少 4 位 hex）；大小写不敏感，不做子串匹配。
+  一行形状：
+
+  ```json
+  {
+    "resultType": "asset",
+    "stableId": "eip155:56:0x55d398326f99059ff775485246999027b3197955",
+    "displaySnapshot": {
+      "title": "USDT",
+      "subtitle": "Tether USD",
+      "avatarRef": null,
+      "logo": {
+        "status": "available",
+        "url": "https://api-dev.quant-dinger.cc/v2/market/logos/eip155:56/0x55d398326f99059ff775485246999027b3197955.png",
+        "source": "trustwallet",
+        "observedAt": null
+      },
+      "memberCount": null,
+      "verificationStatus": "pending"
+    },
+    "destination": {
+      "kind": "assetDetail",
+      "assetId": "eip155:56:0x55d398326f99059ff775485246999027b3197955"
+    }
+  }
+  ```
+
+  `stableId` 就是 CAIP-19 `assetId`（注册表的稳定键，决策 0033）；`destination.assetId`
+  重复一份，**用它打开代币页**（`GET /v2/market/assets/{assetId}` 等）。
+  `verificationStatus` 只有注册表 `verified` 的资产是 `verified`（当前只有 USD1），
+  其余 `pending`——这是注册表核验状态，不是社区认证。`avatarRef` 恒 `null`（注册表
+  不存 logo）；代币图片在 **`displaySnapshot.logo`**（决策 0072，S78c 加法，所有域的
+  `displaySnapshot` 都多这个必填键：`users` / `communities` 为 `null`，`assets` 为 Trust Wallet
+  规则 URL——形状、主机白名单与"加载失败 → monogram、不重试"见
+  `docs/frontend-v2-market-api.md` §2a）。排序：匹配等级 → symbol → assetId；分页与其他域一样用 `nextCursor`。
+  没有匹配时是 `status: "available"` + 空 `results`（不是 unavailable）。`assets` 域
+  **不消耗**公共搜索配额。`ASSET_REGISTRY_NOT_COMPOSED` 只在后端没有组合注册表时出现。
+
+- `launch` / `dapps` 返回 **HTTP 200** 且
+  `{"status": "unavailable", "reasonCode": …, "results": [], "nextCursor": null}`，
+  `reasonCode` 分别是 `LAUNCH_PROJECT_DIRECTORY_PENDING`（Launch 有模块无项目目录）与
+  `DAPP_DIRECTORY_NOT_INTEGRATED`（未接入）。两个 seg 可切换但显示各自的 unavailable 说明。
+- **必须用 `destination.kind` 导航**（`publicProfile` / `communityProfile` /
+  `assetDetail`），禁止从 `displaySnapshot` 文案或 ticker 拼路由。`assetDetail` 是唯一
+  带参数（`assetId`）的目的地。
+- 前缀太短、含非法字符、未知 `domain` → `400 INVALID_REQUEST`。
+- `users` / `communities` 与 `GET /v1/discovery/users` 共用同一个公共搜索配额桶，超限
+  `429 RATE_LIMITED`（`retryable: true`）。`assets` 与两个 unavailable 域不消耗配额。
+- 聊天内容不进入本域。
+- 建议：结果页默认落在有结果的域，而不是固定「社区」（走查 2026-09-23）。
+
+### 4.13 `GET /v2/mining/referral/rules` — `referral` 页（只读）
+
+> 前端第 7 步（S7）起 `referral` 页改读 `GET /v2/referral`（见
+> `docs/frontend-v2-mining-api.md` §3.7 与 §4）。本接口保留兼容，形状不变。
+
+```json
+{
+  "configVersion": "referralRulesV1",
+  "effectiveAt": "2026-09-01T00:00:00.000Z",
+  "appliesTo": "miningPower",
+  "levels": [
+    {
+      "level": 1,
+      "boostPercent": "10",
+      "descriptionKey": "mining.referral.level1"
+    },
+    {
+      "level": 2,
+      "boostPercent": "5",
+      "descriptionKey": "mining.referral.level2"
+    },
+    {
+      "level": 3,
+      "boostPercent": "3",
+      "descriptionKey": "mining.referral.level3"
+    },
+    {
+      "level": 4,
+      "boostPercent": "2",
+      "descriptionKey": "mining.referral.level4"
+    },
+    {
+      "level": 5,
+      "boostPercent": "1",
+      "descriptionKey": "mining.referral.level5"
+    }
+  ],
+  "edges": { "status": "unavailable", "reasonCode": "REFERRAL_GRAPH_DEFERRED" },
+  "inviteCode": {
+    "status": "unavailable",
+    "reasonCode": "INVITE_CODE_DEFERRED"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+该接口挂在 `community` 模块下（没有 `mining` 模块）。`boostPercent` 是十进制
+字符串，不要转成 JS number 再格式化。五级比例卡与深度说明用 `levels` 渲染，
+关系数（L1–L5 人数）与邀请码显示 unavailable，"邀请好友"按钮禁用。必须展示
+"只计入 Mining Power，不是收入、佣金或返佣"提示。
+
+## 5. 错误码汇总
+
+| code                             | HTTP | 何时出现                                                                | 前端动作                       |
+| -------------------------------- | ---- | ----------------------------------------------------------------------- | ------------------------------ |
+| `INVALID_REQUEST`                | 400  | 未知字段/header、非法 cursor、cursor+limit 同传、前缀太短               | 修正请求，列表回到第一页       |
+| `AUTH_REQUIRED` / `AUTH_INVALID` | 401  | 缺失或无效 Privy Bearer                                                 | 重新登录                       |
+| `PERMISSION_DENIED`              | 403  | 越权治理、被封禁者加入、owner 退出                                      | 显示无权限，不重试             |
+| `POLICY_BLOCKED`                 | 403  | 产品策略拒绝（本步暂未使用）                                            | 显示说明                       |
+| `NOT_FOUND`                      | 404  | 社区/成员/请求不存在；目标不可发现或被屏蔽；模块未启用                  | 统一"找不到"，不可枚举         |
+| `ACCOUNT_BOOTSTRAP_REQUIRED`     | 409  | Privy 主体没有 LOOP 账号                                                | 先 bootstrap                   |
+| `PROFILE_ACTIVATION_REQUIRED`    | 409  | 账号未完成 LOOP ID 激活                                                 | 跳 `loop-id-setup` 后重试      |
+| `DATA_STALE`                     | 409  | 状态已变（已禁言/已处理/已过期/非成员）；resubmit 时申请不是 `rejected` | 刷新后重新决定，禁止盲重试     |
+| `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                                 | 换新 key 重发                  |
+| `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                                   | 提示用户换 slug，不重试同值    |
+| `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                                    | 升级客户端                     |
+| `VALIDATION_FAILED`              | 422  | 归一化后长度越界                                                        | 提示用户改内容                 |
+| `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                                          | 提示换名，不重试同名           |
+| `ALIAS_BLOCKED`                  | 422  | 社区名撞运营屏蔽词                                                      | 同上                           |
+| `RATE_LIMITED`                   | 429  | 搜索配额耗尽                                                            | 退避后重试                     |
+| `CAPABILITY_UNAVAILABLE`         | 503  | 仓储/cursor 密钥未配置；`kind=contract\|domain`                         | 显示 unavailable，不回退假数据 |
+| `INTERNAL_ERROR`                 | 500  | 服务端异常                                                              | 显示错误，可重试               |
+
+## 6. 联调准备（两个账号）
+
+1. 两个账号各自 `POST /v2/session/bootstrap` → `POST /v2/profile/loop-id` 激活。
+2. 两个账号各自 `PUT /v2/profile/privacy` 设 `discoverable: true`（否则互相
+   搜不到、关注不了）。
+3. 账号 A `POST /v2/communities` 申请社区（得到 `pending`）。
+4. 运维执行 `pnpm community:verify <communityId>`（`NODE_ENV=production` 会被
+   拒绝），社区变 `verified`，同时分配官方群并给每个成员入队 Stream 同步。
+   直接写库造出来的 `verified` 社区没有官方群（决策 0050）：运维执行
+   `pnpm community:provision-channels --confirm` 补齐，之后 `chat` 块先是
+   `syncing`（`COMMUNITY_CHANNEL_NOT_PROVISIONED` → `COMMUNITY_CHANNEL_MEMBER_SYNCING`），
+   worker 跑完本人那条 job 后变 `available`。
+5. 账号 B `GET /v2/search?domain=communities&q=<前缀>` → `POST …/join`。
+6. A 任命 B 为 admin → B 禁言第三个成员 → 成员越权 403 → 封禁后取关与 DM 请求
+   被拒 → cursor 跨账号失效 → 关闭模块后 404。
+
+## 7. 申请审核结果通知（S79b，决策 0073）
+
+运营用 `pnpm community:verify <id>` / `pnpm community:reject <id> --reason "…"` 审核后，
+后端向**当前 owner** 写一条站内通知（`GET /v2/notifications/feed`，类别
+`community.announcement`，**不受偏好开关影响**），并按决策 0067 触发推送（推送受
+`community.announcement` 偏好门控）。feed 行：
+
+```json
+{
+  "type": "community.announcement",
+  "entityRef": "community:3fa85f64-…",
+  "contextRoute": "community-profile",
+  "contextParams": { "communityId": "3fa85f64-…" },
+  "payload": {
+    "event": "community.application.rejected",
+    "communityId": "3fa85f64-…",
+    "communityName": "Frog Holders",
+    "reviewedAt": "2026-09-23T08:00:00.000Z",
+    "reason": "社区名与已上市代币冲突，请换一个名称"
+  },
+  "source": "loop_operator_review",
+  "observedAt": "2026-09-23T08:00:00.000Z"
+}
+```
+
+- `payload.event`：`community.application.verified` 或 `community.application.rejected`；
+  `reason` 在 verified 时为 `null`。
+- 点击 → 打开 `community-profile`（`contextParams.communityId`），再读 4.4 的 `application`
+  作为权威状态；payload 只用于列表展示。
+- 推送 `type`：`community_application_verified` / `community_application_rejected`，
+  `entityRef: community:<id>`，`contextRoute: community-profile`；本地化 key
+  `push.communityApplicationVerified.title/body`、`push.communityApplicationRejected.title/body`
+  （Android 为 `push_communityApplicationVerified_title` 等下划线拼写）。推送里**没有**
+  社区名与原因。
+- 文案建议：verified →「你创建的社区已通过审核」/「{communityName} 现在对所有人可见」；
+  rejected →「你创建的社区未通过审核」/「{communityName}：{reason}」（feed 行内用
+  payload 渲染；推送本地化文案不含变量）。
+- 同一社区被驳回、重新提交、再驳回会产生两条 feed 行（按审计事件去重），不是覆盖。
+
+## App Links / Universal Links 与 `/u/{loopId}`（决策 0090，S98）
+
+这三条路径**不在 `/v2` 下、不进 OpenAPI**，无需任何 header 或鉴权，由系统（Apple
+CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机本身，例如
+`https://api-dev.quant-dinger.cc`、`https://api-staging.quant-dinger.cc`。
+
+| 路径                                          | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                                                                                                                |
+| --------------------------------------------- | ---- | -------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/apple-app-site-association` | 200  | `application/json`         | `public, max-age=3600` | `applinks.details[0] = {appIDs:["867CN6U7W9.com.cywd.loop"], components:[{"/":"/u/*"},{"/":"/c/*"}]}`（`/c/*` 自决策 0091）；配置了 `PASSKEY_IOS_TEAM_ID` 时另有 `webcredentials.apps`（决策 0063） |
+| `GET /.well-known/assetlinks.json`            | 200  | `application/json`         | `public, max-age=3600` | 第一条：`handle_all_urls`、`com.cywd.loop`、debug keystore 指纹 + `ANDROID_RELEASE_CERT_SHA256`；配置了 `PASSKEY_ANDROID_CERT_SHA256` 时第二条是 passkey 声明（决策 0063，不变）                    |
+| `GET /u/{loopId}`                             | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：大写 LOOP ID +「在 LOOP 里添加好友」；`APP_DOWNLOAD_URL` 配置时多一个「下载 LOOP」链接                                                                                         |
+| `GET /u/<格式不对>`                           | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                                                                                                      |
+
+- `/u/{loopId}` 接受 `LOOP-` + 8 位字母数字，大小写不敏感；**不查库**，页面只回显 URL
+  里的 ID，不说明账号是否存在，不含任何用户资料、脚本或第三方资源（CSP `default-src 'none'`）。
+- 装了 App 时系统直接把 `https://<host>/u/LOOP-XXXXXXXX` 交给 App（客户端决策 0104），
+  这个页面不会出现。
+- 无 unavailable 状态：两份关联文件总是发布；passkey 部分缺配置时只是不出现对应字段/声明。
+
+## 语音房分享链接 `/c/{communityId}/room` 与群聊置顶权限（决策 0091，S99b）
+
+### 链接
+
+| 路径                        | 状态 | Content-Type               | Cache-Control          | 内容                                                                                                            |
+| --------------------------- | ---- | -------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GET /c/{communityId}/room` | 200  | `text/html; charset=utf-8` | `public, max-age=3600` | 未装 App 时的落地页：「语音房邀请」+「在 LOOP 里加入这个社区的语音房」；有 `APP_DOWNLOAD_URL` 时多「下载 LOOP」 |
+| `GET /c/<格式不对>/room`    | 404  | `text/html; charset=utf-8` | `no-store`             | 「链接无效」页                                                                                                  |
+
+- 同 `/u/`：不在 `/v2`、不进 OpenAPI、无 header/鉴权、**不查库**；页面**不回显** communityId，
+  不说明社区或语音房是否存在（CSP `default-src 'none'`，`Referrer-Policy: no-referrer`，`X-Robots-Tag: noindex`）。
+- `communityId` 必须是接口返回的规范小写 UUIDv4；大写或其他形状 → 404。
+- AASA 已声明 `/c/*`，装了 App 时 `https://<host>/c/<communityId>/room` 由系统直接交给 App；
+  App 需在 Associated Domains / 路由表里接住 `/c/{communityId}/room`（跳到该社区语音房入口，
+  进房仍走 `GET /v2/communities/{communityId}/voice-rooms` + `POST /v2/voice-rooms/{id}/join`）。
+  Android 侧 `assetlinks.json` 是整域声明，路径过滤在 App manifest 的 intent-filter 里加 `/c/`。
+- 无 unavailable 状态。
+
+### 置顶（Stream 能力，无新接口）
+
+- 社区官方频道里，owner / admin 的 Stream 频道角色为 `channel_moderator`，member 为 `channel_member`；
+  由后端同步（加入/审核通过、设为/撤销管理员、转让、封禁/解封、退出），客户端不写角色。
+- 频道类型 grants 由运维脚本收紧后（主代理决定何时执行），`channel_member` 与应用角色 `user` 不再有任何置顶权限，
+  `channel_moderator` 与 Stream `admin` 持有 `pin-message`。客户端**不要自己按社区角色判断**是否显示「置顶」，只看 Stream 频道的
+  `ownCapabilities` 是否含 `pin-message`（stream_chat_flutter 默认即如此）。
+- 好友群聊与私聊用同一个 `messaging` 类型（主代理 2026-09-28 裁决）：好友群**创建者**为 `channel_moderator`，
+  可置顶；其他群成员不能置顶；私聊里双方都不能置顶。客户端同样只看 `ownCapabilities`。

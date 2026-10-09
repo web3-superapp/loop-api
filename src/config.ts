@@ -1,0 +1,2467 @@
+import { z } from "zod";
+
+import {
+  bscChainId,
+  bscChainReference,
+  bscTestnetChainId,
+  bscTestnetChainReference,
+  parseDecimalAmount,
+  type LaunchChainId,
+  type LaunchChainReference,
+} from "./features/chain/chain-contract.js";
+import type { LaunchContractConfig } from "./integrations/launch/launch-contract-adapter.js";
+import {
+  compareClientVersions,
+  isValidClientVersion,
+} from "./features/session/client-version.js";
+
+const serviceVersion = "0.1.0";
+
+/**
+ * V2 module IDs accepted by V2_MODULES_ENABLED. The order is the registration
+ * order used by `registerV2Routes`. Adding an ID requires a numbered decision.
+ */
+export const v2ModuleIds = Object.freeze([
+  "community",
+  "communication",
+  "search",
+  "market",
+  "chain",
+  "wallet",
+  "swap",
+  "sendApprovals",
+  "launch",
+  "mining",
+  "referral",
+  "notifications",
+  "profile",
+  "watchlist",
+  "security",
+  "settings",
+  "support",
+] as const);
+
+export type V2ModuleId = (typeof v2ModuleIds)[number];
+
+const v2ModuleIdSet: ReadonlySet<string> = new Set(v2ModuleIds);
+const v2ConfigVersionPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const rfc3339WithOffsetPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+const booleanString = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true");
+
+const positiveIntegerString = (minimum: number, maximum: number) =>
+  z.coerce.number().int().min(minimum).max(maximum);
+
+const blankStringToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
+const optionalCredential = (maximumLength: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    z.string().trim().min(1).max(maximumLength).optional(),
+  );
+
+const optionalOpaqueSecret = (minimumLength: number, maximumLength: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    z.string().min(minimumLength).max(maximumLength).optional(),
+  );
+
+const optionalPositiveIntegerString = (minimum: number, maximum: number) =>
+  z.preprocess(
+    blankStringToUndefined,
+    positiveIntegerString(minimum, maximum).optional(),
+  );
+
+/**
+ * Operator evidence reference for the Decision 0005/0032 audio-room role
+ * pre-condition (Decision 0039). It is published verbatim in
+ * `voiceRooms.evidence.reference` and in one startup log line, so it must be
+ * a short printable label (an archive name, never a URL with credentials and
+ * never a secret): 1–120 characters after trimming, no control, format,
+ * surrogate, private-use, or unassigned code points.
+ */
+const evidenceReferencePattern = /^\P{C}+$/u;
+
+const optionalEvidenceReference = z.preprocess(
+  blankStringToUndefined,
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(evidenceReferencePattern, {
+      message: "must not contain control or non-printable characters",
+    })
+    .optional(),
+);
+
+/**
+ * Launch chain slot keys shared by the API and worker processes (Decision
+ * 0038). `LAUNCH_CHAIN_ID=56` reuses the primary chain configuration and
+ * refuses every `LAUNCH_BSC_*` override; `97` reads its own endpoint list.
+ */
+const launchChainEnvironmentShape = {
+  LAUNCH_CHAIN_ID: z.enum(["56", "97"]),
+  LAUNCH_BSC_RPC_URLS: optionalCredential(4_096),
+  LAUNCH_BSC_CONFIRMATIONS: optionalPositiveIntegerString(1, 1_000),
+  LAUNCH_BSC_REORG_DEPTH_BLOCKS: optionalPositiveIntegerString(1, 1_000),
+  // Decision 0076: the Launch contract on the launch slot. All four blank, or
+  // all four set; anything in between refuses to boot.
+  LAUNCH_CONTRACT_ADDRESS: optionalCredential(64),
+  LAUNCH_CONTRACT_VERSION: optionalCredential(64),
+  LAUNCH_CONTRACT_START_BLOCK: optionalCredential(32),
+  LAUNCH_USD1_ADDRESS: optionalCredential(64),
+  HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
+  HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
+} as const;
+
+function launchChainEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof launchChainEnvironmentShape, string | undefined> {
+  return {
+    LAUNCH_CHAIN_ID: environment["LAUNCH_CHAIN_ID"] ?? "56",
+    LAUNCH_BSC_RPC_URLS: environment["LAUNCH_BSC_RPC_URLS"],
+    LAUNCH_BSC_CONFIRMATIONS: environment["LAUNCH_BSC_CONFIRMATIONS"],
+    LAUNCH_BSC_REORG_DEPTH_BLOCKS: environment["LAUNCH_BSC_REORG_DEPTH_BLOCKS"],
+    LAUNCH_CONTRACT_ADDRESS: environment["LAUNCH_CONTRACT_ADDRESS"],
+    LAUNCH_CONTRACT_VERSION: environment["LAUNCH_CONTRACT_VERSION"],
+    LAUNCH_CONTRACT_START_BLOCK: environment["LAUNCH_CONTRACT_START_BLOCK"],
+    LAUNCH_USD1_ADDRESS: environment["LAUNCH_USD1_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_CODE_HASH:
+      environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+  };
+}
+
+const launchContractKeys = [
+  "LAUNCH_CONTRACT_ADDRESS",
+  "LAUNCH_CONTRACT_VERSION",
+  "LAUNCH_CONTRACT_START_BLOCK",
+  "LAUNCH_USD1_ADDRESS",
+] as const;
+
+type LaunchContractEnvironment = {
+  readonly [Key in (typeof launchContractKeys)[number]]?: string | undefined;
+};
+
+/**
+ * Decision 0076: the four Launch contract keys are one unit. A partial set
+ * would publish a contract whose settlement token or start block is unknown,
+ * so it refuses to boot and names every missing key (the 0038 discipline).
+ */
+function refineLaunchContractEnvironment(
+  value: LaunchContractEnvironment,
+  context: z.RefinementCtx,
+): void {
+  const present = launchContractKeys.filter((key) => value[key] !== undefined);
+  if (present.length === 0 || present.length === launchContractKeys.length) {
+    return;
+  }
+  for (const key of launchContractKeys) {
+    if (value[key] === undefined) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "is required when any of LAUNCH_CONTRACT_ADDRESS, LAUNCH_CONTRACT_VERSION, LAUNCH_CONTRACT_START_BLOCK, LAUNCH_USD1_ADDRESS is set",
+        path: [key],
+      });
+    }
+  }
+}
+
+function refineLaunchChainEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
+    readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
+    readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.LAUNCH_CHAIN_ID !== "56") {
+    return;
+  }
+  for (const key of [
+    "LAUNCH_BSC_RPC_URLS",
+    "LAUNCH_BSC_CONFIRMATIONS",
+    "LAUNCH_BSC_REORG_DEPTH_BLOCKS",
+  ] as const) {
+    if (value[key] !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "must be blank while LAUNCH_CHAIN_ID=56: the launch slot reuses the primary BSC configuration",
+        path: [key],
+      });
+    }
+  }
+}
+
+function refineHooksLaunchFactoryEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+    readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const address = value.HOOKS_LAUNCH_FACTORY_ADDRESS;
+  const codeHash = value.HOOKS_LAUNCH_FACTORY_CODE_HASH;
+  if (address === undefined && codeHash === undefined) return;
+  if (address === undefined || codeHash === undefined) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH must be configured together",
+      path: [
+        address === undefined
+          ? "HOOKS_LAUNCH_FACTORY_ADDRESS"
+          : "HOOKS_LAUNCH_FACTORY_CODE_HASH",
+      ],
+    });
+  }
+  if (value.LAUNCH_CHAIN_ID !== "97") {
+    context.addIssue({
+      code: "custom",
+      message: "is permitted only when LAUNCH_CHAIN_ID=97",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 20-byte contract address",
+      path: ["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    });
+  }
+  if (codeHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(codeHash)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 32-byte runtime code hash",
+      path: ["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    });
+  }
+}
+
+/**
+ * Market Provider keys shared by the API and worker processes (Decision 0034).
+ * DexScreener needs no credential and is on by default; GoPlus needs its key
+ * pair; GeckoTerminal stays off until its commercial terms are verified.
+ * Throttles can only be lowered below each Provider's documented limit.
+ */
+const marketEnvironmentShape = {
+  MARKET_PROVIDER_DEXSCREENER_ENABLED: booleanString,
+  MARKET_PROVIDER_GECKOTERMINAL_ENABLED: booleanString,
+  MARKET_DEXSCREENER_BUDGET_API: positiveIntegerString(1, 300),
+  MARKET_DEXSCREENER_BUDGET_WORKER: positiveIntegerString(1, 300),
+  MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 30),
+  /**
+   * Worker-process share of the GeckoTerminal limit (Decision 0074). Both
+   * processes throttle themselves; the sum is not refined to 30 because the
+   * API already yields `stale` facts under a Provider 429.
+   */
+  MARKET_GECKOTERMINAL_BUDGET_WORKER: positiveIntegerString(1, 30),
+  MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 300),
+  MARKET_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
+  MARKET_SECURITY_TTL_SECONDS: positiveIntegerString(60, 86_400),
+  MARKET_CANDLES_TTL_SECONDS: positiveIntegerString(15, 3_600),
+  /** Row sparkline cache TTL (Decision 0074); read by the API, refreshed by the worker lane. */
+  MARKET_SPARKLINE_TTL_SECONDS: positiveIntegerString(60, 3_600),
+  MARKET_STALE_GRACE_SECONDS: positiveIntegerString(0, 86_400),
+  MARKET_UNLISTED_PRICE_TTL_SECONDS: positiveIntegerString(5, 3_600),
+  MARKET_UNLISTED_METADATA_TTL_SECONDS: positiveIntegerString(60, 86_400),
+  GOPLUS_APP_KEY: optionalCredential(255),
+  GOPLUS_APP_SECRET: optionalOpaqueSecret(1, 4_096),
+} as const;
+
+/**
+ * Community AI Provider keys (Decision 0066, amended 2026-09-23). The key is
+ * `COMMUNITY_AI_API_KEY`, falling back to `ANTHROPIC_API_KEY`; without either
+ * the whole module is `null` here, the `communityAi` capability stays
+ * `deferred`, and every AI route answers CAPABILITY_UNAVAILABLE. There is no
+ * fixture answer and no second Provider. `COMMUNITY_AI_BASE_URL` selects the
+ * Anthropic-compatible endpoint (origin only; the adapter appends
+ * `/v1/messages`), defaulting to Anthropic itself.
+ */
+export const defaultCommunityAiBaseUrl = "https://api.anthropic.com";
+
+const communityAiEnvironmentShape = {
+  ANTHROPIC_API_KEY: optionalOpaqueSecret(8, 512),
+  COMMUNITY_AI_API_KEY: optionalOpaqueSecret(8, 512),
+  COMMUNITY_AI_BASE_URL: z.string().trim().min(1).max(2_048),
+  COMMUNITY_AI_MODEL: z.string().trim().min(1).max(128),
+  COMMUNITY_AI_TIMEOUT_MS: positiveIntegerString(1_000, 60_000),
+  COMMUNITY_AI_BRIEF_TIMEOUT_MS: positiveIntegerString(5_000, 120_000),
+  COMMUNITY_AI_MAX_OUTPUT_TOKENS: positiveIntegerString(64, 4_096),
+  COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: positiveIntegerString(1, 60),
+  COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: positiveIntegerString(1, 10_000),
+  COMMUNITY_AI_BRIEF_CACHE_SECONDS: positiveIntegerString(60, 86_400),
+} as const;
+
+function communityAiEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof communityAiEnvironmentShape, string | undefined> {
+  return {
+    ANTHROPIC_API_KEY: environment["ANTHROPIC_API_KEY"],
+    COMMUNITY_AI_API_KEY: environment["COMMUNITY_AI_API_KEY"],
+    COMMUNITY_AI_BASE_URL:
+      environment["COMMUNITY_AI_BASE_URL"] ?? defaultCommunityAiBaseUrl,
+    COMMUNITY_AI_MODEL: environment["COMMUNITY_AI_MODEL"] ?? "claude-sonnet-5",
+    // Below the 15 s HTTP deadlines with room for knowledge assembly, so a
+    // slow model ends in a 503, not a closed socket (Decision 0066 (2)).
+    COMMUNITY_AI_TIMEOUT_MS: environment["COMMUNITY_AI_TIMEOUT_MS"] ?? "11000",
+    // The background brief answers no request, so it is not bound by the HTTP
+    // deadlines and gets a ceiling of its own (S76c).
+    COMMUNITY_AI_BRIEF_TIMEOUT_MS:
+      environment["COMMUNITY_AI_BRIEF_TIMEOUT_MS"] ?? "30000",
+    COMMUNITY_AI_MAX_OUTPUT_TOKENS:
+      environment["COMMUNITY_AI_MAX_OUTPUT_TOKENS"] ?? "800",
+    COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE:
+      environment["COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE"] ?? "6",
+    COMMUNITY_AI_COMMUNITY_DAILY_LIMIT:
+      environment["COMMUNITY_AI_COMMUNITY_DAILY_LIMIT"] ?? "200",
+    COMMUNITY_AI_BRIEF_CACHE_SECONDS:
+      environment["COMMUNITY_AI_BRIEF_CACHE_SECONDS"] ?? "3600",
+  };
+}
+
+/**
+ * The Provider origin: https, no credentials, no path, no query, no fragment.
+ * A trailing slash is normalised away (`URL.origin` also lower-cases the host
+ * and drops a default port), so `https://api.onlyrouter.ai/` and
+ * `https://api.onlyrouter.ai` are the same configuration. A path such as
+ * `/v1` is refused rather than silently doubled into `/v1/v1/messages`.
+ */
+function parseCommunityAiBaseUrl(fieldName: string, value: string): string {
+  const url = parseUrl(fieldName, value);
+  if (url.protocol !== "https:") {
+    throw new ConfigurationError([`${fieldName}: protocol must be https`]);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([`${fieldName}: credentials are not allowed`]);
+  }
+  if (url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new ConfigurationError([
+      `${fieldName}: must be an origin without path, query, or fragment`,
+    ]);
+  }
+  return url.origin;
+}
+
+function parseCommunityAiConfig(data: {
+  readonly ANTHROPIC_API_KEY?: string | undefined;
+  readonly COMMUNITY_AI_API_KEY?: string | undefined;
+  readonly COMMUNITY_AI_BASE_URL: string;
+  readonly COMMUNITY_AI_MODEL: string;
+  readonly COMMUNITY_AI_TIMEOUT_MS: number;
+  readonly COMMUNITY_AI_BRIEF_TIMEOUT_MS: number;
+  readonly COMMUNITY_AI_MAX_OUTPUT_TOKENS: number;
+  readonly COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE: number;
+  readonly COMMUNITY_AI_COMMUNITY_DAILY_LIMIT: number;
+  readonly COMMUNITY_AI_BRIEF_CACHE_SECONDS: number;
+}): CommunityAiConfig | null {
+  // The endpoint is validated even when no key is present: a malformed
+  // COMMUNITY_AI_BASE_URL is a startup error, not something a later key
+  // discovers.
+  const baseUrl = parseCommunityAiBaseUrl(
+    "COMMUNITY_AI_BASE_URL",
+    data.COMMUNITY_AI_BASE_URL,
+  );
+  const apiKey = data.COMMUNITY_AI_API_KEY ?? data.ANTHROPIC_API_KEY;
+  if (apiKey === undefined) {
+    return null;
+  }
+  return Object.freeze({
+    apiKey,
+    baseUrl,
+    model: data.COMMUNITY_AI_MODEL,
+    timeoutMs: data.COMMUNITY_AI_TIMEOUT_MS,
+    briefTimeoutMs: data.COMMUNITY_AI_BRIEF_TIMEOUT_MS,
+    maximumOutputTokens: data.COMMUNITY_AI_MAX_OUTPUT_TOKENS,
+    userRateLimitPerMinute: data.COMMUNITY_AI_USER_RATE_LIMIT_PER_MINUTE,
+    communityDailyLimit: data.COMMUNITY_AI_COMMUNITY_DAILY_LIMIT,
+    briefCacheSeconds: data.COMMUNITY_AI_BRIEF_CACHE_SECONDS,
+  });
+}
+
+function refineMarketEnvironment(
+  value: {
+    readonly GOPLUS_APP_KEY?: string | undefined;
+    readonly GOPLUS_APP_SECRET?: string | undefined;
+    readonly MARKET_DEXSCREENER_BUDGET_API: number;
+    readonly MARKET_DEXSCREENER_BUDGET_WORKER: number;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.MARKET_DEXSCREENER_BUDGET_API +
+      value.MARKET_DEXSCREENER_BUDGET_WORKER >
+    300
+  ) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "MARKET_DEXSCREENER_BUDGET_API + MARKET_DEXSCREENER_BUDGET_WORKER must not exceed the documented 300 requests per minute",
+      path: ["MARKET_DEXSCREENER_BUDGET_API"],
+    });
+  }
+  if (
+    (value.GOPLUS_APP_KEY !== undefined) !==
+    (value.GOPLUS_APP_SECRET !== undefined)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "GOPLUS_APP_KEY and GOPLUS_APP_SECRET must be configured together",
+      path: ["GOPLUS_APP_KEY"],
+    });
+  }
+}
+
+const environmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]),
+    HOST: z.string().trim().min(1).max(255),
+    PORT: positiveIntegerString(1, 65_535),
+    PUBLIC_BASE_URL: z.string().url(),
+    /**
+     * Decision 0089 §8 (S96c): `proxy` publishes every `logo.url` as this
+     * API's logo proxy; `upstream` publishes the Decision 0072 origin URL for
+     * clients (TestFlight build 7) that refuse any other logo host. Anything
+     * else refuses to start.
+     */
+    TOKEN_LOGO_URL_MODE: z.enum(["proxy", "upstream"]),
+    API_DOCS_ENABLED: booleanString,
+    TRUST_PROXY: booleanString,
+    LOG_LEVEL: z.enum([
+      "fatal",
+      "error",
+      "warn",
+      "info",
+      "debug",
+      "trace",
+      "silent",
+    ]),
+    V2_SESSION_ENABLED: booleanString,
+    V2_MODULES_ENABLED: optionalCredential(1_024),
+    V2_CLIENT_POLICY_CONFIG_VERSION: optionalCredential(128),
+    V2_CLIENT_POLICY_EFFECTIVE_AT: optionalCredential(64),
+    V2_CLIENT_POLICY_MIN_VERSION_IOS: optionalCredential(64),
+    V2_CLIENT_POLICY_MIN_VERSION_ANDROID: optionalCredential(64),
+    V2_CLIENT_POLICY_STORE_URL_IOS: optionalCredential(2_048),
+    V2_CLIENT_POLICY_STORE_URL_ANDROID: optionalCredential(2_048),
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: optionalCredential(64),
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: optionalCredential(64),
+    V2_TERMS_REQUIRED_VERSION: optionalCredential(128),
+    V2_ALIAS_BLOCKED_TERMS: optionalCredential(8_192),
+    V2_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    V2_COMMUNITY_CHANNEL_MEMBER_CAP: positiveIntegerString(1, 200_000),
+    PRIVY_APP_ID: optionalCredential(255),
+    PRIVY_APP_SECRET: optionalCredential(4_096),
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
+    STREAM_API_KEY: optionalCredential(255),
+    STREAM_API_SECRET: optionalOpaqueSecret(1, 4_096),
+    STREAM_TOKEN_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    STREAM_TOKEN_USER_LIMIT_PER_MINUTE: positiveIntegerString(1, 10_000),
+    STREAM_TOKEN_IP_LIMIT_PER_MINUTE: positiveIntegerString(1, 100_000),
+    STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF: optionalEvidenceReference,
+    SOCIAL_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    SOCIAL_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    PERP_READ_CURSOR_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    HYPERLIQUID_PRIVATE_READS_ENABLED: booleanString,
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
+    BSC_RPC_URLS: optionalCredential(4_096),
+    BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
+    BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    BSC_LOG_ADDRESS_CHUNK_SIZE: positiveIntegerString(1, 100),
+    BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
+    BSC_USD1_VERIFIED: booleanString,
+    BSC_WRITES_ENABLED: booleanString,
+    BSC_WRITE_CANARY_ASSETS: optionalCredential(4_096),
+    BSC_WRITE_CANARY_MAX_USD: z.string().trim().min(1).max(32),
+    BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: optionalCredential(4_096),
+    BSC_WRITE_CANARY_DAILY_MAX_USD: optionalCredential(32),
+    LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
+    WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
+    MINING_MOCK_HOLDINGS_ENABLED: booleanString,
+    PASSKEY_ANDROID_PACKAGE: optionalCredential(255),
+    PASSKEY_ANDROID_CERT_SHA256: optionalCredential(4_096),
+    PASSKEY_IOS_TEAM_ID: optionalCredential(32),
+    PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
+    ANDROID_RELEASE_CERT_SHA256: optionalCredential(1_024),
+    APP_DOWNLOAD_URL: optionalCredential(2_048),
+    ...launchChainEnvironmentShape,
+    ...marketEnvironmentShape,
+    ...communityAiEnvironmentShape,
+    DATABASE_URL: z.string().trim().min(1),
+    DATABASE_POOL_MAX: positiveIntegerString(1, 50),
+    DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
+    DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+    // Decision 0085: in-memory reuse of one Launch sale snapshot (ms); 0
+    // disables it. Default 1500, about half a BSC block interval.
+    LAUNCH_SNAPSHOT_CACHE_TTL_MS: positiveIntegerString(0, 10_000),
+    // Decision 0077 S83b7b: publish the overview `graduated` available
+    // branch. `off` (default) keeps the pre-S83b7b bytes for clients that
+    // only decode the unavailable branch. Anything but off/on refuses boot.
+    LAUNCH_GRADUATED_LIST: z.enum(["off", "on"]),
+  })
+  .superRefine((value, context) => {
+    refineMarketEnvironment(value, context);
+    refineLaunchChainEnvironment(value, context);
+    refineLaunchContractEnvironment(value, context);
+    refineHooksLaunchFactoryEnvironment(value, context);
+    // Decision 0061: the seeded holdings are a Development instrument. A
+    // production process refuses to start rather than compute a number from
+    // a balance nobody observed on chain.
+    if (value.MINING_MOCK_HOLDINGS_ENABLED && value.NODE_ENV === "production") {
+      context.addIssue({
+        code: "custom",
+        message:
+          "MINING_MOCK_HOLDINGS_ENABLED must not be set under NODE_ENV=production",
+        path: ["MINING_MOCK_HOLDINGS_ENABLED"],
+      });
+    }
+    if (value.BSC_WRITES_ENABLED) {
+      if (value.BSC_RPC_URLS === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "BSC_WRITES_ENABLED requires BSC_RPC_URLS",
+          path: ["BSC_WRITES_ENABLED"],
+        });
+      }
+      if (value.BSC_WRITE_CANARY_ASSETS === undefined) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "BSC_WRITES_ENABLED requires a BSC_WRITE_CANARY_ASSETS allowlist",
+          path: ["BSC_WRITE_CANARY_ASSETS"],
+        });
+      }
+    }
+    const hasAppId = value.PRIVY_APP_ID !== undefined;
+    const hasAppSecret = value.PRIVY_APP_SECRET !== undefined;
+
+    if (hasAppId !== hasAppSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "PRIVY_APP_ID and PRIVY_APP_SECRET must be configured together",
+        path: ["PRIVY_APP_ID"],
+      });
+    }
+
+    const hasStreamApiKey = value.STREAM_API_KEY !== undefined;
+    const hasStreamApiSecret = value.STREAM_API_SECRET !== undefined;
+
+    if (hasStreamApiKey !== hasStreamApiSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "STREAM_API_KEY and STREAM_API_SECRET must be configured together",
+        path: ["STREAM_API_KEY"],
+      });
+    }
+
+    const hasSocialCursorSecret = value.SOCIAL_CURSOR_HMAC_SECRET !== undefined;
+    const hasSocialQuotaSecret = value.SOCIAL_QUOTA_HMAC_SECRET !== undefined;
+
+    if (hasSocialCursorSecret !== hasSocialQuotaSecret) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "SOCIAL_CURSOR_HMAC_SECRET and SOCIAL_QUOTA_HMAC_SECRET must be configured together",
+        path: ["SOCIAL_CURSOR_HMAC_SECRET"],
+      });
+    }
+
+    const versionPolicyKeys = [
+      "V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      "V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      "V2_CLIENT_POLICY_STORE_URL_IOS",
+      "V2_CLIENT_POLICY_STORE_URL_ANDROID",
+    ] as const;
+    const configuredVersionPolicyKeys = versionPolicyKeys.filter(
+      (key) => value[key] !== undefined,
+    );
+    const versionPolicyConfigured =
+      configuredVersionPolicyKeys.length === versionPolicyKeys.length;
+
+    if (configuredVersionPolicyKeys.length > 0 && !versionPolicyConfigured) {
+      context.addIssue({
+        code: "custom",
+        message: `${versionPolicyKeys.join(", ")} must be configured together`,
+        path: ["V2_CLIENT_POLICY_MIN_VERSION_IOS"],
+      });
+    }
+
+    for (const key of [
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID",
+    ] as const) {
+      if (value[key] !== undefined && !versionPolicyConfigured) {
+        context.addIssue({
+          code: "custom",
+          message: "requires the complete V2 client version policy",
+          path: [key],
+        });
+      }
+    }
+
+    const anyGateConfigured =
+      configuredVersionPolicyKeys.length > 0 ||
+      value.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS !== undefined ||
+      value.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID !== undefined ||
+      value.V2_TERMS_REQUIRED_VERSION !== undefined;
+    if (
+      anyGateConfigured &&
+      (value.V2_CLIENT_POLICY_CONFIG_VERSION === undefined ||
+        value.V2_CLIENT_POLICY_EFFECTIVE_AT === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "V2_CLIENT_POLICY_CONFIG_VERSION and V2_CLIENT_POLICY_EFFECTIVE_AT are required whenever a client policy gate is configured",
+        path: ["V2_CLIENT_POLICY_CONFIG_VERSION"],
+      });
+    }
+
+    for (const key of [
+      "V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      "V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS",
+      "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID",
+    ] as const) {
+      const candidate = value[key];
+      if (candidate !== undefined && !isValidClientVersion(candidate)) {
+        context.addIssue({
+          code: "custom",
+          message: "must be a valid SemVer 2.0 version",
+          path: [key],
+        });
+      }
+    }
+
+    if (
+      value.V2_CLIENT_POLICY_CONFIG_VERSION !== undefined &&
+      !v2ConfigVersionPattern.test(value.V2_CLIENT_POLICY_CONFIG_VERSION)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        path: ["V2_CLIENT_POLICY_CONFIG_VERSION"],
+      });
+    }
+
+    if (
+      value.V2_CLIENT_POLICY_EFFECTIVE_AT !== undefined &&
+      (!rfc3339WithOffsetPattern.test(value.V2_CLIENT_POLICY_EFFECTIVE_AT) ||
+        !Number.isFinite(Date.parse(value.V2_CLIENT_POLICY_EFFECTIVE_AT)))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "must be an RFC 3339 date-time with an explicit timezone",
+        path: ["V2_CLIENT_POLICY_EFFECTIVE_AT"],
+      });
+    }
+
+    if (value.HYPERLIQUID_PRIVATE_READS_ENABLED) {
+      if (!hasAppId || !hasAppSecret) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Hyperliquid private reads require configured Privy credentials",
+          path: ["HYPERLIQUID_PRIVATE_READS_ENABLED"],
+        });
+      }
+      if (value.PERP_READ_CURSOR_HMAC_SECRET === undefined) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Hyperliquid private reads require PERP_READ_CURSOR_HMAC_SECRET",
+          path: ["PERP_READ_CURSOR_HMAC_SECRET"],
+        });
+      }
+      if (value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Hyperliquid private reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
+          path: ["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+        });
+      }
+    }
+  });
+
+const reconciliationWorkerEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]),
+    LOG_LEVEL: z.enum([
+      "fatal",
+      "error",
+      "warn",
+      "info",
+      "debug",
+      "trace",
+      "silent",
+    ]),
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED: booleanString,
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: booleanString,
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: booleanString,
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: booleanString,
+    COMMUNITY_CHANNEL_SYNC_ENABLED: booleanString,
+    STREAM_API_KEY: optionalCredential(255),
+    STREAM_API_SECRET: optionalOpaqueSecret(1, 4_096),
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: optionalOpaqueSecret(32, 4_096),
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE: positiveIntegerString(1, 1_200),
+    BSC_INDEXER_ENABLED: booleanString,
+    LAUNCH_INDEXER_ENABLED: booleanString,
+    BSC_INDEXER_START_BLOCK: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE: positiveIntegerString(1, 1_000),
+    BSC_RPC_URLS: optionalCredential(4_096),
+    BSC_CONFIRMATIONS: positiveIntegerString(1, 1_000),
+    BSC_REORG_DEPTH_BLOCKS: positiveIntegerString(1, 1_000),
+    BSC_LOG_ADDRESS_CHUNK_SIZE: positiveIntegerString(1, 100),
+    ALERT_EVALUATOR_ENABLED: booleanString,
+    ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
+    MARKET_SPARKLINE_WARM_ENABLED: booleanString,
+    MARKET_SPARKLINE_WARM_INTERVAL_MS: positiveIntegerString(1_000, 60_000),
+    WALLET_INTENT_RECONCILE_ENABLED: booleanString,
+    MINING_SNAPSHOT_ENABLED: booleanString,
+    MINING_MOCK_HOLDINGS_ENABLED: booleanString,
+    PRIVY_APP_ID: optionalCredential(255),
+    PRIVY_APP_SECRET: optionalCredential(4_096),
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
+    ...launchChainEnvironmentShape,
+    ...marketEnvironmentShape,
+    DATABASE_URL: z.string().trim().min(1),
+    DATABASE_POOL_MAX: positiveIntegerString(1, 50),
+    DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
+    DATABASE_STATEMENT_TIMEOUT_MS: positiveIntegerString(250, 60_000),
+  })
+  .superRefine((value, context) => {
+    refineMarketEnvironment(value, context);
+    refineLaunchChainEnvironment(value, context);
+    refineLaunchContractEnvironment(value, context);
+    // Decision 0061: the seeded holdings are a Development instrument. A
+    // production process refuses to start rather than compute a number from
+    // a balance nobody observed on chain.
+    if (value.MINING_MOCK_HOLDINGS_ENABLED && value.NODE_ENV === "production") {
+      context.addIssue({
+        code: "custom",
+        message:
+          "MINING_MOCK_HOLDINGS_ENABLED must not be set under NODE_ENV=production",
+        path: ["MINING_MOCK_HOLDINGS_ENABLED"],
+      });
+    }
+    // Privy credentials only matter to this process when the wallet-intent
+    // lane is on; a partial pair is then an error, otherwise it is ignored.
+    if (
+      value.WALLET_INTENT_RECONCILE_ENABLED &&
+      (value.PRIVY_APP_ID !== undefined) !==
+        (value.PRIVY_APP_SECRET !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "PRIVY_APP_ID and PRIVY_APP_SECRET must be configured together",
+        path: ["PRIVY_APP_ID"],
+      });
+    }
+    if (
+      value.WALLET_INTENT_RECONCILE_ENABLED &&
+      value.BSC_RPC_URLS === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The wallet-intent reconciliation lane requires BSC_RPC_URLS",
+        path: ["WALLET_INTENT_RECONCILE_ENABLED"],
+      });
+    }
+    if (
+      value.ALERT_EVALUATOR_ENABLED &&
+      !value.MARKET_PROVIDER_DEXSCREENER_ENABLED
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "The alert evaluator lane requires MARKET_PROVIDER_DEXSCREENER_ENABLED",
+        path: ["ALERT_EVALUATOR_ENABLED"],
+      });
+    }
+    if (value.BSC_INDEXER_ENABLED && value.BSC_RPC_URLS === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "The BSC indexer lane requires BSC_RPC_URLS",
+        path: ["BSC_INDEXER_ENABLED"],
+      });
+    }
+    if (
+      value.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET === undefined &&
+      (value.HYPERLIQUID_RECONCILIATION_READS_ENABLED ||
+        value.HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: value.HYPERLIQUID_RECONCILIATION_READS_ENABLED
+          ? "Hyperliquid reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"
+          : "Hyperliquid Spot reconciliation reads require HYPERLIQUID_INFO_QUOTA_HMAC_SECRET",
+        path: ["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+      });
+    }
+    if (
+      (value.STREAM_API_KEY !== undefined) !==
+      (value.STREAM_API_SECRET !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "STREAM_API_KEY and STREAM_API_SECRET must be configured together",
+        path: ["STREAM_API_KEY"],
+      });
+    }
+    if (
+      value.COMMUNITY_CHANNEL_SYNC_ENABLED &&
+      (value.STREAM_API_KEY === undefined ||
+        value.STREAM_API_SECRET === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "COMMUNITY_CHANNEL_SYNC_ENABLED requires STREAM_API_KEY and STREAM_API_SECRET",
+        path: ["COMMUNITY_CHANNEL_SYNC_ENABLED"],
+      });
+    }
+  });
+
+export interface PrivyConfig {
+  readonly appId: string;
+  readonly appSecret: string;
+}
+
+export interface StreamConfig {
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface StreamTokenQuotaConfig {
+  readonly hmacSecret: string;
+  readonly policyVersion: "stream_token_v1";
+  readonly windowDurationSeconds: 60;
+  readonly userCapacity: number;
+  readonly ipCapacity: number;
+}
+
+export interface SocialConfig {
+  readonly cursorHmacSecret: string;
+  readonly quotaHmacSecret: string;
+  readonly cursorTtlSeconds: 600;
+}
+
+export interface PerpReadCursorConfig {
+  readonly hmacSecret: string;
+  readonly ttlSeconds: 600;
+}
+
+export interface HyperliquidPrivateReadsConfig {
+  readonly quotaHmacSecret: string;
+  readonly policyVersion: "hyperliquid_info_v1";
+  readonly windowDurationSeconds: 60;
+  readonly weightCapacity: number;
+}
+
+export interface V2PlatformValues<T> {
+  readonly ios: T;
+  readonly android: T;
+}
+
+/**
+ * Two version floors per platform. A client below `forceUpdateBelow` must
+ * update before continuing; a client below `minimumSupportedVersions` but at
+ * or above `forceUpdateBelow` sees a dismissible update prompt. When no
+ * explicit hard floor is configured, both floors are the same value.
+ */
+export interface V2ClientVersionPolicyConfig {
+  readonly minimumSupportedVersions: V2PlatformValues<string>;
+  readonly forceUpdateBelow: V2PlatformValues<string>;
+  readonly storeUrls: V2PlatformValues<string>;
+}
+
+export interface V2ClientPolicyConfig {
+  readonly configVersion: string | null;
+  readonly effectiveAt: string | null;
+  readonly versionPolicy: V2ClientVersionPolicyConfig | null;
+  readonly termsRequiredVersion: string | null;
+}
+
+/**
+ * BSC read configuration. Present only when at least one RPC endpoint URL is
+ * configured; absent means every chain read fails closed. A present value is
+ * not proof that an endpoint is reachable or that it actually serves chain 56:
+ * `eth_chainId` is verified at runtime before any read is published.
+ */
+export interface BscChainConfig {
+  readonly chainId: "eip155:56";
+  readonly chainReference: 56;
+  readonly rpcUrls: readonly string[];
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+  /**
+   * Token addresses per `eth_getLogs` request (Decision 0078,
+   * `BSC_LOG_ADDRESS_CHUNK_SIZE`, 1-100, default 8).
+   */
+  readonly logAddressChunkSize: number;
+  /** Present only when the address is configured and independently verified. */
+  readonly usd1TokenAddress: string | null;
+}
+
+/**
+ * The `launch` chain slot (Decision 0038). Always present: with
+ * `LAUNCH_CHAIN_ID=56` it mirrors the primary slot (`sharedWithPrimary`), with
+ * `97` it names the BSC testnet and carries its own endpoint list, which may
+ * be empty (the slot then fails closed with LAUNCH_CHAIN_RPC_NOT_CONFIGURED).
+ * Like `BscChainConfig`, a present endpoint is not proof of reachability or of
+ * the chain it serves; `eth_chainId` is verified at runtime.
+ */
+export interface LaunchChainConfig {
+  readonly chainId: LaunchChainId;
+  readonly chainReference: LaunchChainReference;
+  readonly rpcUrls: readonly string[];
+  readonly confirmations: number;
+  readonly reorgDepthBlocks: number;
+  /** Always the primary `BSC_LOG_ADDRESS_CHUNK_SIZE` (Decision 0078). */
+  readonly logAddressChunkSize: number;
+  readonly sharedWithPrimary: boolean;
+}
+
+/**
+ * Native amount held back from `spendableBalance` so a later transfer or Swap
+ * can still pay gas. It is a display-side product policy, not a chain fact,
+ * and is published with its own config version.
+ */
+export interface WalletGasReserveConfig {
+  readonly configVersion: "walletGasReserveV1";
+  readonly decimalBnb: string;
+  readonly rawWei: string;
+}
+
+/**
+ * Passkey relying-party association (Decision 0063). The API origin is the
+ * relying party for LOOP passkeys, so it must publish the two static files the
+ * platform credential managers fetch before they will bind a credential
+ * created under this origin to the app.
+ *
+ * The two halves are independent and both are fail-closed: without signing
+ * fingerprints there is no `assetlinks.json`, and without an Apple Team ID
+ * there is no `apple-app-site-association`. An empty or placeholder file would
+ * let a wrong association look configured, which is worse than a 404.
+ */
+export interface PasskeyRelyingPartyConfig {
+  readonly android: PasskeyAndroidConfig | null;
+  readonly ios: PasskeyIosConfig | null;
+}
+
+export interface PasskeyAndroidConfig {
+  readonly packageName: string;
+  /**
+   * Signing-certificate SHA-256 fingerprints, uppercase hex byte pairs joined
+   * by colons, in configuration order. Every keystore that signs a build which
+   * must reach these credentials needs an entry (debug, profile, release).
+   */
+  readonly certificateFingerprints: readonly string[];
+}
+
+export interface PasskeyIosConfig {
+  /** `<TEAMID>.<BUNDLEID>`, the value Apple calls an application identifier. */
+  readonly appId: string;
+}
+
+/**
+ * Universal Links / App Links for shared LOOP ID links (Decision 0090). The
+ * iOS application identifier, Android package, and the Development debug
+ * keystore fingerprint are fixed public facts of the LOOP app build; only the
+ * release signing fingerprint(s) and the optional download link for the
+ * `/u/{loopId}` landing page come from the environment.
+ */
+export interface AppLinksConfig {
+  /** `<TEAMID>.<BUNDLEID>` identifiers claimed for `/u/*`. */
+  readonly iosAppIds: readonly string[];
+  readonly androidPackage: string;
+  /** Debug keystore first, then `ANDROID_RELEASE_CERT_SHA256` entries. */
+  readonly androidCertificateFingerprints: readonly string[];
+  /** `APP_DOWNLOAD_URL`; `null` hides the download link on the landing page. */
+  readonly downloadUrl: string | null;
+}
+
+export interface BscIndexerConfig {
+  readonly startBlockNumber: number | null;
+  /**
+   * Wallet addresses per topic OR array of one `eth_getLogs` request
+   * (Decision 0075, `BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE`, 1-1000, default
+   * 200).
+   */
+  readonly walletTopicChunkSize: number;
+}
+
+/**
+ * BSC write admission (Decision 0035). Present only when
+ * `BSC_WRITES_ENABLED=true`; absent means every prepare, broadcast report, and
+ * Provider execute fails closed with CAPABILITY_UNAVAILABLE. Enabling writes
+ * additionally requires an explicit canary asset allowlist and a per-intent USD
+ * ceiling; an intent whose value cannot be priced is never admitted.
+ */
+export interface BscWriteConfig {
+  readonly configVersion: "bscWriteCanaryV1";
+  readonly canaryAssetIds: readonly string[];
+  /** Canonical decimal USD ceiling per intent (default 20). */
+  readonly canaryMaxUsd: string;
+  /**
+   * Rolling 24-hour USD ceiling across every intent of one account that may
+   * still spend (Decision 0065). `null` means no cumulative ceiling.
+   */
+  readonly canaryDailyMaxUsd: string | null;
+  /**
+   * Lowercase counterparty allowlist (send recipient, approve/revoke
+   * spender). Empty means every counterparty is admitted; the per-intent and
+   * daily ceilings are then the only quantitative guards.
+   */
+  readonly canaryCounterpartyAddresses: readonly string[];
+  /** Platform fee slot for Privy Swap; `null` sends no fee_configuration. */
+  readonly swapFeeBps: number | null;
+}
+
+export interface GoplusConfig {
+  readonly appKey: string;
+  readonly appSecret: string;
+  readonly rateLimitPerMinute: number;
+}
+
+/**
+ * Market Provider configuration (Decision 0034). A disabled or uncredentialed
+ * Provider is `null`/`false` here and every fact it would have supplied is
+ * published as `unavailable`; nothing is inferred from another source.
+ */
+export interface MarketConfig {
+  readonly dexscreener: {
+    readonly enabled: boolean;
+    /** Per-process minute budgets; api + worker never exceed the documented 300. */
+    readonly budgetApiPerMinute: number;
+    readonly budgetWorkerPerMinute: number;
+  };
+  readonly geckoterminal: {
+    readonly enabled: boolean;
+    /** The API process throttle. */
+    readonly rateLimitPerMinute: number;
+    /** The worker process throttle (Decision 0074); the two share one egress. */
+    readonly budgetWorkerPerMinute: number;
+  };
+  readonly goplus: GoplusConfig | null;
+  readonly priceTtlSeconds: number;
+  readonly securityTtlSeconds: number;
+  readonly candlesTtlSeconds: number;
+  /** Row sparkline row TTL (Decision 0074). */
+  readonly sparklineTtlSeconds: number;
+  /** Seconds past TTL during which a cached fact may still be served as stale. */
+  readonly staleGraceSeconds: number;
+  /**
+   * Unregistered-address lookup (Decision 0058): price-class facts and the
+   * identity (symbol/name/decimals) of a token the registry does not know.
+   */
+  readonly unlistedPriceTtlSeconds: number;
+  readonly unlistedMetadataTtlSeconds: number;
+}
+
+/**
+ * Community AI runtime (Decision 0066). `null` means no API key was supplied
+ * (neither `COMMUNITY_AI_API_KEY` nor `ANTHROPIC_API_KEY`): the capability is
+ * `deferred` and no answer is ever produced.
+ */
+export interface CommunityAiConfig {
+  /** Never logged, never echoed, never part of an error body. */
+  readonly apiKey: string;
+  /**
+   * Anthropic-compatible Provider origin (`https://api.anthropic.com` or an
+   * Anthropic-compatible gateway such as `https://api.onlyrouter.ai`). Never
+   * published to a client; the adapter appends `/v1/messages`.
+   */
+  readonly baseUrl: string;
+  readonly model: string;
+  /** Per-request Provider ceiling for `ask`; below the HTTP deadlines. */
+  readonly timeoutMs: number;
+  /** Ceiling for one background brief generation; independent of HTTP. */
+  readonly briefTimeoutMs: number;
+  readonly maximumOutputTokens: number;
+  readonly userRateLimitPerMinute: number;
+  readonly communityDailyLimit: number;
+  readonly briefCacheSeconds: number;
+}
+
+export interface AlertEvaluatorConfig {
+  readonly notificationDedupeSeconds: number;
+}
+
+export interface V2CursorConfig {
+  readonly hmacSecret: string;
+  readonly ttlSeconds: 600;
+}
+
+export interface PushConfig {
+  /** Absolute or process-relative path; never the credential itself. */
+  readonly serviceAccountJsonPath: string;
+}
+
+export interface AppConfig {
+  readonly nodeEnv: "development" | "test" | "production";
+  readonly host: string;
+  readonly port: number;
+  readonly publicBaseUrl: string;
+  /** Which URL `logo.url` carries (Decision 0089 §8). */
+  readonly tokenLogoUrlMode: "proxy" | "upstream";
+  readonly apiDocsEnabled: boolean;
+  readonly trustProxy: boolean;
+  readonly logLevel:
+    "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+  readonly v2SessionEnabled: boolean;
+  readonly v2ModulesEnabled: ReadonlySet<V2ModuleId>;
+  readonly v2ClientPolicy: V2ClientPolicyConfig;
+  readonly v2Cursor: V2CursorConfig | null;
+  /** NFKC lower-cased operator-blocked alias substrings; empty by default. */
+  readonly v2AliasBlockedTerms: readonly string[];
+  /**
+   * Stream channel member ceiling recorded on a newly provisioned official
+   * community channel (Decision 0032). Above it the LOOP membership still
+   * stands and the channel member is parked as `capacityPending`.
+   */
+  readonly v2CommunityChannelMemberCap: number;
+  readonly databaseUrl: string;
+  readonly databasePoolMax: number;
+  readonly databaseConnectionTimeoutMs: number;
+  readonly databaseStatementTimeoutMs: number;
+  readonly privy: PrivyConfig | null;
+  readonly stream: StreamConfig | null;
+  readonly streamTokenQuota: StreamTokenQuotaConfig | null;
+  /**
+   * Operator confirmation of the Decision 0005/0032 audio-room role evidence
+   * (Decision 0039): the archived Stream Dashboard reference proving the
+   * `user` role cannot create an `audio_room` call. `null` keeps
+   * `voiceRooms.evidence` pending; a value publishes it as `confirmed`. It
+   * never changes availability, which the communication runtime decides.
+   */
+  readonly streamAudioRoomUserRoleEvidenceRef: string | null;
+  readonly social: SocialConfig | null;
+  readonly perpReadCursor: PerpReadCursorConfig | null;
+  readonly hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null;
+  readonly bscChain: BscChainConfig | null;
+  /**
+   * Chain read policy that applies whether or not an endpoint is configured,
+   * so an unavailable read client still reports the operator's numbers.
+   */
+  readonly bscConfirmations: number;
+  readonly bscReorgDepthBlocks: number;
+  /** The `launch` chain slot (Decision 0038); never null. */
+  readonly launchChain: LaunchChainConfig;
+  /** The Launch contract on that slot (Decision 0076); null keeps it unavailable. */
+  readonly launchContract: LaunchContractConfig | null;
+  /** BSC Testnet-only fixed Hooks Factory address; null keeps signing unavailable. */
+  readonly hooksLaunchFactoryAddress: string | null;
+  readonly hooksLaunchFactoryCodeHash: string | null;
+  /**
+   * Decision 0085: how long (ms) one successful sale snapshot is reused by
+   * the Launch detail/eligibility reads. 0 disables the cache.
+   */
+  readonly launchSnapshotCacheTtlMs: number;
+  /**
+   * Decision 0077 S83b7b: whether `GET /v2/launch/overview` may publish the
+   * `graduated` available branch. False keeps it byte-identical to before
+   * (`LAUNCH_CONTRACT_BASELINE_PENDING`) even with a configured contract.
+   */
+  readonly launchGraduatedListEnabled: boolean;
+  /**
+   * Decision 0061: whether the `mining-snapshot` lane counts the
+   * Development seed's `mock_seed` balances. Default false; the schema
+   * refuses it under `NODE_ENV=production`. Only `pnpm mining:snapshot`
+   * reads it out of this config; the API process never computes a snapshot.
+   */
+  readonly miningMockHoldingsEnabled: boolean;
+  readonly walletGasReserve: WalletGasReserveConfig;
+  /** Passkey association files published at `/.well-known` (Decision 0063). */
+  readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
+  /** Universal Links / App Links for `/u/{loopId}` (Decision 0090). */
+  readonly appLinks: AppLinksConfig;
+  /** `null` keeps every funds-moving path closed. */
+  readonly bscWrites: BscWriteConfig | null;
+  readonly market: MarketConfig;
+  /** Community AI Provider (Decision 0066); null keeps `communityAi` deferred. */
+  readonly communityAi: CommunityAiConfig | null;
+  /**
+   * Push channel credential slot (Decision 0067): the path of the Firebase
+   * service-account JSON. `null` keeps `pushNotifications` unavailable with
+   * `PUSH_RUNTIME_DEFERRED` and refuses push-token registration. The file is
+   * read at composition time; its contents never enter this config.
+   */
+  readonly push: PushConfig | null;
+  readonly serviceName: "loop-api";
+  readonly serviceVersion: string;
+}
+
+export interface ReconciliationWorkerConfig {
+  readonly nodeEnv: "development" | "test" | "production";
+  readonly logLevel:
+    "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+  readonly databaseUrl: string;
+  readonly databasePoolMax: number;
+  readonly databaseConnectionTimeoutMs: number;
+  readonly databaseStatementTimeoutMs: number;
+  readonly hyperliquidReconciliationReads: HyperliquidPrivateReadsConfig | null;
+  readonly hyperliquidSpotReconciliationReads: HyperliquidPrivateReadsConfig | null;
+  readonly spotAgentLifecycleMaintenanceEnabled: boolean;
+  readonly issuanceRateRecordCleanupEnabled: boolean;
+  readonly bscChain: BscChainConfig | null;
+  readonly bscIndexer: BscIndexerConfig | null;
+  /**
+   * The `launch` chain slot (Decision 0038), parsed with the same rules as
+   * the API process so one environment file is accepted or refused
+   * identically. No worker lane consumes it yet: the slot has no indexer
+   * lane until the 02 contract document lands.
+   */
+  readonly launchChain: LaunchChainConfig;
+  /** Decision 0076, parsed identically; the `launch_event` lane reads it. */
+  readonly launchContract: LaunchContractConfig | null;
+  /**
+   * `launch_event` lane switch (Decision 0077), default false like
+   * BSC_INDEXER_ENABLED. On, with the four contract keys blank, the lane
+   * idles with LAUNCH_CONTRACT_BASELINE_PENDING.
+   */
+  readonly launchIndexerEnabled: boolean;
+  /**
+   * `community-channel-sync` lane (Decision 0032). Default off; enabling it
+   * requires the complete Stream credential pair, which is why this process
+   * now parses Stream configuration at all.
+   */
+  readonly communityChannelSync: StreamConfig | null;
+  readonly market: MarketConfig;
+  /** `alert_evaluator` lane (Decision 0034); default off. */
+  readonly alertEvaluator: AlertEvaluatorConfig | null;
+  /**
+   * `market_sparkline_warm` lane (Decision 0074); default on. It only ever
+   * runs when the GeckoTerminal Provider is enabled, which the runtime
+   * checks against `market.geckoterminal.enabled`.
+   */
+  readonly sparklineWarm: { readonly intervalMs: number } | null;
+  /**
+   * `wallet-intent-reconcile` lane (Decision 0035); default off. It reads
+   * receipts over RPC and, when Privy credentials are present, Privy wallet
+   * action status. It never signs, broadcasts, or replays a write.
+   */
+  readonly walletIntentReconcile: {
+    readonly privy: PrivyConfig | null;
+  } | null;
+  /**
+   * `mining-snapshot` lane (Decision 0036); default off. Even when enabled
+   * it stays idle until a Mining formula version is `approved`, which only
+   * the operator script can do outside production.
+   */
+  readonly miningSnapshotEnabled: boolean;
+  /**
+   * Decision 0061: whether that lane counts the Development seed's
+   * `mock_seed` balances. Default false; refused under
+   * `NODE_ENV=production`.
+   */
+  readonly miningMockHoldingsEnabled: boolean;
+  /**
+   * Push channel credential slot (Decision 0067). The `alert_evaluator` lane
+   * sends `price_alert_triggered` only when it is configured; otherwise the
+   * trigger stays an in-app feed row.
+   */
+  readonly push: PushConfig | null;
+  readonly serviceName: "loop-reconciliation-worker";
+  readonly serviceVersion: string;
+}
+
+export class ConfigurationError extends Error {
+  constructor(readonly issues: readonly string[]) {
+    super(`Invalid LOOP API configuration: ${issues.join("; ")}`);
+    this.name = "ConfigurationError";
+  }
+}
+
+function parseUrl(fieldName: string, value: string): URL {
+  try {
+    return new URL(value);
+  } catch {
+    throw new ConfigurationError([`${fieldName}: must be a valid URL`]);
+  }
+}
+
+function assertPublicBaseUrl(nodeEnv: AppConfig["nodeEnv"], url: URL): void {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ConfigurationError([
+      "PUBLIC_BASE_URL: protocol must be http or https",
+    ]);
+  }
+
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([
+      "PUBLIC_BASE_URL: credentials are not allowed",
+    ]);
+  }
+
+  if (nodeEnv === "production" && url.protocol !== "https:") {
+    throw new ConfigurationError([
+      "PUBLIC_BASE_URL: production requires https",
+    ]);
+  }
+}
+
+function parseStoreUrl(fieldName: string, value: string): string {
+  const url = parseUrl(fieldName, value);
+  if (url.protocol !== "https:") {
+    throw new ConfigurationError([`${fieldName}: protocol must be https`]);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([`${fieldName}: credentials are not allowed`]);
+  }
+  return url.toString();
+}
+
+function parseV2ModulesEnabled(value: string | undefined): Set<V2ModuleId> {
+  const modules = new Set<V2ModuleId>();
+  if (value === undefined) {
+    return modules;
+  }
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim();
+    if (!v2ModuleIdSet.has(entry)) {
+      throw new ConfigurationError([
+        `V2_MODULES_ENABLED: unknown module ID; allowed values are ${v2ModuleIds.join(", ")}`,
+      ]);
+    }
+    const moduleId = entry as V2ModuleId;
+    if (modules.has(moduleId)) {
+      throw new ConfigurationError([
+        `V2_MODULES_ENABLED: duplicate module ID ${moduleId}`,
+      ]);
+    }
+    modules.add(moduleId);
+  }
+  return modules;
+}
+
+const maximumAliasBlockedTerms = 256;
+const maximumAliasBlockedTermLength = 64;
+const forbiddenAliasTermCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Comma-separated operator blocklist for V2 aliases. Each term is trimmed,
+ * NFKC-normalised, lower-cased, and matched as a substring of the normalised
+ * alias. Blank entries are ignored; control characters are a startup error.
+ */
+function parseV2AliasBlockedTerms(
+  value: string | undefined,
+): readonly string[] {
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  const terms = new Set<string>();
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim().normalize("NFKC").toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (
+      Array.from(entry).length > maximumAliasBlockedTermLength ||
+      forbiddenAliasTermCharacters.test(entry)
+    ) {
+      throw new ConfigurationError([
+        `V2_ALIAS_BLOCKED_TERMS: each term must be 1-${maximumAliasBlockedTermLength} code points without control characters`,
+      ]);
+    }
+    terms.add(entry);
+  }
+  if (terms.size > maximumAliasBlockedTerms) {
+    throw new ConfigurationError([
+      `V2_ALIAS_BLOCKED_TERMS: at most ${maximumAliasBlockedTerms} terms are supported`,
+    ]);
+  }
+  return Object.freeze([...terms]);
+}
+
+function parseV2ClientPolicy(data: {
+  readonly V2_CLIENT_POLICY_CONFIG_VERSION?: string | undefined;
+  readonly V2_CLIENT_POLICY_EFFECTIVE_AT?: string | undefined;
+  readonly V2_CLIENT_POLICY_MIN_VERSION_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_MIN_VERSION_ANDROID?: string | undefined;
+  readonly V2_CLIENT_POLICY_STORE_URL_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_STORE_URL_ANDROID?: string | undefined;
+  readonly V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS?: string | undefined;
+  readonly V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID?: string | undefined;
+  readonly V2_TERMS_REQUIRED_VERSION?: string | undefined;
+}): V2ClientPolicyConfig {
+  let versionPolicy: V2ClientVersionPolicyConfig | null = null;
+  const minimumIos = data.V2_CLIENT_POLICY_MIN_VERSION_IOS;
+  const minimumAndroid = data.V2_CLIENT_POLICY_MIN_VERSION_ANDROID;
+  const storeIos = data.V2_CLIENT_POLICY_STORE_URL_IOS;
+  const storeAndroid = data.V2_CLIENT_POLICY_STORE_URL_ANDROID;
+
+  if (
+    minimumIos !== undefined &&
+    minimumAndroid !== undefined &&
+    storeIos !== undefined &&
+    storeAndroid !== undefined
+  ) {
+    const forceUpdateBelowIos =
+      data.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS ?? minimumIos;
+    const forceUpdateBelowAndroid =
+      data.V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID ?? minimumAndroid;
+    if (compareClientVersions(forceUpdateBelowIos, minimumIos) > 0) {
+      throw new ConfigurationError([
+        "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS: must not exceed V2_CLIENT_POLICY_MIN_VERSION_IOS",
+      ]);
+    }
+    if (compareClientVersions(forceUpdateBelowAndroid, minimumAndroid) > 0) {
+      throw new ConfigurationError([
+        "V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID: must not exceed V2_CLIENT_POLICY_MIN_VERSION_ANDROID",
+      ]);
+    }
+    versionPolicy = Object.freeze({
+      minimumSupportedVersions: Object.freeze({
+        ios: minimumIos,
+        android: minimumAndroid,
+      }),
+      forceUpdateBelow: Object.freeze({
+        ios: forceUpdateBelowIos,
+        android: forceUpdateBelowAndroid,
+      }),
+      storeUrls: Object.freeze({
+        ios: parseStoreUrl("V2_CLIENT_POLICY_STORE_URL_IOS", storeIos),
+        android: parseStoreUrl(
+          "V2_CLIENT_POLICY_STORE_URL_ANDROID",
+          storeAndroid,
+        ),
+      }),
+    });
+  }
+
+  return Object.freeze({
+    configVersion: data.V2_CLIENT_POLICY_CONFIG_VERSION ?? null,
+    effectiveAt:
+      data.V2_CLIENT_POLICY_EFFECTIVE_AT === undefined
+        ? null
+        : new Date(data.V2_CLIENT_POLICY_EFFECTIVE_AT).toISOString(),
+    versionPolicy,
+    termsRequiredVersion: data.V2_TERMS_REQUIRED_VERSION ?? null,
+  });
+}
+
+const maximumBscRpcEndpoints = 8;
+
+/**
+ * Comma-separated RPC endpoint list. Endpoint URLs are Provider configuration:
+ * they are validated here and never published in an API response, a capability
+ * projection, or a log field.
+ */
+function parseBscRpcUrls(
+  value: string | undefined,
+  fieldName: "BSC_RPC_URLS" | "LAUNCH_BSC_RPC_URLS" = "BSC_RPC_URLS",
+): readonly string[] {
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  const urls: string[] = [];
+  for (const rawEntry of value.split(",")) {
+    const entry = rawEntry.trim();
+    if (entry.length === 0) {
+      continue;
+    }
+    const url = parseUrl(fieldName, entry);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new ConfigurationError([
+        `${fieldName}: protocol must be http or https`,
+      ]);
+    }
+    if (url.username !== "" || url.password !== "") {
+      throw new ConfigurationError([
+        `${fieldName}: credentials are not allowed in an endpoint URL`,
+      ]);
+    }
+    const normalized = url.toString();
+    if (!urls.includes(normalized)) {
+      urls.push(normalized);
+    }
+  }
+  if (urls.length > maximumBscRpcEndpoints) {
+    throw new ConfigurationError([
+      `${fieldName}: at most ${maximumBscRpcEndpoints} endpoints are supported`,
+    ]);
+  }
+  return Object.freeze(urls);
+}
+
+/** Mirrors the LAUNCH_BSC_CONFIRMATIONS and LAUNCH_BSC_REORG_DEPTH_BLOCKS defaults. */
+export const defaultLaunchChainConfirmations = 5;
+export const defaultLaunchChainReorgDepthBlocks = 15;
+
+/**
+ * Parses the launch chain slot (Decision 0038). With `LAUNCH_CHAIN_ID=56` the
+ * primary endpoint list and read policy are copied so the slot can never
+ * describe a second, differently configured mainnet client; the schema
+ * refinement has already refused any `LAUNCH_BSC_*` override in that case.
+ */
+export function parseLaunchChainConfig(
+  data: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
+    readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
+    readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
+  },
+  primary: {
+    readonly rpcUrls: readonly string[];
+    readonly confirmations: number;
+    readonly reorgDepthBlocks: number;
+    readonly logAddressChunkSize: number;
+  },
+): LaunchChainConfig {
+  if (data.LAUNCH_CHAIN_ID === "56") {
+    return Object.freeze({
+      chainId: bscChainId,
+      chainReference: bscChainReference,
+      rpcUrls: primary.rpcUrls,
+      confirmations: primary.confirmations,
+      reorgDepthBlocks: primary.reorgDepthBlocks,
+      logAddressChunkSize: primary.logAddressChunkSize,
+      sharedWithPrimary: true,
+    });
+  }
+  return Object.freeze({
+    chainId: bscTestnetChainId,
+    chainReference: bscTestnetChainReference,
+    rpcUrls: parseBscRpcUrls(data.LAUNCH_BSC_RPC_URLS, "LAUNCH_BSC_RPC_URLS"),
+    confirmations:
+      data.LAUNCH_BSC_CONFIRMATIONS ?? defaultLaunchChainConfirmations,
+    reorgDepthBlocks:
+      data.LAUNCH_BSC_REORG_DEPTH_BLOCKS ?? defaultLaunchChainReorgDepthBlocks,
+    logAddressChunkSize: primary.logAddressChunkSize,
+    sharedWithPrimary: false,
+  });
+}
+
+/**
+ * The launch chain ID as an operator script reads it from the same
+ * environment file the API uses (Decision 0038). The rule is exactly the
+ * one `loadConfig` applies through `launchChainEnvironmentShape`: an unset
+ * key is the default (56); otherwise only the exact strings "56" and "97"
+ * are accepted — a blank or padded value is refused, never defaulted, so
+ * the script and the API can never disagree about which chain a launch is
+ * stamped with.
+ */
+export function parseLaunchChainIdEnvironment(
+  value: string | undefined,
+): LaunchChainId {
+  const parsed = launchChainEnvironmentShape.LAUNCH_CHAIN_ID.safeParse(
+    value ?? "56",
+  );
+  if (!parsed.success) {
+    throw new ConfigurationError(["LAUNCH_CHAIN_ID: must be 56 or 97"]);
+  }
+  return parsed.data === "97" ? bscTestnetChainId : bscChainId;
+}
+
+const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+const semanticVersionPattern =
+  /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/;
+const blockNumberPattern = /^(0|[1-9][0-9]{0,18})$/;
+
+/**
+ * Parses the Decision 0076 contract keys after the schema refinement has
+ * already refused a partial set. The address and the USD1 address are stored
+ * lowercase; the start block must fit a PostgreSQL `bigint` checkpoint. The
+ * ABI major is not checked here: an unsupported major is a runtime
+ * `LAUNCH_CONTRACT_VERSION_UNSUPPORTED`, not a boot failure.
+ */
+export function parseLaunchContractConfig(
+  data: LaunchContractEnvironment,
+): LaunchContractConfig | null {
+  const address = data.LAUNCH_CONTRACT_ADDRESS;
+  const version = data.LAUNCH_CONTRACT_VERSION;
+  const startBlock = data.LAUNCH_CONTRACT_START_BLOCK;
+  const usd1Address = data.LAUNCH_USD1_ADDRESS;
+  if (
+    address === undefined ||
+    version === undefined ||
+    startBlock === undefined ||
+    usd1Address === undefined
+  ) {
+    return null;
+  }
+  const issues: string[] = [];
+  if (!evmAddressPattern.test(address)) {
+    issues.push(
+      "LAUNCH_CONTRACT_ADDRESS: must be a 0x-prefixed 20-byte address",
+    );
+  }
+  if (!evmAddressPattern.test(usd1Address)) {
+    issues.push("LAUNCH_USD1_ADDRESS: must be a 0x-prefixed 20-byte address");
+  }
+  const versionMatch = semanticVersionPattern.exec(version);
+  if (versionMatch === null) {
+    issues.push(
+      "LAUNCH_CONTRACT_VERSION: must be a semantic version MAJOR.MINOR.PATCH",
+    );
+  }
+  if (
+    !blockNumberPattern.test(startBlock) ||
+    BigInt(startBlock) > 9_223_372_036_854_775_807n
+  ) {
+    issues.push(
+      "LAUNCH_CONTRACT_START_BLOCK: must be a non-negative integer block number",
+    );
+  }
+  if (
+    issues.length === 0 &&
+    address.toLowerCase() === usd1Address.toLowerCase()
+  ) {
+    issues.push(
+      "LAUNCH_USD1_ADDRESS: must differ from LAUNCH_CONTRACT_ADDRESS",
+    );
+  }
+  if (issues.length > 0 || versionMatch === null) {
+    throw new ConfigurationError(issues);
+  }
+  return Object.freeze({
+    address: address.toLowerCase(),
+    version,
+    versionMajor: Number(versionMatch[1]),
+    startBlock: BigInt(startBlock),
+    usd1Address: usd1Address.toLowerCase(),
+  });
+}
+
+/**
+ * The USD1 slot needs both an address and an explicit verification flag. A
+ * configured address alone never enters the registry as `verified`.
+ */
+function parseVerifiedUsd1Address(
+  address: string | undefined,
+  verified: boolean,
+): string | null {
+  if (address === undefined) {
+    if (verified) {
+      throw new ConfigurationError([
+        "BSC_USD1_VERIFIED: requires BSC_USD1_TOKEN_ADDRESS",
+      ]);
+    }
+    return null;
+  }
+  if (!evmAddressPattern.test(address)) {
+    throw new ConfigurationError([
+      "BSC_USD1_TOKEN_ADDRESS: must be a 0x-prefixed 20-byte address",
+    ]);
+  }
+  return verified ? address.toLowerCase() : null;
+}
+
+function parseBscChainConfig(data: {
+  readonly BSC_RPC_URLS?: string | undefined;
+  readonly BSC_CONFIRMATIONS: number;
+  readonly BSC_REORG_DEPTH_BLOCKS: number;
+  readonly BSC_LOG_ADDRESS_CHUNK_SIZE: number;
+  readonly BSC_USD1_TOKEN_ADDRESS?: string | undefined;
+  readonly BSC_USD1_VERIFIED?: boolean | undefined;
+}): BscChainConfig | null {
+  const rpcUrls = parseBscRpcUrls(data.BSC_RPC_URLS);
+  if (rpcUrls.length === 0) {
+    return null;
+  }
+  return Object.freeze({
+    chainId: "eip155:56" as const,
+    chainReference: 56 as const,
+    rpcUrls,
+    confirmations: data.BSC_CONFIRMATIONS,
+    reorgDepthBlocks: data.BSC_REORG_DEPTH_BLOCKS,
+    logAddressChunkSize: data.BSC_LOG_ADDRESS_CHUNK_SIZE,
+    usd1TokenAddress: parseVerifiedUsd1Address(
+      data.BSC_USD1_TOKEN_ADDRESS,
+      data.BSC_USD1_VERIFIED ?? false,
+    ),
+  });
+}
+
+const maximumGasReserveWei = 1_000_000_000_000_000_000n;
+
+/**
+ * The reserve is configured in BNB and converted with exact integer
+ * arithmetic. A value above one whole BNB is a configuration error, not a
+ * product choice: it would hide most of a normal balance.
+ */
+function parseWalletGasReserve(value: string): WalletGasReserveConfig {
+  let rawWei: bigint;
+  try {
+    rawWei = parseDecimalAmount(value, 18);
+  } catch {
+    throw new ConfigurationError([
+      "WALLET_GAS_RESERVE_BNB: must be a non-negative decimal with at most 18 fraction digits",
+    ]);
+  }
+  if (rawWei > maximumGasReserveWei) {
+    throw new ConfigurationError([
+      "WALLET_GAS_RESERVE_BNB: must not exceed 1 BNB",
+    ]);
+  }
+  return Object.freeze({
+    configVersion: "walletGasReserveV1" as const,
+    decimalBnb: value,
+    rawWei: rawWei.toString(10),
+  });
+}
+
+export const defaultPasskeyAndroidPackage = "com.cywd.loop";
+export const defaultPasskeyIosBundleId = "com.cywd.loop";
+
+const passkeyAndroidPackagePattern =
+  /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+const passkeyIosBundleIdPattern = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const passkeyIosTeamIdPattern = /^[A-Z0-9]{10}$/;
+/** 32 uppercase hex byte pairs joined by colons: one SHA-256 fingerprint. */
+const passkeySha256FingerprintPattern = /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/;
+const maximumPasskeyFingerprints = 10;
+
+/**
+ * Comma-separated signing-certificate SHA-256 fingerprints: 32 colon-separated
+ * hex byte pairs each, upper-cased, unique, at most ten.
+ */
+function parseCertificateFingerprints(
+  fieldName: string,
+  raw: string | undefined,
+  existing: readonly string[] = [],
+): string[] {
+  const fingerprints: string[] = [];
+  for (const rawEntry of (raw ?? "").split(",")) {
+    const entry = rawEntry.trim().toUpperCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!passkeySha256FingerprintPattern.test(entry)) {
+      throw new ConfigurationError([
+        `${fieldName}: every entry must be 32 colon-separated uppercase hex byte pairs`,
+      ]);
+    }
+    if (fingerprints.includes(entry) || existing.includes(entry)) {
+      throw new ConfigurationError([`${fieldName}: entries must be unique`]);
+    }
+    fingerprints.push(entry);
+  }
+  if (fingerprints.length > maximumPasskeyFingerprints) {
+    throw new ConfigurationError([
+      `${fieldName}: at most ${maximumPasskeyFingerprints.toString(10)} fingerprints are accepted`,
+    ]);
+  }
+  return fingerprints;
+}
+
+/** Decision 0090: the LOOP iOS app (Team ID + bundle ID) claiming `/u/*`. */
+export const appLinksIosAppId = "867CN6U7W9.com.cywd.loop";
+export const appLinksAndroidPackage = "com.cywd.loop";
+/** Development debug keystore of the LOOP Android build (Decision 0090). */
+export const appLinksAndroidDebugFingerprint =
+  "AE:60:82:E6:21:F5:9D:3E:63:96:F8:CB:4B:8D:86:28:7C:F6:2B:29:06:D5:2C:2E:5D:8E:A7:D4:DB:5E:3E:FA";
+
+function parseAppLinksConfig(data: {
+  readonly ANDROID_RELEASE_CERT_SHA256?: string | undefined;
+  readonly APP_DOWNLOAD_URL?: string | undefined;
+}): AppLinksConfig {
+  const release = parseCertificateFingerprints(
+    "ANDROID_RELEASE_CERT_SHA256",
+    data.ANDROID_RELEASE_CERT_SHA256,
+    [appLinksAndroidDebugFingerprint],
+  );
+  let downloadUrl: string | null = null;
+  if (data.APP_DOWNLOAD_URL !== undefined) {
+    const url = parseUrl("APP_DOWNLOAD_URL", data.APP_DOWNLOAD_URL);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      throw new ConfigurationError([
+        "APP_DOWNLOAD_URL: must be an https URL without credentials",
+      ]);
+    }
+    downloadUrl = url.toString();
+  }
+  return Object.freeze({
+    iosAppIds: Object.freeze([appLinksIosAppId]),
+    androidPackage: appLinksAndroidPackage,
+    androidCertificateFingerprints: Object.freeze([
+      appLinksAndroidDebugFingerprint,
+      ...release,
+    ]),
+    downloadUrl,
+  });
+}
+
+/**
+ * Both association files are published only from values an operator typed in
+ * full. Nothing here is derived, normalized upward, or defaulted into
+ * existence: a malformed fingerprint or Team ID stops the process instead of
+ * publishing a file that would advertise an association nobody verified.
+ */
+function parsePasskeyRelyingPartyConfig(data: {
+  readonly PASSKEY_ANDROID_PACKAGE?: string | undefined;
+  readonly PASSKEY_ANDROID_CERT_SHA256?: string | undefined;
+  readonly PASSKEY_IOS_TEAM_ID?: string | undefined;
+  readonly PASSKEY_IOS_BUNDLE_ID?: string | undefined;
+}): PasskeyRelyingPartyConfig {
+  const packageName =
+    data.PASSKEY_ANDROID_PACKAGE ?? defaultPasskeyAndroidPackage;
+  if (!passkeyAndroidPackagePattern.test(packageName)) {
+    throw new ConfigurationError([
+      "PASSKEY_ANDROID_PACKAGE: must be a dotted Android package name",
+    ]);
+  }
+  const fingerprints = parseCertificateFingerprints(
+    "PASSKEY_ANDROID_CERT_SHA256",
+    data.PASSKEY_ANDROID_CERT_SHA256,
+  );
+
+  const bundleId = data.PASSKEY_IOS_BUNDLE_ID ?? defaultPasskeyIosBundleId;
+  if (!passkeyIosBundleIdPattern.test(bundleId)) {
+    throw new ConfigurationError([
+      "PASSKEY_IOS_BUNDLE_ID: must be a dotted bundle identifier",
+    ]);
+  }
+  const teamId = data.PASSKEY_IOS_TEAM_ID?.toUpperCase();
+  if (teamId !== undefined && !passkeyIosTeamIdPattern.test(teamId)) {
+    throw new ConfigurationError([
+      "PASSKEY_IOS_TEAM_ID: must be a ten-character Apple Team ID",
+    ]);
+  }
+
+  return Object.freeze({
+    android:
+      fingerprints.length === 0
+        ? null
+        : Object.freeze({
+            packageName,
+            certificateFingerprints: Object.freeze(fingerprints),
+          }),
+    ios:
+      teamId === undefined
+        ? null
+        : Object.freeze({ appId: `${teamId}.${bundleId}` }),
+  });
+}
+
+const canaryAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$/;
+const canaryMaxUsdPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/;
+const canaryAddressPattern = /^0x[0-9a-f]{40}$/;
+
+/**
+ * Write admission is off unless explicitly enabled, and enabling it requires
+ * both an asset allowlist of canonical asset IDs and a positive USD ceiling.
+ */
+function parseBscWriteConfig(data: {
+  readonly BSC_WRITES_ENABLED: boolean;
+  readonly BSC_WRITE_CANARY_ASSETS?: string | undefined;
+  readonly BSC_WRITE_CANARY_MAX_USD: string;
+  readonly BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST?: string | undefined;
+  readonly BSC_WRITE_CANARY_DAILY_MAX_USD?: string | undefined;
+  readonly LOOP_SWAP_FEE_BPS: number;
+}): BscWriteConfig | null {
+  if (!data.BSC_WRITES_ENABLED) {
+    return null;
+  }
+  const assetIds: string[] = [];
+  for (const rawEntry of (data.BSC_WRITE_CANARY_ASSETS ?? "").split(",")) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!canaryAssetIdPattern.test(entry)) {
+      throw new ConfigurationError([
+        "BSC_WRITE_CANARY_ASSETS: every entry must be a canonical eip155 asset ID",
+      ]);
+    }
+    if (!assetIds.includes(entry)) {
+      assetIds.push(entry);
+    }
+  }
+  if (assetIds.length === 0) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_ASSETS: at least one canary asset is required when writes are enabled",
+    ]);
+  }
+  const maxUsd = data.BSC_WRITE_CANARY_MAX_USD;
+  if (!canaryMaxUsdPattern.test(maxUsd) || /^0(\.0+)?$/.test(maxUsd)) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_MAX_USD: must be a positive decimal with at most 6 fraction digits",
+    ]);
+  }
+  const dailyMaxUsdRaw = data.BSC_WRITE_CANARY_DAILY_MAX_USD?.trim();
+  const dailyMaxUsd =
+    dailyMaxUsdRaw === undefined || dailyMaxUsdRaw.length === 0
+      ? null
+      : dailyMaxUsdRaw;
+  if (
+    dailyMaxUsd !== null &&
+    (!canaryMaxUsdPattern.test(dailyMaxUsd) || /^0(\.0+)?$/.test(dailyMaxUsd))
+  ) {
+    throw new ConfigurationError([
+      "BSC_WRITE_CANARY_DAILY_MAX_USD: must be a positive decimal with at most 6 fraction digits",
+    ]);
+  }
+  const counterparties: string[] = [];
+  for (const rawEntry of (
+    data.BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST ?? ""
+  ).split(",")) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (entry.length === 0) {
+      continue;
+    }
+    if (!canaryAddressPattern.test(entry)) {
+      throw new ConfigurationError([
+        "BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: every entry must be a 0x-prefixed 20-byte address",
+      ]);
+    }
+    if (!counterparties.includes(entry)) {
+      counterparties.push(entry);
+    }
+  }
+  return Object.freeze({
+    configVersion: "bscWriteCanaryV1" as const,
+    canaryAssetIds: Object.freeze(assetIds),
+    canaryMaxUsd: maxUsd,
+    canaryDailyMaxUsd: dailyMaxUsd,
+    canaryCounterpartyAddresses: Object.freeze(counterparties),
+    swapFeeBps: data.LOOP_SWAP_FEE_BPS === 0 ? null : data.LOOP_SWAP_FEE_BPS,
+  });
+}
+
+function marketEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof marketEnvironmentShape, string | undefined> {
+  return {
+    MARKET_PROVIDER_DEXSCREENER_ENABLED:
+      environment["MARKET_PROVIDER_DEXSCREENER_ENABLED"] ?? "true",
+    MARKET_PROVIDER_GECKOTERMINAL_ENABLED:
+      environment["MARKET_PROVIDER_GECKOTERMINAL_ENABLED"] ?? "false",
+    MARKET_DEXSCREENER_BUDGET_API:
+      environment["MARKET_DEXSCREENER_BUDGET_API"] ?? "120",
+    MARKET_DEXSCREENER_BUDGET_WORKER:
+      environment["MARKET_DEXSCREENER_BUDGET_WORKER"] ?? "120",
+    MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE:
+      environment["MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_GECKOTERMINAL_BUDGET_WORKER:
+      environment["MARKET_GECKOTERMINAL_BUDGET_WORKER"] ?? "10",
+    MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE:
+      environment["MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE"] ?? "30",
+    MARKET_UNLISTED_PRICE_TTL_SECONDS:
+      environment["MARKET_UNLISTED_PRICE_TTL_SECONDS"] ?? "60",
+    MARKET_UNLISTED_METADATA_TTL_SECONDS:
+      environment["MARKET_UNLISTED_METADATA_TTL_SECONDS"] ?? "3600",
+    MARKET_PRICE_TTL_SECONDS: environment["MARKET_PRICE_TTL_SECONDS"] ?? "30",
+    MARKET_SECURITY_TTL_SECONDS:
+      environment["MARKET_SECURITY_TTL_SECONDS"] ?? "600",
+    MARKET_CANDLES_TTL_SECONDS:
+      environment["MARKET_CANDLES_TTL_SECONDS"] ?? "60",
+    MARKET_SPARKLINE_TTL_SECONDS:
+      environment["MARKET_SPARKLINE_TTL_SECONDS"] ?? "300",
+    MARKET_STALE_GRACE_SECONDS:
+      environment["MARKET_STALE_GRACE_SECONDS"] ?? "900",
+    GOPLUS_APP_KEY: environment["GOPLUS_APP_KEY"],
+    GOPLUS_APP_SECRET: environment["GOPLUS_APP_SECRET"],
+  };
+}
+
+function parseMarketConfig(data: {
+  readonly MARKET_PROVIDER_DEXSCREENER_ENABLED: boolean;
+  readonly MARKET_PROVIDER_GECKOTERMINAL_ENABLED: boolean;
+  readonly MARKET_DEXSCREENER_BUDGET_API: number;
+  readonly MARKET_DEXSCREENER_BUDGET_WORKER: number;
+  readonly MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_GECKOTERMINAL_BUDGET_WORKER: number;
+  readonly MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE: number;
+  readonly MARKET_PRICE_TTL_SECONDS: number;
+  readonly MARKET_SECURITY_TTL_SECONDS: number;
+  readonly MARKET_CANDLES_TTL_SECONDS: number;
+  readonly MARKET_SPARKLINE_TTL_SECONDS: number;
+  readonly MARKET_STALE_GRACE_SECONDS: number;
+  readonly MARKET_UNLISTED_PRICE_TTL_SECONDS: number;
+  readonly MARKET_UNLISTED_METADATA_TTL_SECONDS: number;
+  readonly GOPLUS_APP_KEY?: string | undefined;
+  readonly GOPLUS_APP_SECRET?: string | undefined;
+}): MarketConfig {
+  return Object.freeze({
+    dexscreener: Object.freeze({
+      enabled: data.MARKET_PROVIDER_DEXSCREENER_ENABLED,
+      budgetApiPerMinute: data.MARKET_DEXSCREENER_BUDGET_API,
+      budgetWorkerPerMinute: data.MARKET_DEXSCREENER_BUDGET_WORKER,
+    }),
+    geckoterminal: Object.freeze({
+      enabled: data.MARKET_PROVIDER_GECKOTERMINAL_ENABLED,
+      rateLimitPerMinute: data.MARKET_GECKOTERMINAL_RATE_LIMIT_PER_MINUTE,
+      budgetWorkerPerMinute: data.MARKET_GECKOTERMINAL_BUDGET_WORKER,
+    }),
+    goplus:
+      data.GOPLUS_APP_KEY !== undefined && data.GOPLUS_APP_SECRET !== undefined
+        ? Object.freeze({
+            appKey: data.GOPLUS_APP_KEY,
+            appSecret: data.GOPLUS_APP_SECRET,
+            rateLimitPerMinute: data.MARKET_GOPLUS_RATE_LIMIT_PER_MINUTE,
+          })
+        : null,
+    priceTtlSeconds: data.MARKET_PRICE_TTL_SECONDS,
+    securityTtlSeconds: data.MARKET_SECURITY_TTL_SECONDS,
+    candlesTtlSeconds: data.MARKET_CANDLES_TTL_SECONDS,
+    sparklineTtlSeconds: data.MARKET_SPARKLINE_TTL_SECONDS,
+    staleGraceSeconds: data.MARKET_STALE_GRACE_SECONDS,
+    unlistedPriceTtlSeconds: data.MARKET_UNLISTED_PRICE_TTL_SECONDS,
+    unlistedMetadataTtlSeconds: data.MARKET_UNLISTED_METADATA_TTL_SECONDS,
+  });
+}
+
+function parsePushConfig(data: {
+  readonly FIREBASE_SERVICE_ACCOUNT_JSON_PATH?: string | undefined;
+}): PushConfig | null {
+  const path = data.FIREBASE_SERVICE_ACCOUNT_JSON_PATH;
+  return path === undefined
+    ? null
+    : Object.freeze({ serviceAccountJsonPath: path });
+}
+
+function assertDatabaseUrl(url: URL): void {
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new ConfigurationError([
+      "DATABASE_URL: protocol must be postgres or postgresql",
+    ]);
+  }
+
+  if (url.hostname === "" || url.username === "" || url.pathname.length <= 1) {
+    throw new ConfigurationError([
+      "DATABASE_URL: host, user, and database name are required",
+    ]);
+  }
+}
+
+export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
+  const rawNodeEnv = environment["NODE_ENV"] ?? "development";
+  const parsed = environmentSchema.safeParse({
+    NODE_ENV: rawNodeEnv,
+    HOST: environment["HOST"] ?? "127.0.0.1",
+    PORT: environment["PORT"] ?? "3000",
+    PUBLIC_BASE_URL: environment["PUBLIC_BASE_URL"] ?? "http://127.0.0.1:3000",
+    TOKEN_LOGO_URL_MODE: environment["TOKEN_LOGO_URL_MODE"] ?? "proxy",
+    API_DOCS_ENABLED:
+      environment["API_DOCS_ENABLED"] ??
+      (rawNodeEnv === "production" ? "false" : "true"),
+    TRUST_PROXY: environment["TRUST_PROXY"] ?? "false",
+    LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    V2_SESSION_ENABLED:
+      environment["V2_SESSION_ENABLED"] ??
+      (rawNodeEnv === "production" ? "false" : "true"),
+    V2_MODULES_ENABLED: environment["V2_MODULES_ENABLED"],
+    V2_CLIENT_POLICY_CONFIG_VERSION:
+      environment["V2_CLIENT_POLICY_CONFIG_VERSION"],
+    V2_CLIENT_POLICY_EFFECTIVE_AT: environment["V2_CLIENT_POLICY_EFFECTIVE_AT"],
+    V2_CLIENT_POLICY_MIN_VERSION_IOS:
+      environment["V2_CLIENT_POLICY_MIN_VERSION_IOS"],
+    V2_CLIENT_POLICY_MIN_VERSION_ANDROID:
+      environment["V2_CLIENT_POLICY_MIN_VERSION_ANDROID"],
+    V2_CLIENT_POLICY_STORE_URL_IOS:
+      environment["V2_CLIENT_POLICY_STORE_URL_IOS"],
+    V2_CLIENT_POLICY_STORE_URL_ANDROID:
+      environment["V2_CLIENT_POLICY_STORE_URL_ANDROID"],
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS:
+      environment["V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_IOS"],
+    V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID:
+      environment["V2_CLIENT_POLICY_FORCE_UPDATE_BELOW_ANDROID"],
+    V2_TERMS_REQUIRED_VERSION: environment["V2_TERMS_REQUIRED_VERSION"],
+    V2_ALIAS_BLOCKED_TERMS: environment["V2_ALIAS_BLOCKED_TERMS"],
+    V2_CURSOR_HMAC_SECRET: environment["V2_CURSOR_HMAC_SECRET"],
+    V2_COMMUNITY_CHANNEL_MEMBER_CAP:
+      environment["V2_COMMUNITY_CHANNEL_MEMBER_CAP"] ?? "3000",
+    PRIVY_APP_ID: environment["PRIVY_APP_ID"],
+    PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
+      environment["FIREBASE_SERVICE_ACCOUNT_JSON_PATH"],
+    STREAM_API_KEY: environment["STREAM_API_KEY"],
+    STREAM_API_SECRET: environment["STREAM_API_SECRET"],
+    STREAM_TOKEN_QUOTA_HMAC_SECRET:
+      environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"],
+    STREAM_TOKEN_USER_LIMIT_PER_MINUTE:
+      environment["STREAM_TOKEN_USER_LIMIT_PER_MINUTE"] ?? "10",
+    STREAM_TOKEN_IP_LIMIT_PER_MINUTE:
+      environment["STREAM_TOKEN_IP_LIMIT_PER_MINUTE"] ?? "60",
+    STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF:
+      environment["STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF"],
+    SOCIAL_CURSOR_HMAC_SECRET: environment["SOCIAL_CURSOR_HMAC_SECRET"],
+    SOCIAL_QUOTA_HMAC_SECRET: environment["SOCIAL_QUOTA_HMAC_SECRET"],
+    PERP_READ_CURSOR_HMAC_SECRET: environment["PERP_READ_CURSOR_HMAC_SECRET"],
+    HYPERLIQUID_PRIVATE_READS_ENABLED:
+      environment["HYPERLIQUID_PRIVATE_READS_ENABLED"] ?? "false",
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
+      environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
+      environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
+    BSC_RPC_URLS: environment["BSC_RPC_URLS"],
+    BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
+    BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    BSC_LOG_ADDRESS_CHUNK_SIZE:
+      environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] ?? "8",
+    BSC_USD1_TOKEN_ADDRESS: environment["BSC_USD1_TOKEN_ADDRESS"],
+    BSC_USD1_VERIFIED: environment["BSC_USD1_VERIFIED"] ?? "false",
+    BSC_WRITES_ENABLED: environment["BSC_WRITES_ENABLED"] ?? "false",
+    BSC_WRITE_CANARY_ASSETS: environment["BSC_WRITE_CANARY_ASSETS"],
+    BSC_WRITE_CANARY_MAX_USD: environment["BSC_WRITE_CANARY_MAX_USD"] ?? "20",
+    BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST:
+      environment["BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST"],
+    BSC_WRITE_CANARY_DAILY_MAX_USD:
+      environment["BSC_WRITE_CANARY_DAILY_MAX_USD"],
+    LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
+    WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
+    MINING_MOCK_HOLDINGS_ENABLED:
+      environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
+    PASSKEY_ANDROID_PACKAGE:
+      environment["PASSKEY_ANDROID_PACKAGE"] ?? defaultPasskeyAndroidPackage,
+    PASSKEY_ANDROID_CERT_SHA256: environment["PASSKEY_ANDROID_CERT_SHA256"],
+    PASSKEY_IOS_TEAM_ID: environment["PASSKEY_IOS_TEAM_ID"],
+    PASSKEY_IOS_BUNDLE_ID:
+      environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
+    ANDROID_RELEASE_CERT_SHA256: environment["ANDROID_RELEASE_CERT_SHA256"],
+    APP_DOWNLOAD_URL: environment["APP_DOWNLOAD_URL"],
+    ...launchChainEnvironmentDefaults(environment),
+    ...marketEnvironmentDefaults(environment),
+    ...communityAiEnvironmentDefaults(environment),
+    DATABASE_URL: environment["DATABASE_URL"],
+    DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
+    DATABASE_CONNECTION_TIMEOUT_MS:
+      environment["DATABASE_CONNECTION_TIMEOUT_MS"] ?? "3000",
+    DATABASE_STATEMENT_TIMEOUT_MS:
+      environment["DATABASE_STATEMENT_TIMEOUT_MS"] ?? "5000",
+    LAUNCH_SNAPSHOT_CACHE_TTL_MS:
+      environment["LAUNCH_SNAPSHOT_CACHE_TTL_MS"] ?? "1500",
+    LAUNCH_GRADUATED_LIST: environment["LAUNCH_GRADUATED_LIST"] ?? "off",
+  });
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map(
+      (issue) => `${issue.path.join(".") || "configuration"}: ${issue.message}`,
+    );
+    throw new ConfigurationError(issues);
+  }
+
+  const publicBaseUrl = parseUrl(
+    "PUBLIC_BASE_URL",
+    parsed.data.PUBLIC_BASE_URL,
+  );
+  const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
+  assertPublicBaseUrl(parsed.data.NODE_ENV, publicBaseUrl);
+  assertDatabaseUrl(databaseUrl);
+  const v2ModulesEnabled = parseV2ModulesEnabled(
+    parsed.data.V2_MODULES_ENABLED,
+  );
+  const v2ClientPolicy = parseV2ClientPolicy(parsed.data);
+  const v2AliasBlockedTerms = parseV2AliasBlockedTerms(
+    parsed.data.V2_ALIAS_BLOCKED_TERMS,
+  );
+  const v2Cursor =
+    parsed.data.V2_CURSOR_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.V2_CURSOR_HMAC_SECRET,
+          ttlSeconds: 600 as const,
+        });
+  const privy =
+    parsed.data.PRIVY_APP_ID !== undefined &&
+    parsed.data.PRIVY_APP_SECRET !== undefined
+      ? Object.freeze({
+          appId: parsed.data.PRIVY_APP_ID,
+          appSecret: parsed.data.PRIVY_APP_SECRET,
+        })
+      : null;
+  const stream =
+    parsed.data.STREAM_API_KEY !== undefined &&
+    parsed.data.STREAM_API_SECRET !== undefined
+      ? Object.freeze({
+          apiKey: parsed.data.STREAM_API_KEY,
+          apiSecret: parsed.data.STREAM_API_SECRET,
+        })
+      : null;
+  const streamTokenQuota =
+    parsed.data.STREAM_TOKEN_QUOTA_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.STREAM_TOKEN_QUOTA_HMAC_SECRET,
+          policyVersion: "stream_token_v1" as const,
+          windowDurationSeconds: 60 as const,
+          userCapacity: parsed.data.STREAM_TOKEN_USER_LIMIT_PER_MINUTE,
+          ipCapacity: parsed.data.STREAM_TOKEN_IP_LIMIT_PER_MINUTE,
+        });
+  const social =
+    parsed.data.SOCIAL_CURSOR_HMAC_SECRET !== undefined &&
+    parsed.data.SOCIAL_QUOTA_HMAC_SECRET !== undefined
+      ? Object.freeze({
+          cursorHmacSecret: parsed.data.SOCIAL_CURSOR_HMAC_SECRET,
+          quotaHmacSecret: parsed.data.SOCIAL_QUOTA_HMAC_SECRET,
+          cursorTtlSeconds: 600 as const,
+        })
+      : null;
+  const perpReadCursor =
+    parsed.data.PERP_READ_CURSOR_HMAC_SECRET === undefined
+      ? null
+      : Object.freeze({
+          hmacSecret: parsed.data.PERP_READ_CURSOR_HMAC_SECRET,
+          ttlSeconds: 600 as const,
+        });
+  let hyperliquidPrivateReads: HyperliquidPrivateReadsConfig | null = null;
+  if (parsed.data.HYPERLIQUID_PRIVATE_READS_ENABLED) {
+    const quotaHmacSecret = parsed.data.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET;
+    if (quotaHmacSecret === undefined) {
+      throw new ConfigurationError([
+        "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: required when private reads are enabled",
+      ]);
+    }
+    hyperliquidPrivateReads = Object.freeze({
+      quotaHmacSecret,
+      policyVersion: "hyperliquid_info_v1",
+      windowDurationSeconds: 60,
+      weightCapacity: parsed.data.HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE,
+    });
+  }
+
+  const bscChain = parseBscChainConfig(parsed.data);
+
+  return Object.freeze({
+    nodeEnv: parsed.data.NODE_ENV,
+    host: parsed.data.HOST,
+    port: parsed.data.PORT,
+    publicBaseUrl: publicBaseUrl.toString(),
+    tokenLogoUrlMode: parsed.data.TOKEN_LOGO_URL_MODE,
+    apiDocsEnabled: parsed.data.API_DOCS_ENABLED,
+    trustProxy: parsed.data.TRUST_PROXY,
+    logLevel: parsed.data.LOG_LEVEL,
+    v2SessionEnabled: parsed.data.V2_SESSION_ENABLED,
+    v2ModulesEnabled,
+    v2ClientPolicy,
+    v2Cursor,
+    v2AliasBlockedTerms,
+    databaseUrl: databaseUrl.toString(),
+    databasePoolMax: parsed.data.DATABASE_POOL_MAX,
+    databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
+    databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    v2CommunityChannelMemberCap: parsed.data.V2_COMMUNITY_CHANNEL_MEMBER_CAP,
+    privy,
+    stream,
+    streamTokenQuota,
+    streamAudioRoomUserRoleEvidenceRef:
+      parsed.data.STREAM_AUDIO_ROOM_USER_ROLE_EVIDENCE_REF ?? null,
+    social,
+    perpReadCursor,
+    hyperliquidPrivateReads,
+    bscChain,
+    bscConfirmations: parsed.data.BSC_CONFIRMATIONS,
+    bscReorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+    launchChain: parseLaunchChainConfig(parsed.data, {
+      rpcUrls: bscChain?.rpcUrls ?? Object.freeze([]),
+      confirmations: parsed.data.BSC_CONFIRMATIONS,
+      reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+      logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
+    }),
+    launchContract: parseLaunchContractConfig(parsed.data),
+    hooksLaunchFactoryAddress:
+      parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
+    hooksLaunchFactoryCodeHash:
+      parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
+    launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
+    launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
+    miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
+    walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
+    passkeyRelyingParty: parsePasskeyRelyingPartyConfig(parsed.data),
+    appLinks: parseAppLinksConfig(parsed.data),
+    bscWrites: parseBscWriteConfig(parsed.data),
+    market: parseMarketConfig(parsed.data),
+    communityAi: parseCommunityAiConfig(parsed.data),
+    push: parsePushConfig(parsed.data),
+    serviceName: "loop-api",
+    serviceVersion,
+  });
+}
+
+/**
+ * The reconciliation process deliberately has no HTTP or provider credential
+ * configuration. Its read-only provider capabilities have independent,
+ * default-off switches and never inherit the API process's private-read flag.
+ */
+export function loadReconciliationWorkerConfig(
+  environment: NodeJS.ProcessEnv,
+): ReconciliationWorkerConfig {
+  const parsed = reconciliationWorkerEnvironmentSchema.safeParse({
+    NODE_ENV: environment["NODE_ENV"] ?? "development",
+    LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED:
+      environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED:
+      environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] ?? "false",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
+      environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED:
+      environment["ISSUANCE_RATE_RECORD_CLEANUP_ENABLED"] ?? "true",
+    COMMUNITY_CHANNEL_SYNC_ENABLED:
+      environment["COMMUNITY_CHANNEL_SYNC_ENABLED"] ?? "false",
+    STREAM_API_KEY: environment["STREAM_API_KEY"],
+    STREAM_API_SECRET: environment["STREAM_API_SECRET"],
+    HYPERLIQUID_INFO_QUOTA_HMAC_SECRET:
+      environment["HYPERLIQUID_INFO_QUOTA_HMAC_SECRET"],
+    HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE:
+      environment["HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE"] ?? "960",
+    BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
+    LAUNCH_INDEXER_ENABLED: environment["LAUNCH_INDEXER_ENABLED"] ?? "false",
+    BSC_INDEXER_START_BLOCK: environment["BSC_INDEXER_START_BLOCK"],
+    BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE:
+      environment["BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE"] ?? "200",
+    BSC_RPC_URLS: environment["BSC_RPC_URLS"],
+    BSC_CONFIRMATIONS: environment["BSC_CONFIRMATIONS"] ?? "15",
+    BSC_REORG_DEPTH_BLOCKS: environment["BSC_REORG_DEPTH_BLOCKS"] ?? "64",
+    BSC_LOG_ADDRESS_CHUNK_SIZE:
+      environment["BSC_LOG_ADDRESS_CHUNK_SIZE"] ?? "8",
+    ALERT_EVALUATOR_ENABLED: environment["ALERT_EVALUATOR_ENABLED"] ?? "false",
+    ALERT_NOTIFICATION_DEDUPE_SECONDS:
+      environment["ALERT_NOTIFICATION_DEDUPE_SECONDS"] ?? "3600",
+    MARKET_SPARKLINE_WARM_ENABLED:
+      environment["MARKET_SPARKLINE_WARM_ENABLED"] ?? "true",
+    MARKET_SPARKLINE_WARM_INTERVAL_MS:
+      environment["MARKET_SPARKLINE_WARM_INTERVAL_MS"] ?? "4000",
+    WALLET_INTENT_RECONCILE_ENABLED:
+      environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
+    MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
+    MINING_MOCK_HOLDINGS_ENABLED:
+      environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
+    PRIVY_APP_ID: environment["PRIVY_APP_ID"],
+    PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
+    FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
+      environment["FIREBASE_SERVICE_ACCOUNT_JSON_PATH"],
+    ...launchChainEnvironmentDefaults(environment),
+    ...marketEnvironmentDefaults(environment),
+    DATABASE_URL: environment["DATABASE_URL"],
+    DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
+    DATABASE_CONNECTION_TIMEOUT_MS:
+      environment["DATABASE_CONNECTION_TIMEOUT_MS"] ?? "3000",
+    DATABASE_STATEMENT_TIMEOUT_MS:
+      environment["DATABASE_STATEMENT_TIMEOUT_MS"] ?? "5000",
+  });
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map(
+      (issue) => `${issue.path.join(".") || "configuration"}: ${issue.message}`,
+    );
+    throw new ConfigurationError(issues);
+  }
+
+  const databaseUrl = parseUrl("DATABASE_URL", parsed.data.DATABASE_URL);
+  assertDatabaseUrl(databaseUrl);
+  let reconciliationReadCapability: HyperliquidPrivateReadsConfig | null = null;
+  if (
+    parsed.data.HYPERLIQUID_RECONCILIATION_READS_ENABLED ||
+    parsed.data.HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED
+  ) {
+    const quotaHmacSecret = parsed.data.HYPERLIQUID_INFO_QUOTA_HMAC_SECRET;
+    if (quotaHmacSecret === undefined) {
+      throw new ConfigurationError([
+        "HYPERLIQUID_INFO_QUOTA_HMAC_SECRET: required when reconciliation reads are enabled",
+      ]);
+    }
+    reconciliationReadCapability = Object.freeze({
+      quotaHmacSecret,
+      policyVersion: "hyperliquid_info_v1",
+      windowDurationSeconds: 60,
+      weightCapacity: parsed.data.HYPERLIQUID_INFO_WEIGHT_LIMIT_PER_MINUTE,
+    });
+  }
+
+  const workerBscChain = parseBscChainConfig({
+    ...parsed.data,
+    BSC_USD1_VERIFIED: false,
+  });
+
+  return Object.freeze({
+    nodeEnv: parsed.data.NODE_ENV,
+    logLevel: parsed.data.LOG_LEVEL,
+    databaseUrl: databaseUrl.toString(),
+    databasePoolMax: parsed.data.DATABASE_POOL_MAX,
+    databaseConnectionTimeoutMs: parsed.data.DATABASE_CONNECTION_TIMEOUT_MS,
+    databaseStatementTimeoutMs: parsed.data.DATABASE_STATEMENT_TIMEOUT_MS,
+    hyperliquidReconciliationReads: parsed.data
+      .HYPERLIQUID_RECONCILIATION_READS_ENABLED
+      ? reconciliationReadCapability
+      : null,
+    hyperliquidSpotReconciliationReads: parsed.data
+      .HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED
+      ? reconciliationReadCapability
+      : null,
+    spotAgentLifecycleMaintenanceEnabled:
+      parsed.data.SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED,
+    issuanceRateRecordCleanupEnabled:
+      parsed.data.ISSUANCE_RATE_RECORD_CLEANUP_ENABLED,
+    bscChain: workerBscChain,
+    bscIndexer: parsed.data.BSC_INDEXER_ENABLED
+      ? Object.freeze({
+          startBlockNumber: parsed.data.BSC_INDEXER_START_BLOCK ?? null,
+          walletTopicChunkSize: parsed.data.BSC_INDEXER_WALLET_TOPIC_CHUNK_SIZE,
+        })
+      : null,
+    communityChannelSync:
+      parsed.data.COMMUNITY_CHANNEL_SYNC_ENABLED &&
+      parsed.data.STREAM_API_KEY !== undefined &&
+      parsed.data.STREAM_API_SECRET !== undefined
+        ? Object.freeze({
+            apiKey: parsed.data.STREAM_API_KEY,
+            apiSecret: parsed.data.STREAM_API_SECRET,
+          })
+        : null,
+    launchChain: parseLaunchChainConfig(parsed.data, {
+      rpcUrls: workerBscChain?.rpcUrls ?? Object.freeze([]),
+      confirmations: parsed.data.BSC_CONFIRMATIONS,
+      reorgDepthBlocks: parsed.data.BSC_REORG_DEPTH_BLOCKS,
+      logAddressChunkSize: parsed.data.BSC_LOG_ADDRESS_CHUNK_SIZE,
+    }),
+    launchContract: parseLaunchContractConfig(parsed.data),
+    launchIndexerEnabled: parsed.data.LAUNCH_INDEXER_ENABLED,
+    market: parseMarketConfig(parsed.data),
+    push: parsePushConfig(parsed.data),
+    alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
+      ? Object.freeze({
+          notificationDedupeSeconds:
+            parsed.data.ALERT_NOTIFICATION_DEDUPE_SECONDS,
+        })
+      : null,
+    sparklineWarm: parsed.data.MARKET_SPARKLINE_WARM_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.MARKET_SPARKLINE_WARM_INTERVAL_MS,
+        })
+      : null,
+    walletIntentReconcile: parsed.data.WALLET_INTENT_RECONCILE_ENABLED
+      ? Object.freeze({
+          privy:
+            parsed.data.PRIVY_APP_ID !== undefined &&
+            parsed.data.PRIVY_APP_SECRET !== undefined
+              ? Object.freeze({
+                  appId: parsed.data.PRIVY_APP_ID,
+                  appSecret: parsed.data.PRIVY_APP_SECRET,
+                })
+              : null,
+        })
+      : null,
+    miningSnapshotEnabled: parsed.data.MINING_SNAPSHOT_ENABLED,
+    miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
+    serviceName: "loop-reconciliation-worker",
+    serviceVersion,
+  });
+}
