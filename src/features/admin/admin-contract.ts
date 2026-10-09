@@ -51,7 +51,12 @@ export const adminErrorCatalog = Object.freeze({
     retryable: false,
     userMessageKey: "errors.admin.loginInvalid",
   },
-  /** Five failures in a row: every login refused for 15 minutes. */
+  /**
+   * Decision 0110: the login name (`detailsSafe.scope: username`, five
+   * failures in a row by default) or the client address (`scope: ip`, 50
+   * failures in 15 minutes by default) is locked; `retryAfterSeconds` and
+   * `Retry-After` say for how long.
+   */
   ADMIN_LOGIN_LOCKED: {
     statusCode: 423,
     category: "rateLimit",
@@ -267,6 +272,10 @@ export const adminReasonCodes = Object.freeze({
   formulaWeightUnbound: "ADMIN_FORMULA_COMMUNITY_ASSET_NOT_BOUND",
   formulaWeightConflict: "ADMIN_FORMULA_COMMUNITY_WEIGHT_CONFLICT",
   formulaApproveProduction: "MINING_APPROVE_FORBIDDEN_IN_PRODUCTION",
+  /** Decision 0110: the draft has no recorded author; save it again. */
+  formulaDraftAuthorUnknown: "ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN",
+  /** Decision 0110: the approver saved this draft. */
+  formulaSelfApproval: "ADMIN_FORMULA_SELF_APPROVAL",
   memeTokenNotFound: "ADMIN_MEME_TOKEN_NOT_FOUND",
   memeExecutorDisabled: "MEME_EXECUTOR_DISABLED",
   memeContractNotConfigured: "MEME_CONTRACT_NOT_CONFIGURED",

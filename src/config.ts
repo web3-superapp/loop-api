@@ -21,6 +21,10 @@ import {
   compareClientVersions,
   isValidClientVersion,
 } from "./features/session/client-version.js";
+import {
+  defaultAdminLoginPolicy,
+  type AdminLoginPolicy,
+} from "./features/admin/admin-login-attempts.js";
 
 const serviceVersion = "0.1.0";
 
@@ -555,6 +559,12 @@ const environmentSchema = z
     ADMIN_USERNAME: optionalCredential(64),
     ADMIN_PASSWORD_HASH: optionalCredential(512),
     ADMIN_SESSION_SECRET: optionalOpaqueSecret(32, 512),
+    // Decision 0110: login lock per username and per client address.
+    ADMIN_LOGIN_USERNAME_MAX_FAILURES: positiveIntegerString(1, 100),
+    ADMIN_LOGIN_USERNAME_LOCK_SECONDS: positiveIntegerString(1, 86_400),
+    ADMIN_LOGIN_IP_MAX_FAILURES: positiveIntegerString(1, 10_000),
+    ADMIN_LOGIN_IP_WINDOW_SECONDS: positiveIntegerString(1, 86_400),
+    ADMIN_LOGIN_IP_LOCK_SECONDS: positiveIntegerString(1, 86_400),
     // Decision 0105: the console's MEME pause/unpause signs with its own
     // operator key; the API process never loads the deployer key.
     MEME_OPERATOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
@@ -2400,6 +2410,8 @@ export interface AdminConsoleConfig {
   readonly sessionSecret: string;
   /** `Secure` cookie attribute: on unless PUBLIC_BASE_URL is plain http. */
   readonly cookieSecure: boolean;
+  /** Decision 0110: `ADMIN_LOGIN_*` (defaults 5 / 900 / 50 / 900 / 900). */
+  readonly loginPolicy: AdminLoginPolicy;
 }
 
 export const adminUsernamePattern = /^[A-Za-z0-9._@-]{1,64}$/u;
@@ -2415,6 +2427,11 @@ export function parseAdminConsoleConfig(data: {
   readonly ADMIN_USERNAME?: string | undefined;
   readonly ADMIN_PASSWORD_HASH?: string | undefined;
   readonly ADMIN_SESSION_SECRET?: string | undefined;
+  readonly ADMIN_LOGIN_USERNAME_MAX_FAILURES?: number | undefined;
+  readonly ADMIN_LOGIN_USERNAME_LOCK_SECONDS?: number | undefined;
+  readonly ADMIN_LOGIN_IP_MAX_FAILURES?: number | undefined;
+  readonly ADMIN_LOGIN_IP_WINDOW_SECONDS?: number | undefined;
+  readonly ADMIN_LOGIN_IP_LOCK_SECONDS?: number | undefined;
   readonly PUBLIC_BASE_URL: string;
 }): AdminConsoleConfig | null {
   const issues: string[] = [];
@@ -2455,6 +2472,23 @@ export function parseAdminConsoleConfig(data: {
     passwordHash: data.ADMIN_PASSWORD_HASH,
     sessionSecret: data.ADMIN_SESSION_SECRET,
     cookieSecure: !data.PUBLIC_BASE_URL.startsWith("http://"),
+    loginPolicy: Object.freeze({
+      usernameMaximumFailures:
+        data.ADMIN_LOGIN_USERNAME_MAX_FAILURES ??
+        defaultAdminLoginPolicy.usernameMaximumFailures,
+      usernameLockSeconds:
+        data.ADMIN_LOGIN_USERNAME_LOCK_SECONDS ??
+        defaultAdminLoginPolicy.usernameLockSeconds,
+      ipMaximumFailures:
+        data.ADMIN_LOGIN_IP_MAX_FAILURES ??
+        defaultAdminLoginPolicy.ipMaximumFailures,
+      ipWindowSeconds:
+        data.ADMIN_LOGIN_IP_WINDOW_SECONDS ??
+        defaultAdminLoginPolicy.ipWindowSeconds,
+      ipLockSeconds:
+        data.ADMIN_LOGIN_IP_LOCK_SECONDS ??
+        defaultAdminLoginPolicy.ipLockSeconds,
+    }),
   });
 }
 
@@ -2642,6 +2676,16 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ADMIN_USERNAME: environment["ADMIN_USERNAME"],
     ADMIN_PASSWORD_HASH: environment["ADMIN_PASSWORD_HASH"],
     ADMIN_SESSION_SECRET: environment["ADMIN_SESSION_SECRET"],
+    ADMIN_LOGIN_USERNAME_MAX_FAILURES:
+      environment["ADMIN_LOGIN_USERNAME_MAX_FAILURES"] ?? "5",
+    ADMIN_LOGIN_USERNAME_LOCK_SECONDS:
+      environment["ADMIN_LOGIN_USERNAME_LOCK_SECONDS"] ?? "900",
+    ADMIN_LOGIN_IP_MAX_FAILURES:
+      environment["ADMIN_LOGIN_IP_MAX_FAILURES"] ?? "50",
+    ADMIN_LOGIN_IP_WINDOW_SECONDS:
+      environment["ADMIN_LOGIN_IP_WINDOW_SECONDS"] ?? "900",
+    ADMIN_LOGIN_IP_LOCK_SECONDS:
+      environment["ADMIN_LOGIN_IP_LOCK_SECONDS"] ?? "900",
     MEME_OPERATOR_PRIVATE_KEY: environment["MEME_OPERATOR_PRIVATE_KEY"],
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),

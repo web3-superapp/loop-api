@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  AdminSeparationOfDutiesError,
   AdminStateConflictError,
   AdminTargetNotFoundError,
   type AdminAuditInput,
@@ -124,6 +125,8 @@ export function adminFormulaFixture(
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
     communityWeights: null,
+    draftAuthor: null,
+    approvedBy: null,
     ...overrides,
   };
 }
@@ -336,6 +339,8 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
         createdAt: at,
         updatedAt: at,
         communityWeights: input.communityWeights,
+        draftAuthor: input.author,
+        approvedBy: null,
       };
       formulas.set(version.configVersion, version);
       const record = append({
@@ -348,6 +353,16 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
     approveFormula: (input) => {
       try {
         const current = formulaOrThrow(input.configVersion);
+        if (current.draftAuthor === null) {
+          throw new AdminStateConflictError(
+            adminReasonCodes.formulaDraftAuthorUnknown,
+          );
+        }
+        if (current.draftAuthor.accountId === input.approver.accountId) {
+          throw new AdminSeparationOfDutiesError(
+            adminReasonCodes.formulaSelfApproval,
+          );
+        }
         let retiredVersion: string | null = null;
         for (const [key, value] of formulas) {
           if (value.status === "approved") {
@@ -362,6 +377,7 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
           effectiveAt: at,
           approvedAt: at,
           updatedAt: at,
+          approvedBy: input.approver,
         };
         formulas.set(version.configVersion, version);
         const record = append({

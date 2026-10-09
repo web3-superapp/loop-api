@@ -8,6 +8,7 @@ import { hashAdminPassword } from "../src/features/admin/admin-auth.js";
 import { adminErrorCodes } from "../src/features/admin/admin-contract.js";
 import type { AdminRole } from "../src/features/admin/admin-roles.js";
 import {
+  adminFormulaFixture,
   createInMemoryAdminRepository,
   type InMemoryAdminRepository,
 } from "./helpers/admin-fakes.js";
@@ -66,7 +67,9 @@ describe("Operator console role separation (Decision 0109)", () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  async function createHarness(): Promise<Harness> {
+  async function createHarness(
+    env: Readonly<Record<string, string>> = {},
+  ): Promise<Harness> {
     const admin = createInMemoryAdminRepository();
     const accounts = createInMemoryAdminAccounts(admin);
     const ownerUserId = randomUUID();
@@ -100,6 +103,7 @@ describe("Operator console role separation (Decision 0109)", () => {
         ADMIN_USERNAME: "operator",
         ADMIN_PASSWORD_HASH: passwordHash,
         ADMIN_SESSION_SECRET: sessionSecret,
+        ...env,
       }),
       database: {
         ...s7Database({}),
@@ -202,7 +206,12 @@ describe("Operator console role separation (Decision 0109)", () => {
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({
       role: "reviewer",
-      permissions: ["audit.read", "launch.approve", "launch.read"],
+      permissions: [
+        "audit.read",
+        "formula.approve",
+        "launch.approve",
+        "launch.read",
+      ],
       operatorUserId: harness.reviewerUserId,
     });
     // The login audit row names the account.
@@ -244,7 +253,22 @@ describe("Operator console role separation (Decision 0109)", () => {
       {
         method: "POST",
         url: "/admin/v1/mining/formula-versions/v9/approve",
+        allowed: ["reviewer"],
+      },
+      {
+        method: "POST",
+        url: "/admin/v1/mining/formula-versions",
         allowed: ["platform_admin"],
+      },
+      {
+        method: "POST",
+        url: "/admin/v1/mining/formula-versions/v9/withdraw",
+        allowed: ["platform_admin"],
+      },
+      {
+        method: "GET",
+        url: "/admin/v1/mining/formula-versions",
+        allowed: ["platform_admin", "reviewer", "auditor"],
       },
       {
         method: "GET",
@@ -756,6 +780,295 @@ describe("Operator console role separation (Decision 0109)", () => {
       headers: { cookie: admin },
     });
     expectError(mismatched, 400, "INVALID_REQUEST");
+  });
+
+  async function sessionOf(
+    app: FastifyInstance,
+    username: string,
+    password: string,
+  ): Promise<{ cookie: string; accountId: string | null }> {
+    const { cookie, body } = await login(app, username, password);
+    return { cookie, accountId: body["accountId"] as string | null };
+  }
+
+  async function seedAccount(
+    harness: Harness,
+    role: AdminRole,
+    operatorUserId: string | null = null,
+  ): Promise<{ username: string; cookie: string; accountId: string }> {
+    const username = `${role.replaceAll("_", "-")}-${randomUUID().slice(0, 8)}`;
+    await harness.accounts.seed({
+      username,
+      password: accountPassword,
+      role,
+      operatorUserId,
+    });
+    const session = await sessionOf(harness.app, username, accountPassword);
+    return {
+      username,
+      cookie: session.cookie,
+      accountId: session.accountId as string,
+    };
+  }
+
+  it("lets only a reviewer approve a formula draft someone else saved (Decision 0110)", async () => {
+    const harness = await createHarness();
+    const base = adminFormulaFixture();
+    harness.admin.formulas.set(base.configVersion, base);
+    const admin = await seedAccount(harness, "platform_admin");
+    const bootstrap = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    const reviewer = await seedAccount(
+      harness,
+      "reviewer",
+      harness.reviewerUserId,
+    );
+    const draft = await harness.app.inject({
+      method: "POST",
+      url: "/admin/v1/mining/formula-versions",
+      headers: { cookie: admin.cookie },
+      payload: { configVersion: "s129Next", baseVersion: base.configVersion },
+    });
+    expect(draft.statusCode, draft.body).toBe(201);
+    expect(draft.json()).toMatchObject({
+      version: {
+        draftAuthor: {
+          kind: "admin_account",
+          username: admin.username,
+          accountId: admin.accountId,
+        },
+        approvedBy: null,
+      },
+    });
+    const approve = (cookie: string, version = "s129Next") =>
+      harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/mining/formula-versions/${version}/approve`,
+        headers: { cookie },
+      });
+    // The platform administrator (table account and bootstrap) cannot.
+    for (const cookie of [admin.cookie, bootstrap]) {
+      expectError(
+        await approve(cookie),
+        403,
+        "PERMISSION_DENIED",
+        "ADMIN_ROLE_FORBIDDEN",
+      );
+    }
+    // The reviewer reads the list (formula.approve) and approves.
+    const list = await harness.app.inject({
+      method: "GET",
+      url: "/admin/v1/mining/formula-versions",
+      headers: { cookie: reviewer.cookie },
+    });
+    expect(list.statusCode).toBe(200);
+    const approved = await approve(reviewer.cookie);
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json()).toMatchObject({
+      version: {
+        status: "approved",
+        approvedBy: {
+          username: reviewer.username,
+          accountId: reviewer.accountId,
+        },
+      },
+      retiredVersion: base.configVersion,
+    });
+    const rows = harness.admin.audit.filter((row) =>
+      row.action.startsWith("mining.formula.approve"),
+    );
+    expect(rows.map((row) => row.action)).toEqual([
+      "mining.formula.approve.requested",
+      "mining.formula.approve",
+    ]);
+    expect(rows.every((row) => row.actorAccountId === reviewer.accountId)).toBe(
+      true,
+    );
+  });
+
+  it("refuses a reviewer's own draft and a draft without a known author (Decision 0110)", async () => {
+    const harness = await createHarness();
+    const reviewer = await seedAccount(
+      harness,
+      "reviewer",
+      harness.reviewerUserId,
+    );
+    harness.admin.formulas.set(
+      "ownDraft",
+      adminFormulaFixture({
+        configVersion: "ownDraft",
+        status: "pending_approval",
+        effectiveAt: null,
+        approvedAt: null,
+        draftAuthor: {
+          kind: "admin_account",
+          actor: reviewer.username,
+          accountId: reviewer.accountId,
+        },
+      }),
+    );
+    harness.admin.formulas.set(
+      "legacyDraft",
+      adminFormulaFixture({
+        configVersion: "legacyDraft",
+        status: "pending_approval",
+        effectiveAt: null,
+        approvedAt: null,
+        draftAuthor: null,
+      }),
+    );
+    const approve = (version: string) =>
+      harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/mining/formula-versions/${version}/approve`,
+        headers: { cookie: reviewer.cookie },
+      });
+    expectError(
+      await approve("ownDraft"),
+      403,
+      "PERMISSION_DENIED",
+      "ADMIN_FORMULA_SELF_APPROVAL",
+    );
+    expectError(
+      await approve("legacyDraft"),
+      409,
+      "ADMIN_CONFLICT",
+      "ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN",
+    );
+    expect(harness.admin.formulas.get("ownDraft")?.status).toBe(
+      "pending_approval",
+    );
+    expect(harness.admin.formulas.get("legacyDraft")?.status).toBe(
+      "pending_approval",
+    );
+    const rows = harness.admin.audit
+      .filter((row) => row.action.startsWith("mining.formula.approve"))
+      .map((row) => [
+        row.action,
+        (row.after as { reasonCode?: string } | null)?.reasonCode ?? null,
+      ]);
+    expect(rows).toEqual([
+      ["mining.formula.approve.requested", null],
+      ["mining.formula.approve.failed", "ADMIN_FORMULA_SELF_APPROVAL"],
+      ["mining.formula.approve.requested", null],
+      ["mining.formula.approve.failed", "ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN"],
+    ]);
+  });
+
+  it("refuses formula approval under NODE_ENV=production like the script", async () => {
+    const harness = await createHarness({
+      NODE_ENV: "production",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      V2_CURSOR_HMAC_SECRET: "c".repeat(64),
+    });
+    harness.admin.formulas.set(
+      "draftV9",
+      adminFormulaFixture({
+        configVersion: "draftV9",
+        status: "pending_approval",
+        draftAuthor: {
+          kind: "admin_bootstrap",
+          actor: "operator",
+          accountId: null,
+        },
+      }),
+    );
+    const reviewer = await seedAccount(
+      harness,
+      "reviewer",
+      harness.reviewerUserId,
+    );
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/admin/v1/mining/formula-versions/draftV9/approve",
+      headers: { cookie: reviewer.cookie },
+    });
+    expectError(
+      response,
+      503,
+      "CAPABILITY_UNAVAILABLE",
+      "MINING_APPROVE_FORBIDDEN_IN_PRODUCTION",
+    );
+    expect(harness.admin.formulas.get("draftV9")?.status).toBe(
+      "pending_approval",
+    );
+  });
+
+  it("locks one account name without locking another, and an address after its limit (Decision 0110)", async () => {
+    const harness = await createHarness({ ADMIN_LOGIN_IP_MAX_FAILURES: "8" });
+    const alice = await seedAccount(harness, "auditor");
+    const bob = await seedAccount(harness, "auditor");
+    const attempt = (username: string, password: string, ip: string) =>
+      harness.app.inject({
+        method: "POST",
+        url: "/admin/v1/session",
+        payload: { username, password },
+        remoteAddress: ip,
+      });
+    for (let index = 0; index < 4; index += 1) {
+      expectError(
+        await attempt(alice.username, "wrong-password-0", `192.0.2.${index}`),
+        401,
+        "ADMIN_LOGIN_INVALID",
+      );
+    }
+    const locked = await attempt(
+      alice.username,
+      "wrong-password-0",
+      "192.0.2.9",
+    );
+    expectError(locked, 423, "ADMIN_LOGIN_LOCKED");
+    expect(locked.json()).toMatchObject({
+      detailsSafe: { scope: "username", retryAfterSeconds: 900 },
+    });
+    expect(locked.headers["retry-after"]).toBe("900");
+    // Alice stays locked from any address, Bob logs in.
+    expectError(
+      await attempt(alice.username, accountPassword, "192.0.2.50"),
+      423,
+      "ADMIN_LOGIN_LOCKED",
+    );
+    expect(
+      (await attempt(bob.username, accountPassword, "192.0.2.50")).statusCode,
+    ).toBe(200);
+    // One address spraying names: the 8th failure locks the address.
+    for (let index = 0; index < 7; index += 1) {
+      expectError(
+        await attempt(`ghost-${index}`, "wrong-password-0", "198.51.100.1"),
+        401,
+        "ADMIN_LOGIN_INVALID",
+      );
+    }
+    const ipLocked = await attempt(
+      "ghost-7",
+      "wrong-password-0",
+      "198.51.100.1",
+    );
+    expect(ipLocked.json()).toMatchObject({
+      code: "ADMIN_LOGIN_LOCKED",
+      detailsSafe: { scope: "ip", retryAfterSeconds: 900 },
+    });
+    // The right password of an unlocked account is refused from that
+    // address, accepted from another.
+    expectError(
+      await attempt(bob.username, accountPassword, "198.51.100.1"),
+      423,
+      "ADMIN_LOGIN_LOCKED",
+    );
+    expect(
+      (await attempt(bob.username, accountPassword, "198.51.100.2")).statusCode,
+    ).toBe(200);
+    const locks = harness.admin.audit
+      .filter((row) => row.action === "session.login_locked")
+      .map((row) => row.after);
+    expect(locks).toEqual([
+      expect.objectContaining({
+        scope: "username",
+        username: alice.username,
+        accountId: alice.accountId,
+      }),
+      expect.objectContaining({ scope: "ip", sourceIp: "198.51.100.1" }),
+    ]);
   });
 
   it("answers 503 for account and launch routes without a database", async () => {

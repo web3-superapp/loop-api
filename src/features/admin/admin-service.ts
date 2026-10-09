@@ -31,13 +31,22 @@ import {
 } from "./admin-contract.js";
 import {
   AdminArgon2BusyError,
-  createAdminLoginThrottle,
   createAdminSessionCodec,
   verifyAdminPassword,
-  type AdminLoginThrottle,
   type AdminSession,
   type AdminSessionCodec,
 } from "./admin-auth.js";
+import {
+  adminLoginIpKey,
+  adminLoginUsernameKey,
+  createMemoryAdminLoginAttemptStore,
+  defaultAdminLoginPolicy,
+  type AdminLoginAttemptStore,
+  type AdminLoginFailureOutcome,
+  type AdminLoginLockScope,
+  type AdminLoginPolicy,
+  type AdminLoginSubjects,
+} from "./admin-login-attempts.js";
 import {
   adminPrincipalFromAccount,
   type AdminAccountCredentialRecord,
@@ -45,8 +54,10 @@ import {
   type AdminAccountRepository,
   type AdminPrincipal,
 } from "./admin-accounts.js";
+import { adminRoleHasPermission } from "./admin-roles.js";
 import {
   AdminRepositoryUnavailableError,
+  AdminSeparationOfDutiesError,
   AdminStateConflictError,
   AdminTargetNotFoundError,
   AdminValidationError,
@@ -102,7 +113,15 @@ export interface AdminServiceOptions {
   readonly logger: AdminServiceLogger;
   readonly now?: () => Date;
   readonly sessionCodec?: AdminSessionCodec;
-  readonly loginThrottle?: AdminLoginThrottle;
+  /**
+   * Decision 0110: login failure buckets per username and per client
+   * address. PostgreSQL (`admin_login_attempts`) when a database is
+   * composed; null/omitted = in-process store (no database: only the
+   * bootstrap administrator can log in).
+   */
+  readonly loginAttempts?: AdminLoginAttemptStore | null;
+  /** Decision 0110: `ADMIN_LOGIN_*` limits (defaults 5 / 900 / 50 / 900 / 900). */
+  readonly loginPolicy?: AdminLoginPolicy;
   /**
    * Decision 0109: console accounts. Null (no database) = only the
    * ADMIN_USERNAME bootstrap administrator can log in.
@@ -175,6 +194,11 @@ function translate(error: unknown): never {
   }
   if (error instanceof AdminTargetNotFoundError) {
     throw new AdminApiError("NOT_FOUND", { reasonCode: error.reasonCode });
+  }
+  if (error instanceof AdminSeparationOfDutiesError) {
+    throw new AdminApiError("PERMISSION_DENIED", {
+      reasonCode: error.reasonCode,
+    });
   }
   if (error instanceof AdminValidationError) {
     throw new AdminApiError("VALIDATION_FAILED", {
@@ -296,6 +320,21 @@ export function projectFormulaVersion(record: AdminFormulaVersionRecord) {
     formula: record.formula,
     weightRange: record.weightRange,
     priceGuardRules: record.priceGuardRules,
+    draftAuthor:
+      record.draftAuthor === null
+        ? null
+        : Object.freeze({
+            kind: record.draftAuthor.kind,
+            username: record.draftAuthor.actor,
+            accountId: record.draftAuthor.accountId,
+          }),
+    approvedBy:
+      record.approvedBy === null
+        ? null
+        : Object.freeze({
+            username: record.approvedBy.actor,
+            accountId: record.approvedBy.accountId,
+          }),
   });
 }
 
@@ -317,6 +356,11 @@ export interface AdminService {
     readonly username: unknown;
     readonly password: unknown;
     readonly requestId: string;
+    /**
+     * Decision 0110: the client address (Fastify `request.ip`, behind the
+     * trusted proxy). Omitted = the shared `unknown` IP bucket.
+     */
+    readonly sourceIp?: string | null;
   }): Promise<{
     readonly token: string;
     readonly session: AdminSession;
@@ -417,7 +461,11 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       username: options.username,
       now,
     });
-  const throttle = options.loginThrottle ?? createAdminLoginThrottle({ now });
+  const loginAttempts =
+    options.loginAttempts ?? createMemoryAdminLoginAttemptStore({ now });
+  const loginPolicy = options.loginPolicy ?? defaultAdminLoginPolicy;
+  /** Decision 0105: one password verification at a time per process. */
+  let loginInFlight = false;
   const repository = options.repository;
   const accounts = options.accounts ?? null;
   const promotionImageHosts = Object.freeze([
@@ -558,6 +606,229 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       );
       return null;
     }
+  }
+
+  function lockError(
+    scope: AdminLoginLockScope,
+    retryAfterSeconds: number,
+  ): AdminApiError {
+    return new AdminApiError("ADMIN_LOGIN_LOCKED", {
+      scope,
+      retryAfterSeconds,
+    });
+  }
+
+  async function refundLogin(
+    subjects: AdminLoginSubjects,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      await loginAttempts.cancel(subjects, loginPolicy);
+    } catch (error) {
+      options.logger.warn(
+        {
+          requestId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Operator console login reservation was not refunded",
+      );
+    }
+  }
+
+  /**
+   * Decision 0110: one login attempt. Both buckets (lower-cased username,
+   * client address) are checked and charged one failure before the
+   * password is verified; a wrong password keeps the charge (and may start
+   * a lock), a right one clears the username bucket and refunds the
+   * address, an attempt without a verdict refunds both.
+   */
+  async function verifyLogin(input: {
+    readonly username: string;
+    readonly password: string;
+    readonly requestId: string;
+    readonly sourceIp: string | null;
+  }) {
+    const subjects: AdminLoginSubjects = {
+      usernameKey: adminLoginUsernameKey(input.username),
+      ipKey: adminLoginIpKey(input.sourceIp),
+    };
+    let reservation;
+    try {
+      reservation = await loginAttempts.reserve(subjects, loginPolicy);
+    } catch (error) {
+      // Fail closed: without the shared counters no password is verified.
+      options.logger.warn(
+        {
+          requestId: input.requestId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Operator console login attempts unavailable; login refused",
+      );
+      throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+        reasonCode: adminReasonCodes.databaseUnavailable,
+      });
+    }
+    if (reservation.status === "locked") {
+      throw lockError(reservation.scope, reservation.retryAfterSeconds);
+    }
+    // Decision 0109: a console account first, then the ADMIN_USERNAME
+    // bootstrap administrator. Exactly one argon2 verification runs either
+    // way, so an unknown name costs the same time as a wrong password.
+    let account: AdminAccountCredentialRecord | null = null;
+    if (accounts !== null) {
+      try {
+        account = await accounts.findByUsername(input.username);
+      } catch (error) {
+        await refundLogin(subjects, input.requestId);
+        options.logger.warn(
+          {
+            requestId: input.requestId,
+            errorName: error instanceof Error ? error.name : "unknown",
+          },
+          "Operator console account lookup failed; login refused",
+        );
+        throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+          reasonCode: adminReasonCodes.databaseUnavailable,
+        });
+      }
+    }
+    const usernameMatches =
+      account === null &&
+      input.username.length === options.username.length &&
+      timingSafeEqual(
+        Buffer.from(input.username),
+        Buffer.from(options.username),
+      );
+    let passwordMatches: boolean;
+    try {
+      // The hash is always verified so a wrong username costs the same time.
+      passwordMatches = await verifyAdminPassword(
+        input.password,
+        account?.passwordHash ?? options.passwordHash,
+      );
+    } catch (error) {
+      await refundLogin(subjects, input.requestId);
+      if (error instanceof AdminArgon2BusyError) {
+        throw new AdminApiError("ADMIN_LOGIN_BUSY", {
+          retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
+        });
+      }
+      throw error;
+    }
+    const accepted =
+      account === null
+        ? usernameMatches && passwordMatches
+        : passwordMatches && account.disabledAt === null;
+    // A name the audit may show: an existing account or the bootstrap
+    // administrator. Anything else typed is never written down.
+    const knownUsername =
+      account !== null
+        ? account.username
+        : usernameMatches
+          ? options.username
+          : null;
+    if (!accepted) {
+      let outcome: AdminLoginFailureOutcome | null = null;
+      try {
+        outcome = await loginAttempts.fail(subjects, loginPolicy);
+      } catch (error) {
+        // The reserved failure is already counted; only the lock refresh
+        // was missed.
+        options.logger.warn(
+          {
+            requestId: input.requestId,
+            errorName: error instanceof Error ? error.name : "unknown",
+          },
+          "Operator console login failure was not recorded",
+        );
+      }
+      const usernameLock = outcome?.username.lockedForSeconds ?? 0;
+      const ipLock = outcome?.ip.lockedForSeconds ?? 0;
+      const lockScope: AdminLoginLockScope | null =
+        usernameLock === 0 && ipLock === 0
+          ? null
+          : ipLock > usernameLock
+            ? "ip"
+            : "username";
+      await sessionAudit({
+        actor: "anonymous",
+        action: "session.login_failed",
+        targetId: null,
+        after: {
+          locked: lockScope !== null,
+          lockScope,
+          username: knownUsername,
+          accountId: account?.accountId ?? null,
+          sourceIp: subjects.ipKey,
+          usernameFailures: outcome?.username.failures ?? null,
+          ipFailures: outcome?.ip.failures ?? null,
+        },
+        requestId: input.requestId,
+      });
+      for (const [scope, seconds, failures] of [
+        ["username", usernameLock, outcome?.username.failures ?? null],
+        ["ip", ipLock, outcome?.ip.failures ?? null],
+      ] as const) {
+        if (seconds > 0) {
+          await sessionAudit({
+            actor: "anonymous",
+            action: "session.login_locked",
+            targetId: null,
+            after: {
+              scope,
+              retryAfterSeconds: seconds,
+              failures,
+              username: scope === "username" ? knownUsername : null,
+              accountId:
+                scope === "username" ? (account?.accountId ?? null) : null,
+              sourceIp: subjects.ipKey,
+            },
+            requestId: input.requestId,
+          });
+        }
+      }
+      if (lockScope !== null) {
+        throw lockError(lockScope, lockScope === "ip" ? ipLock : usernameLock);
+      }
+      throw new AdminApiError("ADMIN_LOGIN_INVALID");
+    }
+    try {
+      await loginAttempts.succeed(subjects, loginPolicy);
+    } catch (error) {
+      // The credentials are right; a missed reset only leaves the counted
+      // reservation behind.
+      options.logger.warn(
+        {
+          requestId: input.requestId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Operator console login success was not recorded",
+      );
+    }
+    const issued =
+      account === null
+        ? sessionCodec.issue(options.username)
+        : sessionCodec.issue({
+            actor: account.username,
+            accountId: account.accountId,
+            role: account.role,
+            credentialsVersion: account.credentialsVersion,
+          });
+    await sessionAudit({
+      actor: issued.session.actor,
+      actorAccountId: issued.session.accountId,
+      action: "session.login",
+      targetId: issued.session.sessionId,
+      after: {
+        expiresAt: issued.session.expiresAt,
+        role: issued.session.role,
+      },
+      requestId: input.requestId,
+    });
+    return Object.freeze({
+      ...issued,
+      principal: adminPrincipalFromAccount(issued.session, account),
+    });
   }
 
   /** Decision 0105: in-process pause/unpause single flight per token. */
@@ -915,108 +1186,24 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       ) {
         refuse("INVALID_REQUEST");
       }
-      // Decision 0105: lock check, single flight, and the failure
-      // reservation happen in one synchronous step before argon2 starts.
-      const admission = throttle.admit();
-      if (admission.status === "locked") {
-        throw new AdminApiError("ADMIN_LOGIN_LOCKED", {
-          retryAfterSeconds: admission.retryAfterSeconds,
-        });
-      }
-      if (admission.status === "busy") {
+      // Decision 0105: only one verification runs at a time in this
+      // process; the flag is taken synchronously before anything awaits.
+      if (loginInFlight) {
         throw new AdminApiError("ADMIN_LOGIN_BUSY", {
           retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
         });
       }
-      // Decision 0109: a console account first, then the ADMIN_USERNAME
-      // bootstrap administrator. Exactly one argon2 verification runs either
-      // way, so an unknown name costs the same time as a wrong password.
-      let account: AdminAccountCredentialRecord | null = null;
-      if (accounts !== null) {
-        try {
-          account = await accounts.findByUsername(input.username);
-        } catch (error) {
-          admission.cancel();
-          options.logger.warn(
-            {
-              requestId: input.requestId,
-              errorName: error instanceof Error ? error.name : "unknown",
-            },
-            "Operator console account lookup failed; login refused",
-          );
-          throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
-            reasonCode: adminReasonCodes.databaseUnavailable,
-          });
-        }
-      }
-      const usernameMatches =
-        account === null &&
-        input.username.length === options.username.length &&
-        timingSafeEqual(
-          Buffer.from(input.username),
-          Buffer.from(options.username),
-        );
-      let passwordMatches: boolean;
+      loginInFlight = true;
       try {
-        // The hash is always verified so a wrong username costs the same time.
-        passwordMatches = await verifyAdminPassword(
-          input.password,
-          account?.passwordHash ?? options.passwordHash,
-        );
-      } catch (error) {
-        admission.cancel();
-        if (error instanceof AdminArgon2BusyError) {
-          throw new AdminApiError("ADMIN_LOGIN_BUSY", {
-            retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
-          });
-        }
-        throw error;
-      }
-      const accepted =
-        account === null
-          ? usernameMatches && passwordMatches
-          : passwordMatches && account.disabledAt === null;
-      if (!accepted) {
-        const lockedNow = admission.fail();
-        await sessionAudit({
-          actor: "anonymous",
-          action: "session.login_failed",
-          targetId: null,
-          after: { locked: lockedNow > 0 },
+        return await verifyLogin({
+          username: input.username,
+          password: input.password,
           requestId: input.requestId,
+          sourceIp: input.sourceIp ?? null,
         });
-        if (lockedNow > 0) {
-          throw new AdminApiError("ADMIN_LOGIN_LOCKED", {
-            retryAfterSeconds: lockedNow,
-          });
-        }
-        throw new AdminApiError("ADMIN_LOGIN_INVALID");
+      } finally {
+        loginInFlight = false;
       }
-      admission.succeed();
-      const issued =
-        account === null
-          ? sessionCodec.issue(options.username)
-          : sessionCodec.issue({
-              actor: account.username,
-              accountId: account.accountId,
-              role: account.role,
-              credentialsVersion: account.credentialsVersion,
-            });
-      await sessionAudit({
-        actor: issued.session.actor,
-        actorAccountId: issued.session.accountId,
-        action: "session.login",
-        targetId: issued.session.sessionId,
-        after: {
-          expiresAt: issued.session.expiresAt,
-          role: issued.session.role,
-        },
-        requestId: input.requestId,
-      });
-      return Object.freeze({
-        ...issued,
-        principal: adminPrincipalFromAccount(issued.session, account),
-      });
     },
 
     async resolvePrincipal(token) {
@@ -1538,6 +1725,20 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           weightRange: draft.weightRange,
           priceGuardRules: base.priceGuardRules,
           communityWeights: draft.communityWeights,
+          // Decision 0110: the author is stored with the draft; the
+          // approver must be someone else.
+          author:
+            context.session.accountId === null
+              ? {
+                  kind: "admin_bootstrap",
+                  actor: context.session.actor,
+                  accountId: null,
+                }
+              : {
+                  kind: "admin_account",
+                  actor: context.session.actor,
+                  accountId: context.session.accountId,
+                },
           audit: {
             actor: context.session.actor,
             actorAccountId: context.session.accountId,
@@ -1558,6 +1759,18 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     },
 
     async approveFormula(context, configVersion) {
+      // Decision 0110: only a role holding `formula.approve` (reviewer)
+      // approves, always as a console account (the route checked it too).
+      const approverAccountId = context.session.accountId;
+      if (
+        !adminRoleHasPermission(context.session.role, "formula.approve") ||
+        approverAccountId === null
+      ) {
+        throw new AdminApiError("PERMISSION_DENIED", {
+          reasonCode: adminReasonCodes.roleForbidden,
+          permission: "formula.approve",
+        });
+      }
       if (!configVersionPattern.test(configVersion)) {
         refuse("NOT_FOUND", adminReasonCodes.formulaNotFound);
       }
@@ -1567,17 +1780,30 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           reasonCode: approval.reasonCode,
         });
       }
+      const auditBase = {
+        actor: context.session.actor,
+        actorAccountId: approverAccountId,
+        targetType: "mining_formula_version",
+        targetId: configVersion,
+        requestId: context.requestId,
+      } as const;
+      // Decision 0110 (0105 / 0109 pattern): the intent row first; when it
+      // cannot be written nothing is approved (503 ADMIN_AUDIT_UNAVAILABLE).
+      const requested = await intentAudit({
+        ...auditBase,
+        action: "mining.formula.approve.requested",
+        before: null,
+        after: { configVersion },
+      });
       try {
         const approved = await repository.approveFormula({
           configVersion,
-          audit: {
+          approver: {
             actor: context.session.actor,
-            actorAccountId: context.session.accountId,
-            action: "mining.formula.approve",
-            targetType: "mining_formula_version",
-            targetId: configVersion,
-            requestId: context.requestId,
+            accountId: approverAccountId,
           },
+          requestedAuditId: requested.auditId,
+          audit: { ...auditBase, action: "mining.formula.approve" },
         });
         return Object.freeze({
           version: projectFormulaVersion(approved.version),
@@ -1585,6 +1811,21 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           audit: auditReference(approved.audit),
         });
       } catch (error) {
+        const reason =
+          error instanceof AdminStateConflictError ||
+          error instanceof AdminValidationError ||
+          error instanceof AdminTargetNotFoundError ||
+          error instanceof AdminSeparationOfDutiesError
+            ? error.reasonCode
+            : error instanceof AdminRepositoryUnavailableError
+              ? adminReasonCodes.databaseUnavailable
+              : "INTERNAL";
+        await outcomeAudit({
+          ...auditBase,
+          action: "mining.formula.approve.failed",
+          before: null,
+          after: { reasonCode: reason, requestedAuditId: requested.auditId },
+        });
         return translate(error);
       }
     },

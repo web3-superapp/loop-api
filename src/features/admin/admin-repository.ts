@@ -124,6 +124,23 @@ export interface AdminFormulaPlaceholders {
   readonly inviteInitialPower: string | null;
 }
 
+/**
+ * Decision 0110: who saved a console draft. `admin_account` = a console
+ * account; `admin_bootstrap` = the ADMIN_USERNAME administrator (no
+ * account ID).
+ */
+export interface AdminFormulaDraftAuthor {
+  readonly kind: "admin_account" | "admin_bootstrap";
+  readonly actor: string;
+  readonly accountId: string | null;
+}
+
+/** Decision 0110: the console account that approved a version. */
+export interface AdminFormulaApprover {
+  readonly actor: string;
+  readonly accountId: string;
+}
+
 export interface AdminFormulaVersionRecord {
   readonly configVersion: string;
   readonly formula: MiningFormulaDocument;
@@ -136,6 +153,13 @@ export interface AdminFormulaVersionRecord {
   readonly updatedAt: string;
   /** Null for versions not created by the console. */
   readonly communityWeights: readonly AdminCommunityWeightEntry[] | null;
+  /**
+   * Decision 0110: null for versions saved before migration 000056 or by a
+   * script; such a draft cannot be approved from the console.
+   */
+  readonly draftAuthor: AdminFormulaDraftAuthor | null;
+  /** Decision 0110: null for script approvals and older versions. */
+  readonly approvedBy: AdminFormulaApprover | null;
 }
 
 export interface AdminOverviewRecord {
@@ -241,6 +265,8 @@ export interface AdminRepository {
     readonly weightRange: MiningWeightRangeDocument;
     readonly priceGuardRules: readonly MiningPriceGuardRule[];
     readonly communityWeights: readonly AdminCommunityWeightEntry[];
+    /** Decision 0110: stored with the draft, immutable. */
+    readonly author: AdminFormulaDraftAuthor;
     readonly audit: Omit<AdminAuditInput, "before" | "after">;
   }): Promise<{
     readonly version: AdminFormulaVersionRecord;
@@ -250,9 +276,17 @@ export interface AdminRepository {
    * Approves a `pending_approval` version: retires the approved one, makes
    * this one approved and effective now, and applies its community
    * weights — one transaction (Decision 0046 semantics).
+   *
+   * Decision 0110: refused (on the locked row) when the draft has no known
+   * author (`AdminStateConflictError` ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN) or
+   * when the approver is the author (`AdminSeparationOfDutiesError`
+   * ADMIN_FORMULA_SELF_APPROVAL).
    */
   approveFormula(input: {
     readonly configVersion: string;
+    readonly approver: AdminFormulaApprover;
+    /** The `.requested` intent row this decision answers. */
+    readonly requestedAuditId: string;
     readonly audit: Omit<AdminAuditInput, "before" | "after">;
   }): Promise<{
     readonly version: AdminFormulaVersionRecord;
@@ -288,6 +322,19 @@ export class AdminStateConflictError extends Error {
   ) {
     super("The admin write conflicts with the current state");
     this.name = "AdminStateConflictError";
+  }
+}
+
+/**
+ * Decision 0110: a separation-of-duties rule refused the actor (403
+ * PERMISSION_DENIED with `reasonCode`).
+ */
+export class AdminSeparationOfDutiesError extends Error {
+  readonly code = "admin_separation_of_duties";
+
+  constructor(readonly reasonCode: string) {
+    super("The actor may not perform this step of the change");
+    this.name = "AdminSeparationOfDutiesError";
   }
 }
 

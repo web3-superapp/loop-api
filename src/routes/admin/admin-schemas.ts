@@ -665,6 +665,8 @@ const formulaVersionSchema = {
     "formula",
     "weightRange",
     "priceGuardRules",
+    "draftAuthor",
+    "approvedBy",
   ],
   properties: {
     configVersion: configVersionSchema,
@@ -739,6 +741,42 @@ const formulaVersionSchema = {
     formula: looseObjectSchema,
     weightRange: looseObjectSchema,
     priceGuardRules: { type: "array", items: looseObjectSchema },
+    draftAuthor: {
+      description:
+        "Decision 0110: who saved the draft. `admin_account` carries the console account ID; `admin_bootstrap` is the ADMIN_USERNAME administrator (accountId null). null = unknown author (saved before S129 or by a script): the console cannot approve it.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "username", "accountId"],
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["admin_account", "admin_bootstrap"],
+            },
+            username: { type: "string", maxLength: 64 },
+            accountId: { anyOf: [uuidSchema, { type: "null" }] },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    approvedBy: {
+      description:
+        "Decision 0110: the reviewer account that approved the version in the console; null for drafts, script approvals, and older versions.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["username", "accountId"],
+          properties: {
+            username: { type: "string", maxLength: 64 },
+            accountId: uuidSchema,
+          },
+        },
+        { type: "null" },
+      ],
+    },
   },
 } as const;
 

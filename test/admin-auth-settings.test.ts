@@ -9,7 +9,6 @@ import {
   AdminArgon2BusyError,
   adminArgon2InFlight,
   adminArgon2MaximumConcurrency,
-  createAdminLoginThrottle,
   createAdminSessionCodec,
   hashAdminPassword,
   readCookie,
@@ -148,66 +147,6 @@ describe("admin password and session", () => {
     expect(codec.verify(issued.token)).not.toBeNull();
     now += 12 * 3600 * 1000;
     expect(codec.verify(issued.token)).toBeNull();
-  });
-
-  it("locks after five failures for fifteen minutes", () => {
-    let now = 0;
-    const throttle = createAdminLoginThrottle({ now: () => new Date(now) });
-    const failOnce = (): number => {
-      const admission = throttle.admit();
-      if (admission.status !== "admitted") {
-        throw new Error(`not admitted: ${admission.status}`);
-      }
-      return admission.fail();
-    };
-    for (let index = 0; index < 4; index += 1) {
-      expect(failOnce()).toBe(0);
-      expect(throttle.lockedForSeconds()).toBe(0);
-    }
-    expect(failOnce()).toBe(900);
-    expect(throttle.lockedForSeconds()).toBe(900);
-    expect(throttle.admit()).toEqual({
-      status: "locked",
-      retryAfterSeconds: 900,
-    });
-    now += 899_000;
-    expect(throttle.lockedForSeconds()).toBe(1);
-    now += 1_000;
-    expect(throttle.lockedForSeconds()).toBe(0);
-    expect(failOnce()).toBe(0);
-  });
-
-  it("admits one attempt at a time and reserves its failure up front (Decision 0105)", () => {
-    const throttle = createAdminLoginThrottle({ now: () => new Date(0) });
-    const first = throttle.admit();
-    expect(first.status).toBe("admitted");
-    // A concurrent attempt is refused before any password work.
-    expect(throttle.admit()).toEqual({ status: "busy" });
-    if (first.status !== "admitted") {
-      throw new Error("unreachable");
-    }
-    // A cancelled attempt (verifier busy or crashed) refunds its reservation.
-    first.cancel();
-    first.fail();
-    for (let index = 0; index < 4; index += 1) {
-      const admission = throttle.admit();
-      if (admission.status !== "admitted") {
-        throw new Error("unreachable");
-      }
-      expect(admission.fail()).toBe(0);
-    }
-    const success = throttle.admit();
-    if (success.status !== "admitted") {
-      throw new Error("unreachable");
-    }
-    success.succeed();
-    for (let index = 0; index < 4; index += 1) {
-      const admission = throttle.admit();
-      if (admission.status !== "admitted") {
-        throw new Error("unreachable");
-      }
-      expect(admission.fail()).toBe(0);
-    }
   });
 
   it("never runs more than two argon2 derivations at once (Decision 0105)", async () => {

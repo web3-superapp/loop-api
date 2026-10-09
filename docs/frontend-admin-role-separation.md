@@ -43,17 +43,18 @@
 
 ## 2. 角色与权限
 
-| 权限 `permissions[]` | platform_admin 平台管理员 | reviewer 审核人 | testnet_acceptor 测试网验收人 | auditor 审计员 | 对应接口                                             |
-| -------------------- | :-----------------------: | :-------------: | :---------------------------: | :------------: | ---------------------------------------------------- |
-| `console.read`       |             ✓             |                 |                               |       ✓        | 概览、设置读、社区读、挖矿公式读、MEME 读            |
-| `console.write`      |             ✓             |                 |                               |                | 设置写、社区审核、公式草稿/批准/撤回、MEME 下架/暂停 |
-| `accounts.read`      |             ✓             |                 |                               |       ✓        | `GET /accounts`                                      |
-| `accounts.manage`    |             ✓             |                 |                               |                | 建账号、停用、重置密码                               |
-| `audit.read`         |             ✓             |        ✓        |               ✓               |       ✓        | `GET /audit`                                         |
-| `launch.read`        |             ✓             |        ✓        |               ✓               |       ✓        | 发射项目列表 / 详情                                  |
-| `launch.approve`     |                           |        ✓        |                               |                | 批准配置版本                                         |
-| `testnet.read`       |             ✓             |                 |               ✓               |       ✓        | （仅供界面显示，暂无独立接口）                       |
-| `testnet.accept`     |                           |                 |               ✓               |                | 记录测试网验收                                       |
+| 权限 `permissions[]` | platform_admin 平台管理员 | reviewer 审核人 | testnet_acceptor 测试网验收人 | auditor 审计员 | 对应接口                                         |
+| -------------------- | :-----------------------: | :-------------: | :---------------------------: | :------------: | ------------------------------------------------ |
+| `console.read`       |             ✓             |                 |                               |       ✓        | 概览、设置读、社区读、挖矿公式读、MEME 读        |
+| `console.write`      |             ✓             |                 |                               |                | 设置写、社区审核、公式草稿/撤回、MEME 下架/暂停  |
+| `accounts.read`      |             ✓             |                 |                               |       ✓        | `GET /accounts`                                  |
+| `accounts.manage`    |             ✓             |                 |                               |                | 建账号、停用、重置密码                           |
+| `audit.read`         |             ✓             |        ✓        |               ✓               |       ✓        | `GET /audit`                                     |
+| `launch.read`        |             ✓             |        ✓        |               ✓               |       ✓        | 发射项目列表 / 详情                              |
+| `launch.approve`     |                           |        ✓        |                               |                | 批准配置版本                                     |
+| `testnet.read`       |             ✓             |                 |               ✓               |       ✓        | （仅供界面显示，暂无独立接口）                   |
+| `testnet.accept`     |                           |                 |               ✓               |                | 记录测试网验收                                   |
+| `formula.approve`    |                           |        ✓        |                               |                | 批准挖矿公式草稿、读公式列表（S129 / 决策 0110） |
 
 要点：
 
@@ -85,7 +86,12 @@
   "actor": "reviewer-alice",
   "accountId": "6a1d0f6e-2c55-4d0b-9a1e-0f3c1b2a4d5e",
   "role": "reviewer",
-  "permissions": ["audit.read", "launch.approve", "launch.read"],
+  "permissions": [
+    "audit.read",
+    "formula.approve",
+    "launch.approve",
+    "launch.read"
+  ],
   "passwordChangeRequired": false,
   "operatorUserId": "0b9f6c1a-7d2e-4f3a-8b5c-1d2e3f4a5b6c",
   "issuedAt": "2026-10-10T02:00:00.000Z",
@@ -95,7 +101,8 @@
 
 错误：400 `INVALID_REQUEST`、401 `ADMIN_LOGIN_INVALID`、423 `ADMIN_LOGIN_LOCKED`、
 429 `ADMIN_LOGIN_BUSY`、503 `CAPABILITY_UNAVAILABLE`（`ADMIN_DATABASE_UNAVAILABLE`，查账号失败）、
-503 `REQUEST_TIMEOUT`、500 `INTERNAL_ERROR`。锁定仍是**全进程全局**：任一账号连续 5 次失败，所有账号锁 15 分钟。
+503 `REQUEST_TIMEOUT`、500 `INTERNAL_ERROR`。锁定自 S129（决策 0110）起**按用户名**与**按来源 IP**
+分别计数，见 §9.2。
 
 ### 3.2 `GET /admin/v1/session`
 
@@ -462,20 +469,20 @@
 
 错误体仍是七字段：`code, category, retryable, userMessageKey, correlationId, detailsSafe, providerReferenceSafe`。
 
-| code                      | HTTP | category       | 本批新增的 reasonCode                                                                                                                                                                                                                                                                                                           |
-| ------------------------- | ---- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PERMISSION_DENIED`（新） | 403  | authorization  | `ADMIN_ROLE_FORBIDDEN`（+`permission`）、`ADMIN_PASSWORD_CHANGE_REQUIRED`、`OPS_FORBIDDEN`、`OPS_SELF_APPROVAL`、`OPS_SELF_ACCEPTANCE`                                                                                                                                                                                          |
-| `ADMIN_SESSION_REQUIRED`  | 401  | authentication | — （账号停用 / 改密 / 重置后旧 cookie 也是它）                                                                                                                                                                                                                                                                                  |
-| `ADMIN_LOGIN_INVALID`     | 401  | authentication | — （也用于改密时当前密码错）                                                                                                                                                                                                                                                                                                    |
-| `ADMIN_LOGIN_LOCKED`      | 423  | rateLimit      | —                                                                                                                                                                                                                                                                                                                               |
-| `ADMIN_LOGIN_BUSY`        | 429  | rateLimit      | — （也用于建账号 / 重置时密码哈希繁忙，`Retry-After: 1`）                                                                                                                                                                                                                                                                       |
-| `ADMIN_CONFLICT`          | 409  | conflict       | `ADMIN_IDEMPOTENCY_CONFLICT`、`ADMIN_ACCOUNT_USERNAME_TAKEN`、`ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND`、`ADMIN_ACCOUNT_DISABLED`、`ADMIN_ACCOUNT_SELF`、`ADMIN_ACCOUNT_ENVIRONMENT`、`ADMIN_UPDATED_AT_MISMATCH`、`OPS_VERSION_CONFLICT`、`OPS_LAUNCH_NOT_APPROVED`、`OPS_LAUNCH_CONFIG_NOT_APPROVED`、`OPS_IDEMPOTENCY_CONFLICT` |
-| `INVALID_REQUEST`         | 400  | validation     | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`（或无 reasonCode：请求头/体格式由 schema 拒绝）                                                                                                                                                                                                                                                |
-| `VALIDATION_FAILED`       | 422  | validation     | `ADMIN_PASSWORD_INVALID`、`ADMIN_ACCOUNT_OPERATOR_REQUIRED`、`ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED`、`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`、`ADMIN_OPERATOR_LABEL_INVALID`、`ADMIN_REASON_CODE_INVALID`、`ADMIN_REASON_TEXT_INVALID`、`OPS_INVALID_COMMAND`、`OPS_INVALID_LAUNCH_CONFIG`     |
-| `NOT_FOUND`               | 404  | validation     | `ADMIN_ACCOUNT_NOT_FOUND`、`ADMIN_LAUNCH_PROJECT_NOT_FOUND`、`OPS_NOT_FOUND`                                                                                                                                                                                                                                                    |
-| `CAPABILITY_UNAVAILABLE`  | 503  | availability   | `ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`、`HOOKS_LAUNCH_REVIEW_UNAVAILABLE`、`OPS_COMMAND_FAILED`                                                                                                                                                                                                                |
-| `REQUEST_TIMEOUT`         | 503  | availability   | —                                                                                                                                                                                                                                                                                                                               |
-| `INTERNAL_ERROR`          | 500  | internal       | —                                                                                                                                                                                                                                                                                                                               |
+| code                      | HTTP | category       | 本批新增的 reasonCode                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------- | ---- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERMISSION_DENIED`（新） | 403  | authorization  | `ADMIN_ROLE_FORBIDDEN`（+`permission`）、`ADMIN_PASSWORD_CHANGE_REQUIRED`、`OPS_FORBIDDEN`、`OPS_SELF_APPROVAL`、`OPS_SELF_ACCEPTANCE`、`ADMIN_FORMULA_SELF_APPROVAL`（S129）                                                                                                                                                                                                 |
+| `ADMIN_SESSION_REQUIRED`  | 401  | authentication | — （账号停用 / 改密 / 重置后旧 cookie 也是它）                                                                                                                                                                                                                                                                                                                                |
+| `ADMIN_LOGIN_INVALID`     | 401  | authentication | — （也用于改密时当前密码错）                                                                                                                                                                                                                                                                                                                                                  |
+| `ADMIN_LOGIN_LOCKED`      | 423  | rateLimit      | — （S129 起 `detailsSafe` = `{scope: "username" \| "ip", retryAfterSeconds}`）                                                                                                                                                                                                                                                                                                |
+| `ADMIN_LOGIN_BUSY`        | 429  | rateLimit      | — （也用于建账号 / 重置时密码哈希繁忙，`Retry-After: 1`）                                                                                                                                                                                                                                                                                                                     |
+| `ADMIN_CONFLICT`          | 409  | conflict       | `ADMIN_IDEMPOTENCY_CONFLICT`、`ADMIN_ACCOUNT_USERNAME_TAKEN`、`ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND`、`ADMIN_ACCOUNT_DISABLED`、`ADMIN_ACCOUNT_SELF`、`ADMIN_ACCOUNT_ENVIRONMENT`、`ADMIN_UPDATED_AT_MISMATCH`、`OPS_VERSION_CONFLICT`、`OPS_LAUNCH_NOT_APPROVED`、`OPS_LAUNCH_CONFIG_NOT_APPROVED`、`OPS_IDEMPOTENCY_CONFLICT`、`ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`（S129） |
+| `INVALID_REQUEST`         | 400  | validation     | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`（或无 reasonCode：请求头/体格式由 schema 拒绝）                                                                                                                                                                                                                                                                                              |
+| `VALIDATION_FAILED`       | 422  | validation     | `ADMIN_PASSWORD_INVALID`、`ADMIN_ACCOUNT_OPERATOR_REQUIRED`、`ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED`、`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`、`ADMIN_OPERATOR_LABEL_INVALID`、`ADMIN_REASON_CODE_INVALID`、`ADMIN_REASON_TEXT_INVALID`、`OPS_INVALID_COMMAND`、`OPS_INVALID_LAUNCH_CONFIG`                                                   |
+| `NOT_FOUND`               | 404  | validation     | `ADMIN_ACCOUNT_NOT_FOUND`、`ADMIN_LAUNCH_PROJECT_NOT_FOUND`、`OPS_NOT_FOUND`                                                                                                                                                                                                                                                                                                  |
+| `CAPABILITY_UNAVAILABLE`  | 503  | availability   | `ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`、`HOOKS_LAUNCH_REVIEW_UNAVAILABLE`、`OPS_COMMAND_FAILED`                                                                                                                                                                                                                                                              |
+| `REQUEST_TIMEOUT`         | 503  | availability   | —                                                                                                                                                                                                                                                                                                                                                                             |
+| `INTERNAL_ERROR`          | 500  | internal       | —                                                                                                                                                                                                                                                                                                                                                                             |
 
 ## 7. 不可用时的行为
 
@@ -498,3 +505,119 @@
   `targetType`：`admin_account` 或 `launch_project`。
 - 绑定 / 撤销运营授权同时写 `ops_audit`（`operator.provision` / `operator.revoke`），批准与验收由审核服务写
   `ops_audit`（成功 `succeeded`，被拒 `rejected`）。后台暂无读 `ops_audit` 的接口。
+
+## 9. S129 变更（决策 0110）：公式审批分权 + 登录按用户名锁定
+
+本节是 S128 合同的增补；与前文冲突时以本节为准。机器契约已重新生成（`openapi/loop-admin.v1.json`）。
+
+### 9.0 给 loop-admin 的改动清单
+
+1. **「批准公式」按钮移到 reviewer 视图**：显示条件改为 `permissions` 含 `formula.approve`
+   （只有 reviewer 有）。platform_admin 视图（含 `ADMIN_USERNAME` 引导账号）**隐藏**批准按钮；
+   platform_admin 仍保留「新建草稿」（= 提交审批）与「撤回草稿」（`console.write`）。
+2. reviewer 视图新增「挖矿公式」页（只读列表 + 批准按钮）：`GET /admin/v1/mining/formula-versions`
+   现在接受 `console.read` **或** `formula.approve`。reviewer 没有 `console.read`，其它旧菜单
+   （概览、设置、社区、MEME）对 reviewer 仍然 403，不要显示。
+3. 公式版本对象多两个字段 `draftAuthor`、`approvedBy`（§9.1），列表与草稿 / 批准 / 撤回回执里都有。
+   当 `draftAuthor === null` 或 `draftAuthor.accountId === 当前会话 accountId` 时，批准按钮置灰并提示原因；
+   服务端同样会拒绝（隐藏只是体验）。
+4. 批准公式新增错误：403 `PERMISSION_DENIED` + `ADMIN_FORMULA_SELF_APPROVAL`、409 `ADMIN_CONFLICT` +
+   `ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`、503 `ADMIN_AUDIT_UNAVAILABLE`（§9.1）。
+5. 登录 423 `ADMIN_LOGIN_LOCKED` 的 `detailsSafe` 多了 `scope`（`username` / `ip`），文案按 scope 区分
+   （§9.2）；一个账号被锁不再影响其它账号登录。
+6. 审计新 action：`mining.formula.approve.requested` / `.failed`、`session.login_locked`；
+   `session.login_failed` 的 `after` 字段扩充（§9.3）。审计页筛选下拉要加上。
+7. 写接口的 `Idempotency-Key` 约定不变：公式批准仍**不带**该头（与 S119 起一致），重复批准会得到
+   409 `ADMIN_FORMULA_STATE_INVALID`。
+
+### 9.1 挖矿公式审批
+
+权限：
+
+| 操作                                           | 接口                                                  | 权限                                | 角色                              |
+| ---------------------------------------------- | ----------------------------------------------------- | ----------------------------------- | --------------------------------- |
+| 读列表                                         | `GET /admin/v1/mining/formula-versions`               | `console.read` 或 `formula.approve` | platform_admin、auditor、reviewer |
+| 新建草稿（= 提交审批，保存人记为 draftAuthor） | `POST /admin/v1/mining/formula-versions`              | `console.write`                     | platform_admin                    |
+| 撤回草稿                                       | `POST /admin/v1/mining/formula-versions/{v}/withdraw` | `console.write`                     | platform_admin                    |
+| 批准草稿                                       | `POST /admin/v1/mining/formula-versions/{v}/approve`  | `formula.approve`                   | **reviewer**                      |
+
+公式版本对象新增字段（其余同 `docs/admin-v1-api.md` §5.6）：
+
+```json
+{
+  "configVersion": "miningFormulaV3",
+  "status": "approved",
+  "…": "…",
+  "draftAuthor": {
+    "kind": "admin_account",
+    "username": "ops-alice",
+    "accountId": "0b6f0c1a-7d2e-4f3a-8b5c-1d2e3f4a5b6c"
+  },
+  "approvedBy": {
+    "username": "reviewer-bob",
+    "accountId": "6a1d0f6e-2c55-4d0b-9a1e-0f3c1b2a4d5e"
+  }
+}
+```
+
+- `draftAuthor.kind`：`admin_account`（后台账号，带 `accountId`）或 `admin_bootstrap`（`ADMIN_USERNAME`
+  引导账号，`accountId: null`）。`draftAuthor: null` = 保存人未知（S129 之前保存的草稿或脚本建的版本）。
+- `approvedBy`：后台批准该版本的 reviewer；草稿、脚本批准、旧版本为 `null`。
+- 两个字段写入后不可改（数据库触发器）。
+
+批准规则与错误（`POST …/{configVersion}/approve`，无请求体）：
+
+| 情况                     | HTTP | code / reasonCode                                                   | 后台应显示                                                 |
+| ------------------------ | ---- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 角色无 `formula.approve` | 403  | `PERMISSION_DENIED` / `ADMIN_ROLE_FORBIDDEN`（`permission`）        | 不应出现（按钮已隐藏）                                     |
+| 批准人就是草稿保存人     | 403  | `PERMISSION_DENIED` / `ADMIN_FORMULA_SELF_APPROVAL`                 | 「不能批准自己保存的草稿」                                 |
+| 草稿保存人未知           | 409  | `ADMIN_CONFLICT` / `ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`             | 「该草稿缺少保存人记录，请平台管理员以它为基版本重新保存」 |
+| 不是草稿                 | 409  | `ADMIN_CONFLICT` / `ADMIN_FORMULA_STATE_INVALID`（`status`）        | 刷新列表                                                   |
+| 草稿不存在               | 404  | `NOT_FOUND` / `ADMIN_FORMULA_VERSION_NOT_FOUND`                     | 刷新列表                                                   |
+| 社区权重校验失败         | 422  | `VALIDATION_FAILED` / `ADMIN_FORMULA_COMMUNITY_*`                   | 原文案                                                     |
+| 审计意图行写不进去       | 503  | `CAPABILITY_UNAVAILABLE` / `ADMIN_AUDIT_UNAVAILABLE`                | 「暂不可用，稍后重试」（什么都没批准）                     |
+| `NODE_ENV=production`    | 503  | `CAPABILITY_UNAVAILABLE` / `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION` | 按钮置灰（列表 `approval.available: false`）               |
+| 数据库不可用             | 503  | `CAPABILITY_UNAVAILABLE` / `ADMIN_DATABASE_UNAVAILABLE`             | 「暂不可用」                                               |
+
+200 回执不变：`{ "version": FormulaVersion, "retiredVersion": "…" | null, "audit": {auditId, seq, at} }`，
+`version.approvedBy` 是当前 reviewer。
+
+### 9.2 登录锁定
+
+| 维度                   | 规则（默认值，可用环境变量调）                                 | 423 `detailsSafe`                                 |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------------------------- |
+| 用户名（不分大小写）   | 连续 5 次失败锁该用户名 15 分钟；成功登录清零                  | `{"scope": "username", "retryAfterSeconds": 900}` |
+| 来源 IP（IPv6 按 /64） | 15 分钟窗口内 50 次失败锁该 IP 15 分钟；成功登录不清零 IP 计数 | `{"scope": "ip", "retryAfterSeconds": 900}`       |
+
+- 两个维度同时锁时返回剩余时间较长的那个（相同时为 `username`）。`Retry-After` 头同 `retryAfterSeconds`。
+- 锁定期内正确密码也是 423；一个用户名被锁**不影响**其它用户名（同一 IP 未达上限时）。
+- 计数在数据库，多实例共享、重启不清零。数据库不可用时登录 503 `ADMIN_DATABASE_UNAVAILABLE`（不校验密码）。
+- 并发登录仍是每实例同一时刻只校验一次，其它 429 `ADMIN_LOGIN_BUSY`（不计失败）。
+- 建议文案：`username` →「该账号登录失败次数过多，请 N 分钟后再试」；`ip` →「当前网络登录失败次数过多，请 N 分钟后再试」。
+
+示例：
+
+```json
+{
+  "code": "ADMIN_LOGIN_LOCKED",
+  "category": "rateLimit",
+  "retryable": true,
+  "userMessageKey": "errors.admin.loginLocked",
+  "correlationId": "2f4b1c9e-6a7d-4e3f-9b2c-1d0e8f7a6b5c",
+  "detailsSafe": { "scope": "username", "retryAfterSeconds": 900 },
+  "providerReferenceSafe": null
+}
+```
+
+### 9.3 审计
+
+| action                             | targetType               | `after`                                                                                                                           |
+| ---------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `mining.formula.approve.requested` | `mining_formula_version` | `{configVersion}`；批准前写，写不进去则不批准                                                                                     |
+| `mining.formula.approve`           | `mining_formula_version` | 原字段 + `draftAuthor`、`approvedBy`、`requestedAuditId`（与批准同一事务）                                                        |
+| `mining.formula.approve.failed`    | `mining_formula_version` | `{reasonCode, requestedAuditId}`                                                                                                  |
+| `session.login_failed`（扩充）     | `session`                | `locked`、`lockScope`、`username`（仅已存在账号或引导账号，否则 null）、`accountId`、`sourceIp`、`usernameFailures`、`ipFailures` |
+| `session.login_locked`（新）       | `session`                | `scope`、`retryAfterSeconds`、`failures`、`username`、`accountId`、`sourceIp`；每次开始锁定写一行                                 |
+
+所有这些行的 `actorAccountId`：批准相关为 reviewer 账号；登录失败 / 锁定为 null（actor `anonymous`）。
+锁定期内被直接拒绝的登录不写审计（避免刷屏），锁定开始那一次写 `session.login_locked`。

@@ -90,6 +90,21 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
     },
     requestId: randomUUID(),
   });
+  // Decision 0110: formula approval is a reviewer's (another account than
+  // the draft's author, here the bootstrap administrator).
+  const reviewerAccountId = randomUUID();
+  const reviewerContext = (): AdminWriteContext => ({
+    session: {
+      sessionId: randomUUID(),
+      actor: "reviewer-s119",
+      accountId: reviewerAccountId,
+      role: "reviewer",
+      credentialsVersion: 1,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+    requestId: randomUUID(),
+  });
 
   async function auditCount(): Promise<number> {
     const result = await pool.query<{ total: string }>(
@@ -577,7 +592,16 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       }),
     ).rejects.toMatchObject({ code: "ADMIN_CONFLICT" });
 
-    const approved = await service.approveFormula(context(), "s119Next");
+    await expect(
+      service.approveFormula(context(), "s119Next"),
+    ).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+      detailsSafe: { reasonCode: "ADMIN_ROLE_FORBIDDEN" },
+    });
+    const approved = await service.approveFormula(
+      reviewerContext(),
+      "s119Next",
+    );
     expect(approved).toMatchObject({
       version: { configVersion: "s119Next", status: "approved" },
       retiredVersion: "s119Base",
@@ -605,7 +629,7 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
     const withdrawn = await service.withdrawFormula(context(), "s119Withdrawn");
     expect(withdrawn["version"]).toMatchObject({ status: "retired" });
     await expect(
-      service.approveFormula(context(), "s119Withdrawn"),
+      service.approveFormula(reviewerContext(), "s119Withdrawn"),
     ).rejects.toBeInstanceOf(AdminApiError);
     await expect(
       service.withdrawFormula(context(), "s119Next"),
@@ -621,12 +645,15 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       .filter((row) => row.action.startsWith("mining."))
       .map((row) => row.action);
     expect(actions).toEqual([
+      "mining.formula.approve.failed",
+      "mining.formula.approve.requested",
       "mining.formula.withdraw",
       "mining.formula.draft",
       "mining.formula.approve",
+      "mining.formula.approve.requested",
       "mining.formula.draft",
     ]);
-    expect(await auditCount()).toBe(before + 4);
+    expect(await auditCount()).toBe(before + 7);
   });
 
   it("counts the overview from live tables", async () => {

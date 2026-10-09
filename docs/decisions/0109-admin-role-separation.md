@@ -208,6 +208,9 @@ account.
 4. The executor (broadcast worker) identity does not exist yet (Decision
    0108 has no executor); when it lands it must be a fourth, non-human
    principal, not a console role.
+   (Questions 2 and 3 are answered by Decision 0110: `formula.approve` for
+   the reviewer with approver ≠ draft author, and a per-username / per-IP
+   lock in `admin_login_attempts`.)
 5. `testnet.read` has no console route of its own (acceptances are shown in
    the project detail under `launch.read`). Add a cross-project acceptance
    list if loop-admin needs one.

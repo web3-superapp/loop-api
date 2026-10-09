@@ -2447,6 +2447,10 @@ export async function buildApp(
         sessionSecret: adminConfig.sessionSecret,
         repository: adminRepository,
         accounts: database.adminAccounts ?? null,
+        // Decision 0110: shared login lock buckets (in-process without a
+        // database, where only the bootstrap administrator exists).
+        loginAttempts: database.adminLoginAttempts ?? null,
+        loginPolicy: adminConfig.loginPolicy,
         settingsReader: adminSettingsReader,
         environmentRecommendedCommunityIds: config.recommendedCommunityIds,
         promotionImageHosts: config.intelPromotionImageHosts,
