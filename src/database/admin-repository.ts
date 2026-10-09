@@ -77,6 +77,7 @@ const auditRowSchema = z
     seq: z.string().regex(/^[1-9][0-9]{0,18}$/u),
     at: dateSchema,
     actor: z.string(),
+    actor_account_id: uuidSchema.nullable(),
     action: z.string(),
     target_type: z.string(),
     target_id: z.string().nullable(),
@@ -87,7 +88,8 @@ const auditRowSchema = z
   .strict();
 
 const auditColumns = `
-  audit_id, seq::text as seq, at, actor, action, target_type, target_id,
+  audit_id, seq::text as seq, at, actor, actor_account_id, action,
+  target_type, target_id,
   before, after, request_id
 `;
 
@@ -98,6 +100,7 @@ function mapAudit(raw: unknown): AdminAuditRecord {
     seq: Number(row.seq),
     at: row.at.toISOString(),
     actor: row.actor,
+    actorAccountId: row.actor_account_id,
     action: row.action,
     targetType: row.target_type,
     targetId: row.target_id,
@@ -115,9 +118,9 @@ async function insertAudit(
     text: `
       insert into public.admin_audit_log (
         audit_id, actor, action, target_type, target_id, before, after,
-        request_id
+        request_id, actor_account_id
       )
-      values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+      values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
       returning ${auditColumns}
     `,
     values: [
@@ -129,6 +132,7 @@ async function insertAudit(
       JSON.stringify(input.before ?? null),
       JSON.stringify(input.after ?? null),
       input.requestId,
+      input.actorAccountId ?? null,
     ],
   });
   return mapAudit(result.rows[0]);

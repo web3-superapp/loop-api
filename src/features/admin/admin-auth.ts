@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 
+import { isAdminRole, type AdminRole } from "./admin-roles.js";
 import {
   adminLoginLockSeconds,
   adminLoginMaximumFailures,
@@ -34,6 +35,14 @@ import {
  *   restart clears both (accepted for one operator behind Cloudflare
  *   Access; rotating ADMIN_SESSION_SECRET revokes every session).
  */
+
+/**
+ * Decision 0109: the console refuses to boot when this Node build has no
+ * `crypto.argon2` (every password check would otherwise fail at runtime).
+ */
+export function adminArgon2Available(): boolean {
+  return typeof argon2 === "function";
+}
 
 /** OWASP-recommended argon2id baseline (19 MiB, t=2, p=1). */
 export const adminArgon2Parameters = Object.freeze({
@@ -174,17 +183,44 @@ export async function verifyAdminPassword(
 
 export interface AdminSession {
   readonly sessionId: string;
+  /** Display username; the `actor` of console audit rows. */
   readonly actor: string;
+  /**
+   * Decision 0109: the `admin_accounts.id`, or null for the ADMIN_USERNAME
+   * bootstrap administrator (environment, never stored).
+   */
+  readonly accountId: string | null;
+  /** Decision 0109: the role at issue time (re-checked per request). */
+  readonly role: AdminRole;
   readonly issuedAt: string;
   readonly expiresAt: string;
+  /**
+   * Decision 0109: `admin_accounts.credentials_version` at issue time (null
+   * for the bootstrap administrator); a password change or reset bumps the
+   * version and ends every older session.
+   */
+  readonly credentialsVersion: number | null;
+}
+
+/** Who a session is issued to (Decision 0109). */
+export interface AdminSessionIdentity {
+  readonly actor: string;
+  readonly accountId: string | null;
+  readonly role: AdminRole;
+  readonly credentialsVersion: number | null;
 }
 
 export interface AdminSessionCodec {
-  issue(actor: string): {
+  /** A bare username means the ADMIN_USERNAME bootstrap administrator. */
+  issue(identity: string | AdminSessionIdentity): {
     readonly token: string;
     readonly session: AdminSession;
   };
-  /** Null for a malformed, forged, expired, revoked, or foreign token. */
+  /**
+   * Null for a malformed, forged, expired, revoked, or foreign token. An
+   * account session still has to be checked against `admin_accounts`
+   * (disabled, password changed) by the caller.
+   */
   verify(token: string | undefined): AdminSession | null;
   revoke(session: AdminSession): void;
 }
@@ -193,8 +229,13 @@ function base64Url(value: Buffer | string): string {
   return Buffer.from(value).toString("base64url");
 }
 
+const sessionUsernamePattern = /^[A-Za-z0-9._@-]{1,64}$/u;
+const sessionAccountIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 export function createAdminSessionCodec(input: {
   readonly secret: string;
+  /** The ADMIN_USERNAME bootstrap administrator. */
   readonly username: string;
   readonly now?: () => Date;
   readonly ttlSeconds?: number;
@@ -219,12 +260,24 @@ export function createAdminSessionCodec(input: {
   }
 
   return Object.freeze({
-    issue(actor: string) {
+    issue(identityInput: string | AdminSessionIdentity) {
+      const identity: AdminSessionIdentity =
+        typeof identityInput === "string"
+          ? {
+              actor: identityInput,
+              accountId: null,
+              role: "platform_admin",
+              credentialsVersion: null,
+            }
+          : identityInput;
       const issuedAtSeconds = Math.floor(now().getTime() / 1000);
       const body = {
-        v: 1,
+        v: 2,
         sid: randomUUID(),
-        sub: actor,
+        sub: identity.actor,
+        aid: identity.accountId,
+        rol: identity.role,
+        cv: identity.credentialsVersion,
         iat: issuedAtSeconds,
         exp: issuedAtSeconds + ttlSeconds,
       };
@@ -233,9 +286,12 @@ export function createAdminSessionCodec(input: {
         token: `${payload}.${sign(payload)}`,
         session: Object.freeze({
           sessionId: body.sid,
-          actor,
+          actor: identity.actor,
+          accountId: identity.accountId,
+          role: identity.role,
           issuedAt: new Date(body.iat * 1000).toISOString(),
           expiresAt: new Date(body.exp * 1000).toISOString(),
+          credentialsVersion: identity.credentialsVersion,
         }),
       });
     },
@@ -267,15 +323,39 @@ export function createAdminSessionCodec(input: {
       }
       const record = body as Record<string, unknown>;
       const atSeconds = Math.floor(now().getTime() / 1000);
+      const subject = record["sub"];
+      const accountId = record["aid"];
+      const role = record["rol"];
+      const credentialsVersion = record["cv"];
       if (
-        record["v"] !== 1 ||
+        record["v"] !== 2 ||
         typeof record["sid"] !== "string" ||
-        record["sub"] !== input.username ||
+        typeof subject !== "string" ||
+        !sessionUsernamePattern.test(subject) ||
+        !isAdminRole(role) ||
         typeof record["iat"] !== "number" ||
         typeof record["exp"] !== "number" ||
         record["exp"] <= atSeconds ||
         record["exp"] - record["iat"] > ttlSeconds ||
         record["iat"] > atSeconds + 60
+      ) {
+        return null;
+      }
+      if (accountId === null) {
+        // The bootstrap administrator: the configured name, always admin.
+        if (
+          subject !== input.username ||
+          role !== "platform_admin" ||
+          credentialsVersion !== null
+        ) {
+          return null;
+        }
+      } else if (
+        typeof accountId !== "string" ||
+        !sessionAccountIdPattern.test(accountId) ||
+        typeof credentialsVersion !== "number" ||
+        !Number.isSafeInteger(credentialsVersion) ||
+        credentialsVersion < 1
       ) {
         return null;
       }
@@ -285,9 +365,12 @@ export function createAdminSessionCodec(input: {
       }
       return Object.freeze({
         sessionId: record["sid"],
-        actor: input.username,
+        actor: subject,
+        accountId,
+        role,
         issuedAt: new Date(record["iat"] * 1000).toISOString(),
         expiresAt: new Date(record["exp"] * 1000).toISOString(),
+        credentialsVersion,
       });
     },
     revoke(session: AdminSession) {

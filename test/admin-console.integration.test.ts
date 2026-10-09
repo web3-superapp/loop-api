@@ -82,6 +82,9 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
     session: {
       sessionId: randomUUID(),
       actor: "operator",
+      accountId: null,
+      role: "platform_admin",
+      credentialsVersion: null,
       issuedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     },

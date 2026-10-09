@@ -6,6 +6,12 @@
 `docs/decisions/0102-admin-console-api.md`；S119b 加固（登录并发、意图先行审计、独立暂停密钥、
 活动位过滤）见 `docs/decisions/0105-admin-hardening-lists-policy.md`。
 
+> **2026-10-10 S128（决策 0109）分权**：后台改为多账号 + 角色（platform_admin / reviewer /
+> testnet_acceptor / auditor），每个接口服务端校验权限（新错误码 `PERMISSION_DENIED` 403）；会话响应多
+> `accountId`、`role`、`permissions`、`passwordChangeRequired`、`operatorUserId`；审计行多 `actorAccountId`；
+> 新增账号管理与发射项目审核接口，其写接口**需要** `Idempotency-Key`。全部见
+> `docs/frontend-admin-role-separation.md`。本文 §1「管理面不用 `Idempotency-Key`」只对本文列出的旧接口成立。
+
 > **2026-10-09 S119b（决策 0105）给 loop-admin 的字段变化**：
 > 新错误码 `ADMIN_LOGIN_BUSY`（429）；新 reasonCode `ADMIN_AUDIT_UNAVAILABLE`、`MEME_PAUSE_PENDING`、
 > `MEME_OPERATOR_KEY_MISSING`（取代 `MEME_EXECUTOR_DISABLED`）；活动位 GET/PUT 回执多

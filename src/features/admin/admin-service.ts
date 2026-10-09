@@ -39,6 +39,13 @@ import {
   type AdminSessionCodec,
 } from "./admin-auth.js";
 import {
+  adminPrincipalFromAccount,
+  type AdminAccountCredentialRecord,
+  type AdminAccountRecord,
+  type AdminAccountRepository,
+  type AdminPrincipal,
+} from "./admin-accounts.js";
+import {
   AdminRepositoryUnavailableError,
   AdminStateConflictError,
   AdminTargetNotFoundError,
@@ -96,6 +103,11 @@ export interface AdminServiceOptions {
   readonly now?: () => Date;
   readonly sessionCodec?: AdminSessionCodec;
   readonly loginThrottle?: AdminLoginThrottle;
+  /**
+   * Decision 0109: console accounts. Null (no database) = only the
+   * ADMIN_USERNAME bootstrap administrator can log in.
+   */
+  readonly accounts?: AdminAccountRepository | null;
 }
 
 export interface AdminAuditReference {
@@ -305,7 +317,22 @@ export interface AdminService {
     readonly username: unknown;
     readonly password: unknown;
     readonly requestId: string;
-  }): Promise<{ readonly token: string; readonly session: AdminSession }>;
+  }): Promise<{
+    readonly token: string;
+    readonly session: AdminSession;
+    readonly principal: AdminPrincipal;
+  }>;
+  /**
+   * Decision 0109: the cookie's principal, re-checked against
+   * `admin_accounts` for an account session (disabled, password changed,
+   * role drift → null). Null = 401.
+   */
+  resolvePrincipal(token: string | undefined): Promise<AdminPrincipal | null>;
+  /** Decision 0109: after a password change, a fresh cookie for the account. */
+  reissueSession(
+    previous: AdminSession,
+    account: AdminAccountRecord,
+  ): { readonly token: string; readonly session: AdminSession };
   logout(context: AdminWriteContext): Promise<void>;
   overview(): Promise<Record<string, unknown>>;
   getRecommendedCommunities(): Promise<Record<string, unknown>>;
@@ -392,6 +419,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     });
   const throttle = options.loginThrottle ?? createAdminLoginThrottle({ now });
   const repository = options.repository;
+  const accounts = options.accounts ?? null;
   const promotionImageHosts = Object.freeze([
     ...(options.promotionImageHosts ?? []),
   ]);
@@ -454,6 +482,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
 
   async function sessionAudit(input: {
     readonly actor: string;
+    readonly actorAccountId?: string | null;
     readonly action: string;
     readonly targetId: string | null;
     readonly after: unknown;
@@ -462,6 +491,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     try {
       await repository.appendAudit({
         actor: input.actor,
+        actorAccountId: input.actorAccountId ?? null,
         action: input.action,
         targetType: "session",
         targetId: input.targetId,
@@ -898,7 +928,29 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
         });
       }
+      // Decision 0109: a console account first, then the ADMIN_USERNAME
+      // bootstrap administrator. Exactly one argon2 verification runs either
+      // way, so an unknown name costs the same time as a wrong password.
+      let account: AdminAccountCredentialRecord | null = null;
+      if (accounts !== null) {
+        try {
+          account = await accounts.findByUsername(input.username);
+        } catch (error) {
+          admission.cancel();
+          options.logger.warn(
+            {
+              requestId: input.requestId,
+              errorName: error instanceof Error ? error.name : "unknown",
+            },
+            "Operator console account lookup failed; login refused",
+          );
+          throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+            reasonCode: adminReasonCodes.databaseUnavailable,
+          });
+        }
+      }
       const usernameMatches =
+        account === null &&
         input.username.length === options.username.length &&
         timingSafeEqual(
           Buffer.from(input.username),
@@ -909,7 +961,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         // The hash is always verified so a wrong username costs the same time.
         passwordMatches = await verifyAdminPassword(
           input.password,
-          options.passwordHash,
+          account?.passwordHash ?? options.passwordHash,
         );
       } catch (error) {
         admission.cancel();
@@ -920,7 +972,11 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         }
         throw error;
       }
-      if (!usernameMatches || !passwordMatches) {
+      const accepted =
+        account === null
+          ? usernameMatches && passwordMatches
+          : passwordMatches && account.disabledAt === null;
+      if (!accepted) {
         const lockedNow = admission.fail();
         await sessionAudit({
           actor: "anonymous",
@@ -937,21 +993,80 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         throw new AdminApiError("ADMIN_LOGIN_INVALID");
       }
       admission.succeed();
-      const issued = sessionCodec.issue(options.username);
+      const issued =
+        account === null
+          ? sessionCodec.issue(options.username)
+          : sessionCodec.issue({
+              actor: account.username,
+              accountId: account.accountId,
+              role: account.role,
+              credentialsVersion: account.credentialsVersion,
+            });
       await sessionAudit({
-        actor: options.username,
+        actor: issued.session.actor,
+        actorAccountId: issued.session.accountId,
         action: "session.login",
         targetId: issued.session.sessionId,
-        after: { expiresAt: issued.session.expiresAt },
+        after: {
+          expiresAt: issued.session.expiresAt,
+          role: issued.session.role,
+        },
         requestId: input.requestId,
       });
-      return issued;
+      return Object.freeze({
+        ...issued,
+        principal: adminPrincipalFromAccount(issued.session, account),
+      });
+    },
+
+    async resolvePrincipal(token) {
+      const session = sessionCodec.verify(token);
+      if (session === null) {
+        return null;
+      }
+      if (session.accountId === null) {
+        return adminPrincipalFromAccount(session, null);
+      }
+      if (accounts === null) {
+        return null;
+      }
+      let account: AdminAccountCredentialRecord | null;
+      try {
+        account = await accounts.get(session.accountId);
+      } catch {
+        throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+          reasonCode: adminReasonCodes.databaseUnavailable,
+        });
+      }
+      // Fail closed: a disabled account, a changed password (credentials
+      // version), or any identity drift ends the session at once.
+      if (
+        account === null ||
+        account.disabledAt !== null ||
+        account.username !== session.actor ||
+        account.role !== session.role ||
+        account.credentialsVersion !== session.credentialsVersion
+      ) {
+        return null;
+      }
+      return adminPrincipalFromAccount(session, account);
+    },
+
+    reissueSession(previous, account) {
+      sessionCodec.revoke(previous);
+      return sessionCodec.issue({
+        actor: account.username,
+        accountId: account.accountId,
+        role: account.role,
+        credentialsVersion: account.credentialsVersion,
+      });
     },
 
     async logout(context) {
       sessionCodec.revoke(context.session);
       await sessionAudit({
         actor: context.session.actor,
+        actorAccountId: context.session.accountId,
         action: "session.logout",
         targetId: context.session.sessionId,
         after: null,
@@ -1048,6 +1163,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           expectedUpdatedAt: expected,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "settings.recommended_communities.update",
             targetType: "setting",
             targetId: "recommended_community_ids",
@@ -1167,6 +1283,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           expectedUpdatedAt: expected,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "settings.intel_promotions.update",
             targetType: "setting",
             targetId: "intel_promotions",
@@ -1287,6 +1404,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         // Decision 0105: intent row first; no row, no review.
         const requested = await intentAudit({
           actor: context.session.actor,
+          actorAccountId: context.session.accountId,
           action: "community.review.requested",
           targetType: "community",
           targetId: communityId,
@@ -1313,6 +1431,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           const errorCode = (error as { readonly code?: unknown } | null)?.code;
           await outcomeAudit({
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "community.review.failed",
             targetType: "community",
             targetId: communityId,
@@ -1348,6 +1467,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           reasonText: text,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "community.review.decided",
             targetType: "community",
             targetId: communityId,
@@ -1420,6 +1540,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           communityWeights: draft.communityWeights,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "mining.formula.draft",
             targetType: "mining_formula_version",
             targetId: body.configVersion,
@@ -1451,6 +1572,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           configVersion,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "mining.formula.approve",
             targetType: "mining_formula_version",
             targetId: configVersion,
@@ -1476,6 +1598,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           configVersion,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "mining.formula.withdraw",
             targetType: "mining_formula_version",
             targetId: configVersion,
@@ -1583,6 +1706,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           reasonText: text,
           audit: {
             actor: context.session.actor,
+            actorAccountId: context.session.accountId,
             action: "meme.listing.update",
             targetType: "meme_token",
             targetId: memeTokenId,
@@ -1655,6 +1779,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       ): Promise<Record<string, unknown>> {
         const base = {
           actor: context.session.actor,
+          actorAccountId: context.session.accountId,
           targetType: "meme_token",
           targetId: memeTokenId,
           before: { status },

@@ -17,6 +17,7 @@ export const adminLoginLockSeconds = 15 * 60;
 
 export const adminErrorCategories = Object.freeze([
   "authentication",
+  "authorization",
   "availability",
   "conflict",
   "internal",
@@ -26,7 +27,7 @@ export const adminErrorCategories = Object.freeze([
 export type AdminErrorCategory = (typeof adminErrorCategories)[number];
 
 export type AdminErrorStatusCode =
-  400 | 401 | 404 | 409 | 422 | 423 | 429 | 500 | 503;
+  400 | 401 | 403 | 404 | 409 | 422 | 423 | 429 | 500 | 503;
 
 interface AdminErrorCatalogEntry {
   readonly statusCode: AdminErrorStatusCode;
@@ -67,6 +68,17 @@ export const adminErrorCatalog = Object.freeze({
     category: "rateLimit",
     retryable: true,
     userMessageKey: "errors.admin.loginBusy",
+  },
+  /**
+   * Decision 0109: the session's role does not hold the permission, the
+   * account must change its password first, or the separation-of-duties
+   * rules refused the actor (`detailsSafe.reasonCode`).
+   */
+  PERMISSION_DENIED: {
+    statusCode: 403,
+    category: "authorization",
+    retryable: false,
+    userMessageKey: "errors.permission.denied",
   },
   /** Optimistic concurrency (`updatedAt`) or a state transition refused. */
   ADMIN_CONFLICT: {
@@ -272,4 +284,26 @@ export const adminReasonCodes = Object.freeze({
   auditUnavailable: "ADMIN_AUDIT_UNAVAILABLE",
   databaseUnavailable: "ADMIN_DATABASE_UNAVAILABLE",
   communityReviewUnavailable: "COMMUNITY_REVIEW_UNAVAILABLE",
+  /** Decision 0109: the role lacks the route's permission. */
+  roleForbidden: "ADMIN_ROLE_FORBIDDEN",
+  /** Decision 0109: an administrator-set password must be changed first. */
+  passwordChangeRequired: "ADMIN_PASSWORD_CHANGE_REQUIRED",
+  /** Decision 0109: the write route needs a UUIDv4 `Idempotency-Key`. */
+  idempotencyKeyRequired: "ADMIN_IDEMPOTENCY_KEY_REQUIRED",
+  /** Decision 0109: the same key was used for another request. */
+  idempotencyConflict: "ADMIN_IDEMPOTENCY_CONFLICT",
+  accountNotFound: "ADMIN_ACCOUNT_NOT_FOUND",
+  accountUsernameTaken: "ADMIN_ACCOUNT_USERNAME_TAKEN",
+  accountOperatorBound: "ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND",
+  accountOperatorUnknown: "ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND",
+  accountOperatorRequired: "ADMIN_ACCOUNT_OPERATOR_REQUIRED",
+  accountOperatorNotAllowed: "ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED",
+  accountProjectUnknown: "ADMIN_ACCOUNT_PROJECT_NOT_FOUND",
+  accountDisabled: "ADMIN_ACCOUNT_DISABLED",
+  accountSelf: "ADMIN_ACCOUNT_SELF",
+  accountEnvironment: "ADMIN_ACCOUNT_ENVIRONMENT",
+  passwordInvalid: "ADMIN_PASSWORD_INVALID",
+  operatorLabelInvalid: "ADMIN_OPERATOR_LABEL_INVALID",
+  launchProjectNotFound: "ADMIN_LAUNCH_PROJECT_NOT_FOUND",
+  launchReviewUnavailable: "HOOKS_LAUNCH_REVIEW_UNAVAILABLE",
 } as const);

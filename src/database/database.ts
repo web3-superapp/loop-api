@@ -55,6 +55,10 @@ import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
+import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
+import { createPostgresAdminLaunchReviewRepository } from "./admin-launch-repository.js";
+import type { AdminAccountRepository } from "../features/admin/admin-accounts.js";
+import type { AdminLaunchReviewRepository } from "../features/admin/admin-launch-review.js";
 import type { AdminRepository } from "../features/admin/admin-repository.js";
 import type { MemeRepository } from "../features/meme/meme-repository.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
@@ -231,6 +235,10 @@ export interface Database {
   readonly meme?: MemeRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
+  /** Decision 0109: console accounts (roles, idempotent account writes). */
+  readonly adminAccounts?: AdminAccountRepository;
+  /** Decision 0109: console read projection of the Hooks launch review. */
+  readonly adminLaunchReview?: AdminLaunchReviewRepository;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
@@ -454,6 +462,8 @@ export function createPostgresDatabase(
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     admin: createPostgresAdminRepository(pool),
+    adminAccounts: createPostgresAdminAccountRepository(pool),
+    adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),
     mining,
     referral,
     async ping(): Promise<void> {
