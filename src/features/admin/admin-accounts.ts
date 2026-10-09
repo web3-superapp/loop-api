@@ -27,7 +27,7 @@ import {
 
 /**
  * Decision 0109: individual console accounts. The platform administrator
- * creates, disables, and resets accounts; every account write carries a
+ * creates, disables, resets, and (Decision 0111) unlocks accounts; every account write carries a
  * UUIDv4 `Idempotency-Key`, lands with its `admin_audit_log` row in the
  * same transaction, and, for reviewer / testnet acceptor accounts, writes
  * the bound LOOP user's `ops_operators` / `ops_grants` through the Decision
@@ -60,10 +60,18 @@ export interface AdminOperatorState {
 export interface AdminAccountListItem extends AdminAccountRecord {
   /** The bound LOOP user's operator state (null when unbound). */
   readonly operator: AdminOperatorState | null;
+  /**
+   * Decision 0111: until when the account's login name is locked
+   * (`admin_login_attempts`, scope `username`); null when not locked now.
+   */
+  readonly lockedUntil: string | null;
 }
 
 export type AdminAccountCommandAction =
-  "account.create" | "account.disable" | "account.reset_password";
+  | "account.create"
+  | "account.disable"
+  | "account.reset_password"
+  | "account.unlock";
 
 export interface AdminAccountCommand {
   readonly idempotencyKey: string;
@@ -115,6 +123,18 @@ export interface AdminAccountRepository {
     readonly audit: Omit<AdminAuditInput, "before" | "after" | "targetId">;
   }): Promise<AdminAccountWriteResult>;
   /**
+   * Decision 0111: deletes the account's login-name bucket
+   * (`admin_login_attempts`, scope `username`, key = the lower-cased
+   * username); address buckets stay. No bucket → `changed: false`, no
+   * audit row. A disabled account is refused (terminal).
+   */
+  unlock(input: {
+    readonly command: AdminAccountCommand;
+    readonly accountId: string;
+    readonly reasonCode: string;
+    readonly audit: Omit<AdminAuditInput, "before" | "after" | "targetId">;
+  }): Promise<AdminAccountWriteResult>;
+  /**
    * The holder's own change: compare-and-set on `credentialsVersion`, so a
    * concurrent reset wins and this change is refused.
    */
@@ -130,6 +150,12 @@ export interface AdminAccountRepository {
 }
 
 export const adminAccountListMaximum = 500;
+/**
+ * Decision 0111: the path segment that names the ADMIN_USERNAME bootstrap
+ * administrator on account routes (it has no account ID); unlocking it is
+ * 409 ADMIN_ACCOUNT_ENVIRONMENT.
+ */
+export const adminBootstrapAccountPathId = "bootstrap";
 export const adminOperatorLabelMaximumLength = 80;
 export const adminAccountProjectScopeMaximum = 20;
 
@@ -281,6 +307,8 @@ export function projectAdminAccount(record: AdminAccountListItem) {
     status: record.disabledAt === null ? "active" : "disabled",
     operatorUserId: record.operatorUserId,
     operator: record.operator,
+    locked: record.lockedUntil !== null,
+    lockedUntil: record.lockedUntil,
     passwordChangeRequired: record.passwordMustChange,
     credentialsChangedAt: record.credentialsChangedAt,
     createdAt: record.createdAt,
@@ -310,6 +338,13 @@ export interface AdminAccountService {
     body: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown>>;
   resetPassword(
+    context: AdminRequestContext,
+    idempotencyKey: unknown,
+    accountId: string,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>>;
+  /** Decision 0111: clears the account's login-name lock. */
+  unlock(
     context: AdminRequestContext,
     idempotencyKey: unknown,
     accountId: string,
@@ -572,6 +607,46 @@ export function createAdminAccountService(options: {
           accountId: id,
           passwordHash,
           audit: auditBase(context, "account.reset_password"),
+        });
+        return writeResource(result);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async unlock(context, idempotencyKey, accountId, body) {
+      assertAdminPermission(context.principal, "accounts.manage");
+      const key = requireAdminIdempotencyKey(idempotencyKey);
+      try {
+        // The ADMIN_USERNAME administrator has no account ID; its name
+        // bucket is cleared by waiting or by the deployment operator.
+        const target = accountId.toLowerCase();
+        if (
+          target === adminBootstrapAccountPathId ||
+          target === options.bootstrapUsername.toLowerCase()
+        ) {
+          throw new AdminApiError("ADMIN_CONFLICT", {
+            reasonCode: adminReasonCodes.accountEnvironment,
+          });
+        }
+        const id = accountIdParam(accountId);
+        const reasonCode = body["reasonCode"];
+        if (
+          typeof reasonCode !== "string" ||
+          !reasonCodePattern.test(reasonCode)
+        ) {
+          throw new AdminApiError("VALIDATION_FAILED", {
+            reasonCode: "ADMIN_REASON_CODE_INVALID",
+          });
+        }
+        const result = await repository().unlock({
+          command: command(context, key, "account.unlock", {
+            accountId: id,
+            reasonCode,
+          }),
+          accountId: id,
+          reasonCode,
+          audit: auditBase(context, "account.unlock"),
         });
         return writeResource(result);
       } catch (error) {

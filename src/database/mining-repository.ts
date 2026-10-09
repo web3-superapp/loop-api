@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Pool } from "pg";
 import { z } from "zod";
 
@@ -23,6 +25,7 @@ import {
   MiningCommunityWeightConflictError,
   MiningFormulaExistsError,
   MiningFormulaNotFoundError,
+  MiningFormulaSelfApprovalError,
   MiningFormulaStateError,
   MiningRepositoryUnavailableError,
   MiningSnapshotNotFoundError,
@@ -341,6 +344,7 @@ function translate(error: unknown): never {
   if (
     error instanceof MiningFormulaNotFoundError ||
     error instanceof MiningFormulaStateError ||
+    error instanceof MiningFormulaSelfApprovalError ||
     error instanceof MiningFormulaExistsError ||
     error instanceof MiningCommunityNotFoundError ||
     error instanceof MiningCommunityAssetNotBoundError ||
@@ -450,6 +454,72 @@ const referralTotalsSql = `
   )
 `;
 
+/** Decision 0111: `--approved-by` and `--reason` of the break-glass CLI. */
+const cliApprovalSchema = z
+  .object({
+    approvedBy: z.string().regex(/^[A-Za-z0-9._@-]{1,60}$/u),
+    reason: z
+      .string()
+      .min(1)
+      .max(500)
+      .refine((value) => !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)),
+    bypass: z.boolean(),
+  })
+  .strict();
+
+const draftAuthorSchema = z.union([
+  z.object({ kind: z.null(), actor: z.null() }).strict(),
+  z
+    .object({
+      kind: z.enum(["admin_account", "admin_bootstrap"]),
+      actor: z.string(),
+    })
+    .strict(),
+]);
+
+/** Compares people by name: case-insensitive, without the `cli:` marker. */
+function cliApproverName(value: string): string {
+  const lower = value.toLowerCase();
+  return lower.startsWith("cli:") ? lower.slice(4) : lower;
+}
+
+async function insertCliApprovalAudit(
+  client: {
+    query(config: {
+      readonly text: string;
+      readonly values: readonly unknown[];
+    }): Promise<unknown>;
+  },
+  input: {
+    readonly action: "mining.formula.approve" | "mining.formula.approve.failed";
+    readonly configVersion: string;
+    readonly requestId: string;
+    readonly before: unknown;
+    readonly after: unknown;
+  },
+): Promise<void> {
+  // Decision 0111: actor `cli` with no console account; the person is in
+  // `after.approvedBy`.
+  await client.query({
+    text: `
+      insert into public.admin_audit_log (
+        audit_id, actor, actor_account_id, action, target_type, target_id,
+        before, after, request_id
+      )
+      values ($1, 'cli', null, $2, 'mining_formula_version', $3,
+        $4::jsonb, $5::jsonb, $6)
+    `,
+    values: [
+      randomUUID(),
+      input.action,
+      input.configVersion,
+      JSON.stringify(input.before),
+      JSON.stringify(input.after),
+      input.requestId,
+    ],
+  });
+}
+
 export function createPostgresMiningRepository(pool: Pool): MiningRepository {
   return Object.freeze({
     async getApprovedFormula() {
@@ -490,30 +560,51 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
     ) {
       try {
         const configVersion = configVersionSchema.parse(rawInput.configVersion);
-        uuidV4Schema.parse(rawInput.requestId);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const approval = cliApprovalSchema.parse(rawInput.approval);
+        const approvedBy = `cli:${approval.approvedBy}`;
         return await withV2Transaction(pool, unavailable, async (client) => {
           const current = await client.query({
             text: `
-              select ${formulaColumns}
+              select ${formulaColumns}, draft_author_kind, draft_author
               from public.mining_formula_versions
               where config_version = $1
               for update
             `,
             values: [configVersion],
           });
-          const raw: unknown = current.rows[0];
+          const raw = current.rows[0] as Record<string, unknown> | undefined;
           if (raw === undefined) {
             throw new MiningFormulaNotFoundError();
           }
-          const record = mapFormula(raw);
+          const {
+            draft_author_kind: rawAuthorKind,
+            draft_author: rawAuthor,
+            ...formulaRow
+          } = raw;
+          const record = mapFormula(formulaRow);
           if (record.status !== "pending_approval") {
             throw new MiningFormulaStateError();
           }
-          await client.query({
+          const author = draftAuthorSchema.parse({
+            kind: rawAuthorKind,
+            actor: rawAuthor,
+          });
+          // Decision 0111: the person who saved the draft (console name, or
+          // a `cli:` name) may not approve it through the CLI either.
+          if (
+            author.actor !== null &&
+            cliApproverName(author.actor) ===
+              cliApproverName(approval.approvedBy)
+          ) {
+            throw new MiningFormulaSelfApprovalError();
+          }
+          const retired = await client.query<{ config_version: string }>({
             text: `
               update public.mining_formula_versions
               set status = 'retired', updated_at = clock_timestamp()
               where status = 'approved'
+              returning config_version
             `,
           });
           const approved = await client.query({
@@ -523,16 +614,76 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 status = 'approved',
                 effective_at = clock_timestamp(),
                 approved_at = clock_timestamp(),
-                updated_at = clock_timestamp()
+                updated_at = clock_timestamp(),
+                approved_by = $2,
+                approved_by_account_id = null
               where config_version = $1
               returning ${formulaColumns}
             `,
-            values: [configVersion],
+            values: [configVersion, approvedBy],
           });
-          return mapFormula(approved.rows[0]);
+          const version = mapFormula(approved.rows[0]);
+          const retiredVersion = retired.rows[0]?.config_version ?? null;
+          await insertCliApprovalAudit(client, {
+            action: "mining.formula.approve",
+            configVersion,
+            requestId,
+            before: {
+              configVersion,
+              status: record.status,
+              effectiveAt: record.effectiveAt,
+              approvedVersion: retiredVersion,
+            },
+            after: {
+              configVersion,
+              status: version.status,
+              effectiveAt: version.effectiveAt,
+              retiredVersion,
+              channel: "cli",
+              draftAuthor:
+                author.kind === null
+                  ? null
+                  : { kind: author.kind, actor: author.actor },
+              approvedBy,
+              reason: approval.reason,
+              bypass: approval.bypass,
+            },
+          });
+          return version;
         });
       } catch (error) {
         return translate(error);
+      }
+    },
+
+    async recordFormulaApprovalRefusal(
+      rawInput: Parameters<MiningRepository["recordFormulaApprovalRefusal"]>[0],
+    ) {
+      try {
+        const configVersion = configVersionSchema.parse(rawInput.configVersion);
+        const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const approval = cliApprovalSchema.parse(rawInput.approval);
+        const reasonCode = z
+          .string()
+          .regex(/^[a-z][a-z0-9_]{0,63}$/u)
+          .parse(rawInput.reasonCode);
+        await insertCliApprovalAudit(pool, {
+          action: "mining.formula.approve.failed",
+          configVersion,
+          requestId,
+          before: null,
+          after: {
+            configVersion,
+            channel: "cli",
+            approvedBy: `cli:${approval.approvedBy}`,
+            reason: approval.reason,
+            bypass: approval.bypass,
+            reasonCode,
+          },
+        });
+        return true;
+      } catch {
+        return false;
       }
     },
 

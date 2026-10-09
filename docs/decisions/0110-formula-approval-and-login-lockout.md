@@ -146,6 +146,8 @@ Replaces the Decision 0105 per-process global lock.
 
 ## 6. Open questions (for the main agent)
 
+Questions 1, 3, and 4 are answered by Decision 0111 (S130).
+
 1. `pnpm mining:approve-formula` (deployment CLI) still approves any draft
    without author or approver records. Keep it as the break-glass path, or
    require `--approver-account` and the same separation?

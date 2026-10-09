@@ -117,6 +117,13 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
        ) values ($1, $2, $3, $4, $5, false, 'operator', now(), now())`,
       [accountId, username, accountHash, role, operator],
     );
+    if (operator !== null) {
+      // Decision 0111: formula approval needs the bound operator enabled.
+      await pool.query(
+        "insert into public.ops_operators (user_id, label, enabled) values ($1, $2, true)",
+        [operator, username],
+      );
+    }
     return { accountId, username };
   }
 
@@ -205,6 +212,11 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
     await mining.approveFormula({
       configVersion: "s129Base",
       requestId: randomUUID(),
+      approval: {
+        approvedBy: "integration-cli",
+        reason: "Integration fixture",
+        bypass: false,
+      },
     });
   }, 120_000);
 
@@ -215,8 +227,8 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
     );
   });
 
-  it("migrates to 000057 with the author columns and the attempts table", async () => {
-    expect(latestMigrationName).toBe("000057_admin_login_attempts");
+  it("migrates to the head (000057 and later) with the author columns and the attempts table", async () => {
+    expect(latestMigrationName).toBe("000058_admin_followups");
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by run_on desc, id desc limit 1",
     );
@@ -345,6 +357,8 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
        where action like 'mining.formula.approve%' order by seq`,
     );
     expect(actions.rows.map((row) => row.action)).toEqual([
+      // Decision 0111: the CLI approval of the base version (actor cli).
+      "mining.formula.approve",
       "mining.formula.approve.requested",
       "mining.formula.approve.failed",
       "mining.formula.approve.requested",
@@ -352,7 +366,8 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
       "mining.formula.approve.requested",
       "mining.formula.approve",
     ]);
-    expect(actions.rows[3]?.actor_account_id).toBe(reviewer.accountId);
+    expect(actions.rows[0]?.actor_account_id).toBeNull();
+    expect(actions.rows[4]?.actor_account_id).toBe(reviewer.accountId);
   });
 
   it("refuses a draft without a recorded author, and the database refuses approver = author", async () => {

@@ -21,6 +21,7 @@ import {
   accountIdParamsSchema,
   accountListResourceSchema,
   accountResetPasswordRequestSchema,
+  accountUnlockRequestSchema,
   accountWriteResourceSchema,
   idempotencyHeadersSchema,
   launchAcceptanceRequestSchema,
@@ -216,7 +217,7 @@ export function registerAdminRoleRoutes(
         operationId: "disableAdminAccount",
         summary: "Disable a console account (terminal)",
         description:
-          "Decision 0109 (`accounts.manage`). Ends every session of the account at once and, for a bound account, sets the LOOP user's ops_operators.enabled=false (ops_audit `operator.revoke`). Disabled is terminal (create a new account instead). Already disabled → 200 `changed: false`. Your own account → 409 ADMIN_ACCOUNT_SELF.",
+          "Decision 0109 (`accounts.manage`). Ends every session of the account at once and, for a bound account, sets the LOOP user's ops_operators.enabled=false in the same transaction (ops_audit `operator.revoke`; the admin audit row carries `operatorEnabledBefore` / `operatorEnabled`), which stops both the Hooks launch review and (Decision 0111) mining formula approval. Disabled is terminal (create a new account instead). Already disabled → 200 `changed: false`. Your own account → 409 ADMIN_ACCOUNT_SELF.",
         tags: ["admin-accounts"],
         security: adminSecurity,
         headers: idempotencyHeadersSchema,
@@ -278,6 +279,45 @@ export function registerAdminRoleRoutes(
     async (request, reply) => {
       const { accountId } = request.params as { readonly accountId: string };
       const resource = await accounts.resetPassword(
+        requestContext(request),
+        idempotencyKey(request),
+        accountId,
+        body(request),
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    `${adminApiPrefix}/accounts/:accountId/unlock`,
+    {
+      schema: {
+        operationId: "unlockAdminAccount",
+        summary: "Lift an account's login-name lock early",
+        description:
+          "Decision 0111 (`accounts.manage`: platform_admin). Deletes the account's login-name bucket (Decision 0110 `admin_login_attempts`, scope username): the lock and the failure count. Address (IP) buckets are never cleared here. Writes `account.unlock` to admin_audit_log (before: failureCount, lockedUntil) and an admin_account_commands row in one transaction. No bucket → 200 `changed: false`, `audit: null`. An exact Idempotency-Key replay → 200 `replayed: true`, `audit: null`. The ADMIN_USERNAME bootstrap administrator (path `bootstrap` or its name) → 409 ADMIN_ACCOUNT_ENVIRONMENT; a disabled account → 409 ADMIN_ACCOUNT_DISABLED.",
+        tags: ["admin-accounts"],
+        security: adminSecurity,
+        headers: idempotencyHeadersSchema,
+        params: accountIdParamsSchema,
+        querystring: emptyQuerySchema,
+        body: accountUnlockRequestSchema,
+        response: {
+          200: accountWriteResourceSchema,
+          ...adminErrors(
+            ...guardedErrors,
+            "NOT_FOUND",
+            "ADMIN_CONFLICT",
+            "VALIDATION_FAILED",
+          ),
+        },
+      },
+      ...guard("accounts.manage"),
+    },
+    async (request, reply) => {
+      const { accountId } = request.params as { readonly accountId: string };
+      const resource = await accounts.unlock(
         requestContext(request),
         idempotencyKey(request),
         accountId,

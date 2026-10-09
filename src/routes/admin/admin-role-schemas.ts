@@ -175,6 +175,8 @@ export const accountSchema = {
     "status",
     "operatorUserId",
     "operator",
+    "locked",
+    "lockedUntil",
     "passwordChangeRequired",
     "credentialsChangedAt",
     "createdAt",
@@ -190,6 +192,16 @@ export const accountSchema = {
     status: { type: "string", enum: ["active", "disabled"] },
     operatorUserId: nullableUuidSchema,
     operator: operatorStateSchema,
+    locked: {
+      type: "boolean",
+      description:
+        "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true.",
+    },
+    lockedUntil: {
+      ...nullableDateTimeSchema,
+      description:
+        "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here.",
+    },
     passwordChangeRequired: { type: "boolean" },
     credentialsChangedAt: dateTimeSchema,
     createdAt: dateTimeSchema,
@@ -295,6 +307,20 @@ export const accountDisableRequestSchema = {
   required: ["reasonCode"],
   properties: {
     reasonCode: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  },
+} as const;
+
+export const accountUnlockRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["reasonCode"],
+  properties: {
+    reasonCode: {
+      type: "string",
+      pattern: "^[a-z][a-z0-9_]{0,63}$",
+      description:
+        "Why the lock is lifted early (lower snake case, e.g. `identity_verified`); stored in the audit row.",
+    },
   },
 } as const;
 

@@ -555,7 +555,33 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
     await mining.approveFormula({
       configVersion: "s119Base",
       requestId: randomUUID(),
+      approval: {
+        approvedBy: "integration-cli",
+        reason: "Integration fixture",
+        bypass: false,
+      },
     });
+    // Decision 0111: the approving reviewer is a real, active account whose
+    // bound LOOP user is an enabled ops operator.
+    const reviewerUser = await pool.query<{ id: string }>(
+      "insert into public.loop_users (privy_user_id) values ($1) returning id",
+      [`did:privy:admin-s119-reviewer:${randomUUID()}`],
+    );
+    await pool.query(
+      `insert into public.admin_accounts (
+         id, username, password_hash, role, operator_user_id,
+         password_must_change, created_by
+       ) values ($1, 'reviewer-s119', $2, 'reviewer', $3, false, 'operator')`,
+      [
+        reviewerAccountId,
+        "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",
+        reviewerUser.rows[0]!.id,
+      ],
+    );
+    await pool.query(
+      "insert into public.ops_operators (user_id, label, enabled) values ($1, 'reviewer-s119', true)",
+      [reviewerUser.rows[0]!.id],
+    );
     const range = documents.weightRange.community.range!;
     await mining.setCommunityWeight({
       communityId: boundCommunity,
@@ -652,6 +678,8 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       "mining.formula.approve",
       "mining.formula.approve.requested",
       "mining.formula.draft",
+      // Decision 0111: the CLI approval of the base version (actor cli).
+      "mining.formula.approve",
     ]);
     expect(await auditCount()).toBe(before + 7);
   });

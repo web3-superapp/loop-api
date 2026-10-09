@@ -6666,7 +6666,7 @@
         "operationId": "approveAdminFormulaVersion",
         "summary": "Approve a draft: it becomes the version in force",
         "tags": ["admin-mining"],
-        "description": "Decision 0110: needs `formula.approve` (reviewer only; platform_admin and the bootstrap administrator are 403 ADMIN_ROLE_FORBIDDEN). The approver must not be the draft's author (403 PERMISSION_DENIED, reasonCode ADMIN_FORMULA_SELF_APPROVAL); a draft without a recorded author is 409 ADMIN_CONFLICT (ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN; save it again as a new draft). Audit: `mining.formula.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing approved), then `mining.formula.approve` in the approving transaction or `mining.formula.approve.failed`. Same semantics as `pnpm mining:approve-formula` (Decision 0046): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
+        "description": "Decision 0110: needs `formula.approve` (reviewer only; platform_admin and the bootstrap administrator are 403 ADMIN_ROLE_FORBIDDEN). The approver must not be the draft's author (403 PERMISSION_DENIED, reasonCode ADMIN_FORMULA_SELF_APPROVAL); a draft without a recorded author is 409 ADMIN_CONFLICT (ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN; save it again as a new draft). Decision 0111: the reviewer's bound ops operator must be enabled (revoked or account disabled meanwhile: 403 PERMISSION_DENIED, reasonCode ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit: `mining.formula.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing approved), then `mining.formula.approve` in the approving transaction or `mining.formula.approve.failed`. Same semantics as the break-glass `pnpm mining:approve-formula` (Decisions 0046, 0111; it records `cli:<name>`, which `approvedBy` shows as null): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 128 },
@@ -11348,6 +11348,8 @@
                           "status",
                           "operatorUserId",
                           "operator",
+                          "locked",
+                          "lockedUntil",
                           "passwordChangeRequired",
                           "credentialsChangedAt",
                           "createdAt",
@@ -11436,6 +11438,17 @@
                               },
                               { "type": "null" }
                             ]
+                          },
+                          "locked": {
+                            "type": "boolean",
+                            "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                          },
+                          "lockedUntil": {
+                            "anyOf": [
+                              { "type": "string", "format": "date-time" },
+                              { "type": "null" }
+                            ],
+                            "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
                           },
                           "passwordChangeRequired": { "type": "boolean" },
                           "credentialsChangedAt": {
@@ -11886,6 +11899,8 @@
                         "status",
                         "operatorUserId",
                         "operator",
+                        "locked",
+                        "lockedUntil",
                         "passwordChangeRequired",
                         "credentialsChangedAt",
                         "createdAt",
@@ -11974,6 +11989,17 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "locked": {
+                          "type": "boolean",
+                          "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                        },
+                        "lockedUntil": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
                         },
                         "passwordChangeRequired": { "type": "boolean" },
                         "credentialsChangedAt": {
@@ -12053,6 +12079,8 @@
                         "status",
                         "operatorUserId",
                         "operator",
+                        "locked",
+                        "lockedUntil",
                         "passwordChangeRequired",
                         "credentialsChangedAt",
                         "createdAt",
@@ -12141,6 +12169,17 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "locked": {
+                          "type": "boolean",
+                          "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                        },
+                        "lockedUntil": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
                         },
                         "passwordChangeRequired": { "type": "boolean" },
                         "credentialsChangedAt": {
@@ -12676,7 +12715,7 @@
         "operationId": "disableAdminAccount",
         "summary": "Disable a console account (terminal)",
         "tags": ["admin-accounts"],
-        "description": "Decision 0109 (`accounts.manage`). Ends every session of the account at once and, for a bound account, sets the LOOP user's ops_operators.enabled=false (ops_audit `operator.revoke`). Disabled is terminal (create a new account instead). Already disabled → 200 `changed: false`. Your own account → 409 ADMIN_ACCOUNT_SELF.",
+        "description": "Decision 0109 (`accounts.manage`). Ends every session of the account at once and, for a bound account, sets the LOOP user's ops_operators.enabled=false in the same transaction (ops_audit `operator.revoke`; the admin audit row carries `operatorEnabledBefore` / `operatorEnabled`), which stops both the Hooks launch review and (Decision 0111) mining formula approval. Disabled is terminal (create a new account instead). Already disabled → 200 `changed: false`. Your own account → 409 ADMIN_ACCOUNT_SELF.",
         "requestBody": {
           "required": true,
           "content": {
@@ -12745,6 +12784,8 @@
                         "status",
                         "operatorUserId",
                         "operator",
+                        "locked",
+                        "lockedUntil",
                         "passwordChangeRequired",
                         "credentialsChangedAt",
                         "createdAt",
@@ -12833,6 +12874,17 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "locked": {
+                          "type": "boolean",
+                          "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                        },
+                        "lockedUntil": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
                         },
                         "passwordChangeRequired": { "type": "boolean" },
                         "credentialsChangedAt": {
@@ -13438,6 +13490,8 @@
                         "status",
                         "operatorUserId",
                         "operator",
+                        "locked",
+                        "lockedUntil",
                         "passwordChangeRequired",
                         "credentialsChangedAt",
                         "createdAt",
@@ -13526,6 +13580,17 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "locked": {
+                          "type": "boolean",
+                          "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                        },
+                        "lockedUntil": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
                         },
                         "passwordChangeRequired": { "type": "boolean" },
                         "credentialsChangedAt": {
@@ -13960,6 +14025,712 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["ADMIN_LOGIN_BUSY"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CAPABILITY_UNAVAILABLE", "REQUEST_TIMEOUT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/accounts/{accountId}/unlock": {
+      "post": {
+        "operationId": "unlockAdminAccount",
+        "summary": "Lift an account's login-name lock early",
+        "tags": ["admin-accounts"],
+        "description": "Decision 0111 (`accounts.manage`: platform_admin). Deletes the account's login-name bucket (Decision 0110 `admin_login_attempts`, scope username): the lock and the failure count. Address (IP) buckets are never cleared here. Writes `account.unlock` to admin_audit_log (before: failureCount, lockedUntil) and an admin_account_commands row in one transaction. No bucket → 200 `changed: false`, `audit: null`. An exact Idempotency-Key replay → 200 `replayed: true`, `audit: null`. The ADMIN_USERNAME bootstrap administrator (path `bootstrap` or its name) → 409 ADMIN_ACCOUNT_ENVIRONMENT; a disabled account → 409 ADMIN_ACCOUNT_DISABLED.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reasonCode"],
+                "properties": {
+                  "reasonCode": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                    "description": "Why the lock is lifted early (lower snake case, e.g. `identity_verified`); stored in the audit row."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "Lower-case UUIDv4. The same key with the same body replays the first result (`replayed: true`); with another body or actor it is 409 ADMIN_CONFLICT (ADMIN_IDEMPOTENCY_CONFLICT / OPS_IDEMPOTENCY_CONFLICT)."
+          }
+        ],
+        "security": [{ "adminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["account", "changed", "replayed", "audit"],
+                  "properties": {
+                    "account": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "accountId",
+                        "username",
+                        "role",
+                        "permissions",
+                        "status",
+                        "operatorUserId",
+                        "operator",
+                        "locked",
+                        "lockedUntil",
+                        "passwordChangeRequired",
+                        "credentialsChangedAt",
+                        "createdAt",
+                        "createdBy",
+                        "disabledAt",
+                        "disabledBy"
+                      ],
+                      "properties": {
+                        "accountId": { "type": "string", "format": "uuid" },
+                        "username": { "type": "string" },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "platform_admin",
+                            "reviewer",
+                            "testnet_acceptor",
+                            "auditor"
+                          ]
+                        },
+                        "permissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "console.read",
+                              "console.write",
+                              "accounts.read",
+                              "accounts.manage",
+                              "audit.read",
+                              "launch.read",
+                              "launch.approve",
+                              "testnet.read",
+                              "testnet.accept",
+                              "formula.approve"
+                            ]
+                          },
+                          "description": "Console permissions of the role (Decision 0109). Empty while `passwordChangeRequired`. The client may hide buttons with it; the server checks every request."
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["active", "disabled"]
+                        },
+                        "operatorUserId": {
+                          "anyOf": [
+                            { "type": "string", "format": "uuid" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "operator": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["enabled", "grants"],
+                              "properties": {
+                                "enabled": {
+                                  "type": ["boolean", "null"],
+                                  "description": "null: no ops_operators row."
+                                },
+                                "grants": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["permission", "scope"],
+                                    "properties": {
+                                      "permission": {
+                                        "type": "string",
+                                        "enum": [
+                                          "audit.read",
+                                          "launch.read",
+                                          "launch.edit",
+                                          "launch.approve",
+                                          "testnet.read",
+                                          "testnet.accept"
+                                        ]
+                                      },
+                                      "scope": {
+                                        "type": "string",
+                                        "description": "`*` or one launch project ID."
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "locked": {
+                          "type": "boolean",
+                          "description": "Decision 0111: the login name is locked right now (too many wrong passwords; Decision 0110). Show the unlock button only when true."
+                        },
+                        "lockedUntil": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0111: when the login-name lock lifts by itself; null when not locked. Read-only (admin_login_attempts). Address (IP) locks are not shown here."
+                        },
+                        "passwordChangeRequired": { "type": "boolean" },
+                        "credentialsChangedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdBy": { "type": "string" },
+                        "disabledAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "disabledBy": { "type": ["null", "string"] }
+                      }
+                    },
+                    "changed": { "type": "boolean" },
+                    "replayed": {
+                      "type": "boolean",
+                      "description": "True when this Idempotency-Key was already applied."
+                    },
+                    "audit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["auditId", "seq", "at"],
+                          "properties": {
+                            "auditId": { "type": "string", "format": "uuid" },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "Display number of the audit row (「审计 #seq」)."
+                            },
+                            "at": { "type": "string", "format": "date-time" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ADMIN_SESSION_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["ADMIN_CONFLICT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
                     "category": {
                       "type": "string",
                       "enum": [

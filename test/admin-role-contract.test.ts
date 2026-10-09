@@ -48,6 +48,7 @@ const writes = [
   "POST /admin/v1/accounts",
   "POST /admin/v1/accounts/{accountId}/disable",
   "POST /admin/v1/accounts/{accountId}/reset-password",
+  "POST /admin/v1/accounts/{accountId}/unlock",
   "POST /admin/v1/launch/projects/{projectId}/versions/{version}/approve",
   "POST /admin/v1/launch/projects/{projectId}/testnet-acceptance",
 ] as const;
@@ -138,6 +139,32 @@ describe("Decision 0109 admin artifact", () => {
       "passwordChangeRequired",
     ]) {
       expect(session).toContain(value);
+    }
+  });
+});
+
+describe("Decision 0111 admin artifact", () => {
+  it("publishes the unlock route with its body, conflicts, and the lock fields", async () => {
+    const all = await operations();
+    const unlock = all.get("POST /admin/v1/accounts/{accountId}/unlock");
+    expect(unlock?.operationId).toBe("unlockAdminAccount");
+    const conflict =
+      unlock?.responses["409"]?.content?.["application/json"]?.schema;
+    expect(JSON.stringify(conflict)).toContain("ADMIN_CONFLICT");
+    expect(Object.keys(unlock?.responses ?? {})).toEqual(
+      expect.arrayContaining(["200", "400", "401", "403", "404", "409", "422"]),
+    );
+    const text = JSON.stringify(unlock);
+    expect(text).toContain("reasonCode");
+    expect(text).toContain("ADMIN_ACCOUNT_ENVIRONMENT");
+    for (const key of [
+      "GET /admin/v1/accounts",
+      "POST /admin/v1/accounts/{accountId}/unlock",
+      "POST /admin/v1/accounts/{accountId}/disable",
+    ]) {
+      const ok = JSON.stringify(all.get(key)?.responses["200"]);
+      expect(ok, key).toContain('"lockedUntil"');
+      expect(ok, key).toContain('"locked"');
     }
   });
 });

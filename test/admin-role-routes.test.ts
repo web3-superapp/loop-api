@@ -1071,6 +1071,179 @@ describe("Operator console role separation (Decision 0109)", () => {
     ]);
   });
 
+  it("unlocks a locked account name for platform_admin only, idempotently (Decision 0111)", async () => {
+    const harness = await createHarness();
+    const admin = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    const target = await harness.accounts.seed({
+      username: "Rev-Locked",
+      password: accountPassword,
+      role: "reviewer",
+      operatorUserId: harness.reviewerUserId,
+    });
+    const lockedUntil = new Date(Date.now() + 600_000).toISOString();
+    harness.accounts.locks.set("rev-locked", lockedUntil);
+    const url = `/admin/v1/accounts/${target.accountId}/unlock`;
+
+    const listed = await harness.app.inject({
+      method: "GET",
+      url: "/admin/v1/accounts",
+      headers: { cookie: admin },
+    });
+    expect(listed.statusCode, listed.body).toBe(200);
+    const listedBody: { items: Record<string, unknown>[] } = listed.json();
+    expect(
+      listedBody.items.find((item) => item["accountId"] === target.accountId),
+    ).toMatchObject({ locked: true, lockedUntil });
+
+    // Other roles: 403 before anything runs.
+    for (const role of ["auditor", "testnet_acceptor"] as const) {
+      const cookie = await seedAndLogin(
+        harness,
+        role,
+        role === "testnet_acceptor" ? harness.acceptorUserId : null,
+      );
+      expectError(
+        await harness.app.inject({
+          method: "POST",
+          url,
+          headers: { cookie, "idempotency-key": randomUUID() },
+          payload: { reasonCode: "identity_verified" },
+        }),
+        403,
+        "PERMISSION_DENIED",
+        "ADMIN_ROLE_FORBIDDEN",
+      );
+    }
+    // Idempotency-Key and body are required.
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin },
+        payload: { reasonCode: "identity_verified" },
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reasonCode: "Not Snake" },
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+    // The bootstrap administrator is not unlockable here.
+    for (const id of ["bootstrap", "operator", "OPERATOR"]) {
+      expectError(
+        await harness.app.inject({
+          method: "POST",
+          url: `/admin/v1/accounts/${id}/unlock`,
+          headers: { cookie: admin, "idempotency-key": randomUUID() },
+          payload: { reasonCode: "identity_verified" },
+        }),
+        409,
+        "ADMIN_CONFLICT",
+        "ADMIN_ACCOUNT_ENVIRONMENT",
+      );
+    }
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/accounts/${randomUUID()}/unlock`,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reasonCode: "identity_verified" },
+      }),
+      404,
+      "NOT_FOUND",
+      "ADMIN_ACCOUNT_NOT_FOUND",
+    );
+    expect(harness.accounts.locks.has("rev-locked")).toBe(true);
+
+    const key = randomUUID();
+    const unlocked = await harness.app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: admin, "idempotency-key": key },
+      payload: { reasonCode: "identity_verified" },
+    });
+    expect(unlocked.statusCode, unlocked.body).toBe(200);
+    expect(unlocked.headers["cache-control"]).toBe("no-store");
+    expect(unlocked.json()).toMatchObject({
+      changed: true,
+      replayed: false,
+      account: {
+        accountId: target.accountId,
+        locked: false,
+        lockedUntil: null,
+      },
+    });
+    const unlockedBody: { audit: unknown } = unlocked.json();
+    expect(unlockedBody.audit).not.toBeNull();
+    expect(harness.accounts.locks.has("rev-locked")).toBe(false);
+    const replay = await harness.app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: admin, "idempotency-key": key },
+      payload: { reasonCode: "identity_verified" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({
+      replayed: true,
+      changed: false,
+      audit: null,
+      account: { locked: false },
+    });
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": key },
+        payload: { reasonCode: "another_reason" },
+      }),
+      409,
+      "ADMIN_CONFLICT",
+      "ADMIN_IDEMPOTENCY_CONFLICT",
+    );
+    // Nothing to clear: 200, unchanged, no audit row.
+    const again = await harness.app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: admin, "idempotency-key": randomUUID() },
+      payload: { reasonCode: "identity_verified" },
+    });
+    expect(again.json()).toMatchObject({ changed: false, audit: null });
+    const audit = await harness.admin.listAudit({
+      limit: 50,
+      beforeSeq: null,
+      actor: null,
+      action: "account.unlock",
+    });
+    expect(audit).toHaveLength(1);
+
+    // A disabled account is terminal.
+    await harness.app.inject({
+      method: "POST",
+      url: `/admin/v1/accounts/${target.accountId}/disable`,
+      headers: { cookie: admin, "idempotency-key": randomUUID() },
+      payload: { reasonCode: "left_team" },
+    });
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reasonCode: "identity_verified" },
+      }),
+      409,
+      "ADMIN_CONFLICT",
+      "ADMIN_ACCOUNT_DISABLED",
+    );
+  });
+
   it("answers 503 for account and launch routes without a database", async () => {
     const admin = createInMemoryAdminRepository();
     const app = await buildApp({
