@@ -517,7 +517,8 @@ create 失败（如尾号盐被他人抢用）后代币回到 `draft`，再次�
 - **每日额度是一个窗口**：`CANARY_DAILY_CEILING_EXCEEDED` 的 `spentUsd` 是同一账号滚动 24 小时内
   钱包（Send / Swap / 授权）+ Launch 认购 + MEME（create 首买 / buy / sell）三处 Intent 的合计；
   MEME 花满后 Send / Swap / Launch 也会被同一个 reasonCode 拒绝，反之亦然。窗口起点含端点（`>=`）。
-  MEME 计入的状态：`broadcast_reported`、`confirmed`、仍在签名窗口内的 `prepared`。
+  MEME 计入的状态：`broadcast_reported`、`confirmed`、`failed`（已上报 hash、链上回滚，与钱包 `reverted`
+  一致）、仍在签名窗口内的 `prepared`；未广播就过期的 `prepared` 与 `expired` 不计。
 - 额度在写库时会在账号锁下**再核一次**：两个并发准备不会同时通过；被拒的那个同样返回
   `403 CANARY_DAILY_CEILING_EXCEEDED`，没有写入 Intent，可降低金额后重试。
 - **一个草稿同时只能有一个未终结的 create Intent**（`prepared` 且未过 `expiresAt` 且模拟未回滚，或

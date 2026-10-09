@@ -15,11 +15,11 @@ Before: wallet / Launch summed `wallet_intents ∪ launch_intents`; MEME summed 
 
 Now `src/database/canary-exposure.ts` owns the only SQL of the window, read by `WalletIntentRepository.sumRecentExposureUsd` (Send, Swap, approvals, and Launch through `walletIntentExposureUsd`) and `MemeRepository.sumRecentExposureUsd` (MEME). It sums `policy.valueUsd` of:
 
-| table            | counted states                                                                            |
-| ---------------- | ----------------------------------------------------------------------------------------- |
-| `wallet_intents` | `awaiting_signature`, `submitted`, `confirmed`, `reverted`, `unknown` (Decision 0065)     |
-| `launch_intents` | same list (Decision 0077)                                                                 |
-| `meme_intents`   | `broadcast_reported`, `confirmed`, and `prepared` with `expires_at > now` (Decision 0101) |
+| table            | counted states                                                                                                                                                                                                                                                                               |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wallet_intents` | `awaiting_signature`, `submitted`, `confirmed`, `reverted`, `unknown` (Decision 0065)                                                                                                                                                                                                        |
+| `launch_intents` | same list (Decision 0077)                                                                                                                                                                                                                                                                    |
+| `meme_intents`   | `broadcast_reported`, `confirmed`, and `failed` with a reported `transaction_hash` (a reverted receipt was executed, like wallet / Launch `reverted`; coordinator ruling 2026-10-09), and `prepared` with `expires_at > now`; a `prepared` that lapsed unbroadcast and `expired` never count |
 
 n3: the window boundary is `created_at >= since` in all three tables (MEME used `>`). The MEME service no longer adds `walletIntentExposureUsd` on top (it would double count); `MemeServiceDependencies.walletIntentExposureUsd` stays in the interface (owned by `meme-service.ts`, outside this change) and is unused by the Intent path.
 
@@ -62,4 +62,5 @@ Unchanged: without writes `503 MEME_WRITES_DISABLED`; without the repository `50
 ## Tests
 
 - `test/meme-canary-indexing-fixes.integration.test.ts` (PostgreSQL): MEME spend blocks Send, Swap, Launch, and MEME; the `>=` boundary; stale pre-checks refused in-transaction for Launch and wallet; two concurrent 60 USD buys under a 100 USD day → one stored, one refused; three concurrent creates → one stored, two `MEME_INTENT_CREATE_IN_FLIGHT`, a new one after expiry, refused again once reported; creator mismatch refused and counted, own wallet accepted; reorg refreshes the facts of a re-included trade, reopens lane- and receipt-confirmed Intents (not those below the range), they are leased by reconcile and re-confirmed by the replay.
+- The same suite: a `failed` MEME Intent with a hash counts; an `expired` one and a lapsed `prepared` one do not.
 - `test/v2-meme-routes.test.ts`: sell without USD1 allowlisted → 403; RPC timeout on fee data and a plain read error → 503 `MEME_CONTRACT_READ_FAILED`; daily refusal on the pre-check and on the insert re-check; second create → 409 with the seven-key error body.

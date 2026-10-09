@@ -743,6 +743,49 @@ describe("Decision 0104 canary window and indexing fixes on PostgreSQL", () => {
     };
   }
 
+  it("M1: a failed MEME Intent with a broadcast hash counts; expired and lapsed prepared ones do not", async () => {
+    const owner = await newUser();
+    const token = await draft(owner, "Count Frog", "KFROG");
+    const since = new Date(Date.now() - 86_400_000).toISOString();
+    const withValue = async (
+      state: "prepared" | "failed" | "expired",
+      transactionHash: string | null,
+      lapsed: boolean,
+    ) => {
+      const intentId = await insertIntent({
+        ownerUserId: owner,
+        memeTokenId: token.memeTokenId,
+        kind: "buy",
+        walletAddress: buyerW,
+        state: transactionHash === null ? "prepared" : "broadcast_reported",
+        transactionHash,
+      });
+      await pool.query({
+        text: `
+          update public.meme_intents set state = $2,
+            policy = '{"valueUsd": "7"}'::jsonb,
+            expires_at = case when $3::boolean
+              then clock_timestamp() - interval '1 second' else expires_at end
+          where intent_id = $1
+        `,
+        values: [intentId, state, lapsed],
+      });
+    };
+    await withValue("failed", fixtureTxHash(0xa001), true);
+    expect(
+      await memes.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("7");
+    await withValue("expired", fixtureTxHash(0xa002), true);
+    await withValue("prepared", null, true);
+    expect(
+      await memes.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("7");
+    await withValue("prepared", null, false);
+    expect(
+      await walletIntents.sumRecentExposureUsd({ ownerUserId: owner, since }),
+    ).toBe("14");
+  });
+
   it("m3: a TokenCreated whose creator is not a create Intent's wallet is refused and counted", async () => {
     const owner = await newUser();
     const token = await draft(owner, "Snipe Frog", "SFROG");

@@ -39,14 +39,19 @@ const exposureSql = `
       and state = any($3::text[])
       and policy ? 'valueUsd'
     union all
-    -- MEME (Decision 0101): reported and confirmed Intents, and prepared
-    -- ones whose signing window is still open.
+    -- MEME (Decisions 0101, 0104): reported, confirmed, and failed
+    -- (a reverted receipt: the chain executed it, like wallet / Launch
+    -- "reverted") Intents that carry a broadcast hash, and prepared ones
+    -- whose signing window is still open.
     select (policy ->> 'valueUsd')::numeric
     from public.meme_intents
     where owner_user_id = $1
       and created_at >= $2::timestamptz
       and (
-        state in ('broadcast_reported', 'confirmed')
+        (
+          state in ('broadcast_reported', 'confirmed', 'failed')
+          and transaction_hash is not null
+        )
         or (state = 'prepared' and expires_at > clock_timestamp())
       )
       and policy ? 'valueUsd'
