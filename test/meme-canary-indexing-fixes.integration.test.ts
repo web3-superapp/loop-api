@@ -301,8 +301,6 @@ describe("Decision 0104 canary window and indexing fixes on PostgreSQL", () => {
         defaultMemeFunds({ usd1Allowance: 10n ** 30n }),
       ),
       writes: memeWrites(options.dailyMaxUsd),
-      walletIntentExposureUsd: () =>
-        Promise.reject(new Error("MEME reads its own three-table window")),
       publicBaseUrl: "https://api.invalid",
       contractConfig: memeContractConfig,
       now: () => new Date(),

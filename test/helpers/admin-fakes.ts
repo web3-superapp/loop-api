@@ -14,7 +14,11 @@ import {
   type CommunityReviewNoteRecord,
 } from "../../src/features/admin/admin-repository.js";
 import { adminReasonCodes } from "../../src/features/admin/admin-contract.js";
-import type { MemePauseSender } from "../../src/integrations/meme/meme-pause-sender.js";
+import type {
+  MemePauseAction,
+  MemePauseSender,
+  MemePauseTransactionState,
+} from "../../src/integrations/meme/meme-pause-sender.js";
 
 /**
  * In-memory operator console repository (Decision 0102) for route tests.
@@ -396,27 +400,46 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
 }
 
 export function fakeMemePauseSender(
-  outcome: "submitted" | "simulation_reverted" | "failed" = "submitted",
-): MemePauseSender & { readonly calls: string[] } {
+  outcome:
+    "submitted" | "simulation_reverted" | "failed" | "throws" = "submitted",
+): MemePauseSender & {
+  readonly calls: string[];
+  /** What `transactionState` answers; tests move it. */
+  state: MemePauseTransactionState;
+  /** Resolves `submit` only when a test calls it (null = resolve at once). */
+  gate: Promise<void> | null;
+} {
   const calls: string[] = [];
-  return {
+  const sender = {
     calls,
+    state: "settled" as MemePauseTransactionState,
+    gate: null as Promise<void> | null,
     address: "0x00000000000000000000000000000000000000e5",
-    submit(action, token) {
+    async submit(action: MemePauseAction, token: string) {
       calls.push(`${action}:${token}`);
+      if (sender.gate !== null) {
+        await sender.gate;
+      }
+      if (outcome === "throws") {
+        throw new Error("rpc exploded");
+      }
       if (outcome === "simulation_reverted") {
-        return Promise.resolve({ status: "simulation_reverted" });
+        return { status: "simulation_reverted" as const };
       }
       if (outcome === "failed") {
-        return Promise.resolve({
-          status: "failed",
+        return {
+          status: "failed" as const,
           errorCode: "MEME_PAUSE_BROADCAST_FAILED",
-        });
+        };
       }
-      return Promise.resolve({
-        status: "submitted",
+      return {
+        status: "submitted" as const,
         transactionHash: `0x${"ab".repeat(32)}`,
-      });
+      };
+    },
+    transactionState() {
+      return Promise.resolve(sender.state);
     },
   };
+  return sender;
 }

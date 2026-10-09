@@ -266,6 +266,15 @@ export interface MemeContractAdapter {
    * initialised (zero price).
    */
   readPoolSqrtPriceX96(pool: string): Promise<bigint>;
+  /**
+   * Decision 0105: `slot0().sqrtPriceX96` of many pools in one multicall
+   * (lower-case pool → price). A pool whose call failed or reads zero is
+   * absent; the whole read failing throws `MemeContractUnavailableError`.
+   * Optional so a fake may leave it out (the caller then reads singly).
+   */
+  readPoolSqrtPriceX96Many?(
+    pools: readonly string[],
+  ): Promise<ReadonlyMap<string, bigint>>;
   encodeCreateToken(input: MemeCreateTokenCallInput): MemeContractCall;
   encodeBuy(input: MemeBuyCallInput): MemeContractCall;
   encodeSell(input: MemeSellCallInput): MemeContractCall;
@@ -1046,6 +1055,40 @@ export function createMemeContractAdapter(
         );
       }
       return sqrtPriceX96;
+    },
+
+    async readPoolSqrtPriceX96Many(pools) {
+      const unique = [...new Set(pools.map((pool) => pool.toLowerCase()))];
+      const result = new Map<string, bigint>();
+      if (unique.length === 0) {
+        return result;
+      }
+      const { client: readClient } = await requireReadable();
+      const addresses = unique.map((pool) => requireAddress(pool, "pool"));
+      let responses;
+      try {
+        responses = await readClient.multicall({
+          allowFailure: true,
+          contracts: addresses.map((address) => ({
+            address,
+            abi: pancakeV3PoolSlot0Abi,
+            functionName: "slot0" as const,
+          })),
+        });
+      } catch (error) {
+        return readFailed(error);
+      }
+      responses.forEach((response, index) => {
+        const pool = unique[index];
+        if (
+          pool !== undefined &&
+          response.status === "success" &&
+          response.result[0] > 0n
+        ) {
+          result.set(pool, response.result[0]);
+        }
+      });
+      return result;
     },
 
     encodeCreateToken(request) {

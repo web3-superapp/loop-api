@@ -486,15 +486,16 @@ const environmentSchema = z
     APP_DOWNLOAD_URL: optionalCredential(2_048),
     COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
     RECOMMENDED_COMMUNITY_IDS: optionalCredential(4_096),
+    // Decision 0105: hosts an intel promotion `imageUrl` may point at.
+    INTEL_PROMOTION_IMAGE_HOSTS: optionalCredential(2_048),
     // Decision 0102: the operator console. All three or the `/admin/*`
     // surface is not mounted.
     ADMIN_USERNAME: optionalCredential(64),
     ADMIN_PASSWORD_HASH: optionalCredential(512),
     ADMIN_SESSION_SECRET: optionalOpaqueSecret(32, 512),
-    // Decision 0102: the console's MEME pause/unpause signs with the same
-    // key and switch as the worker's graduation fallback (Decision 0101).
-    MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
-    LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    // Decision 0105: the console's MEME pause/unpause signs with its own
+    // operator key; the API process never loads the deployer key.
+    MEME_OPERATOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
     ...marketEnvironmentShape,
@@ -1238,15 +1239,22 @@ export interface AppConfig {
    */
   readonly recommendedCommunityIds: readonly string[];
   /**
+   * Decision 0105: `INTEL_PROMOTION_IMAGE_HOSTS`, lower-case host names an
+   * intel promotion `imageUrl` (https) may use. Empty = only `null`.
+   */
+  readonly intelPromotionImageHosts: readonly string[];
+  /**
    * Decision 0102: the operator console credentials. Null unless all three
    * `ADMIN_*` variables are set; null leaves `/admin/*` unmounted (404).
    */
   readonly admin: AdminConsoleConfig | null;
   /**
-   * Decision 0102: the MEME executor key the console's pause/unpause signs
-   * with (`MEME_GRADUATION_EXECUTOR_ENABLED`, Decision 0101). Never logged.
+   * Decision 0105: the key the console's MEME pause/unpause signs with
+   * (`MEME_OPERATOR_PRIVATE_KEY`), separate from the deployer key of the
+   * graduation fallback. Null = pause unavailable
+   * (MEME_OPERATOR_KEY_MISSING). Never logged.
    */
-  readonly memeGraduationExecutor: {
+  readonly memeOperator: {
     readonly privateKey: `0x${string}`;
   } | null;
   readonly serviceName: "loop-api";
@@ -1857,6 +1865,28 @@ const privateKeyPattern = /^(0x)?[0-9a-fA-F]{64}$/u;
 export const MEME_GRADUATION_DEFAULT_DELAY_SECONDS = 15;
 
 /**
+ * Decision 0105: the operator console's pause/unpause key. Blank → null
+ * (pause unavailable, MEME_OPERATOR_KEY_MISSING); malformed refuses boot.
+ * The key never enters a log line or an error message.
+ */
+export function parseMemeOperator(data: {
+  readonly MEME_OPERATOR_PRIVATE_KEY?: string | undefined;
+}): { readonly privateKey: `0x${string}` } | null {
+  const key = data.MEME_OPERATOR_PRIVATE_KEY?.trim();
+  if (key === undefined || key === "") {
+    return null;
+  }
+  if (!privateKeyPattern.test(key)) {
+    throw new ConfigurationError([
+      "MEME_OPERATOR_PRIVATE_KEY: must be a 32-byte hex key",
+    ]);
+  }
+  return Object.freeze({
+    privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
+  });
+}
+
+/**
  * Decision 0101: the graduation fallback executor signs `graduate(token)`
  * with the testnet deployer key. Enabled without a well-formed key refuses
  * boot; the key never enters a log line or an error message. Decision 0103:
@@ -2365,6 +2395,36 @@ function parseRecommendedCommunityIds(
   return Object.freeze(ids);
 }
 
+const intelPromotionImageHostPattern =
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u;
+
+/** Decision 0105: comma-separated lower-case DNS names, at most 20. */
+export function parseIntelPromotionImageHosts(
+  value: string | undefined,
+): readonly string[] {
+  const hosts: string[] = [];
+  for (const raw of (value ?? "").split(",")) {
+    const host = raw.trim();
+    if (host === "") {
+      continue;
+    }
+    if (!intelPromotionImageHostPattern.test(host)) {
+      throw new ConfigurationError([
+        "INTEL_PROMOTION_IMAGE_HOSTS: every entry must be a lower-case DNS host name (no scheme, port, or path)",
+      ]);
+    }
+    if (!hosts.includes(host)) {
+      hosts.push(host);
+    }
+  }
+  if (hosts.length > 20) {
+    throw new ConfigurationError([
+      "INTEL_PROMOTION_IMAGE_HOSTS: at most 20 hosts",
+    ]);
+  }
+  return Object.freeze(hosts);
+}
+
 function parsePushConfig(data: {
   readonly FIREBASE_SERVICE_ACCOUNT_JSON_PATH?: string | undefined;
 }): PushConfig | null {
@@ -2477,12 +2537,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     COMMUNITY_CHAT_REAL_IDENTITY:
       environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
     RECOMMENDED_COMMUNITY_IDS: environment["RECOMMENDED_COMMUNITY_IDS"],
+    INTEL_PROMOTION_IMAGE_HOSTS: environment["INTEL_PROMOTION_IMAGE_HOSTS"],
     ADMIN_USERNAME: environment["ADMIN_USERNAME"],
     ADMIN_PASSWORD_HASH: environment["ADMIN_PASSWORD_HASH"],
     ADMIN_SESSION_SECRET: environment["ADMIN_SESSION_SECRET"],
-    MEME_GRADUATION_EXECUTOR_ENABLED:
-      environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
-    LAUNCH_DEPLOYER_PRIVATE_KEY: environment["LAUNCH_DEPLOYER_PRIVATE_KEY"],
+    MEME_OPERATOR_PRIVATE_KEY: environment["MEME_OPERATOR_PRIVATE_KEY"],
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
@@ -2638,8 +2697,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     recommendedCommunityIds: parseRecommendedCommunityIds(
       parsed.data.RECOMMENDED_COMMUNITY_IDS,
     ),
+    intelPromotionImageHosts: parseIntelPromotionImageHosts(
+      parsed.data.INTEL_PROMOTION_IMAGE_HOSTS,
+    ),
     admin: parseAdminConsoleConfig(parsed.data),
-    memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
+    memeOperator: parseMemeOperator(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });

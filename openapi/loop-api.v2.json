@@ -260,7 +260,7 @@
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
                     },
                     "effectiveAt": { "type": "string", "format": "date-time" },
-                    "defaultRoute": { "type": "string", "enum": ["community"] },
+                    "defaultRoute": { "type": "string", "enum": ["chat"] },
                     "navigation": {
                       "type": "object",
                       "additionalProperties": false,
@@ -57631,7 +57631,8 @@
                               {
                                 "type": "string",
                                 "format": "uri",
-                                "pattern": "^https://"
+                                "pattern": "^https://",
+                                "maxLength": 512
                               },
                               { "type": "null" }
                             ]
@@ -135329,7 +135330,8 @@
                                   "anyOf": [
                                     {
                                       "type": "string",
-                                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                      "pattern": "^OPERATOR_[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "Decision 0105: the operator's reason as an upper-case catalog code, `OPERATOR_` + the console code (e.g. OPERATOR_USER_REPORTS)."
                                     },
                                     { "type": "null" }
                                   ]
@@ -136613,7 +136615,8 @@
                                   "anyOf": [
                                     {
                                       "type": "string",
-                                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                                      "pattern": "^OPERATOR_[A-Z][A-Z0-9_]{0,63}$",
+                                      "description": "Decision 0105: the operator's reason as an upper-case catalog code, `OPERATOR_` + the console code (e.g. OPERATOR_USER_REPORTS)."
                                     },
                                     { "type": "null" }
                                   ]

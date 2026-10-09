@@ -423,7 +423,7 @@ import {
 } from "./features/meme/meme-service.js";
 import type { MemeDexQuote } from "./features/meme/meme-projection.js";
 import { memeRules } from "./features/meme/meme-contract.js";
-import { createMemePoolPriceReader } from "./features/meme/meme-pool-price.js";
+import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
   type MemeContractAdapter,
@@ -1068,6 +1068,7 @@ export async function buildApp(
   const adminSettingsReader = createAdminSettingsReader({
     repository: database.admin ?? null,
     logger: app.log,
+    imageHosts: config.intelPromotionImageHosts,
   });
   const authenticationService = createAuthenticationService(
     privyAccessTokenVerifier,
@@ -1693,12 +1694,18 @@ export async function buildApp(
       verifyChain: () => (launchChainReadClient ?? bscReadClient).verifyChain(),
       logger: app.log,
     });
-  const memePoolPriceReader = createMemePoolPriceReader({
+  const readPoolsMany =
+    memeContractAdapter.readPoolSqrtPriceX96Many?.bind(memeContractAdapter);
+  const memePoolPriceReaders = createMemePoolPriceReaders({
     usd1Address: () => config.meme.contract?.usd1Address ?? null,
     readSqrtPriceX96: (pool) => memeContractAdapter.readPoolSqrtPriceX96(pool),
+    ...(readPoolsMany === undefined
+      ? {}
+      : { readSqrtPriceX96Many: readPoolsMany }),
     cacheMs: memeRules.chainReadCacheMs,
     now: options.walletIntentNow ?? ((): Date => new Date()),
   });
+  const memePoolPriceReader = memePoolPriceReaders.read;
   const marketReadService =
     options.marketReadService ??
     createMarketReadService({
@@ -1711,6 +1718,7 @@ export async function buildApp(
       memePoolPrices: Object.freeze({
         chainId: config.launchChain.chainId,
         read: memePoolPriceReader,
+        readMany: memePoolPriceReaders.readMany,
       }),
       wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
@@ -1949,10 +1957,6 @@ export async function buildApp(
           wallets: database.accountWallets ?? null,
           readClient: asChainCallClient(launchChainReadClient ?? bscReadClient),
           writes: config.bscWrites,
-          walletIntentExposureUsd: (input: {
-            readonly ownerUserId: string;
-            readonly since: string;
-          }) => walletIntentRuntime.repository.sumRecentExposureUsd(input),
           publicBaseUrl: config.publicBaseUrl,
           // Graduated rows read DexScreener like `category=meme` (56 only).
           dexQuotes: async (_chainId, addresses) => {
@@ -2352,6 +2356,7 @@ export async function buildApp(
         repository: database.admin ?? createUnavailableAdminRepository(),
         settingsReader: adminSettingsReader,
         environmentRecommendedCommunityIds: config.recommendedCommunityIds,
+        promotionImageHosts: config.intelPromotionImageHosts,
         communityReview:
           database.community === undefined
             ? null
@@ -2427,7 +2432,8 @@ export async function buildApp(
       reply.header("cache-control", "no-store");
       const retryAfter = projection.response.detailsSafe?.["retryAfterSeconds"];
       if (
-        projection.response.code === "ADMIN_LOGIN_LOCKED" &&
+        (projection.response.code === "ADMIN_LOGIN_LOCKED" ||
+          projection.response.code === "ADMIN_LOGIN_BUSY") &&
         typeof retryAfter === "number"
       ) {
         reply.header("retry-after", String(retryAfter));
@@ -2560,9 +2566,10 @@ export async function buildApp(
 }
 
 /**
- * Decision 0102: the console's pause/unpause signer, composed only when the
- * executor switch, the MEME contract, the testnet slot, and an RPC are all
- * present; otherwise the reason the buttons are grey.
+ * Decision 0102/0105: the console's pause/unpause signer, composed only when
+ * the operator key (MEME_OPERATOR_PRIVATE_KEY), the MEME contract, the
+ * testnet slot, and an RPC are all present; otherwise the reason the
+ * buttons are grey.
  */
 function composeAdminMemePause(
   config: AppConfig,
@@ -2570,11 +2577,11 @@ function composeAdminMemePause(
 ): AdminMemePauseRuntime {
   if (override !== undefined) {
     return override === null
-      ? { status: "unavailable", reasonCode: "MEME_EXECUTOR_DISABLED" }
+      ? { status: "unavailable", reasonCode: "MEME_OPERATOR_KEY_MISSING" }
       : { status: "available", sender: override };
   }
-  if (config.memeGraduationExecutor === null) {
-    return { status: "unavailable", reasonCode: "MEME_EXECUTOR_DISABLED" };
+  if (config.memeOperator === null) {
+    return { status: "unavailable", reasonCode: "MEME_OPERATOR_KEY_MISSING" };
   }
   if (config.meme.contract === null) {
     return {
@@ -2587,7 +2594,7 @@ function composeAdminMemePause(
     return {
       status: "available",
       sender: createMemePauseSender({
-        privateKey: config.memeGraduationExecutor.privateKey,
+        privateKey: config.memeOperator.privateKey,
         curveAddress: config.meme.contract.address,
         chainReference: config.launchChain.chainReference,
         rpcUrls: config.launchChain.rpcUrls,

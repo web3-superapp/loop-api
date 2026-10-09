@@ -29,6 +29,16 @@
 `configVersion` 就是产品策略的版本（`productPolicyV2.2026-10-08`）。以前 about 页把这个投影
 无条件列了一行，于是两行同值。现在只有版本不同时才单列。
 
+## `defaultRoute`（决策 0105，2026-10-09）
+
+`GET /v2/meta/client-policy`（以及会话响应里的同一投影）的 `defaultRoute` 从 `"community"` 改为
+`"chat"`，schema 为 `const: "chat"`；策略版本不变（仍是 `productPolicyV2.2026-10-08`）。它与
+`navigation.primaryTabs[0]` 相同，v3 客户端用它选首屏。
+
+旧客户端兼容：严格校验 `defaultRoute == "community"` 的旧 TestFlight 包会把整份策略判为非法、读不到
+策略。那些包本就不兼容 v3 后端（五 Tab 枚举已在决策 0100 整体更换），不做兼容分支，须升级到 v3 包。
+当前 loop-mobile 已同时接受 `community` / `chat`。
+
 ## 与 `GET /v2/meta/client-policy` 的关系
 
 `client-policy` 的顶层键（`contractVersion` / `configVersion` / `effectiveAt` / `defaultRoute` /

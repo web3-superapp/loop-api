@@ -4,6 +4,7 @@ import {
   intelPromotionsConfigVersion,
   intelPromotionsEffectiveAt,
   intelPromotionsResource,
+  isAllowedIntelPromotionImageUrl,
   type IntelPromotion,
   type IntelPromotionsResource,
 } from "../market/intel-promotions.js";
@@ -119,7 +120,13 @@ export function createAdminSettingsReader(input: {
   readonly logger: AdminSettingsLogger;
   readonly ttlMs?: number;
   readonly now?: () => number;
+  /**
+   * Decision 0105: `INTEL_PROMOTION_IMAGE_HOSTS`. A stored `imageUrl` whose
+   * host is not (or no longer) listed is served as `null`. Absent = none.
+   */
+  readonly imageHosts?: readonly string[];
 }): AdminSettingsReader {
+  const imageHosts = input.imageHosts ?? [];
   const ttlMs = input.ttlMs ?? adminSettingsCacheTtlMs;
   const now = input.now ?? (() => Date.now());
   const cache = new Map<AdminSettingKey, CacheEntry<unknown>>();
@@ -184,7 +191,17 @@ export function createAdminSettingsReader(input: {
           const items = parseIntelPromotionsValue(value);
           return items === null
             ? "invalid"
-            : Object.freeze({ items, updatedAt });
+            : Object.freeze({
+                items: Object.freeze(
+                  items.map((item) =>
+                    item.imageUrl === null ||
+                    isAllowedIntelPromotionImageUrl(item.imageUrl, imageHosts)
+                      ? item
+                      : Object.freeze({ ...item, imageUrl: null }),
+                  ),
+                ),
+                updatedAt,
+              });
         },
       );
     },

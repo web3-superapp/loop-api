@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { parseAdminConsoleConfig } from "../src/config.js";
 import {
+  parseAdminConsoleConfig,
+  parseIntelPromotionImageHosts,
+  parseMemeOperator,
+} from "../src/config.js";
+import {
+  AdminArgon2BusyError,
+  adminArgon2InFlight,
+  adminArgon2MaximumConcurrency,
   createAdminLoginThrottle,
   createAdminSessionCodec,
   hashAdminPassword,
@@ -53,6 +60,34 @@ describe("admin password and session", () => {
         PUBLIC_BASE_URL: "https://api-dev.example.com",
       }),
     ).toMatchObject({ username: "operator", cookieSecure: true });
+  });
+
+  it("parses the operator key and the promotion image hosts (Decision 0105)", () => {
+    expect(parseMemeOperator({})).toBeNull();
+    expect(parseMemeOperator({ MEME_OPERATOR_PRIVATE_KEY: "  " })).toBeNull();
+    expect(
+      parseMemeOperator({ MEME_OPERATOR_PRIVATE_KEY: "ab".repeat(32) }),
+    ).toEqual({ privateKey: `0x${"ab".repeat(32)}` });
+    expect(() =>
+      parseMemeOperator({ MEME_OPERATOR_PRIVATE_KEY: "not-a-key" }),
+    ).toThrow(/MEME_OPERATOR_PRIVATE_KEY/u);
+    expect(parseIntelPromotionImageHosts(undefined)).toEqual([]);
+    expect(
+      parseIntelPromotionImageHosts(
+        " cdn.loop.example, img.loop.example,cdn.loop.example",
+      ),
+    ).toEqual(["cdn.loop.example", "img.loop.example"]);
+    for (const bad of [
+      "https://cdn.loop.example",
+      "cdn.loop.example:443",
+      "CDN.loop.example",
+      "cdn.loop.example/path",
+      "localhost",
+    ]) {
+      expect(() => parseIntelPromotionImageHosts(bad), bad).toThrow(
+        /INTEL_PROMOTION_IMAGE_HOSTS/u,
+      );
+    }
   });
 
   it("prints a quoted env line from piped input and never the password", async () => {
@@ -118,18 +153,80 @@ describe("admin password and session", () => {
   it("locks after five failures for fifteen minutes", () => {
     let now = 0;
     const throttle = createAdminLoginThrottle({ now: () => new Date(now) });
+    const failOnce = (): number => {
+      const admission = throttle.admit();
+      if (admission.status !== "admitted") {
+        throw new Error(`not admitted: ${admission.status}`);
+      }
+      return admission.fail();
+    };
     for (let index = 0; index < 4; index += 1) {
-      throttle.recordFailure();
+      expect(failOnce()).toBe(0);
       expect(throttle.lockedForSeconds()).toBe(0);
     }
-    throttle.recordFailure();
+    expect(failOnce()).toBe(900);
     expect(throttle.lockedForSeconds()).toBe(900);
+    expect(throttle.admit()).toEqual({
+      status: "locked",
+      retryAfterSeconds: 900,
+    });
     now += 899_000;
     expect(throttle.lockedForSeconds()).toBe(1);
     now += 1_000;
     expect(throttle.lockedForSeconds()).toBe(0);
-    throttle.recordFailure();
-    expect(throttle.lockedForSeconds()).toBe(0);
+    expect(failOnce()).toBe(0);
+  });
+
+  it("admits one attempt at a time and reserves its failure up front (Decision 0105)", () => {
+    const throttle = createAdminLoginThrottle({ now: () => new Date(0) });
+    const first = throttle.admit();
+    expect(first.status).toBe("admitted");
+    // A concurrent attempt is refused before any password work.
+    expect(throttle.admit()).toEqual({ status: "busy" });
+    if (first.status !== "admitted") {
+      throw new Error("unreachable");
+    }
+    // A cancelled attempt (verifier busy or crashed) refunds its reservation.
+    first.cancel();
+    first.fail();
+    for (let index = 0; index < 4; index += 1) {
+      const admission = throttle.admit();
+      if (admission.status !== "admitted") {
+        throw new Error("unreachable");
+      }
+      expect(admission.fail()).toBe(0);
+    }
+    const success = throttle.admit();
+    if (success.status !== "admitted") {
+      throw new Error("unreachable");
+    }
+    success.succeed();
+    for (let index = 0; index < 4; index += 1) {
+      const admission = throttle.admit();
+      if (admission.status !== "admitted") {
+        throw new Error("unreachable");
+      }
+      expect(admission.fail()).toBe(0);
+    }
+  });
+
+  it("never runs more than two argon2 derivations at once (Decision 0105)", async () => {
+    const phc = await hashAdminPassword("correct-horse-battery-staple");
+    const results = await Promise.allSettled(
+      Array.from({ length: 6 }, () =>
+        verifyAdminPassword("correct-horse-battery-staple", phc),
+      ),
+    );
+    expect(adminArgon2InFlight()).toBe(0);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter(
+      (r): r is PromiseRejectedResult => r.status === "rejected",
+    );
+    expect(fulfilled).toHaveLength(adminArgon2MaximumConcurrency);
+    expect(rejected).toHaveLength(6 - adminArgon2MaximumConcurrency);
+    for (const result of rejected) {
+      expect(result.reason).toBeInstanceOf(AdminArgon2BusyError);
+    }
   });
 
   it("parses cookies and projects the seven-field envelope", () => {
@@ -204,6 +301,35 @@ describe("read priority: database first, constant second", () => {
     expect(await resolveIntelPromotions(null, new Date())).toMatchObject({
       configVersion: "intelPromotionsV1",
     });
+  });
+
+  it("serves a stored imageUrl only while its host is allow-listed (Decision 0105)", async () => {
+    const updatedAt = "2026-10-08T12:00:00.123Z";
+    const stored = {
+      ...card,
+      imageUrl: "https://cdn.loop.example/promo.png",
+    };
+    const repository = settingRepository({
+      intel_promotions: {
+        key: "intel_promotions",
+        value: [stored],
+        updatedAt,
+        updatedBy: "operator",
+      },
+    });
+    const at = new Date("2026-10-09T00:00:00.000Z");
+    const allowed = createAdminSettingsReader({
+      repository,
+      logger: silent,
+      imageHosts: ["cdn.loop.example"],
+    });
+    expect((await resolveIntelPromotions(allowed, at)).items[0]?.imageUrl).toBe(
+      stored.imageUrl,
+    );
+    const removed = createAdminSettingsReader({ repository, logger: silent });
+    expect((await resolveIntelPromotions(removed, at)).items[0]?.imageUrl).toBe(
+      null,
+    );
   });
 
   it("serves the database promotions with a db configVersion", async () => {

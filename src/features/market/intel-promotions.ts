@@ -13,6 +13,39 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 export const intelPromotionsConfigVersion = "intelPromotionsV1" as const;
 export const intelPromotionsEffectiveAt = "2026-10-08T00:00:00.000Z" as const;
 export const intelPromotionsMaximumItems = 20;
+/** Decision 0105: longest accepted `imageUrl`. */
+export const intelPromotionImageUrlMaximumLength = 512;
+/** Decision 0105: control, format, surrogate, and line/paragraph separators. */
+const forbiddenPromotionTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Decision 0105: an https URL of at most 512 characters, no credentials,
+ * no port, whose host is in `allowedHosts`. An empty list admits nothing.
+ */
+export function isAllowedIntelPromotionImageUrl(
+  value: string,
+  allowedHosts: readonly string[],
+): boolean {
+  if (
+    value.length > intelPromotionImageUrlMaximumLength ||
+    !value.startsWith("https://")
+  ) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.port === "" &&
+    allowedHosts.includes(url.hostname)
+  );
+}
 
 /** In-app routes a promotion may open. `/community/profile` takes an opaque community ID. */
 export const intelPromotionDeeplinkPatternSource =
@@ -78,8 +111,12 @@ export function defineIntelPromotions(
       entry.title.trim().length === 0 ||
       entry.title.length > 40 ||
       entry.subtitle.length > 80 ||
+      forbiddenPromotionTextCharacters.test(entry.title) ||
+      forbiddenPromotionTextCharacters.test(entry.subtitle) ||
       !isAllowedIntelDeeplink(entry.deeplink) ||
-      (entry.imageUrl !== null && !entry.imageUrl.startsWith("https://")) ||
+      (entry.imageUrl !== null &&
+        (!entry.imageUrl.startsWith("https://") ||
+          entry.imageUrl.length > intelPromotionImageUrlMaximumLength)) ||
       !Number.isFinite(startsAt) ||
       !Number.isFinite(endsAt) ||
       endsAt <= startsAt ||

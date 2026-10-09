@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { formatE18, memeE18 } from "../src/features/meme/meme-curve-math.js";
 import {
   createMemePoolPriceReader,
+  createMemePoolPriceReaders,
   memePoolMarketCapRaw,
+  memePoolPriceKey,
   memePoolPriceE18,
 } from "../src/features/meme/meme-pool-price.js";
 
@@ -110,6 +112,77 @@ describe("createMemePoolPriceReader", () => {
         cacheMs: 1_500,
       })({ tokenAddress: low, poolAddress: pool }),
     ).toBeNull();
+  });
+});
+
+describe("createMemePoolPriceReaders.readMany (Decision 0105)", () => {
+  const otherPool = "0x8888888888888888888888888888888888888888";
+
+  it("reads every uncached pool in one multicall and caches the hits", async () => {
+    let at = Date.parse("2026-10-08T00:00:00.000Z");
+    const readSqrtPriceX96 = vi.fn(() => Promise.resolve(2n * q96));
+    const readSqrtPriceX96Many = vi.fn((pools: readonly string[]) =>
+      Promise.resolve(
+        new Map(pools.filter((p) => p === pool).map((p) => [p, 2n * q96])),
+      ),
+    );
+    const readers = createMemePoolPriceReaders({
+      usd1Address: () => usd1,
+      readSqrtPriceX96,
+      readSqrtPriceX96Many,
+      cacheMs: 1_500,
+      now: () => new Date(at),
+    });
+    const inputs = [
+      {
+        tokenAddress: low,
+        poolAddress: pool.toUpperCase().replace("0X", "0x"),
+      },
+      { tokenAddress: low, poolAddress: otherPool },
+    ];
+    const first = await readers.readMany(inputs);
+    expect(readSqrtPriceX96Many).toHaveBeenCalledTimes(1);
+    expect(readSqrtPriceX96Many.mock.calls[0]?.[0]).toEqual([pool, otherPool]);
+    expect(
+      first.get(memePoolPriceKey({ tokenAddress: low, poolAddress: pool })),
+    ).toEqual({
+      priceE18: 4n * memeE18,
+      observedAt: "2026-10-08T00:00:00.000Z",
+    });
+    // A pool whose call failed is null and is not cached.
+    expect(
+      first.get(
+        memePoolPriceKey({ tokenAddress: low, poolAddress: otherPool }),
+      ),
+    ).toBeNull();
+    at += 1_000;
+    await readers.readMany(inputs);
+    expect(readSqrtPriceX96Many).toHaveBeenCalledTimes(2);
+    expect(readSqrtPriceX96Many.mock.calls[1]?.[0]).toEqual([otherPool]);
+    expect(readSqrtPriceX96).not.toHaveBeenCalled();
+  });
+
+  it("answers null for every pool when the multicall fails or USD1 is unknown", async () => {
+    const failing = createMemePoolPriceReaders({
+      usd1Address: () => usd1,
+      readSqrtPriceX96: () => Promise.resolve(q96),
+      readSqrtPriceX96Many: () => Promise.reject(new Error("rpc down")),
+      cacheMs: 1_500,
+    });
+    const result = await failing.readMany([
+      { tokenAddress: low, poolAddress: pool },
+    ]);
+    expect([...result.values()]).toEqual([null]);
+    const noUsd1 = createMemePoolPriceReaders({
+      usd1Address: () => null,
+      readSqrtPriceX96: () => Promise.resolve(q96),
+      cacheMs: 1_500,
+    });
+    expect([
+      ...(
+        await noUsd1.readMany([{ tokenAddress: low, poolAddress: pool }])
+      ).values(),
+    ]).toEqual([null]);
   });
 });
 

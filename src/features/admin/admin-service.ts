@@ -4,7 +4,9 @@ import type { CommunityReviewService } from "../community/community-review-servi
 import {
   defineIntelPromotions,
   intelPromotionDeeplinkPatternSource,
+  intelPromotionImageUrlMaximumLength,
   intelPromotions as shippedIntelPromotions,
+  isAllowedIntelPromotionImageUrl,
   intelPromotionsMaximumItems,
   InvalidIntelPromotionError,
   type IntelPromotion,
@@ -28,6 +30,7 @@ import {
   type AdminErrorDetailsSafe,
 } from "./admin-contract.js";
 import {
+  AdminArgon2BusyError,
   createAdminLoginThrottle,
   createAdminSessionCodec,
   verifyAdminPassword,
@@ -40,6 +43,7 @@ import {
   AdminStateConflictError,
   AdminTargetNotFoundError,
   AdminValidationError,
+  type AdminAuditInput,
   type AdminAuditRecord,
   type AdminCommunityRecord,
   type AdminCommunityWeightEntry,
@@ -78,6 +82,11 @@ export interface AdminServiceOptions {
   readonly settingsReader: AdminSettingsReader;
   /** `RECOMMENDED_COMMUNITY_IDS` (Decision 0095), the fallback list. */
   readonly environmentRecommendedCommunityIds: readonly string[];
+  /**
+   * Decision 0105: `INTEL_PROMOTION_IMAGE_HOSTS`. Empty (the default) =
+   * every promotion `imageUrl` must be null.
+   */
+  readonly promotionImageHosts?: readonly string[];
   /** Null when the community repository is not composed. */
   readonly communityReview: CommunityReviewService | null;
   readonly memePause: AdminMemePauseRuntime;
@@ -105,6 +114,13 @@ export const adminListLimits = Object.freeze({
   maximum: 100,
 });
 export const adminRecentAuditCount = 20;
+/**
+ * Decision 0105: how long a broadcast pause/unpause blocks a second one of
+ * the same token when its state cannot be read (RPC down).
+ */
+export const memePausePendingMaximumMs = 10 * 60 * 1000;
+/** Decision 0105: `Retry-After` of a 429 ADMIN_LOGIN_BUSY. */
+export const adminLoginBusyRetryAfterSeconds = 1;
 
 const reasonCodePattern = /^[a-z][a-z0-9_]{0,63}$/u;
 const forbiddenTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
@@ -376,6 +392,9 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     });
   const throttle = options.loginThrottle ?? createAdminLoginThrottle({ now });
   const repository = options.repository;
+  const promotionImageHosts = Object.freeze([
+    ...(options.promotionImageHosts ?? []),
+  ]);
   const cursorKey = createHmac("sha256", "loop-admin-cursor-v1")
     .update(options.sessionSecret)
     .digest();
@@ -463,6 +482,91 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     }
   }
 
+  /**
+   * Decision 0105: the intent row of an external side effect. It is written
+   * before anything runs; when it cannot be written the action is refused
+   * (503 ADMIN_AUDIT_UNAVAILABLE) and nothing is executed.
+   */
+  async function intentAudit(
+    input: AdminAuditInput,
+  ): Promise<AdminAuditRecord> {
+    try {
+      return await repository.appendAudit(input);
+    } catch (error) {
+      options.logger.warn(
+        {
+          action: input.action,
+          requestId: input.requestId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Operator console intent audit row was not written; action refused",
+      );
+      throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+        reasonCode: adminReasonCodes.auditUnavailable,
+      });
+    }
+  }
+
+  /**
+   * Decision 0105: the outcome row after the side effect. The effect has
+   * already happened, so a failed write is logged (with the intent row's
+   * ID) and never turns a done action into an error; null is returned.
+   */
+  async function outcomeAudit(
+    input: AdminAuditInput,
+  ): Promise<AdminAuditRecord | null> {
+    try {
+      return await repository.appendAudit(input);
+    } catch (error) {
+      options.logger.warn(
+        {
+          action: input.action,
+          requestId: input.requestId,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "Operator console outcome audit row was not written",
+      );
+      return null;
+    }
+  }
+
+  /** Decision 0105: in-process pause/unpause single flight per token. */
+  const pauseInFlight = new Set<string>();
+  const pausePending = new Map<
+    string,
+    { readonly transactionHash: string; readonly submittedAtMs: number }
+  >();
+
+  /**
+   * A broadcast pause/unpause of the token whose transaction is not mined
+   * yet refuses another (409 MEME_PAUSE_PENDING); a mined or dropped one,
+   * or one older than `memePausePendingMaximumMs`, is forgotten.
+   */
+  async function assertNoPendingPause(memeTokenId: string): Promise<void> {
+    const pending = pausePending.get(memeTokenId);
+    if (pending === undefined) {
+      return;
+    }
+    if (now().getTime() - pending.submittedAtMs >= memePausePendingMaximumMs) {
+      pausePending.delete(memeTokenId);
+      return;
+    }
+    if (options.memePause.status !== "available") {
+      return;
+    }
+    const state = await options.memePause.sender
+      .transactionState(pending.transactionHash)
+      .catch(() => "unknown" as const);
+    if (state === "settled") {
+      pausePending.delete(memeTokenId);
+      return;
+    }
+    throw new AdminApiError("ADMIN_CONFLICT", {
+      reasonCode: adminReasonCodes.memePausePending,
+      transactionHash: pending.transactionHash,
+    });
+  }
+
   async function recommendedResource() {
     const setting = await repository.getSetting("recommended_community_ids");
     const databaseIds =
@@ -510,6 +614,8 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       deeplinkPattern: intelPromotionDeeplinkPatternSource,
       deeplinkChoices: intelPromotionDeeplinkChoices,
       maximumItems: intelPromotionsMaximumItems,
+      imageHosts: promotionImageHosts,
+      imageUrlMaximumLength: intelPromotionImageUrlMaximumLength,
     });
   }
 
@@ -771,12 +877,6 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
     sessionCodec,
 
     async login(input) {
-      const locked = throttle.lockedForSeconds();
-      if (locked > 0) {
-        throw new AdminApiError("ADMIN_LOGIN_LOCKED", {
-          retryAfterSeconds: locked,
-        });
-      }
       if (
         typeof input.username !== "string" ||
         typeof input.password !== "string" ||
@@ -785,20 +885,43 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
       ) {
         refuse("INVALID_REQUEST");
       }
+      // Decision 0105: lock check, single flight, and the failure
+      // reservation happen in one synchronous step before argon2 starts.
+      const admission = throttle.admit();
+      if (admission.status === "locked") {
+        throw new AdminApiError("ADMIN_LOGIN_LOCKED", {
+          retryAfterSeconds: admission.retryAfterSeconds,
+        });
+      }
+      if (admission.status === "busy") {
+        throw new AdminApiError("ADMIN_LOGIN_BUSY", {
+          retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
+        });
+      }
       const usernameMatches =
         input.username.length === options.username.length &&
         timingSafeEqual(
           Buffer.from(input.username),
           Buffer.from(options.username),
         );
-      // The hash is always verified so a wrong username costs the same time.
-      const passwordMatches = await verifyAdminPassword(
-        input.password,
-        options.passwordHash,
-      );
+      let passwordMatches: boolean;
+      try {
+        // The hash is always verified so a wrong username costs the same time.
+        passwordMatches = await verifyAdminPassword(
+          input.password,
+          options.passwordHash,
+        );
+      } catch (error) {
+        admission.cancel();
+        if (error instanceof AdminArgon2BusyError) {
+          throw new AdminApiError("ADMIN_LOGIN_BUSY", {
+            retryAfterSeconds: adminLoginBusyRetryAfterSeconds,
+          });
+        }
+        throw error;
+      }
       if (!usernameMatches || !passwordMatches) {
-        throttle.recordFailure();
-        const lockedNow = throttle.lockedForSeconds();
+        const lockedNow = admission.fail();
         await sessionAudit({
           actor: "anonymous",
           action: "session.login_failed",
@@ -813,7 +936,7 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         }
         throw new AdminApiError("ADMIN_LOGIN_INVALID");
       }
-      throttle.recordSuccess();
+      admission.succeed();
       const issued = sessionCodec.issue(options.username);
       await sessionAudit({
         actor: options.username,
@@ -1005,6 +1128,18 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         );
         // Item-level check first so the refusal can name the row.
         candidates.forEach((candidate, index) => {
+          if (
+            candidate.imageUrl !== null &&
+            !isAllowedIntelPromotionImageUrl(
+              candidate.imageUrl,
+              promotionImageHosts,
+            )
+          ) {
+            refuse("VALIDATION_FAILED", adminReasonCodes.promotionInvalid, {
+              index,
+              field: "imageUrl",
+            });
+          }
           try {
             defineIntelPromotions([candidate]);
           } catch (error) {
@@ -1145,6 +1280,20 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
             reasonCode: adminReasonCodes.communityReviewUnavailable,
           });
         }
+        const beforeState = {
+          verificationStatus: before.verificationStatus,
+          rejectedReason: before.rejectedReason,
+        };
+        // Decision 0105: intent row first; no row, no review.
+        const requested = await intentAudit({
+          actor: context.session.actor,
+          action: "community.review.requested",
+          targetType: "community",
+          targetId: communityId,
+          before: beforeState,
+          after: { decision, reasonCode: code, reasonText: text },
+          requestId: context.requestId,
+        });
         let result;
         try {
           result =
@@ -1162,6 +1311,19 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
                 });
         } catch (error) {
           const errorCode = (error as { readonly code?: unknown } | null)?.code;
+          await outcomeAudit({
+            actor: context.session.actor,
+            action: "community.review.failed",
+            targetType: "community",
+            targetId: communityId,
+            before: beforeState,
+            after: {
+              decision,
+              requestedAuditId: requested.auditId,
+              errorCode: typeof errorCode === "string" ? errorCode : "unknown",
+            },
+            requestId: context.requestId,
+          });
           if (errorCode === "community_data_stale") {
             throw new AdminApiError("ADMIN_CONFLICT", {
               reasonCode: adminReasonCodes.communityAlreadyVerified,
@@ -1186,14 +1348,13 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           reasonText: text,
           audit: {
             actor: context.session.actor,
-            action: `community.review.${decision}`,
+            action: "community.review.decided",
             targetType: "community",
             targetId: communityId,
-            before: {
-              verificationStatus: before.verificationStatus,
-              rejectedReason: before.rejectedReason,
-            },
+            before: beforeState,
             after: {
+              decision,
+              requestedAuditId: requested.auditId,
               verificationStatus: result.community.verificationStatus,
               changed: result.changed,
               reasonCode: code,
@@ -1460,55 +1621,108 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
             reasonCode: adminReasonCodes.memeTokenNotOnChain,
           });
         }
-        const admissible =
-          action === "pause"
-            ? token.status === "trading" || token.status === "full"
-            : token.status === "paused";
-        if (!admissible) {
+        // Decision 0105: claimed synchronously after the last await, so two
+        // concurrent requests for one token can never both reach the signer.
+        if (pauseInFlight.has(memeTokenId)) {
           throw new AdminApiError("ADMIN_CONFLICT", {
-            reasonCode: adminReasonCodes.memePauseState,
-            status: token.status,
+            reasonCode: adminReasonCodes.memePausePending,
           });
         }
-        const outcome = await sender.submit(action, token.tokenAddress);
-        if (outcome.status === "simulation_reverted") {
-          throw new AdminApiError("ADMIN_CONFLICT", {
-            reasonCode: adminReasonCodes.memePauseSimulationReverted,
-          });
+        pauseInFlight.add(memeTokenId);
+        try {
+          await assertNoPendingPause(memeTokenId);
+          const admissible =
+            action === "pause"
+              ? token.status === "trading" || token.status === "full"
+              : token.status === "paused";
+          if (!admissible) {
+            throw new AdminApiError("ADMIN_CONFLICT", {
+              reasonCode: adminReasonCodes.memePauseState,
+              status: token.status,
+            });
+          }
+          return await submitPause(token.tokenAddress, token.status);
+        } finally {
+          pauseInFlight.delete(memeTokenId);
         }
-        const audit = await repository.appendAudit({
+      } catch (error) {
+        return translate(error);
+      }
+
+      async function submitPause(
+        tokenAddress: string,
+        status: string,
+      ): Promise<Record<string, unknown>> {
+        const base = {
           actor: context.session.actor,
-          action: `meme.${action}`,
           targetType: "meme_token",
           targetId: memeTokenId,
-          before: { status: token.status },
+          before: { status },
+          requestId: context.requestId,
+        } as const;
+        // Decision 0105: intent row first; no row, nothing is signed.
+        const requested = await intentAudit({
+          ...base,
+          action: `meme.${action}.requested`,
           after: {
-            outcome: outcome.status,
-            transactionHash:
-              outcome.status === "submitted" ? outcome.transactionHash : null,
-            errorCode: outcome.status === "failed" ? outcome.errorCode : null,
             reasonCode: code,
             reasonText: text,
             executorAddress: sender.address,
           },
-          requestId: context.requestId,
         });
-        if (outcome.status === "failed") {
-          throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
-            reasonCode: outcome.errorCode,
-            auditId: audit.auditId,
+        const failed = (errorCode: string) =>
+          outcomeAudit({
+            ...base,
+            action: `meme.${action}.failed`,
+            after: {
+              requestedAuditId: requested.auditId,
+              errorCode,
+              executorAddress: sender.address,
+            },
+          });
+        let outcome;
+        try {
+          outcome = await sender.submit(action, tokenAddress);
+        } catch (error) {
+          await failed(adminReasonCodes.memePauseBroadcastFailed);
+          throw error;
+        }
+        if (outcome.status === "simulation_reverted") {
+          await failed(adminReasonCodes.memePauseSimulationReverted);
+          throw new AdminApiError("ADMIN_CONFLICT", {
+            reasonCode: adminReasonCodes.memePauseSimulationReverted,
           });
         }
+        if (outcome.status === "failed") {
+          const row = await failed(outcome.errorCode);
+          throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
+            reasonCode: outcome.errorCode,
+            auditId: row?.auditId ?? requested.auditId,
+          });
+        }
+        pausePending.set(memeTokenId, {
+          transactionHash: outcome.transactionHash,
+          submittedAtMs: now().getTime(),
+        });
+        const submitted = await outcomeAudit({
+          ...base,
+          action: `meme.${action}.submitted`,
+          after: {
+            requestedAuditId: requested.auditId,
+            transactionHash: outcome.transactionHash,
+            reasonCode: code,
+            reasonText: text,
+            executorAddress: sender.address,
+          },
+        });
         return Object.freeze({
           memeTokenId,
           action,
           status: "submitted",
           transactionHash: outcome.transactionHash,
           executorAddress: sender.address,
-          audit: auditReference(audit),
+          audit: auditReference(submitted ?? requested),
         });
-      } catch (error) {
-        return translate(error);
       }
     },
 

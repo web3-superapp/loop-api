@@ -99,6 +99,6 @@ None. All reads use tables written by other modules (`launches`, `communities`, 
 
 ## Open questions for the main agent
 
-1. `defaultRoute` is still the literal `"community"`, which is no longer a tab. Proposed: `"chat"` in the next policy step (a schema `const` change).
+1. `defaultRoute` is still the literal `"community"`, which is no longer a tab. Proposed: `"chat"` in the next policy step (a schema `const` change). **Resolved by Decision 0105: `"chat"` inside the same policy version.**
 2. Referral rank counts every validation status; switch to `valid` only once the effective-invite rule is approved.
 3. `major` omits USDC until it is registered (`pnpm asset:register`).
