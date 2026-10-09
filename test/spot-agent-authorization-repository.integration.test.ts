@@ -34,6 +34,16 @@ const databaseUrl = requireIntegrationDatabaseUrl();
 
 const truncateAll = `
   truncate table
+    public.hooks_launch_submission_commands,
+    public.hooks_launch_deployment_authorizations,
+    public.hooks_launch_deployment_tasks,
+    public.hooks_testnet_acceptances,
+    public.hooks_launch_config_approvals,
+    public.hooks_launch_project_config_versions,
+    public.ops_audit,
+    public.ops_operations,
+    public.ops_grants,
+    public.ops_operators,
     public.community_review_notes,
     public.meme_intents,
     public.meme_holders,

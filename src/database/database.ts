@@ -72,6 +72,12 @@ import { createPostgresSupportTicketRepository } from "./support-ticket-reposito
 import type { AccountSettingsRepository } from "../features/settings/account-settings-repository.js";
 import type { SupportTicketRepository } from "../features/support/support-ticket-repository.js";
 import { createPostgresLaunchRepository } from "./launch-repository.js";
+import { createPostgresHooksLaunchProjectConfigRepository } from "./hooks-launch-project-config-repository.js";
+import { createPostgresHooksLaunchReviewRepository } from "./hooks-launch-review-repository.js";
+import { createPostgresHooksLaunchSubmissionRepository } from "./hooks-launch-submission-repository.js";
+import type { HooksLaunchProjectConfigRepository } from "../features/launch/hooks-launch-project-config.js";
+import type { HooksLaunchReviewRepository } from "../features/launch/hooks-launch-review.js";
+import type { HooksLaunchSubmissionRepository } from "../features/launch/hooks-launch-submission.js";
 import { createPostgresMiningRepository } from "./mining-repository.js";
 import { createPostgresReferralRepository } from "./referral-repository.js";
 import type { LaunchRepository } from "../features/launch/launch-repository.js";
@@ -209,6 +215,12 @@ export interface Database {
   readonly supportTickets?: SupportTicketRepository;
   /** Launch off-chain catalog and review (Decision 0036). */
   readonly launch?: LaunchRepository;
+  /** Decision 0108: append-only owner Hooks launch config drafts. */
+  readonly hooksLaunchProjectConfigs?: HooksLaunchProjectConfigRepository;
+  /** Decision 0108: operator review (edit / approve / testnet acceptance). */
+  readonly hooksLaunchReview?: HooksLaunchReviewRepository;
+  /** Decision 0108: project-signed deployment tasks (awaiting executor). */
+  readonly hooksLaunchSubmissions?: HooksLaunchSubmissionRepository;
   /** Launch chain facts: lane, projections, allowlist roots, Intents (Decision 0077). */
   readonly launchChain?: LaunchChainRepository;
   /** Mining formula versions, weights, and snapshots (Decision 0036). */
@@ -435,6 +447,10 @@ export function createPostgresDatabase(
     supportTickets,
     communityAi,
     launch,
+    hooksLaunchProjectConfigs:
+      createPostgresHooksLaunchProjectConfigRepository(pool),
+    hooksLaunchReview: createPostgresHooksLaunchReviewRepository(pool),
+    hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     admin: createPostgresAdminRepository(pool),

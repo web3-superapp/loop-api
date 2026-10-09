@@ -13,6 +13,23 @@ import {
 } from "../../features/community/community-contract.js";
 import { parseV2WriteRequestMetadata } from "../../features/session/session-contract.js";
 import type { LaunchService } from "../../features/launch/launch-service.js";
+import {
+  HooksLaunchDeploymentError,
+  type HooksLaunchDeploymentService,
+} from "../../features/launch/hooks-launch-deployment.js";
+import { InvalidHooksLaunchDraftError } from "../../features/launch/hooks-launch-config.js";
+import {
+  HooksLaunchProjectConfigUnavailableError,
+  HooksLaunchProjectNotFoundError,
+  HooksLaunchProjectVersionConflictError,
+  type HooksLaunchProjectConfigRecord,
+  type HooksLaunchProjectConfigService,
+} from "../../features/launch/hooks-launch-project-config.js";
+import {
+  HooksLaunchSubmissionError,
+  type HooksLaunchSubmissionService,
+} from "../../features/launch/hooks-launch-submission.js";
+import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { assertDecimalStringFields } from "./chain-schemas.js";
 import {
   assertNoBodyOrQueryV2,
@@ -27,6 +44,14 @@ import type { V2RouteDependencies } from "./index.js";
 import {
   createProjectRequestSchema,
   economyResourceSchema,
+  hooksLaunchDeploymentJobSchema,
+  hooksLaunchDeploymentParamsSchema,
+  hooksLaunchDeploymentRequestSchema,
+  hooksLaunchProjectConfigReadSchema,
+  hooksLaunchProjectConfigRequestSchema,
+  hooksLaunchProjectConfigResourceSchema,
+  hooksLaunchSigningRequestQuerySchema,
+  hooksLaunchSigningRequestResourceSchema,
   eligibilityQuerySchema,
   eligibilityResourceSchema,
   historyResourceSchema,
@@ -98,12 +123,342 @@ const validateCasWriteHeaders: onRequestHookHandler = (
   }
 };
 
+interface HooksDeploymentParams {
+  readonly projectId: string;
+  readonly jobId: string;
+}
+
+/** Decision 0108: reason codes carried by a hooks-route 503. */
+const hooksLaunchDisabledReason = "HOOKS_LAUNCH_DISABLED";
+const hooksLaunchFactoryReason = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE";
+
+function hooksUnavailable(reasonCode: string): V2ApiError {
+  return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
+}
+
+function projectConfigResource(record: HooksLaunchProjectConfigRecord) {
+  return {
+    projectId: record.projectId,
+    version: record.version,
+    templateVersion: record.templateVersion,
+    config: record.config,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function projectConfigError(error: unknown): never {
+  if (error instanceof HooksLaunchProjectNotFoundError) {
+    throw V2ApiError.notFound();
+  }
+  if (error instanceof HooksLaunchProjectVersionConflictError) {
+    throw V2ApiError.versionConflict();
+  }
+  if (error instanceof InvalidHooksLaunchDraftError) {
+    throw V2ApiError.invalidRequest();
+  }
+  if (error instanceof HooksLaunchProjectConfigUnavailableError) {
+    throw hooksUnavailable(hooksLaunchDisabledReason);
+  }
+  throw error;
+}
+
+function submissionError(error: unknown): never {
+  if (error instanceof HooksLaunchSubmissionError) {
+    switch (error.kind) {
+      case "unavailable":
+        throw hooksUnavailable(hooksLaunchFactoryReason);
+      case "not_found":
+        throw V2ApiError.notFound();
+      case "conflict":
+        throw V2ApiError.versionConflict();
+      case "idempotency_conflict":
+        throw V2ApiError.idempotencyConflict();
+      case "not_approved":
+        throw V2ApiError.fromCode("POLICY_BLOCKED", {
+          reasonCode: "HOOKS_CONFIG_NOT_APPROVED",
+        });
+      case "invalid":
+        throw V2ApiError.invalidRequest();
+    }
+  }
+  throw error;
+}
+
 export function registerV2LaunchRoutes(
   app: FastifyInstance,
   dependencies: V2RouteDependencies,
 ): void {
   const { authenticateLoopBearer } = dependencies;
   const service: LaunchService = dependencies.launchService;
+  const hooksConfigService: HooksLaunchProjectConfigService | undefined =
+    dependencies.hooksLaunchProjectConfigService;
+  const hooksDeploymentService: HooksLaunchDeploymentService | undefined =
+    dependencies.hooksLaunchDeploymentService;
+  const hooksSubmissionService: HooksLaunchSubmissionService | undefined =
+    dependencies.hooksLaunchSubmissionService;
+
+  app.get(
+    "/v2/launch/projects/:projectId/hooks-config",
+    {
+      schema: {
+        operationId: "getV2HooksLaunchProjectConfig",
+        summary: "Read the caller's fixed-template Hooks project configuration",
+        description:
+          "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: projectIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: hooksLaunchProjectConfigReadSchema,
+          ...launchReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksConfigService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      const params = request.params as ProjectParams;
+      try {
+        const draft = await hooksConfigService.getDraft({
+          ownerUserId: requireAuthenticatedLoopPrincipal(request).userId,
+          projectId: params.projectId,
+        });
+        reply.header("cache-control", "no-store");
+        return reply.code(200).send({
+          draft: draft === null ? null : projectConfigResource(draft),
+          contractVersion: v2ContractVersion,
+        });
+      } catch (error) {
+        return projectConfigError(error);
+      }
+    },
+  );
+
+  app.put(
+    "/v2/launch/projects/:projectId/hooks-config",
+    {
+      schema: {
+        operationId: "saveV2HooksLaunchProjectConfig",
+        summary: "Save an owner-scoped fixed-template Hooks project draft",
+        description:
+          "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: projectIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: hooksLaunchProjectConfigRequestSchema,
+        response: {
+          200: hooksLaunchProjectConfigResourceSchema,
+          ...launchCommandErrors,
+        },
+      },
+      onRequest: validateCasWriteHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksConfigService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      const params = request.params as ProjectParams;
+      const body = request.body as {
+        readonly expectedVersion: number;
+        readonly config: unknown;
+      };
+      try {
+        const saved = await hooksConfigService.saveDraft({
+          ownerUserId: requireAuthenticatedLoopPrincipal(request).userId,
+          projectId: params.projectId,
+          expectedVersion: body.expectedVersion,
+          body: body.config,
+        });
+        reply.header("cache-control", "no-store");
+        return reply.code(200).send(projectConfigResource(saved));
+      } catch (error) {
+        return projectConfigError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/v2/launch/projects/:projectId/hooks-config/signing-request",
+    {
+      schema: {
+        operationId: "getV2HooksLaunchSigningRequest",
+        summary: "Prepare the owner's BSC Testnet Hooks deployment signature",
+        description:
+          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5).",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: projectIdParamsSchema,
+        querystring: hooksLaunchSigningRequestQuerySchema,
+        response: {
+          200: hooksLaunchSigningRequestResourceSchema,
+          ...launchReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksDeploymentService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      const params = request.params as ProjectParams;
+      const query = request.query as { readonly walletId: string };
+      try {
+        const prepared = await hooksDeploymentService.prepareSigningRequest({
+          ownerUserId: requireAuthenticatedLoopPrincipal(request).userId,
+          projectId: params.projectId,
+          walletId: query.walletId,
+        });
+        reply.header("cache-control", "no-store");
+        return reply.code(200).send(prepared);
+      } catch (error) {
+        if (error instanceof HooksLaunchDeploymentError) {
+          if (error.kind === "not_found") throw V2ApiError.notFound();
+          if (error.kind === "invalid") throw V2ApiError.invalidRequest();
+          if (error.kind === "busy") reply.header("retry-after", "5");
+          throw hooksUnavailable(hooksLaunchFactoryReason);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/v2/launch/projects/:projectId/hooks-deployments",
+    {
+      schema: {
+        operationId: "submitV2HooksLaunchDeployment",
+        summary: "Verify and record a project-signed Testnet deployment task",
+        description:
+          "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: projectIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: hooksLaunchDeploymentRequestSchema,
+        response: {
+          200: hooksLaunchDeploymentJobSchema,
+          ...launchCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksSubmissionService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      try {
+        const job = await hooksSubmissionService.submit({
+          ownerUserId: requireAuthenticatedLoopPrincipal(request).userId,
+          projectId: (request.params as ProjectParams).projectId,
+          idempotencyKey: commandContext(request).idempotencyKey,
+          body: request.body,
+        });
+        reply.header("cache-control", "no-store");
+        return reply.code(200).send(job);
+      } catch (error) {
+        return submissionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/v2/launch/projects/:projectId/hooks-deployments/:jobId",
+    {
+      schema: {
+        operationId: "getV2HooksLaunchDeployment",
+        summary: "Read an owner-scoped Hooks deployment task",
+        description:
+          "Decision 0108. A task of another account or project is NOT_FOUND. The response never contains the saved signature.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: hooksLaunchDeploymentParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: hooksLaunchDeploymentJobSchema, ...launchReadErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksSubmissionService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      const params = request.params as HooksDeploymentParams;
+      let job;
+      try {
+        job = await hooksSubmissionService.getOwned(
+          requireAuthenticatedLoopPrincipal(request).userId,
+          params.projectId,
+          params.jobId,
+        );
+      } catch (error) {
+        return submissionError(error);
+      }
+      if (job === null) throw V2ApiError.notFound();
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(job);
+    },
+  );
+
+  app.delete(
+    "/v2/launch/projects/:projectId/hooks-deployments/:jobId",
+    {
+      schema: {
+        operationId: "cancelV2HooksLaunchDeployment",
+        summary: "Cancel an owner-scoped task before any broadcast",
+        description:
+          "Decision 0108. awaiting_executor -> cancelled; an already cancelled task is returned unchanged (idempotent). Cancelling does not revoke an EIP-712 signature already shared on chain.",
+        tags: ["launch"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: hooksLaunchDeploymentParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: hooksLaunchDeploymentJobSchema,
+          ...launchCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (hooksSubmissionService === undefined) {
+        throw hooksUnavailable(hooksLaunchDisabledReason);
+      }
+      const params = request.params as HooksDeploymentParams;
+      let job;
+      try {
+        job = await hooksSubmissionService.cancelOwned(
+          requireAuthenticatedLoopPrincipal(request).userId,
+          params.projectId,
+          params.jobId,
+        );
+      } catch (error) {
+        return submissionError(error);
+      }
+      if (job === null) throw V2ApiError.notFound();
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(job);
+    },
+  );
 
   app.get(
     "/v2/launch/overview",

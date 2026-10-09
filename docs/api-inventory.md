@@ -303,6 +303,31 @@ reads. No request, response, or error changes.
 | `GET /v2/launch/stake`                                                 | Bearer + headers                                                                                                                    | `STAKING_CONTRACT_PENDING`, `executable: false`                                                                                                                                                                                                                                                                                                                                                            | `implemented` | `blocked-provider`                                                                                                                                                                                         |
 | `GET /v2/launch/economy`                                               | Bearer + headers                                                                                                                    | Provable counts + `source: loop` (Decision 0049); optional `onChain` (registered sales, SUCCEEDED raise, locked LP; `source: loop_indexer`) only with a configured contract                                                                                                                                                                                                                                | `implemented` | `implemented`; `onChain` needs the lane checkpoint (Decision 0077)                                                                                                                                         |
 
+### V2 Hooks launch configuration and deployment tasks (Decision 0108, inside `launch`)
+
+Ported in S125 from the requirer branch `codex/integrated-dual-pool-20261008`
+(requirer Decisions 0090/0095/0097; migrations renumbered 000051–000054).
+Fixed `hooks_launch_v1` template, BSC Testnet only, no broadcast. Off by
+default: while `HOOKS_LAUNCH_ENABLED` is not `on` every route answers `503
+CAPABILITY_UNAVAILABLE` (`HOOKS_LAUNCH_DISABLED`). Signing and submission
+additionally need `LAUNCH_CHAIN_ID=97` + launch RPC URLs +
+`HOOKS_LAUNCH_FACTORY_ADDRESS` + `HOOKS_LAUNCH_FACTORY_CODE_HASH`
+(`HOOKS_LAUNCH_FACTORY_UNAVAILABLE`). Operator approval / testnet acceptance
+exist as a service with server-side separation of duties but have no HTTP
+route yet (loop-admin batch); operators are created by `pnpm hooks:operator`.
+Frontend contract: `docs/frontend-v2-hooks-launch-api.md`.
+
+| Route                                                              | Input                                                        | Output                                                                             | Contract      | Runtime                                                                                         |
+| ------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /v2/launch/projects/{projectId}/hooks-config`                 | Bearer + headers; no payload                                 | `{draft \| null, contractVersion}`; owner-scoped                                   | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                     |
+| `PUT /v2/launch/projects/{projectId}/hooks-config`                 | Headers, no `Idempotency-Key`; `{expectedVersion, config}`   | New immutable version with server-derived `fixedEconomics` and `configHash`        | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; CAS                                                |
+| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request` | Bearer + headers; `walletId`                                 | EIP-712 typed data, MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                     |
+| `POST /v2/launch/projects/{projectId}/hooks-deployments`           | Write headers incl. UUIDv4 `Idempotency-Key`; signed request | `awaiting_executor` task (never broadcast)                                         | `implemented` | `blocked-provider`; needs the Factory and an operator approval (`403 POLICY_BLOCKED` otherwise) |
+| `GET /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`    | Bearer + headers                                             | Owner-scoped task                                                                  | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                     |
+| `DELETE /v2/launch/projects/{projectId}/hooks-deployments/{jobId}` | Write headers incl. UUIDv4 `Idempotency-Key`                 | `cancelled` task                                                                   | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                     |
+
+Dual-pool mining algorithms (Decision 0107) are library code only: no route.
+
 ### V2 MEME launchpad module (Decision 0101, `V2_MODULES_ENABLED=meme`)
 
 The four.meme-style bonding-curve launchpad of the v3 MEME tab (docs/10,

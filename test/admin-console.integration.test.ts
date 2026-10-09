@@ -224,10 +224,11 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
   });
 
   it("applies 000050 and keeps the audit log append-only", async () => {
-    const head = await pool.query<{ name: string }>(
-      "select name from public.pgmigrations order by id desc limit 1",
+    // Later migrations (000051+, Decision 0108) sit on top of 000050.
+    const applied = await pool.query<{ name: string }>(
+      "select name from public.pgmigrations where name = '000050_admin_console'",
     );
-    expect(head.rows[0]?.name).toBe("000050_admin_console");
+    expect(applied.rows[0]?.name).toBe("000050_admin_console");
     const row = await repository.appendAudit({
       actor: "operator",
       action: "session.login",
