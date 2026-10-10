@@ -303,6 +303,36 @@ function tradeOf(record: Launch2TradeRecord): Resource {
   });
 }
 
+/**
+ * Decision 0121: the keeper's newest attempt. `nextEligibleAt` = the
+ * backoff / retry time after a refusal or failure, or the last ledger
+ * success + `MIN_SUCCESS_INTERVAL` once the newest attempt is in the
+ * ledger; null while an attempt is in flight or unknown.
+ */
+function keeperSummaryOf(record: Launch2InstanceRecord): Resource | null {
+  const keeper = record.buybackKeeper;
+  if (keeper === null) return null;
+  let nextEligibleAt: string | null = null;
+  if (keeper.status === "rejected" || keeper.status === "failed") {
+    nextEligibleAt = keeper.nextEligibleAt;
+  } else if (
+    keeper.status === "confirmed" &&
+    keeper.aligned &&
+    record.buyback.lastAt !== null
+  ) {
+    nextEligibleAt = new Date(
+      Date.parse(record.buyback.lastAt) +
+        launch2Template.buybackMinIntervalSeconds * 1000,
+    ).toISOString();
+  }
+  return Object.freeze({
+    lastAttemptAt: keeper.lastAttemptAt,
+    lastResult: keeper.status,
+    reasonCode: keeper.reasonCode,
+    nextEligibleAt,
+  });
+}
+
 function buybackSummaryOf(
   record: Launch2InstanceRecord,
   latest: Launch2BuybackRecord | null,
@@ -321,6 +351,7 @@ function buybackSummaryOf(
       recorded > spent ? recorded - spent : 0n,
     ),
     latest: latest === null ? null : buybackOf(latest),
+    keeper: keeperSummaryOf(record),
   });
 }
 
@@ -666,6 +697,16 @@ export function createLaunch2Service(
     return at < state.curve.earlyRoundEndsAt ? "priority" : "public";
   }
 
+  /**
+   * S143 / Decision 0121 §quote: the stage that gates a quote or a trade
+   * prepare is the read model's — the same `stage` the instance detail
+   * shows (lane-confirmed facts + the clock). The chain stage at the quote
+   * block must agree; when the chain has already moved (a snapshot or a
+   * graduation not yet `confirmations` deep for the lane) the answer is
+   * 409 `LAUNCH2_STAGE_MISMATCH` with the read-model `stage`, never a quote
+   * for a round the App does not show yet. MAX and amounts still come from
+   * that chain block.
+   */
   function requireTradable(
     record: Launch2InstanceRecord,
     state: Launch2ViewerChainState,
@@ -676,12 +717,7 @@ export function createLaunch2Service(
         holdReason: record.holdReason,
       });
     }
-    if (!state.curve.published) {
-      refuse("DATA_STALE", launch2ReasonCodes.stageMismatch, {
-        stage: "upcoming",
-      });
-    }
-    const stage = chainStageOf(record, state);
+    const stage = stageOf(record, nowSeconds()).stage;
     const open =
       side === "buy"
         ? stage === "priority" || stage === "public"
@@ -697,6 +733,12 @@ export function createLaunch2Service(
           : launch2ReasonCodes.stageMismatch,
         { stage },
       );
+    }
+    const chainStage = state.curve.published
+      ? chainStageOf(record, state)
+      : "upcoming";
+    if (chainStage !== stage) {
+      refuse("DATA_STALE", launch2ReasonCodes.stageMismatch, { stage });
     }
     return stage;
   }

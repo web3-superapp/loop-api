@@ -212,6 +212,17 @@ export interface Launch2InstanceRecord {
     readonly meme: string;
     readonly lastAt: string | null;
   };
+  /** Decision 0121: the buyback keeper's newest attempt, if any. */
+  readonly buybackKeeper: {
+    readonly status:
+      "rejected" | "pending" | "broadcast" | "confirmed" | "failed";
+    readonly reasonCode: string | null;
+    /** The decision time (latest refusal for a refreshed `rejected`). */
+    readonly lastAttemptAt: string;
+    readonly nextEligibleAt: string | null;
+    /** The ledger row of the transaction exists (`confirmed` only). */
+    readonly aligned: boolean;
+  } | null;
   readonly registeredAt: string;
   readonly projectedAt: string;
 }

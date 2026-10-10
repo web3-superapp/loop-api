@@ -444,14 +444,28 @@ curve-bound USD1 (`403 LAUNCH2_COUNTERPARTY_NOT_INSTANCE` otherwise), not
 `BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST`; the canary asset list and ceilings
 still apply. Frontend contract: `docs/frontend-v2-launch2-api.md`.
 
+S143 (Decision 0121): the worker lane `launch2_buyback_keeper`
+(`LAUNCH2_BUYBACK_KEEPER_ENABLED`, default off; migration 000065
+`launch2_buyback_attempts`) calls `BuybackExecutor.execute()` from a Factory
+keeper key on graduated, unpaused instances (simulate first; refusals are
+recorded, never sent; the ledger stays the `launch2_event` lane's). The
+buyback summary (instance detail `buyback` and `GET …/buybacks` `summary`)
+adds the optional `keeper` (`lastAttemptAt`, `lastResult`, `reasonCode`,
+`nextEligibleAt`); the console project detail adds `buybackAttempts` (newest
+20). Quote and trade prepare now gate on the read-model stage (the detail's);
+a chain ahead of the lane is `409 LAUNCH2_STAGE_MISMATCH`. Evidence:
+`test/launch2-buyback-keeper-anvil.integration.test.ts` (anvil chain 97,
+graduation by 160 wallets, three executions); no BSC Testnet run (needs a
+graduated Testnet instance, a keeper key with tBNB, and a fed price recorder).
+
 | Route                                                                            | Input                                                       | Output                                                                                                                                                              | Contract      | Runtime                                              |
 | -------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------- |
 | `GET /v2/launch2/instances`                                                      | `stage`, `limit` ≤ 50 or signed `cursor`                    | Rows: stage + `nextChangeAt` (clock-derived), NFT sold, curve sold / reserve / price                                                                                | `implemented` | `blocked-provider`; needs the Testnet Factory + lane |
-| `GET /v2/launch2/instances/{instanceId}`                                         | optional `walletId`                                         | Template, contracts, snapshot (verification), graduation, buyback summary, 20 trades, viewer block                                                                  | `implemented` | `blocked-provider`                                   |
-| `GET /v2/launch2/instances/{instanceId}/quote`                                   | `side`, `amount`, `walletId`, `slippageBps?`                | One-block quote with tax, `minOut`, `deadline`, executable `max` (quota / inventory / balance), quota, eligibility                                                  | `implemented` | `blocked-provider`                                   |
+| `GET /v2/launch2/instances/{instanceId}`                                         | optional `walletId`                                         | Template, contracts, snapshot (verification), graduation, buyback summary (+ `keeper`, 0121), 20 trades, viewer block                                               | `implemented` | `blocked-provider`                                   |
+| `GET /v2/launch2/instances/{instanceId}/quote`                                   | `side`, `amount`, `walletId`, `slippageBps?`                | One-block quote with tax, `minOut`, `deadline`, executable `max` (quota / inventory / balance), quota, eligibility; stage = read model (S143)                       | `implemented` | `blocked-provider`                                   |
 | `POST /v2/launch2/instances/{instanceId}/nft/prepare`                            | Write headers incl. `Idempotency-Key`; `{walletId}`         | `201` unsigned `mint()` (+ exact 100 USD1 approve); device signing exit; counterparties = instance registry (0117)                                                  | `implemented` | `blocked-provider`; needs `BSC_WRITES_ENABLED`       |
 | `POST /v2/launch2/instances/{instanceId}/trade/prepare`                          | Write headers; `{walletId, side, amount, minOut, deadline}` | `201` unsigned `buy` (with Merkle proof in the priority hour) / `sell` (+ exact approve); `QUOTE_EXPIRED`, `PRICE_MOVED`; counterparties = instance registry (0117) | `implemented` | `blocked-provider`; needs `BSC_WRITES_ENABLED`       |
-| `GET /v2/launch2/instances/{instanceId}/buybacks`                                | `limit` ≤ 100 or signed `cursor`                            | Executed buybacks, ledger summary, live executor / escrow state with `nextOrderBlockedReason`                                                                       | `implemented` | `blocked-provider`; rejected attempts leave no log   |
+| `GET /v2/launch2/instances/{instanceId}/buybacks`                                | `limit` ≤ 100 or signed `cursor`                            | Executed buybacks, ledger summary (+ `keeper`, 0121), live executor / escrow state with `nextOrderBlockedReason`                                                    | `implemented` | `blocked-provider`; rejected attempts leave no log   |
 | `GET /v2/launch2/me/positions`                                                   | Bearer + headers                                            | Per instance × wallet: NFT minted / held, snapshot member, curve bought / sold / cumulative quota                                                                   | `implemented` | `blocked-provider`                                   |
 | Snapshot publication (Decision 0118, S140): the worker lane                      |
 | `launch2_snapshot_publisher` (`LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED`, default off; |

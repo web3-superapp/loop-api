@@ -1,4 +1,5 @@
 import { launch2PublicationStatuses } from "./features/launch2/launch2-snapshot-publisher.js";
+import { launch2BuybackAttemptStatuses } from "./features/launch2/launch2-buyback-keeper.js";
 import { hooksLaunchDeploymentStatuses } from "./features/launch/hooks-launch-deployment-status.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 
@@ -40,9 +41,10 @@ const indexerLanes = new Set([
   "meme_intent_reconcile",
   "meme_graduation_executor",
   "hooks_launch_executor",
-  // Decision 0114 / 0118: the MEME v2 lanes.
+  // Decision 0114 / 0118 / 0121: the MEME v2 lanes.
   "launch2_event",
   "launch2_snapshot_publisher",
+  "launch2_buyback_keeper",
 ]);
 const memeGraduationOutcomes = new Set([
   "confirmed",
@@ -61,8 +63,9 @@ const launchIntentSettlements = new Set([
 
 const hooksDeploymentStatusSet: ReadonlySet<string> = new Set([
   ...hooksLaunchDeploymentStatuses,
-  // Decision 0118: snapshot publication statuses.
+  // Decision 0118 / 0121: snapshot publication and buyback attempt statuses.
   ...launch2PublicationStatuses,
+  ...launch2BuybackAttemptStatuses,
 ]);
 
 export type ReconciliationWorkerLogMessage =
@@ -93,6 +96,11 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch2 snapshot publisher enabled"
   | "LOOP launch2 snapshot publisher step"
   | "LOOP launch2 snapshot publisher is waiting"
+  | "LOOP launch2 buyback keeper stays idle"
+  | "LOOP launch2 buyback keeper enabled"
+  | "LOOP launch2 buyback keeper step"
+  | "LOOP launch2 buyback keeper is waiting"
+  | "LOOP launch2 buyback keeper refused: the key is not a Factory keeper"
   | "LOOP mining_hourly_settlement lane stays idle"
   | "LOOP mining_hourly_settlement lane enabled"
   | "LOOP mining_hourly_settlement tick failed"

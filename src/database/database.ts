@@ -58,6 +58,7 @@ import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
 import { createPostgresLaunch2PublicationRepository } from "./launch2-snapshot-publication-repository.js";
+import { createPostgresLaunch2BuybackAttemptRepository } from "./launch2-buyback-attempt-repository.js";
 import { createPostgresMiningSettlementRepository } from "./mining-settlement-repository.js";
 import type { MiningSettlementRepository } from "../features/mining/hourly-settlement-ports.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
@@ -70,6 +71,7 @@ import type { AdminRepository } from "../features/admin/admin-repository.js";
 import type { MemeRepository } from "../features/meme/meme-repository.js";
 import type { Launch2Repository } from "../features/launch2/launch2-ports.js";
 import type { Launch2PublicationRepository } from "../features/launch2/launch2-snapshot-publisher.js";
+import type { Launch2BuybackAttemptRepository } from "../features/launch2/launch2-buyback-keeper.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
 import type { MediaStorage } from "../features/media/media-storage.js";
@@ -251,6 +253,8 @@ export interface Database {
   readonly launch2?: Launch2Repository;
   /** Decision 0118: snapshot publications (2-of-3 signed, worker only). */
   readonly launch2Publications?: Launch2PublicationRepository;
+  /** Decision 0121: buyback keeper attempts (worker only). */
+  readonly launch2BuybackAttempts?: Launch2BuybackAttemptRepository;
   /** Decision 0116: hourly settlement, ledger, and claims. */
   readonly miningSettlement?: MiningSettlementRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
@@ -496,6 +500,7 @@ export function createPostgresDatabase(
     meme: createPostgresMemeRepository(pool),
     launch2: createPostgresLaunch2Repository(pool),
     launch2Publications: createPostgresLaunch2PublicationRepository(pool),
+    launch2BuybackAttempts: createPostgresLaunch2BuybackAttemptRepository(pool),
     miningSettlement: createPostgresMiningSettlementRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),

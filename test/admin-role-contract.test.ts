@@ -119,6 +119,7 @@ describe("Decision 0109 admin artifact", () => {
       "predictedHookAddress",
       "testnetAcceptances",
       "snapshotPublications",
+      "buybackAttempts",
       "approval",
     ]) {
       expect(detail).toContain(field);

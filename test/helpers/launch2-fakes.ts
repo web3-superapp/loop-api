@@ -110,6 +110,7 @@ export function instanceFixture(
     snapshotPublication: null,
     graduation: null,
     buyback: { paused: false, count: "0", usd1: "0", meme: "0", lastAt: null },
+    buybackKeeper: null,
     registeredAt: new Date(
       Number(launch2NowSeconds - 86_400n) * 1000,
     ).toISOString(),

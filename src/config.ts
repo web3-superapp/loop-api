@@ -982,6 +982,11 @@ const reconciliationWorkerEnvironmentSchema = z
       1,
       1_000,
     ),
+    // Decision 0121: the launch2_buyback_keeper lane, default off.
+    LAUNCH2_BUYBACK_KEEPER_ENABLED: booleanString,
+    LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: positiveIntegerString(10, 3_600),
+    LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS: positiveIntegerString(1, 64),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -1572,6 +1577,14 @@ export interface ReconciliationWorkerConfig {
    * executor's), or off BSC Testnet refuses boot. Keys are never logged.
    */
   readonly launch2SnapshotPublisher: Launch2SnapshotPublisherConfig | null;
+  /**
+   * MEME v2 buyback keeper (Decision 0121). Present only with
+   * `LAUNCH2_BUYBACK_KEEPER_ENABLED=true`; enabling it without a
+   * well-formed keeper key, without HOOKS_LAUNCH_FACTORY_ADDRESS, or off
+   * BSC Testnet refuses boot (the worker then reads the Factory keepers and
+   * refuses boot when the key is neither). The key is never logged.
+   */
+  readonly launch2BuybackKeeper: Launch2BuybackKeeperConfig | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -2369,6 +2382,67 @@ export function parseLaunch2SnapshotPublisher(data: {
     pollIntervalMs: data.LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS,
     confirmations: data.LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS,
     maxGasPriceGwei: data.LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI,
+  });
+}
+
+export interface Launch2BuybackKeeperConfig {
+  readonly privateKey: `0x${string}`;
+  readonly factoryAddress: string;
+  /** Tick interval (≥ 10 = `BuybackExecutor.MIN_SUCCESS_INTERVAL`). */
+  readonly intervalSeconds: number;
+  readonly confirmations: number;
+}
+
+/**
+ * Decision 0121: the buyback keeper signs `BuybackExecutor.execute()` from
+ * a Factory keeper account. `false` (default) → null. `true` refuses boot
+ * without a 32-byte hex key, without HOOKS_LAUNCH_FACTORY_ADDRESS (the
+ * keepers are verified against it), or off `LAUNCH_CHAIN_ID=97`. The
+ * interval floor (10 s) is enforced by the schema. No key enters a log
+ * line or an error message.
+ */
+export function parseLaunch2BuybackKeeper(data: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH2_BUYBACK_KEEPER_ENABLED: boolean;
+  readonly LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY?: string | undefined;
+  readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+  readonly LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: number;
+  readonly LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS: number;
+}): Launch2BuybackKeeperConfig | null {
+  if (!data.LAUNCH2_BUYBACK_KEEPER_ENABLED) {
+    return null;
+  }
+  const issues: string[] = [];
+  const key = data.LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY?.trim() ?? "";
+  if (key === "" || !privateKeyPattern.test(key)) {
+    issues.push(
+      "LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY: a 32-byte hex key is required when LAUNCH2_BUYBACK_KEEPER_ENABLED=true",
+    );
+  }
+  const factory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(factory)) {
+    issues.push(
+      "LAUNCH2_BUYBACK_KEEPER_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS (the keeper is verified against the Factory keepers)",
+    );
+  }
+  if (data.LAUNCH_CHAIN_ID !== "97") {
+    issues.push(
+      "LAUNCH2_BUYBACK_KEEPER_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
+    );
+  }
+  if (data.LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS < 10) {
+    issues.push(
+      "LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: must be at least 10 (BuybackExecutor.MIN_SUCCESS_INTERVAL)",
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigurationError(issues);
+  }
+  return Object.freeze({
+    privateKey: normalizedKey(key),
+    factoryAddress: factory.toLowerCase(),
+    intervalSeconds: data.LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS,
+    confirmations: data.LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS,
   });
 }
 
@@ -3365,6 +3439,14 @@ export function loadReconciliationWorkerConfig(
       environment["LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS"] ?? "12",
     LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI:
       environment["LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI"] ?? "20",
+    LAUNCH2_BUYBACK_KEEPER_ENABLED:
+      environment["LAUNCH2_BUYBACK_KEEPER_ENABLED"] ?? "false",
+    LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY:
+      environment["LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY"],
+    LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS:
+      environment["LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS"] ?? "15",
+    LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS:
+      environment["LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS"] ?? "12",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -3461,6 +3543,7 @@ export function loadReconciliationWorkerConfig(
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
     launch2SnapshotPublisher: parseLaunch2SnapshotPublisher(parsed.data),
+    launch2BuybackKeeper: parseLaunch2BuybackKeeper(parsed.data),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED

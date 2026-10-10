@@ -1,4 +1,4 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121)
 
 Status: implemented on `feat/S134-launch2-read-model`, follow-ups in `fix/S139-launch2-followups`
 (Decision 0117); Development / BSC Testnet (chain 97) only. Evidence: anvil end-to-end
@@ -166,7 +166,8 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
       "lastExecutedAt": null,
       "escrowRecordedUsd1": "200",
       "escrowAvailableUsd1": "200",
-      "latest": null
+      "latest": null,
+      "keeper": null
     },
     "recentTrades": [
       {
@@ -223,6 +224,45 @@ buying — wait for `stage = priority` and `snapshot.verification = verified`. `
 `{graduatedAt, officialPoolId, hookAddress, lpFee: 2500, tickSpacing: 60,
 officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address).
 
+`buyback.keeper` (Decision 0121, S143, added; optional in the schema, always present in
+answers; no existing key changed): the server-side buyback keeper's newest attempt, or
+`null` before the keeper ever looked at this instance (keeper off, not graduated, or
+never eligible). Also in `GET …/buybacks` → `summary.keeper`.
+
+```json
+"keeper": {
+  "lastAttemptAt": "2027-01-24T08:00:15.000Z",
+  "lastResult": "rejected",
+  "reasonCode": "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
+  "nextEligibleAt": "2027-01-24T08:00:45.000Z"
+}
+```
+
+| `lastResult` | meaning                                                                                  | 回购面板「最近一笔」                           |
+| ------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `rejected`   | the contract refused the simulation; nothing was sent; `reasonCode` says why             | 「回购暂缓：<原因>」 + `nextEligibleAt` 倒计时 |
+| `pending`    | the order passed simulation and is being signed / sent                                   | 「回购进行中」                                 |
+| `broadcast`  | sent, waiting for confirmations                                                          | 「回购进行中」                                 |
+| `confirmed`  | final on chain; the ledger row (`latest`) follows from the event lane                    | show `latest` (100 USD1 / 时间)                |
+| `failed`     | prepared or sent but not executed (gas, funds, reverted); retried after `nextEligibleAt` | 「回购暂缓，稍后重试」                         |
+
+`reasonCode` for `rejected`: `LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE` (参考价未就绪 — the
+30-minute price window is not filled), `LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION` (现价偏离参考价
+超过 5%), `LAUNCH2_BUYBACK_OUTPUT_BELOW_PROTECTION` (到账低于保护线), `LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT`
+(池子本金保护), `LAUNCH2_BUYBACK_TOO_SOON` (两笔成功间隔 < 10 s), `LAUNCH2_BUYBACK_NO_BUDGET`
+(托管余额为 0), `LAUNCH2_BUYBACK_PAUSED` (回购已暂停), `LAUNCH2_BUYBACK_NOT_KEEPER`,
+`LAUNCH2_BUYBACK_NOT_GRADUATED`, `LAUNCH2_BUYBACK_CONTRACT_REVERTED` (其它，平台处理). For
+`failed`: `LAUNCH2_BUYBACK_TX_REVERTED`, `LAUNCH2_BUYBACK_TX_DROPPED`,
+`LAUNCH2_BUYBACK_TX_REJECTED`, `LAUNCH2_BUYBACK_GAS_ABOVE_CAP`,
+`LAUNCH2_BUYBACK_KEEPER_INSUFFICIENT_FUNDS`, `LAUNCH2_BUYBACK_NONCE_CONSUMED`,
+`LAUNCH2_BUYBACK_PAUSED` (paused before sending). Unknown codes → 「回购暂缓」. A refusal
+that persists keeps one `rejected` row (the time moves, the code stays); `nextEligibleAt`
+doubles from 15 s up to 10 min. `nextEligibleAt` after `confirmed` = the last ledger success
+
+- 10 s; `null` while `pending` / `broadcast`. The keeper is advisory: counts, totals and
+  `latest` come only from the ledger (the `BuybackCompleted` events). `paused: true` →
+  「回购已暂停」 regardless of `keeper`.
+
 ### 3.3 `GET /v2/launch2/instances/{instanceId}/quote?side=buy|sell&amount=&walletId=&slippageBps=`
 
 `amount`: buy = USD1 in (tax included); sell = MEME in. `slippageBps` 0–5000 (default 100).
@@ -240,6 +280,17 @@ never a 200 with `limitedBy: "closed"`:
 
 The App does not call quote outside `priority` / `public` (hide the trade panel, show the
 stage countdown); if it does, treat the 409 as "not open yet" and keep polling the detail.
+
+**Stage = the instance detail's stage** (S143, Decision 0121 §quote; closes S137 report
+observation 1). The quote and `trade/prepare` judge the stage exactly as `GET
+…/instances/{id}` does (the read model: lane-confirmed snapshot / graduation + the clock).
+When the chain at the quote block is already in another stage — the snapshot or the
+graduation is on chain but not yet `confirmations` deep for the lane (≈ 20 s on the testnet)
+— the answer is `409 DATA_STALE` / `LAUNCH2_STAGE_MISMATCH` with `detailsSafe.stage` = the
+read-model stage (the same value the detail shows), never a 200 for a round the App does not
+show yet. Handle it like the table above: keep the panel in the detail's stage and poll the
+detail; re-quote after `stage` changes. MAX, amounts, `basis` still come from the chain block
+of the quote.
 
 ```json
 {
@@ -427,9 +478,10 @@ Refusals to handle in the panel (no toast, no error page):
 
 `nextOrderBlockedReason`: `null` | `BUYBACK_PAUSED` | `BUYBACK_NOT_GRADUATED` |
 `BUYBACK_NO_BUDGET` | `BUYBACK_PROTECTION_BLOCKED` (reference / spot / principal protection
-would refuse now) | `BUYBACK_PRICE_SOURCE_UNAVAILABLE`. Refused attempts are not listed
-(they revert without a log). `live: null` + `liveUnavailable.reasonCode` when the chain read
-fails. Copy: 「回购不等于销毁」 in ⓘ.
+would refuse now) | `BUYBACK_PRICE_SOURCE_UNAVAILABLE`. Refused attempts are not listed in
+`buybacks` (they revert without a log); the keeper's latest refusal is
+`summary.keeper` (§3.2, Decision 0121). `live: null` + `liveUnavailable.reasonCode` when the
+chain read fails. Copy: 「回购不等于销毁」 in ⓘ.
 
 ### 3.7 `GET /v2/launch2/me/positions`
 
@@ -473,7 +525,7 @@ fails. Copy: 「回购不等于销毁」 in ⓘ.
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                         |
 | 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2    |
 | 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason                                                                                                                                                                                                                            |
-| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage`), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                 |
+| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`              |
 | 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                   |
 | 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                      |
 | 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                         |
@@ -484,7 +536,8 @@ fails. Copy: 「回购不等于销毁」 in ⓘ.
 
 Never fabricate a stage, price, or list: a 503 shows the module unavailable with retry; an
 empty `instances` list is the empty state (the lane has indexed nothing yet). `viewer: null`
-means no wallet, not zero holdings.
+means no wallet, not zero holdings. `buyback.keeper: null` means the keeper has not run for
+this instance (lane off by default, or not graduated): show the ledger only, no "回购暂缓".
 
 ## 6. Preflight samples to add (coordinator)
 

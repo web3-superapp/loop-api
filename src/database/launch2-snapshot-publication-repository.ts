@@ -220,8 +220,9 @@ export function createPostgresLaunch2PublicationRepository(
         ) {
           return null;
         }
-        // Nonces the account holds in flight: Hooks executor reservations
-        // and this table's pending / broadcast transactions.
+        // Nonces the account holds in flight: Hooks executor reservations,
+        // this table's and the buyback keeper's (Decision 0121) pending /
+        // broadcast transactions.
         const held = await client.query<{ nonce: string }>(
           `select nonce::text as nonce from public.hooks_launch_executor_nonces
              where chain_id = 97 and executor_address = $1 and state = 'pending'
@@ -229,6 +230,10 @@ export function createPostgresLaunch2PublicationRepository(
            union
            select tx_nonce::text from public.launch2_snapshot_publications
              where submitter_address = $1 and status in ('pending', 'broadcast')
+               and tx_nonce is not null and tx_nonce >= $2::bigint
+           union
+           select tx_nonce::text from public.launch2_buyback_attempts
+             where keeper_address = $1 and status in ('pending', 'broadcast')
                and tx_nonce is not null and tx_nonce >= $2::bigint
            order by 1`,
           [submitter, input.chainPendingNonce.toString()],

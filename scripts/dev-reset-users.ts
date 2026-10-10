@@ -186,6 +186,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_intents: "user",
     // Snapshot publications (Decision 0118): rooted in a launch2 instance
     launch2_snapshot_publications: "user",
+    // Buyback keeper attempts (Decision 0121): rooted in a launch2 instance
+    launch2_buyback_attempts: "user",
     // Mining
     mining_formula_versions: "platform",
     mining_snapshots: "platform",
@@ -352,6 +354,7 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "launch2_snapshot_publications",
     `instance_id in ${doomedLaunch2Instances}`,
   ),
+  del("launch2_buyback_attempts", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_positions", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_snapshot_members", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_buybacks", `instance_id in ${doomedLaunch2Instances}`),

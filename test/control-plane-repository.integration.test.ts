@@ -73,6 +73,7 @@ const truncateControlPlane = `
     public.ops_grants,
     public.ops_operators,
     public.community_review_notes,
+    public.launch2_buyback_attempts,
     public.launch2_snapshot_publications,
     public.launch2_intents,
     public.mining_reward_ledger_events,

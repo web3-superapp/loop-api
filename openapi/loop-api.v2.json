@@ -153804,6 +153804,56 @@
                                 },
                                 { "type": "null" }
                               ]
+                            },
+                            "keeper": {
+                              "description": "Decision 0121 (optional, additive): the server-side buyback keeper's newest attempt; null before the keeper ever simulated this instance. `lastResult` rejected = the contract refused the simulation (nothing sent; `reasonCode` says why, e.g. LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE / LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION / LAUNCH2_BUYBACK_PAUSED); pending / broadcast = a transaction in flight; confirmed = final on chain (the ledger row follows from the event lane); failed = sent or prepared but not executed. `nextEligibleAt` = earliest next try (null while in flight). Advisory only: the ledger (`latest`, `executedCount`) stays the source of truth.",
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "lastAttemptAt",
+                                    "lastResult",
+                                    "reasonCode",
+                                    "nextEligibleAt"
+                                  ],
+                                  "properties": {
+                                    "lastAttemptAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "lastResult": {
+                                      "type": "string",
+                                      "enum": [
+                                        "rejected",
+                                        "pending",
+                                        "broadcast",
+                                        "confirmed",
+                                        "failed"
+                                      ]
+                                    },
+                                    "reasonCode": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "nextEligibleAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "format": "date-time"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
                             }
                           }
                         },
@@ -157363,6 +157413,53 @@
                                 "blockNumber": {
                                   "type": "string",
                                   "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "keeper": {
+                          "description": "Decision 0121 (optional, additive): the server-side buyback keeper's newest attempt; null before the keeper ever simulated this instance. `lastResult` rejected = the contract refused the simulation (nothing sent; `reasonCode` says why, e.g. LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE / LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION / LAUNCH2_BUYBACK_PAUSED); pending / broadcast = a transaction in flight; confirmed = final on chain (the ledger row follows from the event lane); failed = sent or prepared but not executed. `nextEligibleAt` = earliest next try (null while in flight). Advisory only: the ledger (`latest`, `executedCount`) stays the source of truth.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "lastAttemptAt",
+                                "lastResult",
+                                "reasonCode",
+                                "nextEligibleAt"
+                              ],
+                              "properties": {
+                                "lastAttemptAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "lastResult": {
+                                  "type": "string",
+                                  "enum": [
+                                    "rejected",
+                                    "pending",
+                                    "broadcast",
+                                    "confirmed",
+                                    "failed"
+                                  ]
+                                },
+                                "reasonCode": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "nextEligibleAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
                                 }
                               }
                             },

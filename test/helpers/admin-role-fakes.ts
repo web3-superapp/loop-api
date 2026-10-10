@@ -408,6 +408,7 @@ export function createInMemoryAdminLaunchReview(
               testnetAcceptances: [],
               deploymentTasks: [],
               snapshotPublications: [],
+              buybackAttempts: [],
             },
       );
     },

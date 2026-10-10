@@ -911,4 +911,156 @@ describe("V2 launch2 routes (Decision 0114)", () => {
       }),
     ]);
   });
+  it("gates quote and trade prepare on the read-model stage: a chain ahead of the lane is 409 LAUNCH2_STAGE_MISMATCH (S143)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    // The snapshot is on chain (the chain says priority) but the lane has
+    // not confirmed it: the read model still says snapshot_pending.
+    const pending = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 604_800n - 3_600n),
+      stage: "snapshot_pending",
+    });
+    const priority = priorityInstance();
+    repository.instances.set(pending.instanceId, pending);
+    repository.instances.set(priority.instanceId, priority);
+    seedMember(repository, priority.instanceId);
+    const chain = defaultChainState();
+    const { app } = await createApp({ repository, chain });
+    const detail = await get(
+      app,
+      `/v2/launch2/instances/${pending.instanceId}`,
+    );
+    expect(detail.json<{ instance: { stage: string } }>().instance.stage).toBe(
+      "snapshot_pending",
+    );
+    const quote = await get(
+      app,
+      `/v2/launch2/instances/${pending.instanceId}/quote?side=buy&amount=10&walletId=${walletId}`,
+    );
+    expect(quote.statusCode).toBe(409);
+    expect(quote.json()).toMatchObject({
+      code: "DATA_STALE",
+      detailsSafe: {
+        reasonCode: "LAUNCH2_STAGE_MISMATCH",
+        stage: "snapshot_pending",
+      },
+    });
+    expectKeys(quote.json<Record<string, unknown>>(), errorKeys);
+    const prepare = await post(
+      app,
+      `/v2/launch2/instances/${pending.instanceId}/trade/prepare`,
+      {
+        walletId,
+        side: "buy",
+        amount: "10",
+        minOut: "1",
+        deadline: iso(launch2NowSeconds + 60n),
+      },
+    );
+    expect(prepare.statusCode).toBe(409);
+    expect(prepare.json()).toMatchObject({
+      detailsSafe: {
+        reasonCode: "LAUNCH2_STAGE_MISMATCH",
+        stage: "snapshot_pending",
+      },
+    });
+
+    // The curve graduated on chain, the lane has not seen it: still the
+    // read-model stage, never a quote.
+    chain.viewer.curve = { graduated: true };
+    const graduated = await get(
+      app,
+      `/v2/launch2/instances/${priority.instanceId}/quote?side=buy&amount=10&walletId=${walletId}`,
+    );
+    expect(graduated.statusCode).toBe(409);
+    expect(graduated.json()).toMatchObject({
+      detailsSafe: { reasonCode: "LAUNCH2_STAGE_MISMATCH", stage: "priority" },
+    });
+    // Agreement: the quote answers with MAX from the chain block.
+    chain.viewer.curve = {};
+    const agreed = await get(
+      app,
+      `/v2/launch2/instances/${priority.instanceId}/quote?side=buy&amount=10&walletId=${walletId}`,
+    );
+    expect(agreed.statusCode).toBe(200);
+    expect(agreed.json()).toMatchObject({
+      quote: { stage: "priority", basis: { blockNumber: "5000" } },
+    });
+  });
+
+  it("adds the keeper's newest attempt to the buyback summary (Decision 0121)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const graduation = {
+      graduatedAt: iso(launch2NowSeconds - 100n),
+      blockNumber: "900",
+      transactionHash: `0x${"ab".repeat(32)}`,
+      poolId: `0x${"cd".repeat(32)}`,
+    };
+    const rejected = instanceFixture({
+      graduation,
+      buybackKeeper: {
+        status: "rejected",
+        reasonCode: "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
+        lastAttemptAt: iso(launch2NowSeconds - 5n),
+        nextEligibleAt: iso(launch2NowSeconds + 25n),
+        aligned: false,
+      },
+    });
+    const executed = instanceFixture({
+      graduation,
+      buyback: {
+        paused: false,
+        count: "1",
+        usd1: (100n * wad).toString(),
+        meme: (5n * wad).toString(),
+        lastAt: iso(launch2NowSeconds - 50n),
+      },
+      buybackKeeper: {
+        status: "confirmed",
+        reasonCode: null,
+        lastAttemptAt: iso(launch2NowSeconds - 60n),
+        nextEligibleAt: null,
+        aligned: true,
+      },
+    });
+    const none = instanceFixture({ graduation });
+    for (const instance of [rejected, executed, none]) {
+      repository.instances.set(instance.instanceId, instance);
+    }
+    const { app } = await createApp({ repository });
+    const keeperOf = async (instanceId: string) => {
+      const response = await get(app, `/v2/launch2/instances/${instanceId}`);
+      expect(response.statusCode).toBe(200);
+      const buyback = response.json<{
+        instance: { buyback: Record<string, unknown> };
+      }>().instance.buyback;
+      expectKeys(
+        buyback,
+        requiredOf(launch2InstanceDetailResourceSchema, [
+          "instance",
+          "buyback",
+        ]),
+      );
+      return buyback["keeper"];
+    };
+    expect(await keeperOf(rejected.instanceId)).toEqual({
+      lastAttemptAt: iso(launch2NowSeconds - 5n),
+      lastResult: "rejected",
+      reasonCode: "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
+      nextEligibleAt: iso(launch2NowSeconds + 25n),
+    });
+    expect(await keeperOf(executed.instanceId)).toEqual({
+      lastAttemptAt: iso(launch2NowSeconds - 60n),
+      lastResult: "confirmed",
+      reasonCode: null,
+      nextEligibleAt: iso(launch2NowSeconds - 40n),
+    });
+    expect(await keeperOf(none.instanceId)).toBeNull();
+    const buybacks = await get(
+      app,
+      `/v2/launch2/instances/${rejected.instanceId}/buybacks`,
+    );
+    expect(
+      buybacks.json<{ summary: Record<string, unknown> }>().summary["keeper"],
+    ).toMatchObject({ lastResult: "rejected" });
+  });
 });

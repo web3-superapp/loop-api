@@ -6,6 +6,7 @@ import {
   type AdminLaunchConfigVersion,
   type AdminLaunchDeploymentTask,
   type AdminLaunchSnapshotPublication,
+  type AdminLaunchBuybackAttempt,
   type AdminLaunchProjectSummary,
   type AdminLaunchReviewRepository,
   type AdminLaunchScope,
@@ -356,6 +357,51 @@ function scopeParameters(scope: AdminLaunchScope): [boolean, string[]] {
 }
 
 export const adminLaunchDetailMaximumRows = 200;
+/** Decision 0121: the console shows the newest 20 keeper attempts. */
+export const adminLaunchBuybackAttemptRows = 20;
+
+function mapBuybackAttempt(
+  row: Record<string, unknown>,
+): AdminLaunchBuybackAttempt {
+  const at = (value: unknown): string | null =>
+    value === null || value === undefined
+      ? null
+      : new Date(value as Date | string).toISOString();
+  const text = (value: unknown): string | null =>
+    typeof value === "string" ? value : null;
+  const reasonCode = text(row["reason_code"]);
+  return Object.freeze({
+    attemptId: String(row["attempt_id"]),
+    instanceId: String(row["instance_id"]),
+    jobId: String(row["job_id"]),
+    attempt: Number(row["attempt"]),
+    status: row["status"] as AdminLaunchBuybackAttempt["status"],
+    simulation: row["simulation"] as AdminLaunchBuybackAttempt["simulation"],
+    keeperAddress: String(row["keeper_address"]),
+    executorAddress: String(row["executor_address"]),
+    orderUsd1Wei: text(row["order_usd1"]),
+    simulatedGas: text(row["simulated_gas"]),
+    reason:
+      reasonCode === null
+        ? null
+        : Object.freeze({
+            code: reasonCode,
+            detail: text(row["reason_detail"]),
+          }),
+    rejectionCount:
+      row["rejection_count"] === null ? null : Number(row["rejection_count"]),
+    lastRejectedAt: at(row["last_rejected_at"]),
+    nextEligibleAt: at(row["next_eligible_at"]),
+    txHash: text(row["tx_hash"]),
+    txNonce: text(row["tx_nonce"]),
+    blockNumber: text(row["block_number"]),
+    confirmations:
+      row["confirmations"] === null ? null : Number(row["confirmations"]),
+    buybackId: text(row["buyback_id"]),
+    createdAt: at(row["created_at"])!,
+    updatedAt: at(row["updated_at"])!,
+  });
+}
 
 function mapPublication(
   row: Record<string, unknown>,
@@ -468,9 +514,10 @@ export function createPostgresAdminLaunchReviewRepository(
         if (summary.rows[0] === undefined) {
           return null;
         }
-        const [versions, acceptances, tasks, publications] = await Promise.all([
-          pool.query(
-            `select c.config_version, c.template_version, c.config_hash, c.config,
+        const [versions, acceptances, tasks, publications, attempts] =
+          await Promise.all([
+            pool.query(
+              `select c.config_version, c.template_version, c.config_hash, c.config,
                c.owner_user_id, c.edited_by_operator_id, c.created_at,
                a.approver_id, a.config_hash as approval_hash,
                a.reason as approval_reason, a.approved_at
@@ -480,20 +527,20 @@ export function createPostgresAdminLaunchReviewRepository(
              where c.project_id = $1
              order by c.config_version desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select acceptance_id, config_version, chain_id, config_hash,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select acceptance_id, config_version, chain_id, config_hash,
                contract_manifest_hash, checklist_version, outcome, evidence,
                actor_id, reason, created_at
              from public.hooks_testnet_acceptances
              where project_id = $1
              order by created_at desc, acceptance_id desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select t.job_id, t.config_version, t.status, t.chain_id,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select t.job_id, t.config_version, t.status, t.chain_id,
                t.factory_address, t.project_owner, t.owner_nonce,
                t.binding_hash, t.meme_address, t.hook_address,
                (select count(*)::integer from public.hooks_launch_deployment_authorizations z
@@ -524,10 +571,10 @@ export function createPostgresAdminLaunchReviewRepository(
              where t.project_id = $1
              order by t.created_at desc, t.job_id desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select p.publication_id::text, p.instance_id::text, i.job_id::text,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select p.publication_id::text, p.instance_id::text, i.job_id::text,
                p.attempt, p.status, p.cutoff_block::text as cutoff_block,
                p.cutoff_block_hash, p.member_count, p.root, p.data_hash,
                p.signer_addresses, p.submitter_address, p.tx_hash,
@@ -541,9 +588,25 @@ export function createPostgresAdminLaunchReviewRepository(
              where i.project_id = $1
              order by p.created_at desc, p.attempt desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-        ]);
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select a.attempt_id::text, a.instance_id::text, i.job_id::text,
+               a.attempt, a.status, a.simulation, a.keeper_address,
+               a.executor_address, a.order_usd1::text as order_usd1,
+               a.simulated_gas::text as simulated_gas, a.reason_code,
+               a.reason_detail, a.rejection_count, a.last_rejected_at,
+               a.next_eligible_at, a.tx_hash, a.tx_nonce::text as tx_nonce,
+               a.block_number::text as block_number, a.confirmations,
+               a.buyback_id::text as buyback_id, a.created_at, a.updated_at
+             from public.launch2_buyback_attempts a
+             join public.launch2_instances i using (instance_id)
+             where i.project_id = $1
+             order by a.attempt desc, a.created_at desc
+             limit $2`,
+              [input.projectId, adminLaunchBuybackAttemptRows],
+            ),
+          ]);
         return Object.freeze({
           project: mapSummary(summary.rows[0]),
           versions: Object.freeze(versions.rows.map(mapVersion)),
@@ -554,6 +617,7 @@ export function createPostgresAdminLaunchReviewRepository(
           snapshotPublications: Object.freeze(
             publications.rows.map(mapPublication),
           ),
+          buybackAttempts: Object.freeze(attempts.rows.map(mapBuybackAttempt)),
         });
       });
     },

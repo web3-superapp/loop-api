@@ -158,8 +158,46 @@ const instanceColumns = `
     from public.launch2_snapshot_publications p
     where p.instance_id = launch2_instances.instance_id
     order by p.attempt desc limit 1) as snapshot_publication,
+  (select jsonb_build_object(
+      'status', k.status, 'reasonCode', k.reason_code,
+      'lastAttemptAt', coalesce(k.last_rejected_at, k.created_at),
+      'nextEligibleAt', k.next_eligible_at,
+      'aligned', k.buyback_id is not null)
+    from public.launch2_buyback_attempts k
+    where k.instance_id = launch2_instances.instance_id
+    order by k.attempt desc limit 1) as buyback_keeper,
   ${nftSaleEndColumn}
 `;
+
+/** Decision 0121: the newest buyback keeper attempt, if any. */
+function keeperOf(value: unknown): Launch2InstanceRecord["buybackKeeper"] {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const status = record["status"];
+  if (
+    status !== "rejected" &&
+    status !== "pending" &&
+    status !== "broadcast" &&
+    status !== "confirmed" &&
+    status !== "failed"
+  ) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  const at = (key: string): string | null => {
+    const value = record[key];
+    return typeof value === "string" ? new Date(value).toISOString() : null;
+  };
+  const lastAttemptAt = at("lastAttemptAt");
+  if (lastAttemptAt === null) throw new Launch2RepositoryUnavailableError();
+  return Object.freeze({
+    status,
+    reasonCode:
+      typeof record["reasonCode"] === "string" ? record["reasonCode"] : null,
+    lastAttemptAt,
+    nextEligibleAt: at("nextEligibleAt"),
+    aligned: record["aligned"] === true,
+  });
+}
 
 /** Decision 0118: the latest snapshot publication attempt, if any. */
 function publicationOf(
@@ -287,6 +325,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
       meme: text(row, "buyback_meme"),
       lastAt: nullableIso(row, "last_buyback_at"),
     }),
+    buybackKeeper: keeperOf(row["buyback_keeper"]),
     registeredAt: iso(row, "registered_at"),
     projectedAt: iso(row, "projected_at"),
   });

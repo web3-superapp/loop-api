@@ -314,6 +314,32 @@ const buybackSummarySchema = {
     escrowRecordedUsd1: decimalSchema,
     escrowAvailableUsd1: decimalSchema,
     latest: { anyOf: [buybackItemSchema, { type: "null" }] },
+    keeper: {
+      description:
+        "Decision 0121 (optional, additive): the server-side buyback keeper's newest attempt; null before the keeper ever simulated this instance. `lastResult` rejected = the contract refused the simulation (nothing sent; `reasonCode` says why, e.g. LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE / LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION / LAUNCH2_BUYBACK_PAUSED); pending / broadcast = a transaction in flight; confirmed = final on chain (the ledger row follows from the event lane); failed = sent or prepared but not executed. `nextEligibleAt` = earliest next try (null while in flight). Advisory only: the ledger (`latest`, `executedCount`) stays the source of truth.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "lastAttemptAt",
+            "lastResult",
+            "reasonCode",
+            "nextEligibleAt",
+          ],
+          properties: {
+            lastAttemptAt: dateTimeSchema,
+            lastResult: {
+              type: "string",
+              enum: ["rejected", "pending", "broadcast", "confirmed", "failed"],
+            },
+            reasonCode: nullableReasonCodeSchema,
+            nextEligibleAt: nullableDateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
+    },
   },
 } as const;
 

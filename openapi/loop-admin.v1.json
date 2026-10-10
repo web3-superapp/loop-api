@@ -19652,7 +19652,8 @@
                     "testnetAcceptances",
                     "deploymentTasks",
                     "deploymentChainId",
-                    "snapshotPublications"
+                    "snapshotPublications",
+                    "buybackAttempts"
                   ],
                   "properties": {
                     "project": {
@@ -20434,6 +20435,169 @@
                                 "type": "string",
                                 "enum": ["verified", "mismatch"]
                               },
+                              { "type": "null" }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "buybackAttempts": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "description": "Decision 0121: the newest 20 buyback keeper attempts of the project's MEME v2 instance (simulation refusals included; the ledger stays launch2_buybacks).",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "attemptId",
+                          "instanceId",
+                          "jobId",
+                          "attempt",
+                          "status",
+                          "simulation",
+                          "keeperAddress",
+                          "executorAddress",
+                          "orderUsd1Wei",
+                          "simulatedGas",
+                          "reason",
+                          "rejectionCount",
+                          "lastRejectedAt",
+                          "nextEligibleAt",
+                          "txHash",
+                          "txNonce",
+                          "blockNumber",
+                          "confirmations",
+                          "buybackId",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "properties": {
+                          "attemptId": { "type": "string", "format": "uuid" },
+                          "instanceId": { "type": "string", "format": "uuid" },
+                          "jobId": { "type": "string", "format": "uuid" },
+                          "attempt": { "type": "integer", "minimum": 1 },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "rejected",
+                              "pending",
+                              "broadcast",
+                              "confirmed",
+                              "failed"
+                            ]
+                          },
+                          "simulation": {
+                            "type": "string",
+                            "enum": ["passed", "reverted"]
+                          },
+                          "keeperAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-fA-F]{40}$"
+                          },
+                          "executorAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-fA-F]{40}$"
+                          },
+                          "orderUsd1Wei": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Raw USD1 units (18 decimals) of the simulated order."
+                          },
+                          "simulatedGas": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["code", "detail"],
+                                "properties": {
+                                  "code": { "type": "string" },
+                                  "detail": {
+                                    "anyOf": [
+                                      { "type": "string" },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "rejectionCount": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 1 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "lastRejectedAt": {
+                            "anyOf": [
+                              { "type": "string", "format": "date-time" },
+                              { "type": "null" }
+                            ]
+                          },
+                          "nextEligibleAt": {
+                            "anyOf": [
+                              { "type": "string", "format": "date-time" },
+                              { "type": "null" }
+                            ]
+                          },
+                          "txHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-fA-F]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "txNonce": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "blockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "confirmations": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 0 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "buybackId": {
+                            "anyOf": [
+                              { "type": "string", "format": "uuid" },
                               { "type": "null" }
                             ]
                           },

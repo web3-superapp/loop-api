@@ -3,6 +3,10 @@ import type {
   Launch2PublicationRepository,
   Launch2PublisherChain,
 } from "../src/features/launch2/launch2-snapshot-publisher.js";
+import type {
+  Launch2BuybackAttemptRepository,
+  Launch2BuybackKeeperChain,
+} from "../src/features/launch2/launch2-buyback-keeper.js";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1625,6 +1629,234 @@ describe("launch2_snapshot_publisher lane (Decision 0118)", () => {
       createDatabase: () => fakeDatabase([]),
       createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
       createLaunch2PublisherChain: off,
+    });
+    expect(off).not.toHaveBeenCalled();
+  });
+});
+
+describe("launch2_buyback_keeper lane (Decision 0121)", () => {
+  const keeperKey = `0x${"61".repeat(32)}`;
+  const keeperAddress = "0x5f1175ffb0174332d86ff55eb9b8e885ce90e260";
+  const factory = "0x6a69ba7a5a71c114301e20ef95f62cd83d07d9c0";
+  const keeperEnvironment = {
+    NODE_ENV: "test",
+    LOG_LEVEL: "silent",
+    DATABASE_URL:
+      "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+    MARKET_SPARKLINE_WARM_ENABLED: "false",
+    VOICE_ROOM_REAPER_ENABLED: "false",
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED: "false",
+    LAUNCH_CHAIN_ID: "97",
+    LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    HOOKS_LAUNCH_FACTORY_ADDRESS: factory,
+    HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+    LAUNCH2_BUYBACK_KEEPER_ENABLED: "true",
+    LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY: keeperKey,
+  };
+
+  function keeperChain(
+    keepers: {
+      readonly primary: string;
+      readonly fallback: string;
+    } | null,
+  ): Launch2BuybackKeeperChain {
+    return {
+      keeperAddress,
+      chainId: () => Promise.resolve(97),
+      factoryKeepers: vi.fn(() =>
+        keepers === null
+          ? Promise.reject(new Error("rpc down"))
+          : Promise.resolve(keepers),
+      ),
+    } as unknown as Launch2BuybackKeeperChain;
+  }
+
+  function database() {
+    return {
+      ...fakeDatabase([]),
+      launch2BuybackAttempts: {} as Launch2BuybackAttemptRepository,
+    };
+  }
+
+  it("refuses boot without a key, without the Factory, off chain 97, or under a 10 s interval", () => {
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...keeperEnvironment,
+        LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY: "",
+      }),
+    ).toThrow(/LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY/u);
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...keeperEnvironment,
+        HOOKS_LAUNCH_FACTORY_ADDRESS: undefined,
+        HOOKS_LAUNCH_FACTORY_CODE_HASH: undefined,
+      }),
+    ).toThrow(/HOOKS_LAUNCH_FACTORY_ADDRESS/u);
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...keeperEnvironment,
+        LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: "5",
+      }),
+    ).toThrow(/LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS/u);
+    const config = loadReconciliationWorkerConfig(keeperEnvironment);
+    expect(config.launch2BuybackKeeper).toEqual({
+      privateKey: keeperKey,
+      factoryAddress: factory,
+      intervalSeconds: 15,
+      confirmations: 12,
+    });
+    expect(
+      loadReconciliationWorkerConfig({
+        ...keeperEnvironment,
+        LAUNCH2_BUYBACK_KEEPER_ENABLED: "false",
+      }).launch2BuybackKeeper,
+    ).toBeNull();
+  });
+
+  it("verifies the key against the Factory keepers at boot and refuses a non-keeper", async () => {
+    const logger = fakeLogger();
+    const lane = vi.fn();
+    await expect(
+      runReconciliationWorker({
+        config: loadReconciliationWorkerConfig(keeperEnvironment),
+        logger,
+        signalSource: fakeSignalSource(),
+        createDatabase: database,
+        createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+        createLaunch2BuybackKeeperChain: () =>
+          keeperChain({
+            primary: "0x1111111111111111111111111111111111111111",
+            fallback: "0x2222222222222222222222222222222222222222",
+          }),
+        createLaunch2BuybackKeeperLane: (options) => {
+          lane();
+          return {
+            lane: "launch2_buyback_keeper",
+            keeper: {
+              verifyKeeper: () =>
+                options.chain
+                  .factoryKeepers(options.policy.factoryAddress)
+                  .then((keepers) =>
+                    keepers.primary === keeperAddress ||
+                    keepers.fallback === keeperAddress
+                      ? ("ok" as const)
+                      : ("not_keeper" as const),
+                  ),
+              runOnce: vi.fn(),
+            },
+            runOnce: vi.fn(),
+            run: vi.fn(() => Promise.resolve()),
+          };
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "Launch2KeeperBootRefusedError",
+      reasonCode: "LAUNCH2_BUYBACK_KEEPER_NOT_AUTHORIZED",
+    });
+    expect(lane).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "launch2_buyback_keeper",
+        reasonCode: "LAUNCH2_BUYBACK_KEEPER_NOT_AUTHORIZED",
+      }),
+      "LOOP launch2 buyback keeper refused: the key is not a Factory keeper",
+    );
+  });
+
+  it("enables the lane for a Factory keeper (real lane), never logging the key; an unreadable Factory defers the check", async () => {
+    for (const keepers of [
+      { primary: keeperAddress, fallback: `0x${"22".repeat(20)}` },
+      null,
+    ]) {
+      const logger = fakeLogger();
+      const createChain = vi.fn(() => keeperChain(keepers));
+      await runReconciliationWorker({
+        config: loadReconciliationWorkerConfig(keeperEnvironment),
+        logger,
+        signalSource: fakeSignalSource(),
+        createDatabase: database,
+        createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+        createLaunch2BuybackKeeperChain: createChain,
+        createLaunch2BuybackKeeperLane: (options) => {
+          expect(options.policy).toMatchObject({
+            chainId: "eip155:97",
+            factoryAddress: factory,
+            confirmations: 12,
+            intervalSeconds: 15,
+            maxGasPriceWei: 20_000_000_000n,
+          });
+          return {
+            lane: "launch2_buyback_keeper",
+            keeper: {
+              verifyKeeper: async () => {
+                const read = await options.chain.factoryKeepers(factory);
+                return read.primary === keeperAddress ? "ok" : "not_keeper";
+              },
+              runOnce: vi.fn(),
+            },
+            runOnce: vi.fn(),
+            run: vi.fn(() => Promise.resolve()),
+          };
+        },
+      });
+      expect(createChain).toHaveBeenCalledWith({
+        privateKey: keeperKey,
+        rpcUrls: ["https://bsc-testnet.example/rpc"],
+      });
+      const enabled = vi
+        .mocked(logger.info)
+        .mock.calls.find(
+          ([, message]) => message === "LOOP launch2 buyback keeper enabled",
+        );
+      expect(enabled?.[0]).toMatchObject({
+        lane: "launch2_buyback_keeper",
+        executorAddress: keeperAddress,
+        factoryAddress: factory,
+        ...(keepers === null
+          ? { reasonCode: "LAUNCH2_BUYBACK_KEEPER_UNVERIFIED" }
+          : {}),
+      });
+      const logged = JSON.stringify([
+        vi.mocked(logger.info).mock.calls,
+        vi.mocked(logger.warn).mock.calls,
+        vi.mocked(logger.error).mock.calls,
+      ]);
+      expect(logged).not.toContain("61".repeat(32));
+    }
+  });
+
+  it("stays idle with a reason without the repository, and is absent while off", async () => {
+    const logger = fakeLogger();
+    const createChain = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(keeperEnvironment),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => fakeDatabase([]),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLaunch2BuybackKeeperChain: createChain,
+    });
+    expect(createChain).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "launch2_buyback_keeper",
+        reasonCode: "LAUNCH2_REPOSITORY_UNAVAILABLE",
+      },
+      "LOOP launch2 buyback keeper stays idle",
+    );
+    const off = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...keeperEnvironment,
+        LAUNCH2_BUYBACK_KEEPER_ENABLED: "false",
+      }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLaunch2BuybackKeeperChain: off,
     });
     expect(off).not.toHaveBeenCalled();
   });

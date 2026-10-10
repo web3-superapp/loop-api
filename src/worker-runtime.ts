@@ -54,6 +54,16 @@ import {
 } from "./integrations/launch2/launch2-snapshot-publisher-chain.js";
 import { createLaunch2SnapshotPublisherLane } from "./launch2-snapshot-publisher-worker.js";
 import {
+  launch2BuybackKeeperDefaults,
+  launch2KeeperReasonCodes,
+  type Launch2BuybackAttemptRepository,
+} from "./features/launch2/launch2-buyback-keeper.js";
+import { createLaunch2BuybackKeeperLane } from "./features/launch2/launch2-buyback-keeper-worker.js";
+import {
+  Launch2KeeperChainRefusedError,
+  createLaunch2BuybackKeeperChain,
+} from "./integrations/launch2/launch2-buyback-keeper-chain.js";
+import {
   createAlertEvaluatorWorker,
   type AlertEvaluatorWorker,
   type CreateAlertEvaluatorWorkerOptions,
@@ -230,6 +240,8 @@ export interface ReconciliationWorkerDatabase {
   readonly launch2?: Launch2Repository;
   /** Snapshot publisher (Decision 0118); absent keeps it off. */
   readonly launch2Publications?: Launch2PublicationRepository;
+  /** Buyback keeper attempts (Decision 0121); absent keeps it off. */
+  readonly launch2BuybackAttempts?: Launch2BuybackAttemptRepository;
   /** `mining_hourly_settlement` lane (Decision 0116); absent keeps it idle. */
   readonly miningSettlement?: MiningSettlementRepository;
   /** Hooks deployment executor (Decision 0112); absent keeps it off. */
@@ -329,6 +341,9 @@ export interface RunReconciliationWorkerOptions {
   /** Test seam for the snapshot publisher's chain client (Decision 0118). */
   readonly createLaunch2PublisherChain?: typeof createLaunch2PublisherChain;
   readonly createLaunch2SnapshotPublisherLane?: typeof createLaunch2SnapshotPublisherLane;
+  /** Test seams for the buyback keeper's chain client and lane (Decision 0121). */
+  readonly createLaunch2BuybackKeeperChain?: typeof createLaunch2BuybackKeeperChain;
+  readonly createLaunch2BuybackKeeperLane?: typeof createLaunch2BuybackKeeperLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -351,6 +366,14 @@ export interface RunReconciliationWorkerOptions {
    * default is `configureOutboundKeepAlive`.
    */
   readonly configureOutboundKeepAlive?: () => unknown;
+}
+
+/** Decision 0121: the keeper key is not a Factory keeper (boot refused). */
+export class Launch2KeeperBootRefusedError extends Error {
+  constructor(readonly reasonCode: string) {
+    super("The launch2 buyback keeper key is not a Factory keeper");
+    this.name = "Launch2KeeperBootRefusedError";
+  }
 }
 
 const processSignalSource: WorkerSignalSource = {
@@ -945,6 +968,150 @@ export async function runReconciliationWorker(
             count: signers.length,
           },
           "LOOP launch2 snapshot publisher enabled",
+        );
+      }
+    }
+    // MEME v2 buyback keeper (Decision 0121), default off. Config load
+    // already refused boot for `true` without a key, the Factory, or chain
+    // 97. Here the Factory's keepers are read: a key that is neither
+    // refuses boot; an unreadable Factory leaves the check to the lane's
+    // first tick (it never acts unverified). A missing RPC / store keeps
+    // the lane idle with the reason.
+    const keeperConfig = options.config.launch2BuybackKeeper;
+    if (keeperConfig !== null) {
+      let refused: string | null =
+        database.launch2BuybackAttempts === undefined
+          ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
+          : launchChainConfig.chainId !== "eip155:97" ||
+              launchChainConfig.rpcUrls.length === 0
+            ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
+            : null;
+      let keeperChain: ReturnType<
+        typeof createLaunch2BuybackKeeperChain
+      > | null = null;
+      if (refused === null) {
+        try {
+          keeperChain = (
+            options.createLaunch2BuybackKeeperChain ??
+            createLaunch2BuybackKeeperChain
+          )({
+            privateKey: keeperConfig.privateKey,
+            rpcUrls: launchChainConfig.rpcUrls,
+          });
+        } catch (error) {
+          refused =
+            error instanceof Launch2KeeperChainRefusedError
+              ? error.reasonCode
+              : "LAUNCH2_BUYBACK_KEEPER_CHAIN_UNAVAILABLE";
+        }
+      }
+      if (
+        refused !== null ||
+        keeperChain === null ||
+        database.launch2BuybackAttempts === undefined
+      ) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "launch2_buyback_keeper",
+            reasonCode: refused ?? "LAUNCH2_REPOSITORY_UNAVAILABLE",
+          },
+          "LOOP launch2 buyback keeper stays idle",
+        );
+      } else {
+        const keeperLane = (
+          options.createLaunch2BuybackKeeperLane ??
+          createLaunch2BuybackKeeperLane
+        )({
+          repository: database.launch2BuybackAttempts,
+          chain: keeperChain,
+          policy: {
+            chainId: launchChainConfig.chainId,
+            factoryAddress: keeperConfig.factoryAddress,
+            confirmations: keeperConfig.confirmations,
+            intervalSeconds: keeperConfig.intervalSeconds,
+            maxGasPriceWei:
+              BigInt(launch2BuybackKeeperDefaults.maxGasPriceGwei) * 10n ** 9n,
+            gasLimitCap: launch2BuybackKeeperDefaults.gasLimitCap,
+            retryDelaySeconds: launch2BuybackKeeperDefaults.retryDelaySeconds,
+            maxBackoffSeconds: launch2BuybackKeeperDefaults.maxBackoffSeconds,
+          },
+          onStep: (step) => {
+            const log =
+              step.to === "rejected" || step.to === "failed"
+                ? options.logger.warn.bind(options.logger)
+                : options.logger.info.bind(options.logger);
+            log(
+              {
+                ...logFields(),
+                lane: "launch2_buyback_keeper",
+                instanceId: step.instanceId,
+                ...(step.from === null ? {} : { fromStatus: step.from }),
+                toStatus: step.to,
+                ...(step.txHash === null
+                  ? {}
+                  : { transactionHash: step.txHash }),
+                ...(step.reasonCode === null
+                  ? {}
+                  : { reasonCode: step.reasonCode }),
+              },
+              "LOOP launch2 buyback keeper step",
+            );
+          },
+          onWaiting: (event) => {
+            options.logger.info(
+              {
+                ...logFields(),
+                lane: "launch2_buyback_keeper",
+                ...(event.instanceId === null
+                  ? {}
+                  : { instanceId: event.instanceId }),
+                reasonCode: event.reasonCode,
+              },
+              "LOOP launch2 buyback keeper is waiting",
+            );
+          },
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        });
+        let verification: "ok" | "not_keeper" | "unverified";
+        try {
+          verification = await keeperLane.keeper.verifyKeeper();
+        } catch {
+          verification = "unverified";
+        }
+        if (verification === "not_keeper") {
+          options.logger.error(
+            {
+              ...logFields(),
+              lane: "launch2_buyback_keeper",
+              executorAddress: keeperChain.keeperAddress,
+              factoryAddress: keeperConfig.factoryAddress,
+              reasonCode: launch2KeeperReasonCodes.notAuthorized,
+            },
+            "LOOP launch2 buyback keeper refused: the key is not a Factory keeper",
+          );
+          throw new Launch2KeeperBootRefusedError(
+            launch2KeeperReasonCodes.notAuthorized,
+          );
+        }
+        memeLanes.push(keeperLane);
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "launch2_buyback_keeper",
+            executorAddress: keeperChain.keeperAddress,
+            factoryAddress: keeperConfig.factoryAddress,
+            confirmations: keeperConfig.confirmations,
+            ...(verification === "ok"
+              ? {}
+              : { reasonCode: "LAUNCH2_BUYBACK_KEEPER_UNVERIFIED" }),
+          },
+          "LOOP launch2 buyback keeper enabled",
         );
       }
     }

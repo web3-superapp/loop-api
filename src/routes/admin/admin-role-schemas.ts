@@ -818,6 +818,89 @@ const snapshotPublicationSchema = {
   },
 } as const;
 
+const uintTextSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]*)$",
+} as const;
+const nullableUintTextSchema = {
+  anyOf: [uintTextSchema, { type: "null" }],
+} as const;
+
+/** Decision 0121: one buyback keeper attempt (no raw transaction). */
+const buybackAttemptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "attemptId",
+    "instanceId",
+    "jobId",
+    "attempt",
+    "status",
+    "simulation",
+    "keeperAddress",
+    "executorAddress",
+    "orderUsd1Wei",
+    "simulatedGas",
+    "reason",
+    "rejectionCount",
+    "lastRejectedAt",
+    "nextEligibleAt",
+    "txHash",
+    "txNonce",
+    "blockNumber",
+    "confirmations",
+    "buybackId",
+    "createdAt",
+    "updatedAt",
+  ],
+  properties: {
+    attemptId: uuidSchema,
+    instanceId: uuidSchema,
+    jobId: uuidSchema,
+    attempt: { type: "integer", minimum: 1 },
+    status: {
+      type: "string",
+      enum: ["rejected", "pending", "broadcast", "confirmed", "failed"],
+    },
+    simulation: { type: "string", enum: ["passed", "reverted"] },
+    keeperAddress: addressSchema,
+    executorAddress: addressSchema,
+    orderUsd1Wei: {
+      ...nullableUintTextSchema,
+      description: "Raw USD1 units (18 decimals) of the simulated order.",
+    },
+    simulatedGas: nullableUintTextSchema,
+    reason: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "detail"],
+          properties: {
+            code: { type: "string" },
+            detail: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    rejectionCount: {
+      anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+    },
+    lastRejectedAt: nullableDateTimeSchema,
+    nextEligibleAt: nullableDateTimeSchema,
+    txHash: { anyOf: [hash32Schema, { type: "null" }] },
+    txNonce: nullableUintTextSchema,
+    blockNumber: nullableUintTextSchema,
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+    },
+    buybackId: nullableUuidSchema,
+    createdAt: dateTimeSchema,
+    updatedAt: dateTimeSchema,
+  },
+} as const;
+
 export const launchProjectDetailResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -829,6 +912,7 @@ export const launchProjectDetailResourceSchema = {
     "deploymentTasks",
     "deploymentChainId",
     "snapshotPublications",
+    "buybackAttempts",
   ],
   properties: {
     project: projectSummarySchema,
@@ -878,6 +962,13 @@ export const launchProjectDetailResourceSchema = {
       type: "array",
       maxItems: 200,
       items: snapshotPublicationSchema,
+    },
+    buybackAttempts: {
+      type: "array",
+      maxItems: 20,
+      description:
+        "Decision 0121: the newest 20 buyback keeper attempts of the project's MEME v2 instance (simulation refusals included; the ledger stays launch2_buybacks).",
+      items: buybackAttemptSchema,
     },
   },
 } as const;

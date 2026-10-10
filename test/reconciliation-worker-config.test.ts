@@ -57,6 +57,7 @@ describe("loadReconciliationWorkerConfig", () => {
       hooksLaunchExecutor: null,
       launch2Indexer: null,
       launch2SnapshotPublisher: null,
+      launch2BuybackKeeper: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

@@ -186,12 +186,49 @@ export interface AdminLaunchSnapshotPublication {
   readonly updatedAt: string;
 }
 
+/**
+ * Decision 0121: one buyback keeper attempt of the project's MEME v2
+ * instance (newest first, at most 20). The raw transaction is never
+ * returned.
+ */
+export interface AdminLaunchBuybackAttempt {
+  readonly attemptId: string;
+  readonly instanceId: string;
+  readonly jobId: string;
+  readonly attempt: number;
+  readonly status:
+    "rejected" | "pending" | "broadcast" | "confirmed" | "failed";
+  readonly simulation: "passed" | "reverted";
+  readonly keeperAddress: string;
+  readonly executorAddress: string;
+  /** Raw USD1 units (18 decimals) of the simulated order. */
+  readonly orderUsd1Wei: string | null;
+  readonly simulatedGas: string | null;
+  /** `rejected` / `failed`: the reason code and the contract error name. */
+  readonly reason: {
+    readonly code: string;
+    readonly detail: string | null;
+  } | null;
+  readonly rejectionCount: number | null;
+  readonly lastRejectedAt: string | null;
+  readonly nextEligibleAt: string | null;
+  readonly txHash: string | null;
+  readonly txNonce: string | null;
+  readonly blockNumber: string | null;
+  readonly confirmations: number | null;
+  /** The `launch2_buybacks` row of the transaction (ledger alignment). */
+  readonly buybackId: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface AdminLaunchProjectDetail {
   readonly project: AdminLaunchProjectSummary;
   readonly versions: readonly AdminLaunchConfigVersion[];
   readonly testnetAcceptances: readonly AdminLaunchTestnetAcceptance[];
   readonly deploymentTasks: readonly AdminLaunchDeploymentTask[];
   readonly snapshotPublications: readonly AdminLaunchSnapshotPublication[];
+  readonly buybackAttempts: readonly AdminLaunchBuybackAttempt[];
 }
 
 /** `*` = every project; otherwise the project IDs the caller may read. */
@@ -647,6 +684,7 @@ export function createAdminLaunchReviewConsoleService(options: {
           deploymentTasks: detail.deploymentTasks,
           deploymentChainId: options.deploymentChainId,
           snapshotPublications: detail.snapshotPublications,
+          buybackAttempts: detail.buybackAttempts,
         });
       } catch (error) {
         return translate(error);
