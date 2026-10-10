@@ -376,6 +376,56 @@ export const membershipSchema = {
 } as const;
 
 /**
+ * Decision 0115: the optional join body. No body (no Content-Type), `{}`,
+ * and `null` join with `notifications: "default"`.
+ */
+export const joinCommunityRequestSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        notifications: {
+          type: "string",
+          enum: ["default", "muted"],
+          description:
+            "The official-channel notification preference. `muted` is applied server-side by the channel sync lane right after it adds the member to the Stream channel; clients must not mute the channel themselves before `channelSynced` (GET /v2/communities/{communityId}/membership). Recorded only when this join creates the membership; an existing membership keeps its preference. Default `default`.",
+        },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
+/** Decision 0115: GET /v2/communities/{communityId}/membership. */
+export const communityMembershipResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "communityId",
+    "membership",
+    "notifications",
+    "channelSynced",
+    "contractVersion",
+  ],
+  properties: {
+    communityId: { type: "string", format: "uuid" },
+    membership: { anyOf: [membershipSchema, { type: "null" }] },
+    notifications: {
+      anyOf: [{ type: "string", enum: ["default", "muted"] }, { type: "null" }],
+      description:
+        "The preference recorded at join; null without a membership.",
+    },
+    channelSynced: {
+      type: "boolean",
+      description:
+        "True once the channel sync lane added this member to the community's Stream channel and, for `muted`, confirmed the server-side mute. False without a membership, before the community has a channel, while the add is pending, and when the channel is at capacity.",
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/**
  * Viewer-level governance standing. The three booleans say whether the viewer
  * holds a right anywhere in this community; they carry no target and never
  * decide a row's commands. `items[].actions` is the only row-action source.

@@ -2518,7 +2518,15 @@ export function createPostgresCommunityChannelSyncRepository(
               from public.community_memberships as membership
               where membership.community_id = job.community_id
                 and membership.owner_user_id = job.owner_user_id
-            ) as membership_status
+            ) as membership_status,
+            (
+              select
+                membership.notifications = 'muted'
+                and membership.notifications_applied_at is null
+              from public.community_memberships as membership
+              where membership.community_id = job.community_id
+                and membership.owner_user_id = job.owner_user_id
+            ) as member_mute_required
         `,
         values: [workerId, leaseSeconds, limit],
       });
@@ -2550,6 +2558,8 @@ export function createPostgresCommunityChannelSyncRepository(
                       .enum(communityMembershipStatuses)
                       .parse(row["membership_status"]),
                   ),
+            // Decision 0115: a gone membership row mutes nothing.
+            memberMuteRequired: row["member_mute_required"] === true,
             attempts: z.number().int().parse(row["attempts"]),
             channelProvisioned: row["channel_provisioned"] === true,
             channelName: z.string().min(1).parse(row["channel_name"]),
@@ -2607,7 +2617,9 @@ export function createPostgresCommunityChannelSyncRepository(
       readonly workerId: string;
       readonly memberState: CommunityChannelMemberState;
       readonly channelState: CommunityChannelState;
+      readonly notificationsApplied?: boolean;
     }): Promise<void> {
+      const notificationsApplied = input.notificationsApplied === true;
       const communityId = opaqueIdSchema.parse(input.communityId);
       const ownerUserId = userIdSchema.parse(input.ownerUserId);
       const workerId = uuidV4Schema.parse(input.workerId);
@@ -2685,6 +2697,21 @@ export function createPostgresCommunityChannelSyncRepository(
           `,
           values: [communityId, ownerUserId, appliedMemberState],
         });
+        // Decision 0115: the mute was confirmed under this same lease. Only a
+        // `muted` row records it, and only once.
+        if (notificationsApplied && appliedMemberState === "synced") {
+          await client.query({
+            text: `
+              update public.community_memberships
+              set notifications_applied_at = clock_timestamp()
+              where community_id = $1
+                and owner_user_id = $2
+                and notifications = 'muted'
+                and notifications_applied_at is null
+            `,
+            values: [communityId, ownerUserId],
+          });
+        }
         await client.query({
           text: `
             update public.community_channels

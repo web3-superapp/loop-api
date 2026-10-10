@@ -122,6 +122,7 @@ import {
   type CommunityRecord,
   type CommunityRepository,
   type MembershipRecord,
+  type CommunityNotificationPreference,
 } from "./community-repository.js";
 import {
   referralRulesV1,
@@ -189,6 +190,39 @@ export interface CommunityIdInput extends ViewerInput {
 export interface CommunityCommandInput extends CommandInput {
   readonly communityId: unknown;
 }
+
+/** Decision 0115: the join command carries an optional body. */
+export interface JoinCommunityInput extends CommunityCommandInput {
+  readonly body?: unknown;
+}
+
+/**
+ * Decision 0115: the viewer's own membership with its notification
+ * preference and whether the Stream channel projection (add, and for
+ * `muted` the server-side mute) has completed. Clients poll it after a join
+ * instead of writing to Stream themselves.
+ */
+export interface CommunityMembershipResource {
+  readonly communityId: string;
+  readonly membership: MembershipRecord | null;
+  readonly notifications: CommunityNotificationPreference | null;
+  readonly channelSynced: boolean;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+const joinCommunityBodySchema = z
+  .union([
+    z
+      .object({
+        notifications: z.enum(["default", "muted"]).optional(),
+      })
+      .strict(),
+    z.null(),
+    z.undefined(),
+  ])
+  .transform(
+    (body): CommunityNotificationPreference => body?.notifications ?? "default",
+  );
 
 export interface ListCommunitiesInput extends ListInput {
   readonly sort: unknown;
@@ -589,7 +623,8 @@ export interface CommunityService {
   createCommunity(input: CreateCommunityInput): Promise<CommunityResource>;
   updateCommunity(input: UpdateCommunityInput): Promise<CommunityResource>;
   getCommunity(input: CommunityIdInput): Promise<CommunityResource>;
-  joinCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
+  joinCommunity(input: JoinCommunityInput): Promise<CommunityResource>;
+  getMembership(input: CommunityIdInput): Promise<CommunityMembershipResource>;
   leaveCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
   resubmitCommunity(input: CommunityCommandInput): Promise<CommunityResource>;
   listMembers(input: ListMembersInput): Promise<CommunityMemberListResource>;
@@ -1876,14 +1911,26 @@ export function createCommunityService(
       const owner = assertPrincipal(input.principal);
       try {
         const communityId = parseOpaqueUuid(input.communityId);
+        const parsedBody = joinCommunityBodySchema.safeParse(input.body);
+        if (!parsedBody.success) {
+          throw V2ApiError.invalidRequest();
+        }
+        const notifications = parsedBody.data;
         const record = await options.repository.joinCommunity({
           ownerUserId: owner.userId,
           communityId,
           idempotencyKey: input.idempotencyKey,
-          requestSha256: commandDigest("community", "joinCommunity", [
-            communityId,
-          ]),
+          // Decision 0115: a `default` join keeps the digest it always had,
+          // so a replayed body-less join still matches; `muted` is bound in.
+          requestSha256: commandDigest(
+            "community",
+            "joinCommunity",
+            notifications === "muted"
+              ? [communityId, "notifications=muted"]
+              : [communityId],
+          ),
           requestId: input.requestId,
+          ...(notifications === "muted" ? { notifications } : {}),
         });
         return communityResource(
           record,
@@ -1892,6 +1939,26 @@ export function createCommunityService(
           communityPresenceNotObserved,
           options.tokenLogos,
         );
+      } catch (error) {
+        return mapFailure(error);
+      }
+    },
+
+    async getMembership(input) {
+      const owner = assertPrincipal(input.principal);
+      try {
+        const communityId = parseOpaqueUuid(input.communityId);
+        const record = await options.repository.readMembershipSync({
+          viewerUserId: owner.userId,
+          communityId,
+        });
+        return Object.freeze({
+          communityId,
+          membership: membership(record.membership),
+          notifications: record.notifications,
+          channelSynced: record.channelSynced,
+          contractVersion: v2ContractVersion,
+        });
       } catch (error) {
         return mapFailure(error);
       }

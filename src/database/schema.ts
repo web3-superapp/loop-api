@@ -1,4 +1,4 @@
-export const latestMigrationName = "000059_hooks_deployment_executor";
+export const latestMigrationName = "000060_join_notifications_preference";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

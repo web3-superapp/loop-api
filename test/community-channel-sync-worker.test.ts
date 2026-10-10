@@ -33,6 +33,7 @@ function job(
     memberStreamUserId: creatorStreamUserId,
     kind: "add" as const,
     memberChannelRole: "channel_member" as const,
+    memberMuteRequired: false,
     attempts: 1,
     channelProvisioned: true,
     channelName: "Frog Holders",
@@ -162,6 +163,7 @@ function gatewayMocks(
     readonly addMembers?: ChannelMock;
     readonly removeMembers?: ChannelMock;
     readonly readCommunityChannelActivity?: ChannelMock;
+    readonly muteCommunityChannelForMember?: ChannelMock;
   } = {},
 ): {
   readonly gateway: StreamCommunityChannelGateway;
@@ -169,7 +171,10 @@ function gatewayMocks(
   readonly addMembers: ChannelMock;
   readonly removeMembers: ChannelMock;
   readonly readCommunityChannelActivity: ChannelMock;
+  readonly muteCommunityChannelForMember: ChannelMock;
 } {
+  const muteCommunityChannelForMember =
+    overrides.muteCommunityChannelForMember ?? vi.fn(() => Promise.resolve());
   const upsertCommunityChannel =
     overrides.upsertCommunityChannel ??
     vi.fn(() => Promise.resolve(projection()));
@@ -185,11 +190,13 @@ function gatewayMocks(
       addMembers,
       removeMembers,
       readCommunityChannelActivity,
+      muteCommunityChannelForMember,
     } as unknown as StreamCommunityChannelGateway,
     upsertCommunityChannel,
     addMembers,
     removeMembers,
     readCommunityChannelActivity,
+    muteCommunityChannelForMember,
   };
 }
 
@@ -941,6 +948,201 @@ describe("community channel sync worker lane", () => {
       expect(removeMembers.mock.calls[0]?.[0]).not.toHaveProperty(
         "channelRole",
       );
+    });
+  });
+
+  describe("join notification preference (Decision 0115)", () => {
+    it("mutes the channel for a muted joiner right after the confirmed add", async () => {
+      const { repository, completeJob, retryJob } = repositoryFake([
+        job({ memberMuteRequired: true }),
+      ]);
+      const order: string[] = [];
+      const { gateway, muteCommunityChannelForMember } = gatewayMocks({
+        addMembers: vi.fn(() => {
+          order.push("add");
+          return Promise.resolve(projection());
+        }),
+        muteCommunityChannelForMember: vi.fn(() => {
+          order.push("mute");
+          return Promise.resolve();
+        }),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      const result = await worker.runOnce();
+
+      expect(result).toMatchObject({ succeededCount: 1, retriedCount: 0 });
+      expect(order).toEqual(["add", "mute"]);
+      expect(muteCommunityChannelForMember).toHaveBeenCalledWith({
+        channelId: streamChannelId,
+        memberStreamUserId: creatorStreamUserId,
+        signal: expect.any(AbortSignal) as AbortSignal,
+      });
+      expect(completeJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memberState: "synced",
+          notificationsApplied: true,
+        }),
+      );
+      expect(retryJob).not.toHaveBeenCalled();
+    });
+
+    it("never mutes a default joiner", async () => {
+      const { repository, completeJob } = repositoryFake([job()]);
+      const { gateway, muteCommunityChannelForMember } = gatewayMocks();
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      await worker.runOnce();
+
+      expect(muteCommunityChannelForMember).not.toHaveBeenCalled();
+      const [completion] = completeJob.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      expect(completion).not.toHaveProperty("notificationsApplied");
+    });
+
+    it("does not mute when the add itself failed", async () => {
+      const { repository, retryJob } = repositoryFake([
+        job({ memberMuteRequired: true }),
+      ]);
+      const { gateway, muteCommunityChannelForMember } = gatewayMocks({
+        addMembers: vi.fn(() =>
+          Promise.reject(new StreamChannelGatewayUnavailableError()),
+        ),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      await worker.runOnce();
+
+      expect(muteCommunityChannelForMember).not.toHaveBeenCalled();
+      expect(retryJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCode: "stream_channel_sync_unavailable",
+        }),
+      );
+    });
+
+    it("retries the job under stream_channel_mute_unavailable when the mute does not answer", async () => {
+      const { repository, completeJob, retryJob, failJob } = repositoryFake([
+        job({ memberMuteRequired: true, attempts: 2 }),
+      ]);
+      const { gateway } = gatewayMocks({
+        muteCommunityChannelForMember: vi.fn(() =>
+          Promise.reject(new StreamChannelGatewayUnavailableError()),
+        ),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      const result = await worker.runOnce();
+
+      expect(result).toMatchObject({ retriedCount: 1, succeededCount: 0 });
+      expect(retryJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCode: "stream_channel_mute_unavailable",
+          retryDelaySeconds: 10,
+        }),
+      );
+      expect(completeJob).not.toHaveBeenCalled();
+      expect(failJob).not.toHaveBeenCalled();
+    });
+
+    it("completes the membership without the mute on a deterministic rejection, and logs it", async () => {
+      const { repository, completeJob, failJob } = repositoryFake([
+        job({ memberMuteRequired: true }),
+      ]);
+      const warn = vi.fn();
+      const { gateway } = gatewayMocks({
+        muteCommunityChannelForMember: vi.fn(() =>
+          Promise.reject(new StreamChannelRequestRejectedError()),
+        ),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+        logger: { warn },
+      });
+
+      const result = await worker.runOnce();
+
+      expect(result).toMatchObject({ succeededCount: 1 });
+      expect(completeJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memberState: "synced",
+          notificationsApplied: false,
+        }),
+      );
+      expect(failJob).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: "mute",
+          errorName: "StreamChannelRequestRejectedError",
+        }),
+        "Community channel mute was not applied; the membership sync completed without it",
+      );
+    });
+
+    it("completes the membership without the mute on the last attempt instead of failing it", async () => {
+      const { repository, completeJob, failJob, retryJob } = repositoryFake([
+        job({ memberMuteRequired: true, attempts: 10 }),
+      ]);
+      const { gateway } = gatewayMocks({
+        muteCommunityChannelForMember: vi.fn(() =>
+          Promise.reject(new StreamChannelGatewayUnavailableError()),
+        ),
+      });
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      await worker.runOnce();
+
+      expect(completeJob).toHaveBeenCalledWith(
+        expect.objectContaining({ notificationsApplied: false }),
+      );
+      expect(failJob).not.toHaveBeenCalled();
+      expect(retryJob).not.toHaveBeenCalled();
+    });
+
+    it("does not mute a member parked at the channel cap", async () => {
+      const { repository } = repositoryFake([
+        job({ memberMuteRequired: true, memberCap: 10, syncedMemberCount: 10 }),
+      ]);
+      const { gateway, muteCommunityChannelForMember } = gatewayMocks();
+      const worker = createCommunityChannelSyncWorker({
+        repository,
+        gateway,
+        personas: personasFake().personas,
+        realIdentity: true,
+      });
+
+      await worker.runOnce();
+
+      expect(muteCommunityChannelForMember).not.toHaveBeenCalled();
     });
   });
 });

@@ -244,6 +244,13 @@ function communityRepositoryFake() {
     leaveCommunity: vi.fn(() =>
       Promise.resolve({ community, viewerMembership: null }),
     ),
+    readMembershipSync: vi.fn(() =>
+      Promise.resolve({
+        membership: ownerMembership,
+        notifications: "muted" as const,
+        channelSynced: false,
+      }),
+    ),
     resubmitCommunity: resubmitCommunityMock,
     listMembers: listMembersMock,
     governMember: governMemberMock,
@@ -880,6 +887,181 @@ describe("LOOP API V2 community, social, and search modules", () => {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
     }
+  });
+
+  describe("join notification preference (Decision 0115)", () => {
+    async function joinApp() {
+      const dependencies = fakes();
+      const joinMock = vi.fn(() =>
+        Promise.resolve({ community, viewerMembership: ownerMembership }),
+      );
+      dependencies.communityRepository.joinCommunity = joinMock;
+      const { app } = await createApp(dependencies);
+      return { app, joinMock };
+    }
+
+    it("keeps a body-less join on default with its original digest", async () => {
+      const { app, joinMock } = await joinApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers: commandHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const call = joinMock.mock.calls[0] as unknown as [
+        Record<string, unknown>,
+      ];
+      expect(call[0]).toMatchObject({
+        requestSha256: commandDigest("community", "joinCommunity", [
+          communityId,
+        ]),
+      });
+      expect(call[0]).not.toHaveProperty("notifications");
+    });
+
+    it("treats {} and an explicit default like no body", async () => {
+      for (const payload of [{}, { notifications: "default" }]) {
+        const { app, joinMock } = await joinApp();
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/join`,
+          headers: commandHeaders(),
+          payload,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(joinMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestSha256: commandDigest("community", "joinCommunity", [
+              communityId,
+            ]),
+          }),
+        );
+      }
+    });
+
+    it("forwards notifications=muted and binds it into the digest", async () => {
+      const { app, joinMock } = await joinApp();
+      const response = await app.inject({
+        method: "POST",
+        url: `/v2/communities/${communityId}/join`,
+        headers: commandHeaders(),
+        payload: { notifications: "muted" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(joinMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerUserId: accountId,
+          communityId,
+          notifications: "muted",
+          requestSha256: commandDigest("community", "joinCommunity", [
+            communityId,
+            "notifications=muted",
+          ]),
+        }),
+      );
+    });
+
+    it("rejects an unknown preference or an unknown key before any write", async () => {
+      for (const payload of [
+        { notifications: "silent" },
+        { notifications: "muted", extra: true },
+        { notifications: null },
+      ]) {
+        const { app, joinMock } = await joinApp();
+        const response = await app.inject({
+          method: "POST",
+          url: `/v2/communities/${communityId}/join`,
+          headers: commandHeaders(),
+          payload,
+        });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(joinMock).not.toHaveBeenCalled();
+      }
+    });
+
+    it("reads the viewer's membership sync state", async () => {
+      const dependencies = fakes();
+      const readMock = vi.fn(() =>
+        Promise.resolve({
+          membership: ownerMembership,
+          notifications: "muted" as const,
+          channelSynced: false,
+        }),
+      );
+      dependencies.communityRepository.readMembershipSync = readMock;
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/membership`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expectOperationalHeaders(response);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({
+        communityId,
+        membership: {
+          role: ownerMembership.role,
+          status: ownerMembership.status,
+          joinedAt: ownerMembership.joinedAt,
+        },
+        notifications: "muted",
+        channelSynced: false,
+        contractVersion: "2.0",
+      });
+      expect(readMock).toHaveBeenCalledWith({
+        viewerUserId: accountId,
+        communityId,
+      });
+    });
+
+    it("reads no membership as nulls and maps a hidden community to NOT_FOUND", async () => {
+      const dependencies = fakes();
+      dependencies.communityRepository.readMembershipSync = vi.fn(() =>
+        Promise.resolve({
+          membership: null,
+          notifications: null,
+          channelSynced: false,
+        }),
+      );
+      const { app } = await createApp(dependencies);
+      const none = await app.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/membership`,
+        headers: commonHeaders(),
+      });
+      expect(none.statusCode).toBe(200);
+      expect(none.json()).toMatchObject({
+        membership: null,
+        notifications: null,
+        channelSynced: false,
+      });
+
+      const hidden = fakes();
+      hidden.communityRepository.readMembershipSync = vi.fn(() =>
+        Promise.reject(new CommunityNotFoundError()),
+      );
+      const { app: hiddenApp } = await createApp(hidden);
+      const missing = await hiddenApp.inject({
+        method: "GET",
+        url: `/v2/communities/${communityId}/membership`,
+        headers: commonHeaders(),
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("rejects a query or an Idempotency-Key on the membership read", async () => {
+      const { app } = await createApp();
+      for (const [url, headers] of [
+        [`/v2/communities/${communityId}/membership?x=1`, commonHeaders()],
+        [`/v2/communities/${communityId}/membership`, commandHeaders()],
+      ] as const) {
+        const response = await app.inject({ method: "GET", url, headers });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
   });
 
   it("rejects an Idempotency-Key on a read", async () => {

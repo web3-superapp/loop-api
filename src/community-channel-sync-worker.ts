@@ -83,12 +83,13 @@ export interface CreateCommunityChannelSyncWorkerOptions {
 
 export type CommunityChannelSyncWorkerLogMessage =
   | "Community persona bookkeeping failed after a completed sync job"
-  | "Community channel activity could not be observed; no observation was recorded";
+  | "Community channel activity could not be observed; no observation was recorded"
+  | "Community channel mute was not applied; the membership sync completed without it";
 
 export interface CommunityChannelSyncWorkerLogContext {
   readonly communityId: string;
   readonly ownerUserId: string;
-  readonly write: "confirm" | "observe" | "request" | "reset";
+  readonly write: "confirm" | "mute" | "observe" | "request" | "reset";
   readonly errorName: string;
 }
 
@@ -105,6 +106,18 @@ class CommunityChannelSyncUnavailableError extends Error {
   constructor() {
     super("Community channel synchronization is unavailable");
     this.name = "CommunityChannelSyncUnavailableError";
+  }
+}
+
+/**
+ * Decision 0115: the server-side mute after a confirmed add did not answer.
+ * The job retries under its own code; the add is idempotent, so the next
+ * attempt re-confirms it and mutes again.
+ */
+class CommunityChannelMuteUnavailableError extends Error {
+  constructor() {
+    super("The community channel mute did not complete");
+    this.name = "CommunityChannelMuteUnavailableError";
   }
 }
 
@@ -212,6 +225,48 @@ export function createCommunityChannelSyncWorker(
     }
   }
 
+  /**
+   * Decision 0115: mute the channel for a member that joined with
+   * `notifications: "muted"`, after Stream confirmed the add. Returns whether
+   * the mute was confirmed. A deterministic rejection, or a transient
+   * failure on the last attempt, never undoes the membership: the job
+   * completes without the mute (logged) and the preference stays unapplied.
+   * Any other failure retries the job.
+   */
+  async function muteMember(
+    job: CommunityChannelSyncJobRecord,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      await options.gateway.muteCommunityChannelForMember({
+        channelId: job.streamChannelId,
+        memberStreamUserId: job.memberStreamUserId,
+        signal,
+      });
+      return true;
+    } catch (error) {
+      if (isAborted(signal)) {
+        throw error;
+      }
+      if (
+        error instanceof StreamChannelRequestRejectedError ||
+        job.attempts >= COMMUNITY_CHANNEL_SYNC_MAX_ATTEMPTS
+      ) {
+        options.logger?.warn(
+          {
+            communityId: job.communityId,
+            ownerUserId: job.ownerUserId,
+            write: "mute",
+            errorName: error instanceof Error ? error.name : "unknown",
+          },
+          "Community channel mute was not applied; the membership sync completed without it",
+        );
+        return false;
+      }
+      throw new CommunityChannelMuteUnavailableError();
+    }
+  }
+
   async function applyJob(
     job: CommunityChannelSyncJobRecord,
     signal: AbortSignal,
@@ -294,12 +349,18 @@ export function createCommunityChannelSyncWorker(
         channelRole: job.memberChannelRole,
         signal,
       });
+      // Decision 0115: only a member Stream now holds can be muted, so the
+      // mute follows the confirmed add inside the same attempt.
+      const notificationsApplied = job.memberMuteRequired
+        ? await muteMember(job, signal)
+        : false;
       await options.repository.completeJob({
         communityId: job.communityId,
         ownerUserId: job.ownerUserId,
         workerId,
         memberState: "synced",
         channelState: "created",
+        ...(job.memberMuteRequired ? { notificationsApplied } : {}),
       });
       if (lease === null) {
         return "succeeded";
@@ -329,6 +390,16 @@ export function createCommunityChannelSyncWorker(
           ownerUserId: job.ownerUserId,
           workerId,
           errorCode: "community_persona_unavailable",
+          retryDelaySeconds: jobRetryDelaySeconds(job.attempts),
+        });
+        return "retried";
+      }
+      if (error instanceof CommunityChannelMuteUnavailableError) {
+        await options.repository.retryJob({
+          communityId: job.communityId,
+          ownerUserId: job.ownerUserId,
+          workerId,
+          errorCode: "stream_channel_mute_unavailable",
           retryDelaySeconds: jobRetryDelaySeconds(job.attempts),
         });
         return "retried";

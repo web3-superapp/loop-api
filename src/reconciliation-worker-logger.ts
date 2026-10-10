@@ -88,6 +88,7 @@ export type ReconciliationWorkerLogMessage =
   | "Unexpected idle PostgreSQL client error"
   | "Community persona bookkeeping failed after a completed sync job"
   | "Community channel activity could not be observed; no observation was recorded"
+  | "Community channel mute was not applied; the membership sync completed without it"
   | "Community persona projection lease was lost; outcome not recorded"
   | "Community persona projection was not confirmed"
   | "LOOP mining-snapshot lane attempt incomplete: a held asset could not be valued; nothing published"
@@ -129,7 +130,7 @@ export interface ReconciliationWorkerLogFields {
   readonly communityId?: string;
   readonly ownerUserId?: string;
   readonly personaId?: string;
-  readonly write?: "confirm" | "observe" | "request" | "reset";
+  readonly write?: "confirm" | "mute" | "observe" | "request" | "reset";
   readonly projectionAttempts?: number;
   readonly errorName?: string;
   /**

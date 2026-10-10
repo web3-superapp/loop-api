@@ -54,6 +54,8 @@ import {
   type CommunityMemberPageRecord,
   type CommunityMemberRecord,
   type CommunityMembershipCommandInput,
+  type CommunityMembershipSyncRecord,
+  communityNotificationPreferences,
   type CommunityOrderingFacts,
   type CommunityRecord,
   type CommunityRepository,
@@ -1887,6 +1889,9 @@ export function createPostgresCommunityRepository(
         const idempotencyKey = uuidV4Schema.parse(rawInput.idempotencyKey);
         const requestSha256 = sha256Schema.parse(rawInput.requestSha256);
         const requestId = uuidV4Schema.parse(rawInput.requestId);
+        const notifications = z
+          .enum(communityNotificationPreferences as ["default", "muted"])
+          .parse(rawInput.notifications ?? "default");
         return await withTransaction(pool, async (client) => {
           const recordId = await claimCommunityCommand(client, {
             ownerUserId,
@@ -1913,18 +1918,21 @@ export function createPostgresCommunityRepository(
             }
             return readDetail(client, communityId, ownerUserId);
           }
+          // Decision 0115: the preference is recorded with the membership
+          // it belongs to; the sync lane applies it after the Stream add.
           await client.query({
             text: `
               insert into public.community_memberships (
                 community_id,
                 owner_user_id,
                 role,
-                status
+                status,
+                notifications
               )
-              values ($1, $2, 'member', 'active')
+              values ($1, $2, 'member', 'active', $3)
               on conflict (community_id, owner_user_id) do nothing
             `,
-            values: [communityId, ownerUserId],
+            values: [communityId, ownerUserId, notifications],
           });
           await appendCommunityAudit(client, {
             communityId,
@@ -1943,6 +1951,65 @@ export function createPostgresCommunityRepository(
             requestId,
           });
           return readDetail(client, communityId, ownerUserId);
+        });
+      } catch (error) {
+        return translateRepositoryError(error);
+      }
+    },
+
+    async readMembershipSync(rawInput: {
+      readonly viewerUserId: string;
+      readonly communityId: string;
+    }): Promise<CommunityMembershipSyncRecord> {
+      try {
+        const communityId = opaqueIdSchema.parse(rawInput.communityId);
+        const viewerUserId = userIdSchema.parse(rawInput.viewerUserId);
+        await readVisibleCommunity(pool, communityId, viewerUserId);
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select
+              membership.role,
+              membership.status,
+              membership.joined_at,
+              membership.notifications,
+              membership.notifications_applied_at is not null
+                as notifications_applied,
+              (
+                select member.state
+                from public.community_channel_members as member
+                where member.community_id = membership.community_id
+                  and member.owner_user_id = membership.owner_user_id
+              ) as channel_member_state
+            from public.community_memberships as membership
+            where membership.community_id = $1
+              and membership.owner_user_id = $2
+            limit 1
+          `,
+          values: [communityId, viewerUserId],
+        });
+        const row = result.rows[0];
+        if (row === undefined) {
+          return Object.freeze({
+            membership: null,
+            notifications: null,
+            channelSynced: false,
+          });
+        }
+        const notifications = z
+          .enum(communityNotificationPreferences as ["default", "muted"])
+          .parse(row["notifications"]);
+        const memberSynced = row["channel_member_state"] === "synced";
+        return Object.freeze({
+          membership: toMembershipRecord({
+            role: row["role"],
+            status: row["status"],
+            joined_at: row["joined_at"],
+          }),
+          notifications,
+          channelSynced:
+            memberSynced &&
+            (notifications === "default" ||
+              row["notifications_applied"] === true),
         });
       } catch (error) {
         return translateRepositoryError(error);

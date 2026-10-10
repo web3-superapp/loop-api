@@ -649,6 +649,16 @@ export interface ProjectStreamCommunityMemberPersonaInput {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Decision 0115: mute one official community channel for one member,
+ * server-side, as that member.
+ */
+export interface MuteStreamCommunityChannelForMemberInput {
+  readonly channelId: string;
+  readonly memberStreamUserId: string;
+  readonly signal: AbortSignal;
+}
+
 export interface ReadStreamCommunityChannelPresenceInput {
   readonly channelId: string;
   readonly signal: AbortSignal;
@@ -839,6 +849,16 @@ export interface StreamCommunityChannelGateway {
    */
   updateGroupChannelName(
     input: UpdateStreamGroupChannelNameInput,
+  ): Promise<void>;
+  /**
+   * Decision 0115: mutes an official community channel for one member with
+   * one server-side `muteChannel` on that member's behalf. It resolves only
+   * when Stream echoes a channel mute for that channel; another echo is
+   * `unavailable`. Muting an already muted channel is idempotent. A member
+   * Stream does not know is a deterministic rejection.
+   */
+  muteCommunityChannelForMember(
+    input: MuteStreamCommunityChannelForMemberInput,
   ): Promise<void>;
 }
 
@@ -1284,6 +1304,63 @@ function reduceMemberRoles(
     );
   }
   return Object.freeze(result);
+}
+
+function parseMuteForMemberInput(
+  value: unknown,
+): MuteStreamCommunityChannelForMemberInput {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["channelId", "memberStreamUserId", "signal"]) ||
+    !isCommunityChannelId(value["channelId"]) ||
+    !isStreamUserId(value["memberStreamUserId"])
+  ) {
+    return unavailable();
+  }
+  return Object.freeze({
+    channelId: value["channelId"],
+    memberStreamUserId: value["memberStreamUserId"],
+    signal: parseSignal(value["signal"]),
+  });
+}
+
+/**
+ * `muteChannel` answers with `channel_mute` (one channel) or
+ * `channel_mutes` (several). Either must name the muted channel and the
+ * member; anything else is not a confirmation.
+ */
+function validateMuteResponse(
+  value: unknown,
+  input: MuteStreamCommunityChannelForMemberInput,
+): void {
+  if (!isRecord(value)) {
+    return unavailable();
+  }
+  const expectedCid = `${streamChannelType}:${input.channelId}`;
+  const mutes: unknown[] = [];
+  if (value["channel_mute"] !== undefined) {
+    mutes.push(value["channel_mute"]);
+  }
+  if (Array.isArray(value["channel_mutes"])) {
+    mutes.push(...(value["channel_mutes"] as unknown[]));
+  }
+  const confirmed = mutes.some((mute) => {
+    if (!isRecord(mute) || !isRecord(mute["channel"])) {
+      return false;
+    }
+    if (mute["channel"]["cid"] !== expectedCid) {
+      return false;
+    }
+    const user = mute["user"];
+    return (
+      user === undefined ||
+      user === null ||
+      (isRecord(user) && user["id"] === input.memberStreamUserId)
+    );
+  });
+  if (!confirmed) {
+    return unavailable();
+  }
 }
 
 function parseProjectPersonaInput(
@@ -1733,6 +1810,7 @@ export function createUnavailableStreamCommunityChannelGateway(): StreamCommunit
     readCommunityChannelMessages: unavailablePromise,
     sendCommunityFeedMessage: unavailablePromise,
     updateGroupChannelName: unavailablePromise,
+    muteCommunityChannelForMember: unavailablePromise,
   });
 }
 
@@ -2255,6 +2333,25 @@ export function createStreamCommunityChannelGateway(
         if (error instanceof StreamChannelProjectionMismatchError) {
           throw error;
         }
+        return sanitizeCommunityProviderFailure(error, input.signal);
+      }
+    },
+
+    async muteCommunityChannelForMember(
+      rawInput: MuteStreamCommunityChannelForMemberInput,
+    ): Promise<void> {
+      const input = parseMuteForMemberInput(rawInput);
+      try {
+        input.signal.throwIfAborted();
+        const response = await client.chat.muteChannel({
+          user_id: input.memberStreamUserId,
+          channel_cids: [`${streamChannelType}:${input.channelId}`],
+        });
+        input.signal.throwIfAborted();
+        validateMuteResponse(response, input);
+      } catch (error) {
+        // An unconfirmed echo is already `unavailable`, which the
+        // classification below keeps.
         return sanitizeCommunityProviderFailure(error, input.signal);
       }
     },
