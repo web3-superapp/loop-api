@@ -1,5 +1,6 @@
 import type { Launch2HoldReason, Launch2Stage } from "./launch2-contract.js";
 import type { Launch2CurveState } from "./launch2-curve-math.js";
+import type { Launch2FactoryGeneration } from "./launch2-generation.js";
 
 /**
  * Decision 0114: the boundaries of the launch2 read model — the chain
@@ -8,8 +9,19 @@ import type { Launch2CurveState } from "./launch2-curve-math.js";
  * decimal strings; addresses and hashes are lower-case.
  */
 
+/**
+ * Decision 0122: `buybackExecutorV2` is the price-protected executor of a
+ * v2-generation instance (other `BuybackCompleted` / `quoteNextOrder`
+ * shapes); `buybackExecutor` is the current generation's.
+ */
 export type Launch2ContractRole =
-  "factory" | "gate" | "nft" | "snapshots" | "curve" | "buybackExecutor";
+  | "factory"
+  | "gate"
+  | "nft"
+  | "snapshots"
+  | "curve"
+  | "buybackExecutor"
+  | "buybackExecutorV2";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -17,6 +29,7 @@ export const launch2EventNames = Object.freeze([
   "NftMinted",
   "Transfer",
   "SnapshotPublished",
+  "PublicRoundOpenedWithoutHolders",
   "CurveBought",
   "CurveSold",
   "Graduated",
@@ -62,15 +75,26 @@ export interface Launch2ViewerChainState {
 }
 
 export interface Launch2BuybackChainState {
+  /** Timestamp of the block every value was read at. */
+  readonly blockTimestamp: bigint;
   readonly paused: boolean;
   readonly lastSuccessfulAt: bigint;
   readonly availableBudget: bigint;
   readonly totalRecorded: bigint;
   readonly totalSpent: bigint;
-  /** `quoteNextOrder()`; null when the read reverted (price source not ready). */
+  /**
+   * `quoteNextOrder().amountIn`; null when the read reverted (a v2
+   * instance whose price recorder is not ready).
+   */
   readonly nextOrderAmountIn: bigint | null;
-  /** 0 with a non-zero amount: a protection would refuse the order now. */
-  readonly nextOrderMinMemeOut: bigint | null;
+  /**
+   * Decision 0122, v3: `quoteNextOrder().executable` — every precondition
+   * of `execute()` before the swap holds (not paused, interval elapsed,
+   * graduated, budget > 0, locked-principal guard). v2: derived — true
+   * when the price protection would not refuse (`minMemeOut > 0`); null
+   * when the read reverted.
+   */
+  readonly nextOrderExecutable: boolean | null;
 }
 
 export interface Launch2SnapshotPublication {
@@ -119,6 +143,8 @@ export interface Launch2Chain {
   readBuybackState(input: {
     readonly buybackExecutor: string;
     readonly escrow: string;
+    /** Decision 0122: selects the executor ABI. */
+    readonly generation: Launch2FactoryGeneration;
   }): Promise<Launch2BuybackChainState>;
 }
 
@@ -161,6 +187,8 @@ export interface Launch2InstanceRecord {
   readonly ownerUserId: string;
   readonly chainId: string;
   readonly factoryAddress: string;
+  /** Decision 0122: the deploying Factory's bytecode generation. */
+  readonly generation: Launch2FactoryGeneration;
   readonly launchId: string;
   readonly configHash: string;
   readonly projectOwner: string;
@@ -207,6 +235,16 @@ export interface Launch2InstanceRecord {
   readonly noHoldersClosure: {
     readonly cutoffBlock: string;
     readonly closedAt: string;
+  } | null;
+  /**
+   * Decision 0122 (v3): the indexed `PublicRoundOpenedWithoutHolders` — the
+   * sale ended with no mint and the public round opened at `openedAt`
+   * without a snapshot (stage `public`).
+   */
+  readonly openedWithoutHolders: {
+    readonly openedAt: string;
+    readonly blockNumber: string;
+    readonly transactionHash: string;
   } | null;
   readonly graduation: {
     readonly graduatedAt: string;
@@ -259,6 +297,8 @@ export interface Launch2Checkpoint {
 export interface Launch2LaneInstance {
   readonly instanceId: string;
   readonly launchId: string;
+  /** Decision 0122: selects the buyback executor ABI of the instance. */
+  readonly generation: Launch2FactoryGeneration;
   readonly addresses: Launch2InstanceAddresses;
   readonly deployBlockNumber: string;
   readonly nftSaleStart: string;
@@ -273,6 +313,8 @@ export interface Launch2LaneInstance {
   readonly snapshotPublishedAt: string | null;
   /** Decision 0120: a no-holder closure is recorded. */
   readonly closedNoHolders: boolean;
+  /** Decision 0122: the indexed zero-holder public opening (ISO). */
+  readonly openedWithoutHoldersAt: string | null;
   readonly activatedAt: string | null;
   readonly stage: Launch2Stage;
   readonly nextChangeAt: string | null;
@@ -301,9 +343,10 @@ export interface Launch2BuybackRecord {
   readonly reasonCode: string | null;
   readonly usd1Spent: string;
   readonly memeDelivered: string;
-  readonly minMemeOut: string;
-  readonly referencePriceE18: string;
-  readonly spotPriceE18: string;
+  /** Decision 0122: null for a v3 (no price protection) execution. */
+  readonly minMemeOut: string | null;
+  readonly referencePriceE18: string | null;
+  readonly spotPriceE18: string | null;
   readonly executedAt: string;
   readonly transactionHash: string;
   readonly blockNumber: string;
@@ -387,9 +430,16 @@ export class Launch2IdempotencyConflictError extends Error {
 
 export interface Launch2Repository {
   // --- Lane ---
+  /**
+   * Decision 0122: registers activated tasks of every listed Factory and
+   * records that Factory's generation on the instance.
+   */
   registerActivatedInstances(input: {
     readonly chainId: string;
-    readonly factoryAddress: string;
+    readonly factories: readonly {
+      readonly address: string;
+      readonly generation: Launch2FactoryGeneration;
+    }[];
   }): Promise<readonly string[]>;
   listLaneInstances(chainId: string): Promise<readonly Launch2LaneInstance[]>;
   getCheckpoint(chainId: string): Promise<Launch2Checkpoint | null>;

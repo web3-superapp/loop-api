@@ -703,6 +703,7 @@ describe("launch chain slot (Decision 0038)", () => {
       factoryAddress: null,
       factoryCodeHash: null,
       minimumSaleLeadSeconds: 86_400,
+      fixedBuybackRecipient: null,
     });
     const environment = validEnvironment();
     environment["HOOKS_LAUNCH_ENABLED"] = "on";
@@ -711,6 +712,25 @@ describe("launch chain slot (Decision 0038)", () => {
       const invalid = validEnvironment();
       invalid["HOOKS_LAUNCH_ENABLED"] = value;
       expect(() => loadConfig(invalid), value).toThrow(/HOOKS_LAUNCH_ENABLED/);
+    }
+  });
+
+  it("reads the fixed buyback recipient, lower-cased, and refuses a malformed one (Decision 0122)", () => {
+    const at = (value: string | undefined) =>
+      loadConfig({
+        ...validEnvironment(),
+        ...(value === undefined ? {} : { LAUNCH2_BUYBACK_RECIPIENT: value }),
+      }).hooksLaunch.fixedBuybackRecipient;
+    expect(at(undefined)).toBeNull();
+    expect(at("")).toBeNull();
+    expect(at("0x28816c4C4792467390C90e5B426F198570E29307")).toBe(
+      "0x28816c4c4792467390c90e5b426f198570e29307",
+    );
+    for (const value of [
+      "0x1234",
+      "28816c4C4792467390C90e5B426F198570E29307",
+    ]) {
+      expect(() => at(value), value).toThrow(/LAUNCH2_BUYBACK_RECIPIENT/);
     }
   });
 
@@ -744,6 +764,7 @@ describe("launch chain slot (Decision 0038)", () => {
       factoryAddress: "0x1111111111111111111111111111111111111abc",
       factoryCodeHash: `0x${"ab".repeat(32)}`,
       minimumSaleLeadSeconds: 86_400,
+      fixedBuybackRecipient: null,
     });
     expect(() =>
       loadConfig({

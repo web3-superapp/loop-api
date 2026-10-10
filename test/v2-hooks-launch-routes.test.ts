@@ -11,6 +11,7 @@ import {
   HooksLaunchProjectVersionConflictError,
   type HooksLaunchProjectConfigRecord,
   type HooksLaunchProjectConfigRepository,
+  type HooksLaunchProjectProgress,
 } from "../src/features/launch/hooks-launch-project-config.js";
 import {
   HooksLaunchSubmissionError,
@@ -39,7 +40,11 @@ const walletId = "00000000-0000-4000-8000-000000000099";
 const jobId = "00000000-0000-4000-8000-000000000011";
 const createdAt = "2026-10-09T00:00:00.000Z";
 const signer = privateKeyToAccount(`0x${"01".repeat(32)}`);
-const enabled = { HOOKS_LAUNCH_ENABLED: "on" } as const;
+const enabled = {
+  HOOKS_LAUNCH_ENABLED: "on",
+  // Decision 0122: the fixed buyback recipient the test drafts name.
+  LAUNCH2_BUYBACK_RECIPIENT: "0x1234567890123456789012345678901234567890",
+} as const;
 
 const draftBody = {
   name: "MoonCat",
@@ -52,10 +57,11 @@ const draftBody = {
 };
 
 function configRepositoryFake(
-  progress: {
-    approvedAt: string | null;
-    latestJobId: string | null;
-  } = { approvedAt: null, latestJobId: null },
+  progress: HooksLaunchProjectProgress = {
+    approvedAt: null,
+    rejection: null,
+    latestJobId: null,
+  },
 ): HooksLaunchProjectConfigRepository {
   let record: HooksLaunchProjectConfigRecord | null = null;
   return {
@@ -65,7 +71,7 @@ function configRepositoryFake(
           input.ownerUserId === s7AccountId &&
           input.configVersion === record?.version
           ? { ...progress }
-          : { approvedAt: null, latestJobId: null },
+          : { approvedAt: null, rejection: null, latestJobId: null },
       );
     },
     getOwnedDraft(input) {
@@ -390,6 +396,8 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
       approval: null,
       latestDeployment: null,
       minSaleLeadSeconds: 86_400,
+      buybackRecipientFixed: true,
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
       contractVersion: "2.0",
     });
 
@@ -440,7 +448,11 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     const approvedAt = "2026-10-10T01:00:00.000Z";
     const app = await createApp({
       overrides: { ...enabled, HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: "4200" },
-      configs: configRepositoryFake({ approvedAt, latestJobId: jobId }),
+      configs: configRepositoryFake({
+        approvedAt,
+        rejection: null,
+        latestJobId: jobId,
+      }),
       submissions: submissionsFake(),
       reader: factoryReader,
     });
@@ -456,6 +468,7 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
       configVersion: 1,
       status: "approved",
       approvedAt,
+      rejection: null,
     });
     expect(body["minSaleLeadSeconds"]).toBe(4_200);
     // Same shape as GET hooks-deployments/{jobId}.
@@ -471,7 +484,11 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
 
     // A task id the submission store no longer resolves is not invented.
     const missing = await createApp({
-      configs: configRepositoryFake({ approvedAt: null, latestJobId: jobId }),
+      configs: configRepositoryFake({
+        approvedAt: null,
+        rejection: null,
+        latestJobId: jobId,
+      }),
       submissions: submissionsFake({
         getOwned: () => Promise.resolve(null),
       }),
@@ -930,5 +947,110 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
       headers: s7CommonHeaders({ authorization: undefined }),
     });
     expect(unsigned.statusCode).toBe(401);
+  });
+
+  it("fixes the buyback recipient and shows a reviewer rejection (Decision 0122)", async () => {
+    const app = await createApp({
+      configs: configRepositoryFake({
+        approvedAt: null,
+        rejection: {
+          reasonCode: "other",
+          note: "Logo does not match the website",
+          at: "2026-10-10T02:00:00.000Z",
+        },
+        latestJobId: null,
+      }),
+      reader: factoryReader,
+    });
+    // Another recipient: 422, nothing saved.
+    const other = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: {
+        expectedVersion: 0,
+        config: {
+          ...draftBody,
+          buybackRecipient: "0x9999999999999999999999999999999999999999",
+        },
+      },
+    });
+    expect(other.statusCode, other.body).toBe(422);
+    expect(other.json()).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "HOOKS_BUYBACK_RECIPIENT_FIXED" },
+    });
+    expect(Object.keys(other.json<Record<string, unknown>>()).sort()).toEqual(
+      [
+        "category",
+        "code",
+        "correlationId",
+        "detailsSafe",
+        "providerReferenceSafe",
+        "retryable",
+        "userMessageKey",
+      ].sort(),
+    );
+    // The fixed address in another case is the same address.
+    const upper = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: {
+        expectedVersion: 0,
+        config: {
+          ...draftBody,
+          buybackRecipient: "0x1234567890123456789012345678901234567890"
+            .toUpperCase()
+            .replace("0X", "0x"),
+        },
+      },
+    });
+    expect(upper.statusCode, upper.body).toBe(200);
+    const read = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({
+      approval: {
+        configVersion: 1,
+        status: "rejected",
+        approvedAt: null,
+        rejection: {
+          reasonCode: "other",
+          note: "Logo does not match the website",
+          at: "2026-10-10T02:00:00.000Z",
+        },
+      },
+      buybackRecipientFixed: true,
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
+    });
+
+    // Not configured: fail closed (503), never a free-form recipient.
+    const unconfigured = await createApp({
+      overrides: { HOOKS_LAUNCH_ENABLED: "on" },
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+    });
+    const refused = await unconfigured.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: draftBody },
+    });
+    expect(refused.statusCode).toBe(503);
+    expect(refused.json()).toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE",
+      detailsSafe: { reasonCode: "HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE" },
+    });
+    const empty = await unconfigured.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(empty.json()).toMatchObject({
+      buybackRecipientFixed: true,
+      fixedBuybackRecipient: null,
+    });
   });
 });

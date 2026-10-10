@@ -1,6 +1,10 @@
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import { getCreate2Address } from "viem";
-import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
+import {
+  HooksLaunchBuybackRecipientFixedError,
+  assertHooksLaunchFixedBuybackRecipient,
+  type HooksLaunchProjectConfigRepository,
+} from "./hooks-launch-project-config.js";
 import {
   createHooksLaunchDeploymentTypedData,
   withHooksLaunchEip712Domain,
@@ -49,7 +53,15 @@ export interface HooksLaunchFactoryReader {
 export class HooksLaunchDeploymentError extends Error {
   constructor(
     readonly kind:
-      "not_found" | "invalid" | "unavailable" | "busy" | "template_mismatch",
+      | "not_found"
+      | "invalid"
+      | "unavailable"
+      | "busy"
+      | "template_mismatch"
+      /** Decision 0122: the draft names another buyback recipient. */
+      | "recipient_fixed"
+      /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
+      | "recipient_unavailable",
     message: string,
   ) {
     super(message);
@@ -117,6 +129,8 @@ export function createHooksLaunchDeploymentService(input: {
   readonly now?: () => number;
   readonly signatureLifetimeSeconds: number;
   readonly maxSaltAttempts: number;
+  /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails closed. */
+  readonly fixedBuybackRecipient?: string | null;
 }): HooksLaunchDeploymentService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1_000));
   let activePreparations = 0;
@@ -192,6 +206,21 @@ export function createHooksLaunchDeploymentService(input: {
         buybackRecipient: draft.config.buybackRecipient.toLowerCase(),
         deadline,
       };
+      // Decision 0122: an older draft naming another recipient is never
+      // signed; the owner saves a new version with the fixed address.
+      try {
+        assertHooksLaunchFixedBuybackRecipient(
+          input.fixedBuybackRecipient ?? null,
+          draft.config.buybackRecipient,
+        );
+      } catch (error) {
+        throw new HooksLaunchDeploymentError(
+          error instanceof HooksLaunchBuybackRecipientFixedError
+            ? "recipient_fixed"
+            : "recipient_unavailable",
+          "Hooks launch buyback recipient is fixed by the platform",
+        );
+      }
       await assertHooksLaunchFactoryTemplate(
         reader,
         draft.config,

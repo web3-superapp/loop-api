@@ -9,6 +9,8 @@ import type {
 import {
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
+  hooksLaunchRejectionReasons,
+  type HooksLaunchRejectionReason,
 } from "../features/launch/hooks-launch-project-config.js";
 
 const rowSchema = z
@@ -68,6 +70,11 @@ export function createPostgresHooksLaunchProjectConfigRepository(
       // owner-scoped like `GET hooks-deployments/{jobId}`.
       const result = await pool.query<{
         approved_at: Date | null;
+        rejection: {
+          reasonCode: string;
+          note: string | null;
+          at: string;
+        } | null;
         latest_job_id: string | null;
       }>({
         text: `
@@ -80,6 +87,16 @@ export function createPostgresHooksLaunchProjectConfigRepository(
                 and a.config_hash = c.config_hash
                where c.project_id = $1 and c.owner_user_id = $2
                  and c.config_version = $3) as approved_at,
+            -- Decision 0122: a reviewer rejection of the same version / hash.
+            (select jsonb_build_object('reasonCode', r.reason_code,
+                 'note', r.note, 'at', r.rejected_at)
+               from public.hooks_launch_project_config_versions c
+               inner join public.hooks_launch_config_rejections r
+                 on r.project_id = c.project_id
+                and r.config_version = c.config_version
+                and r.config_hash = c.config_hash
+               where c.project_id = $1 and c.owner_user_id = $2
+                 and c.config_version = $3) as rejection,
             (select t.job_id::text
                from public.hooks_launch_deployment_tasks t
                where t.project_id = $1 and t.owner_user_id = $2
@@ -89,11 +106,23 @@ export function createPostgresHooksLaunchProjectConfigRepository(
         values: [input.projectId, input.ownerUserId, input.configVersion],
       });
       const row = result.rows[0];
+      const rejection = row?.rejection ?? null;
       return Object.freeze({
         approvedAt:
           row?.approved_at === null || row?.approved_at === undefined
             ? null
             : row.approved_at.toISOString(),
+        rejection:
+          rejection === null ||
+          !(hooksLaunchRejectionReasons as readonly string[]).includes(
+            rejection.reasonCode,
+          )
+            ? null
+            : Object.freeze({
+                reasonCode: rejection.reasonCode as HooksLaunchRejectionReason,
+                note: rejection.note,
+                at: new Date(rejection.at).toISOString(),
+              }),
         latestJobId: row?.latest_job_id ?? null,
       });
     },

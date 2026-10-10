@@ -97,7 +97,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "getV2Launch2Instance",
         summary: "Get one MEME v2 launch instance",
-        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
+        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -236,7 +236,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "listV2Launch2Buybacks",
         summary: "List the NFT-escrow buybacks of a MEME v2 instance",
-        description: `BuybackCompleted logs indexed by the launch2_event lane (100 USD1 per order, the last may be smaller; ≥ 10 s between successes), newest first, plus the ledger summary and a live read of the executor and escrow (paused, budget, next order and the protection that would refuse it now: nextOrderBlockedReason). A protection refusal reverts on chain and leaves no log, so refused attempts are not listed (outcome rejected is reserved for the keeper). live is null with liveUnavailable.reasonCode when the chain read fails. Signed cursor; limit <= 100 (default 30). ${unavailableNote}`,
+        description: `BuybackCompleted logs indexed by the launch2_event lane (100 USD1 per order, the last may be smaller; ≥ 10 s between successes), newest first, plus the ledger summary and a live read of the executor and escrow (paused, budget, next order and why it cannot run now: nextOrderBlockedReason, Decision 0122 — from quoteNextOrder().executable on the v3 Factory, which has no price protection; minMemeOut / referencePriceUsd1 / spotPriceUsd1 are null for v3 executions). A refusal reverts on chain and leaves no log, so refused attempts are not listed (outcome rejected is reserved for the keeper). live is null with liveUnavailable.reasonCode when the chain read fails. Signed cursor; limit <= 100 (default 30). ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

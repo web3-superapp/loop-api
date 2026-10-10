@@ -69,6 +69,7 @@ let preparedPromise:
   | undefined;
 async function payload() {
   preparedPromise ??= createHooksLaunchDeploymentService({
+    fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
     configs,
     wallets,
     reader,
@@ -140,6 +141,7 @@ function fixture(
     save,
     repository,
     service: createHooksLaunchSubmissionService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       configs,
       wallets,
       reader,

@@ -44,9 +44,33 @@ export interface HooksLaunchProjectConfigRepository {
   }): Promise<HooksLaunchProjectProgress>;
 }
 
+/** Decision 0122: the review rejection reasons (requirer ruling 7). */
+export const hooksLaunchRejectionReasons = Object.freeze([
+  "incomplete_materials",
+  "name_or_ticker_conflict",
+  "buyback_recipient_invalid",
+  "community_binding_mismatch",
+  "other",
+] as const);
+export type HooksLaunchRejectionReason =
+  (typeof hooksLaunchRejectionReasons)[number];
+
+/** Decision 0122: what the applicant sees of a reviewer rejection. */
+export interface HooksLaunchRejection {
+  readonly reasonCode: HooksLaunchRejectionReason;
+  /** The reviewer's note (required for `other`), shown to the applicant. */
+  readonly note: string | null;
+  readonly at: string;
+}
+
 /** Decision 0120: see `HooksLaunchProjectConfigRepository.getOwnedProgress`. */
 export interface HooksLaunchProjectProgress {
   readonly approvedAt: string | null;
+  /**
+   * Decision 0122: the reviewer rejected this version (same configHash);
+   * null otherwise. A version is approved or rejected, never both.
+   */
+  readonly rejection: HooksLaunchRejection | null;
   readonly latestJobId: string | null;
 }
 
@@ -68,11 +92,48 @@ export class HooksLaunchProjectVersionConflictError extends Error {
  * Decision 0108: no repository (database not configured) fails closed.
  * Decision 0119: so does a missing / unreadable target Factory (`factory`),
  * because the configHash binds the Factory's `nftSaleDuration()`.
+ * Decision 0122: and a missing fixed buyback recipient
+ * (`LAUNCH2_BUYBACK_RECIPIENT`, `recipient`).
  */
 export class HooksLaunchProjectConfigUnavailableError extends Error {
-  constructor(readonly source: "repository" | "factory" = "repository") {
+  constructor(
+    readonly source: "repository" | "factory" | "recipient" = "repository",
+  ) {
     super("Hooks config unavailable");
     this.name = "HooksLaunchProjectConfigUnavailableError";
+  }
+}
+
+/**
+ * Decision 0122 (requirer ruling 9): the buyback recipient is fixed by the
+ * platform (`LAUNCH2_BUYBACK_RECIPIENT`); a config naming another address
+ * is refused (422 `HOOKS_BUYBACK_RECIPIENT_FIXED`).
+ */
+export class HooksLaunchBuybackRecipientFixedError extends Error {
+  constructor() {
+    super("The buyback recipient is fixed by the platform");
+    this.name = "HooksLaunchBuybackRecipientFixedError";
+  }
+}
+
+/**
+ * Decision 0122: throws `HooksLaunchProjectConfigUnavailableError("recipient")`
+ * when no fixed recipient is configured (fail closed) and
+ * `HooksLaunchBuybackRecipientFixedError` when `recipient` is another
+ * address (case-insensitive).
+ */
+export function assertHooksLaunchFixedBuybackRecipient(
+  fixed: string | null,
+  recipient: unknown,
+): void {
+  if (fixed === null) {
+    throw new HooksLaunchProjectConfigUnavailableError("recipient");
+  }
+  if (
+    typeof recipient !== "string" ||
+    recipient.toLowerCase() !== fixed.toLowerCase()
+  ) {
+    throw new HooksLaunchBuybackRecipientFixedError();
   }
 }
 
@@ -99,6 +160,11 @@ export interface HooksLaunchProjectConfigService {
    * nftSaleStartAt a save accepts is now + this value.
    */
   readonly minimumLeadSeconds: number;
+  /**
+   * Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT` (lower-case); null = not
+   * configured, every save is unavailable.
+   */
+  readonly fixedBuybackRecipient: string | null;
   getDraft(input: {
     readonly ownerUserId: string;
     readonly projectId: string;
@@ -122,8 +188,12 @@ export function createHooksLaunchProjectConfigService(input: {
   /** The target Factory (Decision 0119); null fails `saveDraft` closed. */
   readonly factory: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
   readonly minimumLeadSeconds: number;
+  /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails saves closed. */
+  readonly fixedBuybackRecipient?: string | null;
   readonly now?: () => number;
 }): HooksLaunchProjectConfigService {
+  const fixedBuybackRecipient =
+    input.fixedBuybackRecipient?.toLowerCase() ?? null;
   const now = input.now ?? (() => Math.floor(Date.now() / 1_000));
 
   function requireRepository(): HooksLaunchProjectConfigRepository {
@@ -135,6 +205,7 @@ export function createHooksLaunchProjectConfigService(input: {
 
   return Object.freeze({
     minimumLeadSeconds: input.minimumLeadSeconds,
+    fixedBuybackRecipient,
     async getProgress(request: {
       readonly ownerUserId: string;
       readonly projectId: string;
@@ -178,6 +249,11 @@ export function createHooksLaunchProjectConfigService(input: {
       if (typeof request.body !== "object" || request.body === null) {
         throw new InvalidHooksLaunchDraftError();
       }
+      // Decision 0122: the recipient is the platform's, never the owner's.
+      assertHooksLaunchFixedBuybackRecipient(
+        fixedBuybackRecipient,
+        (request.body as Record<string, unknown>)["buybackRecipient"],
+      );
       const config = parseHooksLaunchDraft(
         request.body as Parameters<typeof parseHooksLaunchDraft>[0],
         {

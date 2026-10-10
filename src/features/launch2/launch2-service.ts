@@ -67,6 +67,7 @@ import {
   Launch2IdempotencyConflictError,
   Launch2RepositoryUnavailableError,
   type CreateLaunch2IntentRecord,
+  type Launch2BuybackChainState,
   type Launch2BuybackRecord,
   type Launch2Chain,
   type Launch2InstanceRecord,
@@ -228,7 +229,46 @@ function stageOf(record: Launch2InstanceRecord, nowSeconds: bigint) {
     graduated: record.graduation !== null,
     holdReason: record.holdReason,
     closedNoHolders: record.noHoldersClosure !== null,
+    openedWithoutHoldersAt:
+      record.openedWithoutHolders === null
+        ? null
+        : seconds(record.openedWithoutHolders.openedAt),
   });
+}
+
+/**
+ * Decision 0122: why the next buyback order cannot run now (null = it
+ * can). v3: `quoteNextOrder().executable` is false for exactly one of the
+ * `execute()` pre-swap checks; the first that holds is named, the locked
+ * principal guard (≥ 10,000 USD1 LP principal, order ≤ 1 %) being the
+ * only one left. v2 (price-protected, legacy): a reverted quote or a zero
+ * protected output is `BUYBACK_LEGACY_PRICE_PROTECTION`.
+ */
+export function launch2NextOrderBlockedReason(input: {
+  readonly generation: Launch2InstanceRecord["generation"];
+  readonly graduated: boolean;
+  readonly state: Launch2BuybackChainState;
+}): string | null {
+  const { state } = input;
+  const legacy = input.generation === "v2";
+  if (state.nextOrderAmountIn === null) {
+    return legacy
+      ? "BUYBACK_LEGACY_PRICE_PROTECTION"
+      : "BUYBACK_QUOTE_UNAVAILABLE";
+  }
+  if (state.paused) return "BUYBACK_PAUSED";
+  if (!input.graduated) return "BUYBACK_NOT_GRADUATED";
+  if (state.nextOrderAmountIn === 0n) return "BUYBACK_NO_BUDGET";
+  if (state.nextOrderExecutable === true) return null;
+  if (legacy) return "BUYBACK_LEGACY_PRICE_PROTECTION";
+  if (
+    state.lastSuccessfulAt !== 0n &&
+    state.blockTimestamp <
+      state.lastSuccessfulAt + BigInt(launch2Template.buybackMinIntervalSeconds)
+  ) {
+    return "BUYBACK_TOO_SOON";
+  }
+  return "BUYBACK_PRINCIPAL_INSUFFICIENT";
 }
 
 function summaryOf(
@@ -280,9 +320,19 @@ function buybackOf(record: Launch2BuybackRecord): Resource {
     reasonCode: record.reasonCode,
     usd1Spent: formatLaunch2Amount(BigInt(record.usd1Spent)),
     memeDelivered: formatLaunch2Amount(BigInt(record.memeDelivered)),
-    minMemeOut: formatLaunch2Amount(BigInt(record.minMemeOut)),
-    referencePriceUsd1: formatLaunch2Amount(BigInt(record.referencePriceE18)),
-    spotPriceUsd1: formatLaunch2Amount(BigInt(record.spotPriceE18)),
+    // Decision 0122: null for a v3 execution (no price protection).
+    minMemeOut:
+      record.minMemeOut === null
+        ? null
+        : formatLaunch2Amount(BigInt(record.minMemeOut)),
+    referencePriceUsd1:
+      record.referencePriceE18 === null
+        ? null
+        : formatLaunch2Amount(BigInt(record.referencePriceE18)),
+    spotPriceUsd1:
+      record.spotPriceE18 === null
+        ? null
+        : formatLaunch2Amount(BigInt(record.spotPriceE18)),
     executedAt: record.executedAt,
     transactionHash: record.transactionHash,
     blockNumber: record.blockNumber,
@@ -1233,7 +1283,12 @@ export function createLaunch2Service(
             ...record.addresses,
           }),
           snapshot: Object.freeze({
-            status: snapshot === null ? "pending" : "published",
+            status:
+              snapshot !== null
+                ? "published"
+                : record.openedWithoutHolders !== null
+                  ? "opened_without_holders"
+                  : "pending",
             verification:
               snapshot === null ? null : (snapshot.verification ?? "pending"),
             root: snapshot?.root ?? null,
@@ -1242,9 +1297,10 @@ export function createLaunch2Service(
             cutoffBlockHash: snapshot?.cutoffBlockHash ?? null,
             publishedAt: snapshot?.publishedAt ?? null,
             earlyRoundEndsAt:
-              snapshot === null
-                ? null
-                : isoOf(launch2EarlyRoundEnd(seconds(snapshot.publishedAt))),
+              snapshot !== null
+                ? isoOf(launch2EarlyRoundEnd(seconds(snapshot.publishedAt)))
+                : // Decision 0122: no early round after a zero-holder opening.
+                  (record.openedWithoutHolders?.openedAt ?? null),
             memberCount: snapshot?.memberCount ?? null,
             signers: snapshot?.signers ?? null,
             publication:
@@ -1259,6 +1315,10 @@ export function createLaunch2Service(
                     cutoffBlock: record.noHoldersClosure.cutoffBlock,
                     closedAt: record.noHoldersClosure.closedAt,
                   }),
+            openedWithoutHolders:
+              record.openedWithoutHolders === null
+                ? null
+                : Object.freeze({ ...record.openedWithoutHolders }),
           }),
           graduation:
             graduation === null
@@ -1451,19 +1511,13 @@ export function createLaunch2Service(
           const state = await deps.chain.readBuybackState({
             buybackExecutor: record.addresses.buybackExecutor,
             escrow: record.addresses.escrow,
+            generation: record.generation,
           });
-          const blocked =
-            state.nextOrderAmountIn === null
-              ? "BUYBACK_PRICE_SOURCE_UNAVAILABLE"
-              : state.paused
-                ? "BUYBACK_PAUSED"
-                : record.graduation === null
-                  ? "BUYBACK_NOT_GRADUATED"
-                  : state.nextOrderAmountIn === 0n
-                    ? "BUYBACK_NO_BUDGET"
-                    : state.nextOrderMinMemeOut === 0n
-                      ? "BUYBACK_PROTECTION_BLOCKED"
-                      : null;
+          const blocked = launch2NextOrderBlockedReason({
+            generation: record.generation,
+            graduated: record.graduation !== null,
+            state,
+          });
           live = Object.freeze({
             paused: state.paused,
             lastSuccessfulAt:

@@ -1024,3 +1024,128 @@ worker 相同（小时必须已结束 + 宽限、索引已追上、参数在生�
 
 含义：发布器在已确认的截止块读到 `ProjectNFT.totalMinted() = 0`（且索引器已追上），名单根不能为零所以永远无法发布；
 实例阶段变为 `closed_no_holders`（终态），发布器不再处理它。
+
+## 14. S145 变更（决策 0122）：审核拒绝、`kind`、零持有人开盘、收币地址固定
+
+### 14.0 给 loop-admin 的改动清单
+
+1. 配置版本详情加「拒绝」按钮：`POST /admin/v1/launch/projects/{projectId}/versions/{version}/reject`（§14.1）。
+2. 项目资料（目录审核）加「拒绝」按钮：`POST /admin/v1/launch/projects/{projectId}/reject`（§14.2）。
+3. 列表 / 详情 `project` 新增 `kind`、`materialVersion`、`rejection`、`latestRejection`；阶段新增 `rejected`；
+   列表支持 `?kind=all|ido|launch2`（S142-admin 未决项 1）。详情 `versions[].rejection`、`projectRejections[]`（§14.3）。
+4. 名单发布记录 `snapshotPublications[].action`：`open_without_holders` = 第三版工厂零持有人开盘（§14.4）。
+5. 参数页去掉价格来源 / 价格保护相关展示（第三版工厂回购无价格保护）；`buybackAttempts[].reason.code` 不再出现
+   价格保护类（旧工厂实例除外），新增 `LAUNCH2_BUYBACK_NO_OUTPUT`。
+6. 运营保存配置（`launch.config.save`）时收币地址只能是平台固定地址：否则 `422 VALIDATION_FAILED /
+OPS_BUYBACK_RECIPIENT_FIXED`；服务端未配置固定地址 → `503 / HOOKS_LAUNCH_REVIEW_UNAVAILABLE`。
+
+拒绝的权限模型与批准完全相同：`launch.approve`（仅 reviewer；platform_admin、testnet_acceptor、auditor 一律
+`403 ADMIN_ROLE_FORBIDDEN`），以绑定 LOOP 用户身份执行（需要该项目的 `launch.approve` 运营授权），项目方本人、
+该版本编辑人不能拒绝（`403 OPS_SELF_APPROVAL`）。`Idempotency-Key` 必填（= `operationId`）。理由枚举：
+
+| `reasonCode`                 | 中文                 |
+| ---------------------------- | -------------------- |
+| `incomplete_materials`       | 材料不完整           |
+| `name_or_ticker_conflict`    | 名称或代币符号冲突   |
+| `buyback_recipient_invalid`  | 回购收币地址不合规   |
+| `community_binding_mismatch` | 社区绑定不一致       |
+| `other`                      | 其它（必须填写说明） |
+
+`note`：给项目方看的说明，去首尾空格后 1–500 字；`other` 必填，其余可空（空串 = 不填）。
+
+### 14.1 `POST /admin/v1/launch/projects/{projectId}/versions/{version}/reject`
+
+```json
+{
+  "configHash": "0x352a30cf38a51245ff842f7146a641bd094ee440fb3303c1054fef3d26eb73b4",
+  "reasonCode": "buyback_recipient_invalid",
+  "note": "请使用平台回购收币地址"
+}
+```
+
+200：
+
+```json
+{
+  "operationId": "3f0c1f2e-8b7a-4c61-9d2e-5a4b3c2d1e0f",
+  "replayed": false,
+  "rejection": {
+    "projectId": "1e7a9c55-0b3d-4f2a-9c1e-2b3c4d5e6f70",
+    "configVersion": 2,
+    "configHash": "0x352a…73b4",
+    "reviewerUserId": "0b9f6c1a-7d2e-4f3a-8b5c-1d2e3f4a5b6c",
+    "reasonCode": "buyback_recipient_invalid",
+    "note": "请使用平台回购收币地址",
+    "rejectedAt": "2026-10-10T08:00:00.000Z"
+  },
+  "audit": { "auditId": "…", "seq": 901, "at": "2026-10-10T08:00:00.000Z" }
+}
+```
+
+- 只能拒绝**最新**版本且哈希一致；一个版本只能被批准或拒绝一次（被拒的版本不能再批准，批准过的不能再拒绝）。
+- 项目方在 App 看到「审核未通过 + 理由」，改资料保存新版本后重新进入「待审批」。
+
+### 14.2 `POST /admin/v1/launch/projects/{projectId}/reject`
+
+```json
+{ "materialVersion": 1, "reasonCode": "other", "note": "Logo 与官网不一致" }
+```
+
+- 只对 `launchReviewStatus` 为 `submitted` / `in_review` 的项目资料有效；`materialVersion` 取详情 `project.materialVersion`
+  （防止拒绝了已被修改的资料）。
+- 结果：`launchReviewStatus = rejected`，App 显示理由与说明；项目方可改资料（版本 +1）后重新提交。
+- 200：`{operationId, replayed, rejection: {rejectionId, projectId, materialVersion, reviewerUserId, reasonCode, note, rejectedAt}, audit}`。
+
+两个拒绝接口的错误：
+
+| HTTP | code                     | `detailsSafe.reasonCode`                                                                                                           |
+| ---- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`        | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`；或 `reasonCode` 不在枚举、字段缺失                                                               |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`（非 reviewer）/ `OPS_SELF_APPROVAL`（项目方或编辑人）/ `OPS_FORBIDDEN`                                      |
+| 404  | `NOT_FOUND`              | `OPS_NOT_FOUND` / `ADMIN_LAUNCH_PROJECT_NOT_FOUND`                                                                                 |
+| 409  | `ADMIN_CONFLICT`         | `OPS_VERSION_CONFLICT`（版本 / 哈希 / materialVersion 已变，刷新详情）                                                             |
+| 409  | `ADMIN_CONFLICT`         | `OPS_LAUNCH_CONFIG_DECIDED`（该配置版本已批准或已拒绝）                                                                            |
+| 409  | `ADMIN_CONFLICT`         | `OPS_LAUNCH_NOT_IN_REVIEW`（项目资料不在待审状态）/ `OPS_LAUNCH_NOT_APPROVED`（配置拒绝时资料未通过）                              |
+| 409  | `ADMIN_CONFLICT`         | `OPS_IDEMPOTENCY_CONFLICT`（同 key 不同请求，换新 key）                                                                            |
+| 422  | `VALIDATION_FAILED`      | `ADMIN_REJECTION_NOTE_REQUIRED`（`other` 未填说明）/ `ADMIN_REJECTION_NOTE_INVALID`（超过 500 字）                                 |
+| 503  | `CAPABILITY_UNAVAILABLE` | `ADMIN_AUDIT_UNAVAILABLE` / `ADMIN_DATABASE_UNAVAILABLE` / `HOOKS_LAUNCH_REVIEW_UNAVAILABLE` / `OPS_COMMAND_FAILED`（同 key 重试） |
+
+审计：`launch.config.reject.requested / .decided / .failed`、`launch.project.reject.requested / .decided / .failed`
+（`targetType = launch_project`），另有 `ops_audit`。
+
+### 14.3 列表 / 详情新增字段
+
+`project`（列表项与详情）：
+
+```json
+{
+  "kind": "launch2",
+  "materialVersion": 2,
+  "rejection": {
+    "reasonCode": "other",
+    "note": "Logo 与官网不一致",
+    "reviewerUserId": "…",
+    "materialVersion": 1,
+    "rejectedAt": "2026-10-10T08:00:00.000Z"
+  },
+  "latestRejection": {
+    "reviewerUserId": "…",
+    "rejectedAt": "2026-10-10T08:00:00.000Z"
+  },
+  "stage": "rejected"
+}
+```
+
+- `rejection`：目录资料当前为 `rejected` 时最近一次拒绝，否则 `null`。`latestRejection`：最新配置版本被拒时非空。
+- `stage` 新增 `rejected`（最新配置版本被拒，未批准）；`?status=rejected` 可筛。
+- `?kind=all|ido|launch2`：按产品类型筛选；非 `all` 时绑定进游标（翻页带同一个 kind）。
+- 详情 `versions[].rejection`：`{reviewerUserId, configHash, reasonCode, note, rejectedAt} | null`；
+  `projectRejections[]`：目录资料的全部拒绝（新在前，≤ 200）`{rejectionId, materialVersion, reasonCode, note, reviewerUserId, rejectedAt}`。
+
+### 14.4 零持有人开盘（取代「无人持有，已结束」）
+
+第三版工厂起，发售结束一个 NFT 都没卖出时，发布器调用 `openPublicWithoutSnapshot()`，实例直接进入公开内盘
+（`stage = public`）。`snapshotPublications[]` 中这条记录 `action = "open_without_holders"`、`memberCount = 0`、
+`root / dataHash` 为全零、`signerAddresses = []`，状态机与名单发布相同（`pending → broadcast → confirmed`）。
+失败码新增 `LAUNCH2_SNAPSHOT_OPENED_BY_OTHER`（别人先开了盘，无需处理）。`snapshotClosure` 只会出现在第二版及更早
+工厂的实例上（deprecated）；已开盘实例的「放行重试」返回 `409 LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN`。

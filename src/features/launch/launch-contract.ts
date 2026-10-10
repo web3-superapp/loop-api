@@ -483,14 +483,21 @@ export function canonicalLaunchFilter(
 // Review state machine (applicant + operator)
 // ---------------------------------------------------------------------------
 
+/**
+ * Decision 0122 (requirer ruling 7): rejected material can be edited and
+ * resubmitted (material version + 1) like returned material.
+ */
 export const launchApplicantEditableStatuses: readonly LaunchReviewStatus[] =
-  Object.freeze(["draft", "returned"]);
+  Object.freeze(["draft", "returned", "rejected"]);
 
 export function canApplicantEdit(status: LaunchReviewStatus): boolean {
   return launchApplicantEditableStatuses.includes(status);
 }
 
-/** Applicant submit: `draft | returned → submitted`; anything else is stale. */
+/**
+ * Applicant submit: `draft | returned | rejected → submitted` (Decision
+ * 0122 adds rejected); anything else is stale.
+ */
 export function submitTransition(
   current: LaunchReviewStatus,
 ): LaunchReviewStatus | null {
@@ -562,7 +569,28 @@ const launchReviewReasonCatalog: Readonly<
   }),
   policy_violation: Object.freeze({
     status: "rejected",
-    text: "材料不符合上线规则，这份申请不会继续；调整后可以新建项目再提交。",
+    text: "材料不符合上线规则，按规则调整后可以重新提交审核。",
+  }),
+  // Decision 0122: the reviewer rejection reasons (requirer ruling 7).
+  incomplete_materials: Object.freeze({
+    status: "rejected",
+    text: "材料不完整，补齐后可以重新提交审核。",
+  }),
+  name_or_ticker_conflict: Object.freeze({
+    status: "rejected",
+    text: "项目名称或代币符号与已有项目冲突，修改后可以重新提交审核。",
+  }),
+  buyback_recipient_invalid: Object.freeze({
+    status: "rejected",
+    text: "回购收币地址不符合平台要求，修改后可以重新提交审核。",
+  }),
+  community_binding_mismatch: Object.freeze({
+    status: "rejected",
+    text: "绑定的社区与项目不一致，修改后可以重新提交审核。",
+  }),
+  other: Object.freeze({
+    status: "rejected",
+    text: "审核未通过，请按审核意见修改后重新提交。",
   }),
 });
 
@@ -574,7 +602,7 @@ const launchReviewStatusTexts: Readonly<Record<LaunchReviewStatus, string>> =
     in_review: "材料正在审核，这期间不能修改，有结果后状态会更新。",
     returned: "材料被退回，修改后可以重新提交审核。",
     approved: "审核已通过，材料不再可改，可以继续后面的发行安排。",
-    rejected: "审核未通过，这份申请不能再提交，需要的话可以新建项目。",
+    rejected: "审核未通过，按审核意见修改后可以重新提交。",
   });
 
 /**
@@ -761,6 +789,15 @@ export interface LaunchProjectProjection {
   readonly reviewReasonCode: string | null;
   /** Display projection of `reviewReasonCode`; never parsed back into a code. */
   readonly reviewReasonText: string | null;
+  /**
+   * Decision 0122: the reviewer rejection (reason, note, time) while
+   * `reviewStatus` is rejected; null otherwise and for non-owners.
+   */
+  readonly rejection: {
+    readonly reasonCode: string;
+    readonly note: string | null;
+    readonly at: string;
+  } | null;
   readonly kyb: UnavailableProjection & { readonly state: LaunchKybStatus };
   readonly attachments: UnavailableProjection;
   readonly submittedAt: string | null;

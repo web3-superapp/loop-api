@@ -430,9 +430,59 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     ).toBeNull();
   });
 
-  it("ends a no-holder sale at closed_no_holders and never quotes it (Decision 0120)", async () => {
+  it("opens a zero-holder v3 sale straight into public and quotes it (Decision 0122)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const openedAt = launch2NowSeconds - 30n;
+    const opened = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 604_800n - 60n),
+      nftMintedCount: "0",
+      stage: "public",
+      openedWithoutHolders: {
+        openedAt: iso(openedAt),
+        blockNumber: "456",
+        transactionHash: `0x${"ab".repeat(32)}`,
+      },
+    });
+    repository.instances.set(opened.instanceId, opened);
+    const chain = defaultChainState();
+    const { app } = await createApp({ repository, chain });
+    // The contract sets earlyRoundEndsAt = openedAt (no early round).
+    chain.viewer.curve = { earlyRoundEndsAt: openedAt };
+    const response = await get(
+      app,
+      `/v2/launch2/instances/${opened.instanceId}`,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const instance = response.json<{
+      instance: { stage: string; snapshot: Record<string, unknown> };
+    }>().instance;
+    expect(instance.stage).toBe("public");
+    expect(instance.snapshot).toEqual(
+      expect.objectContaining({
+        status: "opened_without_holders",
+        root: null,
+        memberCount: null,
+        publication: null,
+        closure: null,
+        earlyRoundEndsAt: iso(openedAt),
+        openedWithoutHolders: {
+          openedAt: iso(openedAt),
+          blockNumber: "456",
+          transactionHash: `0x${"ab".repeat(32)}`,
+        },
+      }),
+    );
+    const quote = await get(
+      app,
+      `/v2/launch2/instances/${opened.instanceId}/quote?side=buy&amount=1000000&walletId=${walletId}`,
+    );
+    expect(quote.statusCode, quote.body).toBe(200);
+  });
+
+  it("ends a v2-generation no-holder sale at closed_no_holders and never quotes it (Decision 0120)", async () => {
     const repository = createInMemoryLaunch2Repository();
     const closed = instanceFixture({
+      generation: "v2",
       nftSaleStart: iso(launch2NowSeconds - 604_800n - 60n),
       stage: "closed_no_holders",
       noHoldersClosure: {
@@ -893,12 +943,27 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         reasonCode: null,
         usd1Spent: (100n * wad).toString(),
         memeDelivered: (5n * wad).toString(),
-        minMemeOut: (4n * wad).toString(),
-        referencePriceE18: (20n * wad).toString(),
-        spotPriceE18: (20n * wad).toString(),
+        // Decision 0122: a v3 execution has no protection fields.
+        minMemeOut: null,
+        referencePriceE18: null,
+        spotPriceE18: null,
         executedAt: iso(launch2NowSeconds - 50n),
         transactionHash: `0x${"ef".repeat(32)}`,
         blockNumber: "950",
+      },
+      {
+        buybackId: "5f0a4c1e-4b3a-4c2d-9e1f-0a1b2c3d4e60",
+        outcome: "executed",
+        reasonCode: null,
+        usd1Spent: (100n * wad).toString(),
+        memeDelivered: (5n * wad).toString(),
+        // A v2 (price-protected) execution keeps all three.
+        minMemeOut: (4n * wad).toString(),
+        referencePriceE18: (20n * wad).toString(),
+        spotPriceE18: (20n * wad).toString(),
+        executedAt: iso(launch2NowSeconds - 60n),
+        transactionHash: `0x${"ee".repeat(32)}`,
+        blockNumber: "940",
       },
     ]);
     repository.positions.push({
@@ -934,11 +999,39 @@ describe("V2 launch2 routes (Decision 0114)", () => {
       live: {
         escrowAvailableUsd1: "200",
         nextOrderUsd1: "100",
-        nextOrderBlockedReason: "BUYBACK_PROTECTION_BLOCKED",
+        // Decision 0122: executable false, not paused / too soon / out of
+        // budget → the locked-principal guard.
+        nextOrderBlockedReason: "BUYBACK_PRINCIPAL_INSUFFICIENT",
       },
       liveUnavailable: null,
-      buybacks: [{ outcome: "executed", usd1Spent: "100", memeDelivered: "5" }],
+      buybacks: [
+        {
+          outcome: "executed",
+          usd1Spent: "100",
+          memeDelivered: "5",
+          minMemeOut: null,
+          referencePriceUsd1: null,
+          spotPriceUsd1: null,
+        },
+        {
+          minMemeOut: "4",
+          referencePriceUsd1: "20",
+          spotPriceUsd1: "20",
+        },
+      ],
       nextCursor: null,
+    });
+    // A v2-generation instance keeps its price protection.
+    repository.instances.set(instance.instanceId, {
+      ...instance,
+      generation: "v2",
+    });
+    const legacy = await get(
+      app,
+      `/v2/launch2/instances/${instance.instanceId}/buybacks`,
+    );
+    expect(legacy.json()).toMatchObject({
+      live: { nextOrderBlockedReason: "BUYBACK_LEGACY_PRICE_PROTECTION" },
     });
     const positions = await get(app, "/v2/launch2/me/positions");
     expect(positions.statusCode).toBe(200);

@@ -3,6 +3,10 @@ import type { HooksLaunchDeploymentStatus } from "../launch/hooks-launch-deploym
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
+  hooksLaunchRejectionReasons,
+  type HooksLaunchRejectionReason,
+} from "../launch/hooks-launch-project-config.js";
+import {
   HooksLaunchReviewError,
   type HooksLaunchReviewCommandResult,
   type HooksLaunchReviewErrorCode,
@@ -36,6 +40,8 @@ import {
 export const adminLaunchStages = Object.freeze([
   "draft",
   "awaiting_approval",
+  /** Decision 0122: the latest config version was rejected by a reviewer. */
+  "rejected",
   "approved",
   "accepted",
   "deploying",
@@ -54,7 +60,22 @@ export interface AdminLaunchProjectSummary {
   readonly name: string;
   readonly ticker: string;
   readonly ownerUserId: string;
+  /** Decision 0120 product kind (S142-admin open item 1, Decision 0122). */
+  readonly kind: "ido" | "launch2";
   readonly launchReviewStatus: string;
+  /** Decision 0122: the catalog material version (reject CAS). */
+  readonly materialVersion: number;
+  /**
+   * Decision 0122: the latest catalog rejection while the project is
+   * `rejected`; null otherwise.
+   */
+  readonly rejection: {
+    readonly reasonCode: string;
+    readonly note: string | null;
+    readonly reviewerUserId: string;
+    readonly materialVersion: number;
+    readonly rejectedAt: string;
+  } | null;
   readonly stage: AdminLaunchStage;
   readonly latestConfigVersion: number | null;
   readonly latestConfigHash: string | null;
@@ -62,6 +83,11 @@ export interface AdminLaunchProjectSummary {
   readonly latestApproval: {
     readonly approverUserId: string;
     readonly approvedAt: string;
+  } | null;
+  /** Decision 0122: the latest config version's rejection, if any. */
+  readonly latestRejection: {
+    readonly reviewerUserId: string;
+    readonly rejectedAt: string;
   } | null;
   readonly latestAcceptanceOutcome: "passed" | "failed" | "incomplete" | null;
   readonly activeDeploymentJobId: string | null;
@@ -84,6 +110,24 @@ export interface AdminLaunchConfigVersion {
     readonly reason: string;
     readonly approvedAt: string;
   } | null;
+  /** Decision 0122: a reviewer rejection of this version. */
+  readonly rejection: {
+    readonly reviewerUserId: string;
+    readonly configHash: string;
+    readonly reasonCode: string;
+    readonly note: string | null;
+    readonly rejectedAt: string;
+  } | null;
+}
+
+/** Decision 0122: one catalog material rejection (append-only). */
+export interface AdminLaunchProjectRejection {
+  readonly rejectionId: string;
+  readonly materialVersion: number;
+  readonly reasonCode: string;
+  readonly note: string | null;
+  readonly reviewerUserId: string;
+  readonly rejectedAt: string;
 }
 
 export interface AdminLaunchTestnetAcceptance {
@@ -162,6 +206,12 @@ export interface AdminLaunchSnapshotPublication {
   readonly publicationId: string;
   readonly instanceId: string;
   readonly jobId: string;
+  /**
+   * Decision 0122: `open_without_holders` = the v3 zero-holder
+   * `openPublicWithoutSnapshot()` (member count 0, zero root / dataHash,
+   * no signers).
+   */
+  readonly action: "publish_snapshot" | "open_without_holders";
   readonly attempt: number;
   readonly status:
     "pending" | "broadcast" | "confirmed" | "failed" | "mismatch";
@@ -259,6 +309,8 @@ export interface AdminLaunchProjectDetail {
   readonly buybackAttempts: readonly AdminLaunchBuybackAttempt[];
   readonly snapshotReleases: readonly AdminLaunchSnapshotRelease[];
   readonly snapshotClosure: AdminLaunchSnapshotClosure | null;
+  /** Decision 0122: catalog rejections, newest first (≤ 200). */
+  readonly projectRejections: readonly AdminLaunchProjectRejection[];
 }
 
 /**
@@ -301,6 +353,8 @@ export interface AdminLaunchReviewRepository {
   launchReadScopes(operatorUserId: string): Promise<readonly string[]>;
   listProjects(input: {
     readonly stage: AdminLaunchStage | null;
+    /** Decision 0122: `?kind=` (null = every kind). */
+    readonly kind: "ido" | "launch2" | null;
     readonly scope: AdminLaunchScope;
     readonly limit: number;
     readonly after: {
@@ -358,6 +412,21 @@ export interface AdminLaunchReviewConsoleService {
     projectId: string,
     body: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown>>;
+  /** Decision 0122 (`launch.approve`: reviewer only). */
+  rejectConfigVersion(
+    context: AdminRequestContext,
+    idempotencyKey: unknown,
+    projectId: string,
+    version: string,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>>;
+  /** Decision 0122 (`launch.approve`: reviewer only). */
+  rejectProject(
+    context: AdminRequestContext,
+    idempotencyKey: unknown,
+    projectId: string,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>>;
   /** Decision 0120 (`console.write`: platform administrator). */
   retrySnapshotPublication(
     context: AdminRequestContext,
@@ -389,9 +458,12 @@ export function adminLaunchReviewErrorProjection(
       return new AdminApiError("NOT_FOUND", { reasonCode: code });
     case "OPS_INVALID_COMMAND":
     case "OPS_INVALID_LAUNCH_CONFIG":
+    case "OPS_BUYBACK_RECIPIENT_FIXED":
       return new AdminApiError("VALIDATION_FAILED", { reasonCode: code });
     case "OPS_LAUNCH_NOT_APPROVED":
     case "OPS_LAUNCH_CONFIG_NOT_APPROVED":
+    case "OPS_LAUNCH_NOT_IN_REVIEW":
+    case "OPS_LAUNCH_CONFIG_DECIDED":
     case "OPS_VERSION_CONFLICT":
     case "OPS_IDEMPOTENCY_CONFLICT":
       return new AdminApiError("ADMIN_CONFLICT", { reasonCode: code });
@@ -535,12 +607,16 @@ export function createAdminLaunchReviewConsoleService(options: {
       name: item.name,
       ticker: item.ticker,
       ownerUserId: item.ownerUserId,
+      kind: item.kind,
       launchReviewStatus: item.launchReviewStatus,
+      materialVersion: item.materialVersion,
+      rejection: item.rejection,
       stage: item.stage,
       latestConfigVersion: item.latestConfigVersion,
       latestConfigHash: item.latestConfigHash,
       latestEditedBy: item.latestEditedBy,
       latestApproval: item.latestApproval,
+      latestRejection: item.latestRejection,
       latestAcceptanceOutcome: item.latestAcceptanceOutcome,
       activeDeploymentJobId: item.activeDeploymentJobId,
       createdAt: item.createdAt,
@@ -609,13 +685,55 @@ export function createAdminLaunchReviewConsoleService(options: {
   }
 
   /**
+   * Decision 0122: `{reasonCode, note}` of a reject body. `other` needs a
+   * note; a note is 1–500 characters after trim (blank = none).
+   */
+  function rejectionOf(body: Readonly<Record<string, unknown>>): {
+    readonly reasonCode: HooksLaunchRejectionReason;
+    readonly note: string | null;
+  } {
+    const reasonCode = body["reasonCode"];
+    if (
+      typeof reasonCode !== "string" ||
+      !(hooksLaunchRejectionReasons as readonly string[]).includes(reasonCode)
+    ) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    const rawNote = body["note"];
+    if (
+      rawNote !== undefined &&
+      rawNote !== null &&
+      typeof rawNote !== "string"
+    ) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    const trimmed = typeof rawNote === "string" ? rawNote.trim() : "";
+    if (Array.from(trimmed).length > 500) {
+      throw new AdminApiError("VALIDATION_FAILED", {
+        reasonCode: "ADMIN_REJECTION_NOTE_INVALID",
+      });
+    }
+    const note = trimmed === "" ? null : trimmed;
+    if (reasonCode === "other" && note === null) {
+      throw new AdminApiError("VALIDATION_FAILED", {
+        reasonCode: "ADMIN_REJECTION_NOTE_REQUIRED",
+      });
+    }
+    return { reasonCode: reasonCode as HooksLaunchRejectionReason, note };
+  }
+
+  /**
    * Runs one Decision 0108 command as the account's bound LOOP user with
    * the intent → execute → outcome audit rows.
    */
   async function run(
     context: AdminRequestContext,
     input: {
-      readonly action: "launch.config.approve" | "testnet.acceptance.record";
+      readonly action:
+        | "launch.config.approve"
+        | "launch.config.reject"
+        | "launch.project.reject"
+        | "testnet.acceptance.record";
       readonly operationId: string;
       readonly projectId: string;
       readonly reason: string;
@@ -725,13 +843,24 @@ export function createAdminLaunchReviewConsoleService(options: {
           }
           limit = parsed;
         }
-        const filter = stage ?? "";
+        const kindValue = query["kind"];
+        let kind: "ido" | "launch2" | null = null;
+        if (kindValue !== undefined && kindValue !== "all") {
+          if (kindValue !== "ido" && kindValue !== "launch2") {
+            throw new AdminApiError("INVALID_REQUEST");
+          }
+          kind = kindValue;
+        }
+        // The cursor binds the stage and (Decision 0122) the kind filter;
+        // without a kind the binding is the pre-0122 one.
+        const filter = kind === null ? (stage ?? "") : `${stage ?? ""}|${kind}`;
         const after =
           query["cursor"] === undefined
             ? null
             : decodeCursor(filter, query["cursor"]);
         const rows = await repository().listProjects({
           stage,
+          kind,
           scope,
           limit: limit + 1,
           after,
@@ -771,6 +900,7 @@ export function createAdminLaunchReviewConsoleService(options: {
           buybackAttempts: detail.buybackAttempts,
           snapshotReleases: detail.snapshotReleases,
           snapshotClosure: detail.snapshotClosure,
+          projectRejections: detail.projectRejections,
         });
       } catch (error) {
         return translate(error);
@@ -855,6 +985,106 @@ export function createAdminLaunchReviewConsoleService(options: {
             acceptorUserId: stringOf(row["actor_id"]),
             reason: stringOf(row["reason"]),
             createdAt: isoOf(row["created_at"]),
+          }),
+          audit: auditReference(audit),
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async rejectConfigVersion(
+      context,
+      idempotencyKey,
+      projectId,
+      version,
+      body,
+    ) {
+      assertAdminPermission(context.principal, "launch.approve");
+      const operationId = requireAdminIdempotencyKey(idempotencyKey);
+      try {
+        const id = projectIdParam(projectId);
+        if (!versionPattern.test(version) || Number(version) > maximumVersion) {
+          throw new AdminApiError("NOT_FOUND", { reasonCode: "OPS_NOT_FOUND" });
+        }
+        const configHash = body["configHash"];
+        if (
+          typeof configHash !== "string" ||
+          !/^0x[0-9a-fA-F]{64}$/u.test(configHash)
+        ) {
+          throw new AdminApiError("INVALID_REQUEST");
+        }
+        const rejection = rejectionOf(body);
+        const { result, audit } = await run(context, {
+          action: "launch.config.reject",
+          operationId,
+          projectId: id,
+          reason: rejection.note ?? rejection.reasonCode,
+          payload: {
+            configVersion: Number(version),
+            configHash,
+            reasonCode: rejection.reasonCode,
+            note: rejection.note,
+          },
+        });
+        const row = (result.result ?? {}) as Record<string, unknown>;
+        return Object.freeze({
+          operationId: result.operationId,
+          replayed: result.replayed,
+          rejection: Object.freeze({
+            projectId: stringOf(row["project_id"]),
+            configVersion: Number(row["config_version"]),
+            configHash: stringOf(row["config_hash"]),
+            reviewerUserId: stringOf(row["reviewer_id"]),
+            reasonCode: stringOf(row["reason_code"]),
+            note: typeof row["note"] === "string" ? row["note"] : null,
+            rejectedAt: isoOf(row["rejected_at"]),
+          }),
+          audit: auditReference(audit),
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async rejectProject(context, idempotencyKey, projectId, body) {
+      assertAdminPermission(context.principal, "launch.approve");
+      const operationId = requireAdminIdempotencyKey(idempotencyKey);
+      try {
+        const id = projectIdParam(projectId);
+        const materialVersion = body["materialVersion"];
+        if (
+          typeof materialVersion !== "number" ||
+          !Number.isSafeInteger(materialVersion) ||
+          materialVersion < 1 ||
+          materialVersion > maximumVersion
+        ) {
+          throw new AdminApiError("INVALID_REQUEST");
+        }
+        const rejection = rejectionOf(body);
+        const { result, audit } = await run(context, {
+          action: "launch.project.reject",
+          operationId,
+          projectId: id,
+          reason: rejection.note ?? rejection.reasonCode,
+          payload: {
+            materialVersion,
+            reasonCode: rejection.reasonCode,
+            note: rejection.note,
+          },
+        });
+        const row = (result.result ?? {}) as Record<string, unknown>;
+        return Object.freeze({
+          operationId: result.operationId,
+          replayed: result.replayed,
+          rejection: Object.freeze({
+            rejectionId: stringOf(row["rejection_id"]),
+            projectId: stringOf(row["project_id"]),
+            materialVersion: Number(row["material_version"]),
+            reviewerUserId: stringOf(row["reviewer_user_id"]),
+            reasonCode: stringOf(row["reason_code"]),
+            note: typeof row["note"] === "string" ? row["note"] : null,
+            rejectedAt: isoOf(row["created_at"]),
           }),
           audit: auditReference(audit),
         });

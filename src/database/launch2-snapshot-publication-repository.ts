@@ -25,7 +25,8 @@ export function submitterNonceLockKey(address: string): string {
 type Row = Record<string, unknown>;
 
 const publicationColumns = `
-  publication_id::text, instance_id::text, attempt, status, snapshots_address,
+  publication_id::text, instance_id::text, action, attempt, status,
+  snapshots_address,
   cutoff_block::text, cutoff_block_hash, sale_end_at, member_count, root,
   data_hash, signer_addresses, signatures, submitter_address, tx_hash,
   tx_nonce::text, raw_tx, block_number::text, block_hash, confirmations,
@@ -51,6 +52,10 @@ function mapPublication(row: Row): Launch2PublicationRecord {
   return Object.freeze({
     publicationId: row["publication_id"] as string,
     instanceId: row["instance_id"] as string,
+    action:
+      row["action"] === "open_without_holders"
+        ? "open_without_holders"
+        : "publish_snapshot",
     attempt: Number(row["attempt"]),
     status: row["status"] as Launch2PublicationStatus,
     snapshots: row["snapshots_address"] as string,
@@ -108,7 +113,8 @@ export function createPostgresLaunch2PublicationRepository(
           select i.instance_id::text, i.launch_id, i.nft_address,
             i.snapshots_address, i.deploy_block_number::text,
             i.nft_sale_start, i.hold_reason, i.graduated_at is not null as graduated,
-            i.snapshot_root, i.snapshot_verification,
+            i.snapshot_root, i.snapshot_verification, i.factory_generation,
+            i.opened_without_holders_at is not null as opened_without_holders,
             coalesce((select max(p.attempt) from public.launch2_snapshot_publications p
               where p.instance_id = i.instance_id), 0) as last_attempt,
             (select count(*)::integer from public.launch2_snapshot_publications p
@@ -141,7 +147,9 @@ export function createPostgresLaunch2PublicationRepository(
             and (
               exists (select 1 from public.launch2_snapshot_publications p
                 where p.instance_id = i.instance_id and p.status in ('pending', 'broadcast'))
-              or (i.graduated_at is null and i.snapshot_verification is distinct from 'verified'))
+              or (i.graduated_at is null and i.snapshot_verification is distinct from 'verified'
+                -- Decision 0122: an indexed zero-holder opening needs nothing more.
+                and i.opened_without_holders_at is null))
           order by i.nft_sale_start, i.instance_id
         `,
         [chainId],
@@ -156,6 +164,8 @@ export function createPostgresLaunch2PublicationRepository(
           nftSaleStart: iso(row["nft_sale_start"]),
           holdReason: textOrNull(row["hold_reason"]),
           graduated: row["graduated"] === true,
+          generation: row["factory_generation"] === "v2" ? "v2" : "v3",
+          openedWithoutHolders: row["opened_without_holders"] === true,
           snapshotRoot: textOrNull(row["snapshot_root"]),
           snapshotVerification: textOrNull(row["snapshot_verification"]) as
             "verified" | "mismatch" | null,
@@ -202,9 +212,10 @@ export function createPostgresLaunch2PublicationRepository(
           insert into public.launch2_snapshot_publications (
             publication_id, instance_id, chain_id, attempt, snapshots_address,
             cutoff_block, cutoff_block_hash, sale_end_at, members, member_count,
-            root, data_hash, signer_addresses, signatures, submitter_address
+            root, data_hash, signer_addresses, signatures, submitter_address,
+            action
           ) values ($1, $2, $3, $4, $5, $6::bigint, $7, $8::timestamptz,
-            $9::jsonb, $10, $11, $12, $13::jsonb, $14::jsonb, $15)
+            $9::jsonb, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16)
           on conflict do nothing
           returning ${publicationColumns}
         `,
@@ -224,6 +235,7 @@ export function createPostgresLaunch2PublicationRepository(
           JSON.stringify(input.signerAddresses),
           JSON.stringify(input.signatures),
           input.submitterAddress,
+          input.action ?? "publish_snapshot",
         ],
       );
       return result.rows[0] === undefined

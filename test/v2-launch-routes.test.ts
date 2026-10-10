@@ -45,6 +45,7 @@ const draft: LaunchProjectRecord = Object.freeze({
   reviewStatus: "draft",
   kybStatus: "unavailable",
   reviewReasonCode: null,
+  rejection: null,
   submittedAt: null,
   reviewedAt: null,
   launchId: null,

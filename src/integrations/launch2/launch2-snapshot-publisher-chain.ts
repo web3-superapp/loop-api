@@ -35,8 +35,9 @@ import {
 
 /**
  * Decision 0118: the snapshot publisher's BSC Testnet client and signer
- * keys. The submitter signs exactly one call shape — `publishSnapshot` on
- * an instance's `SnapshotRegistry` — locally (legacy, chain 97), so the
+ * keys. The submitter signs exactly two call shapes on an instance's
+ * `SnapshotRegistry` — `publishSnapshot`, and (Decision 0122, v3 Factory)
+ * the argument-free `openPublicWithoutSnapshot()` — locally (legacy, chain 97), so the
  * transaction hash is persisted before the bytes are sent. Snapshot signer
  * keys only produce EIP-712 `LOOP NFT Snapshot` v1 signatures. Keys live in
  * these closures only; no result, error, or log carries a key or RPC URL.
@@ -125,6 +126,11 @@ function publishData(call: Launch2PublishCall): Hex {
   });
 }
 
+const openWithoutHoldersData: Hex = encodeFunctionData({
+  abi: snapshotRegistryAbi,
+  functionName: "openPublicWithoutSnapshot",
+});
+
 export function createLaunch2PublisherChain(input: {
   readonly privateKey: `0x${string}`;
   readonly rpcUrls: readonly string[];
@@ -205,6 +211,10 @@ export function createLaunch2PublisherChain(input: {
     },
     registryRoot: async (snapshots) =>
       lower(await read<string>(snapshots, snapshotRegistryAbi, "root")),
+    registryPublishedAt: async (snapshots) =>
+      BigInt(
+        await read<bigint>(snapshots, snapshotRegistryAbi, "rootPublishedAt"),
+      ),
     isSnapshotSigner: (snapshots, address) =>
       read<boolean>(snapshots, snapshotSignerAbi, "isSnapshotSigner", [
         address,
@@ -257,6 +267,49 @@ export function createLaunch2PublisherChain(input: {
         if (reason !== null) throw new Launch2PublisherRevertError(reason);
         throw error;
       }
+    },
+    async estimateOpenWithoutHolders(snapshots) {
+      try {
+        await client.simulateContract({
+          account: account.address,
+          address: snapshots as Address,
+          abi: snapshotRegistryAbi,
+          functionName: "openPublicWithoutSnapshot",
+          args: [],
+        });
+      } catch (error) {
+        const reason = revertReasonOf(error);
+        if (reason !== null) throw new Launch2PublisherRevertError(reason);
+        throw error;
+      }
+      try {
+        return await client.estimateGas({
+          account: account.address,
+          to: snapshots as Address,
+          data: openWithoutHoldersData,
+          value: 0n,
+        });
+      } catch (error) {
+        const reason = revertReasonOf(error);
+        if (reason !== null) throw new Launch2PublisherRevertError(reason);
+        throw error;
+      }
+    },
+    async signOpenWithoutHolders(snapshots, tx) {
+      if (tx.nonce > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error("Submitter nonce out of range");
+      }
+      const rawTx = await account.signTransaction({
+        chainId,
+        type: "legacy",
+        to: snapshots as Address,
+        data: openWithoutHoldersData,
+        value: 0n,
+        nonce: Number(tx.nonce),
+        gas: tx.gas,
+        gasPrice: tx.gasPrice,
+      });
+      return { txHash: lower(keccak256(rawTx)), rawTx: lower(rawTx) };
     },
     gasPrice: () => client.getGasPrice(),
     async pendingNonce() {

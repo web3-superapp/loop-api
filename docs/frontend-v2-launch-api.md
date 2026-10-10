@@ -154,17 +154,19 @@ reasonCode: "KYB_PROVIDER_NOT_SELECTED"}`；页面显示"待接入"，不提供�
 
 ### 3.3 `POST /v2/launch/projects/{projectId}/submit`
 
-`draft | returned → submitted`；其他状态 `409 DATA_STALE`。提交不代表通过；审核推进仅由
-Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `reviewStatus`：
+`draft | returned | rejected → submitted`（S145 / 决策 0122 起 `rejected` 也可改资料重提）；其他状态
+`409 DATA_STALE`。提交不代表通过；审核推进由 Dev 脚本 `pnpm launch:review`（写审计）完成，决策 0122 起
+审核人也可在后台**拒绝**（`POST /admin/v1/launch/projects/{projectId}/reject`），前端轮询 `GET` 看
+`reviewStatus`：
 
-| reviewStatus | 页面状态                                        |
-| ------------ | ----------------------------------------------- |
-| `draft`      | 可编辑、可提交                                  |
-| `submitted`  | 只读，"审核中"                                  |
-| `in_review`  | 只读，"审核中"                                  |
-| `returned`   | 可编辑、可重提；退回原因显示 `reviewReasonText` |
-| `approved`   | 只读；`launchId` 非空 → 进入目录                |
-| `rejected`   | 只读；不可重提                                  |
+| reviewStatus | 页面状态                                                                              |
+| ------------ | ------------------------------------------------------------------------------------- |
+| `draft`      | 可编辑、可提交                                                                        |
+| `submitted`  | 只读，"审核中"                                                                        |
+| `in_review`  | 只读，"审核中"                                                                        |
+| `returned`   | 可编辑、可重提；退回原因显示 `reviewReasonText`                                       |
+| `approved`   | 只读；`launchId` 非空 → 进入目录                                                      |
+| `rejected`   | 可编辑、可重提（决策 0122）；显示 `rejection`（理由 + 审核意见）与 `reviewReasonText` |
 
 ### 3.4 `GET /v2/launch/projects?status=&limit=&cursor=`
 
@@ -194,23 +196,47 @@ Dev 脚本 `pnpm launch:review`（写审计）完成，前端轮询 `GET` 看 `r
 后端当前的取值（catalog 内的 code 只在它所属的状态上生效，其余一律落到该状态的兜底句，
 因此屏幕上永远不会出现内部标识符）：
 
-| `reviewStatus` | `reviewReasonCode`           | `reviewReasonText`                                               |
-| -------------- | ---------------------------- | ---------------------------------------------------------------- |
-| 任意           | `null`                       | `null`                                                           |
-| `returned`     | `needs_more_material`        | 材料还不完整，补齐后可以重新提交审核。                           |
-| `returned`     | `official_links_unreachable` | 官方链接无法访问或核对，换成可访问的链接后可以重新提交。         |
-| `returned`     | `material_mismatch`          | 名称、代币符号与简介之间对不上，改一致后可以重新提交。           |
-| `returned`     | `ticker_conflict`            | 这个代币符号已被占用，换一个后可以重新提交。                     |
-| `rejected`     | `duplicate_submission`       | 同一个项目已经有一份申请在审核，这份重复申请不再处理。           |
-| `rejected`     | `policy_violation`           | 材料不符合上线规则，这份申请不会继续；调整后可以新建项目再提交。 |
-| `draft`        | 其它任意 code                | 项目还是草稿，材料填完就可以提交审核。                           |
-| `submitted`    | 其它任意 code                | 材料已提交，审核期间不能修改，有结果后状态会更新。               |
-| `in_review`    | 其它任意 code                | 材料正在审核，这期间不能修改，有结果后状态会更新。               |
-| `returned`     | 其它任意 code                | 材料被退回，修改后可以重新提交审核。                             |
-| `approved`     | 其它任意 code                | 审核已通过，材料不再可改，可以继续后面的发行安排。               |
-| `rejected`     | 其它任意 code                | 审核未通过，这份申请不能再提交，需要的话可以新建项目。           |
+| `reviewStatus` | `reviewReasonCode`           | `reviewReasonText`                                                      |
+| -------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| 任意           | `null`                       | `null`                                                                  |
+| `returned`     | `needs_more_material`        | 材料还不完整，补齐后可以重新提交审核。                                  |
+| `returned`     | `official_links_unreachable` | 官方链接无法访问或核对，换成可访问的链接后可以重新提交。                |
+| `returned`     | `material_mismatch`          | 名称、代币符号与简介之间对不上，改一致后可以重新提交。                  |
+| `returned`     | `ticker_conflict`            | 这个代币符号已被占用，换一个后可以重新提交。                            |
+| `rejected`     | `duplicate_submission`       | 同一个项目已经有一份申请在审核，这份重复申请不再处理。                  |
+| `rejected`     | `policy_violation`           | 材料不符合上线规则，按规则调整后可以重新提交审核。                      |
+| `rejected`     | `incomplete_materials`       | 材料不完整，补齐后可以重新提交审核。（0122）                            |
+| `rejected`     | `name_or_ticker_conflict`    | 项目名称或代币符号与已有项目冲突，修改后可以重新提交审核。（0122）      |
+| `rejected`     | `buyback_recipient_invalid`  | 回购收币地址不符合平台要求，修改后可以重新提交审核。（0122）            |
+| `rejected`     | `community_binding_mismatch` | 绑定的社区与项目不一致，修改后可以重新提交审核。（0122）                |
+| `rejected`     | `other`                      | 审核未通过，请按审核意见修改后重新提交。（0122，配合 `rejection.note`） |
+| `draft`        | 其它任意 code                | 项目还是草稿，材料填完就可以提交审核。                                  |
+| `submitted`    | 其它任意 code                | 材料已提交，审核期间不能修改，有结果后状态会更新。                      |
+| `in_review`    | 其它任意 code                | 材料正在审核，这期间不能修改，有结果后状态会更新。                      |
+| `returned`     | 其它任意 code                | 材料被退回，修改后可以重新提交审核。                                    |
+| `approved`     | 其它任意 code                | 审核已通过，材料不再可改，可以继续后面的发行安排。                      |
+| `rejected`     | 其它任意 code                | 审核未通过，按审核意见修改后可以重新提交。                              |
 
 "其它任意 code" 包含运维脚本的默认值 `operator_manual_review`：它不带信息，按状态出句子。
+
+### 3.7 审核拒绝 `rejection`（S145 / 决策 0122，需求方答复 7）
+
+`project` 多一个字段 `rejection`（schema 可选、本人投影总是返回；他人投影为 `null`）：
+
+```json
+"rejection": {
+  "reasonCode": "other",
+  "note": "Logo 与官网不一致，请替换后重提",
+  "at": "2026-10-10T08:00:00.000Z"
+}
+```
+
+- 仅当 `reviewStatus = rejected` 且拒绝来自后台审核人时非空；否则 `null`（含旧的脚本拒绝）。
+- `reasonCode`：`incomplete_materials`（材料不完整）| `name_or_ticker_conflict`（名称或代号冲突）|
+  `buyback_recipient_invalid`（收币地址不合规）| `community_binding_mismatch`（社区绑定不一致）|
+  `other`（其它，`note` 必有）。`note` 为审核人写给项目方的原话（≤ 500 字，`other` 以外可为 `null`），
+  原样展示。
+- 处理：项目方修改资料（`PUT`，`materialVersion` +1）后再 `submit` → `submitted`，`rejection` 回到 `null`。
 
 ## 4. 目录与详情
 

@@ -417,6 +417,7 @@ describe.skipIf(skipReason !== null)(
       });
       const walletId = walletIdOf(ownerUserId);
       const prepared = await createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -445,6 +446,7 @@ describe.skipIf(skipReason !== null)(
         },
       });
       const job = await createHooksLaunchSubmissionService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -586,7 +588,9 @@ describe.skipIf(skipReason !== null)(
         repository,
         chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
         chainId: "eip155:97",
-        factoryAddress: deployed.factory,
+        factories: [
+          { address: deployed.factory, generation: "v3", current: true },
+        ],
         reorgDepthBlocks: 15,
         pollIntervalMs: 1_000,
         now: () => new Date(Number(chainNow) * 1000),
@@ -863,6 +867,136 @@ describe.skipIf(skipReason !== null)(
       await expect(
         pool.query("delete from public.launch2_snapshot_publications"),
       ).rejects.toThrow(/retain audit history/u);
+    }, 900_000);
+
+    it("opens a zero-holder sale publicly without a snapshot: row first, one transaction, lane indexes public (Decision 0122)", async () => {
+      const launch = await activatedLaunch("ZERO");
+      const repository = createPostgresLaunch2Repository(pool);
+      const lane = laneFor(repository);
+      const service = createLaunch2Service({
+        repository,
+        chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
+        readClient: anvilCallClient(chain.rpcUrl),
+        wallets,
+        writes: {
+          configVersion: "bscWriteCanaryV1",
+          canaryAssetIds: [`eip155:97:${deployed.usd1}`],
+          canaryMaxUsd: "100000",
+          canaryDailyMaxUsd: null,
+          canaryCounterpartyAddresses: [],
+          swapFeeBps: null,
+        },
+        cursorCodec: createV2CursorCodec({
+          secret: new TextEncoder().encode("0123456789abcdef0123456789abcdef"),
+        }),
+        chainId: "eip155:97",
+        unavailableReason: null,
+        quoteTtlSeconds: 60,
+        defaultSlippageBps: 100,
+        now: () => new Date(Number(chainNow) * 1000),
+      });
+      await refreshNow();
+      await lane.runOnce();
+      const instanceId = await instanceOf(launch.projectId);
+      const record = (await repository.getInstance(instanceId))!;
+      expect(record.generation).toBe("v3");
+      const snapshots = record.addresses.snapshots;
+      const publisher = publisherWith(repository, [
+        anvilPrivateKey(9),
+        anvilPrivateKey(10),
+      ]);
+
+      // Nobody mints; the sale ends with totalMinted() = 0.
+      const saleEnd = await registrySaleEnd(snapshots);
+      await warpTo(saleEnd);
+      await chain.mine(3);
+      await lane.runOnce();
+      const nonceBefore = await submitterNonce();
+      const ran = await publisher.runOnce();
+      expect(ran.waiting[instanceId]).toBe(
+        "LAUNCH2_SNAPSHOT_OPENING_WITHOUT_HOLDERS",
+      );
+      let rows = await pool.query<{
+        action: string;
+        status: string;
+        member_count: number;
+        root: string;
+        signatures: string[];
+        tx_hash: string | null;
+      }>(
+        `select action, status, member_count, root, signatures, tx_hash
+         from public.launch2_snapshot_publications where instance_id = $1`,
+        [instanceId],
+      );
+      expect(rows.rows).toEqual([
+        expect.objectContaining({
+          action: "open_without_holders",
+          status: "broadcast",
+          member_count: 0,
+          root: `0x${"00".repeat(32)}`,
+          signatures: [],
+        }),
+      ]);
+      expect(await submitterNonce()).toBe(nonceBefore + 1);
+      const transaction = await publicClient().getTransaction({
+        hash: rows.rows[0]!.tx_hash as Hex,
+      });
+      expect(transaction.input).toBe(
+        encode(snapshotRegistryAbi, "openPublicWithoutSnapshot", []),
+      );
+      // Repeated ticks never send twice; confirmations finish it.
+      await publisher.runOnce();
+      await chain.mine(3);
+      await publisher.runOnce();
+      rows = await pool.query(
+        `select action, status, member_count, root, signatures, tx_hash
+         from public.launch2_snapshot_publications where instance_id = $1`,
+        [instanceId],
+      );
+      expect(rows.rows.map((row) => row.status)).toEqual(["confirmed"]);
+      expect(await submitterNonce()).toBe(nonceBefore + 1);
+      expect(
+        await publicClient().readContract({
+          address: snapshots as Address,
+          abi: snapshotRegistryAbi,
+          functionName: "openedWithoutHolders",
+        }),
+      ).toBe(true);
+
+      // The lane indexes PublicRoundOpenedWithoutHolders → public, no
+      // snapshot, no closure; the publisher is done with it.
+      await refreshNow();
+      await lane.runOnce();
+      const opened = (await repository.getInstance(instanceId))!;
+      expect(opened.stage).toBe("public");
+      expect(opened.noHoldersClosure).toBeNull();
+      expect(opened.openedWithoutHolders?.transactionHash).toBe(
+        rows.rows[0]!.tx_hash,
+      );
+      expect((await publisher.runOnce()).waiting[instanceId]).toBeUndefined();
+      const buyer = await user(anvilPrivateKey(13));
+      const detail = (
+        await service.getInstance({ principal: principal(buyer), instanceId })
+      )["instance"] as Record<string, Record<string, unknown>>;
+      expect(detail["stage"]).toBe("public");
+      expect(detail["snapshot"]).toMatchObject({
+        status: "opened_without_holders",
+        root: null,
+        publication: null,
+        closure: null,
+        openedWithoutHolders: { transactionHash: rows.rows[0]!.tx_hash },
+      });
+      // Anyone can buy at once, without a proof.
+      const quote = (
+        await service.quote({
+          principal: principal(buyer),
+          instanceId,
+          side: "buy",
+          amount: "50",
+          walletId: walletIdOf(buyer),
+        })
+      )["quote"] as Record<string, unknown>;
+      expect(quote).toMatchObject({ stage: "public", side: "buy" });
     }, 900_000);
 
     it("an unregistered signer key: the contract refuses, the attempt is failed and not retried", async () => {

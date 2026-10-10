@@ -28,6 +28,10 @@ import {
   launchAcceptanceResourceSchema,
   launchApproveRequestSchema,
   launchApproveResourceSchema,
+  launchConfigRejectRequestSchema,
+  launchConfigRejectResourceSchema,
+  launchProjectRejectRequestSchema,
+  launchProjectRejectResourceSchema,
   launchProjectDetailResourceSchema,
   launchProjectListResourceSchema,
   launchProjectParamsSchema,
@@ -337,7 +341,7 @@ export function registerAdminRoleRoutes(
         operationId: "listAdminLaunchProjects",
         summary: "List Hooks launch projects by review stage",
         description:
-          "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, approved, accepted, deploying. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
+          "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
         tags: ["admin-launch"],
         security: adminSecurity,
         querystring: launchProjectsQuerySchema,
@@ -424,6 +428,88 @@ export function registerAdminRoleRoutes(
         idempotencyKey(request),
         projectId,
         version,
+        body(request),
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    `${adminApiPrefix}/launch/projects/:projectId/versions/:version/reject`,
+    {
+      schema: {
+        operationId: "rejectAdminLaunchConfigVersion",
+        summary: "Reject a Hooks launch config version (reviewer)",
+        description:
+          "Decision 0122 (`launch.approve`: reviewer only — the platform administrator cannot reject, same permission model as approve). Runs the `launch.config.reject` command as the account's bound LOOP user with operationId = Idempotency-Key. Body: configHash of the latest version, reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, note (shown to the applicant; required for other, 1–500 characters). The owner sees approval.status rejected with the reason on GET /v2/launch/projects/{projectId}/hooks-config and resubmits by saving a new version. Refusals: 403 OPS_SELF_APPROVAL (the version's editor / the project owner) / OPS_FORBIDDEN, 404 OPS_NOT_FOUND, 409 OPS_VERSION_CONFLICT (stale version or hash) / OPS_LAUNCH_CONFIG_DECIDED (already approved or rejected) / OPS_LAUNCH_NOT_APPROVED / OPS_IDEMPOTENCY_CONFLICT, 422 ADMIN_REJECTION_NOTE_REQUIRED / ADMIN_REJECTION_NOTE_INVALID. Audit: `launch.config.reject.requested` before (503 ADMIN_AUDIT_UNAVAILABLE when it cannot be written, nothing runs), then `.decided` or `.failed`; the service writes ops_audit.",
+        tags: ["admin-launch"],
+        security: adminSecurity,
+        headers: idempotencyHeadersSchema,
+        params: launchVersionParamsSchema,
+        querystring: emptyQuerySchema,
+        body: launchConfigRejectRequestSchema,
+        response: {
+          200: launchConfigRejectResourceSchema,
+          ...adminErrors(
+            ...guardedErrors,
+            "NOT_FOUND",
+            "ADMIN_CONFLICT",
+            "VALIDATION_FAILED",
+          ),
+        },
+      },
+      ...guard("launch.approve"),
+    },
+    async (request, reply) => {
+      const { projectId, version } = request.params as {
+        readonly projectId: string;
+        readonly version: string;
+      };
+      const resource = await launchReview.rejectConfigVersion(
+        requestContext(request),
+        idempotencyKey(request),
+        projectId,
+        version,
+        body(request),
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    `${adminApiPrefix}/launch/projects/:projectId/reject`,
+    {
+      schema: {
+        operationId: "rejectAdminLaunchProject",
+        summary: "Reject a launch project's catalog material (reviewer)",
+        description:
+          "Decision 0122 (`launch.approve`: reviewer only, the project owner excluded). Rejects `submitted` / `in_review` catalog material (compare-and-swap on materialVersion): review_status becomes rejected, reviewReasonCode = the reason, a launch_project_rejections row and a launch_review_events operator row are written in the same transaction. The applicant sees reviewStatus rejected and rejection {reasonCode, note, at} on GET /v2/launch/projects/{projectId}, may edit (materialVersion + 1) and resubmit. Refusals: 403 OPS_SELF_APPROVAL / OPS_FORBIDDEN, 404 OPS_NOT_FOUND, 409 OPS_LAUNCH_NOT_IN_REVIEW / OPS_VERSION_CONFLICT / OPS_IDEMPOTENCY_CONFLICT, 422 ADMIN_REJECTION_NOTE_REQUIRED / ADMIN_REJECTION_NOTE_INVALID. Audit: `launch.project.reject.requested` / `.decided` / `.failed` + ops_audit.",
+        tags: ["admin-launch"],
+        security: adminSecurity,
+        headers: idempotencyHeadersSchema,
+        params: launchProjectParamsSchema,
+        querystring: emptyQuerySchema,
+        body: launchProjectRejectRequestSchema,
+        response: {
+          200: launchProjectRejectResourceSchema,
+          ...adminErrors(
+            ...guardedErrors,
+            "NOT_FOUND",
+            "ADMIN_CONFLICT",
+            "VALIDATION_FAILED",
+          ),
+        },
+      },
+      ...guard("launch.approve"),
+    },
+    async (request, reply) => {
+      const { projectId } = request.params as { readonly projectId: string };
+      const resource = await launchReview.rejectProject(
+        requestContext(request),
+        idempotencyKey(request),
+        projectId,
         body(request),
       );
       noStore(reply);

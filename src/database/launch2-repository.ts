@@ -26,6 +26,10 @@ import {
   type Launch2Repository,
   type Launch2TradeRecord,
 } from "../features/launch2/launch2-ports.js";
+import {
+  launch2FactoryGenerations,
+  type Launch2FactoryGeneration,
+} from "../features/launch2/launch2-generation.js";
 import { admitCanaryExposure } from "./canary-exposure.js";
 import {
   claimV2Command,
@@ -135,7 +139,8 @@ const nftSaleEndColumn = `
 
 const instanceColumns = `
   instance_id::text, job_id::text, project_id::text, config_version,
-  owner_user_id::text, chain_id, factory_address, launch_id, config_hash,
+  owner_user_id::text, chain_id, factory_address, factory_generation,
+  launch_id, config_hash,
   project_owner, name, ticker, logo_url, meme_address, hook_address,
   nft_address, curve_address, gate_address, escrow_address,
   snapshots_address, graduation_adapter_address, buyback_adapter_address,
@@ -149,7 +154,9 @@ const instanceColumns = `
   snapshot_published_block::text, snapshot_transaction_hash,
   snapshot_verification, snapshot_member_count, snapshot_signers,
   graduated_at, graduation_block::text, graduation_transaction_hash,
-  official_pool_id, buyback_paused, buyback_count::text, buyback_usd1::text,
+  official_pool_id, opened_without_holders_at,
+  opened_without_holders_block::text, opened_without_holders_tx,
+  buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
   coalesce(activated_at, registered_at) as sort_at,
   (select jsonb_build_object(
@@ -157,6 +164,7 @@ const instanceColumns = `
       'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
     from public.launch2_snapshot_publications p
     where p.instance_id = launch2_instances.instance_id
+      and p.action = 'publish_snapshot'
     order by p.attempt desc limit 1) as snapshot_publication,
   (select jsonb_build_object(
       'status', k.status, 'reasonCode', k.reason_code,
@@ -260,8 +268,19 @@ function saleEndOf(row: Row): string {
   return new Date(end).toISOString();
 }
 
+function generationOf(value: unknown): Launch2FactoryGeneration {
+  if (
+    typeof value !== "string" ||
+    !(launch2FactoryGenerations as readonly string[]).includes(value)
+  ) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  return value as Launch2FactoryGeneration;
+}
+
 function mapInstance(row: Row): Launch2InstanceRecord {
   const snapshotRoot = nullableText(row, "snapshot_root");
+  const openedAt = nullableIso(row, "opened_without_holders_at");
   const verification = nullableText(row, "snapshot_verification");
   const graduatedAt = nullableIso(row, "graduated_at");
   const signers = row["snapshot_signers"];
@@ -273,6 +292,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     ownerUserId: text(row, "owner_user_id"),
     chainId: text(row, "chain_id"),
     factoryAddress: text(row, "factory_address"),
+    generation: generationOf(row["factory_generation"]),
     launchId: text(row, "launch_id"),
     configHash: text(row, "config_hash"),
     projectOwner: text(row, "project_owner"),
@@ -334,6 +354,14 @@ function mapInstance(row: Row): Launch2InstanceRecord {
           }),
     snapshotPublication: publicationOf(row["snapshot_publication"]),
     noHoldersClosure: closureOf(row["snapshot_closure"]),
+    openedWithoutHolders:
+      openedAt === null
+        ? null
+        : Object.freeze({
+            openedAt,
+            blockNumber: text(row, "opened_without_holders_block"),
+            transactionHash: text(row, "opened_without_holders_tx"),
+          }),
     graduation:
       graduatedAt === null
         ? null
@@ -495,9 +523,10 @@ async function insertFact(
         randomUUID(),
         a["usd1Spent"],
         a["memeDelivered"],
-        a["minMemeOut"],
-        a["referencePrice"],
-        a["spotPrice"],
+        // Decision 0122: a v3 BuybackCompleted has no protection fields.
+        a["minMemeOut"] ?? null,
+        a["referencePrice"] ?? null,
+        a["spotPrice"] ?? null,
         at,
       ],
     });
@@ -531,6 +560,12 @@ async function reproject(
           where instance_id = $1 and not removed and event_name = 'SnapshotPublished'
           order by block_number, log_index limit 1) as snapshot,
         (select jsonb_build_object('payload', payload, 'block', block_number::text,
+            'tx', transaction_hash)
+          from public.launch2_events
+          where instance_id = $1 and not removed
+            and event_name = 'PublicRoundOpenedWithoutHolders'
+          order by block_number, log_index limit 1) as opened,
+        (select jsonb_build_object('payload', payload, 'block', block_number::text,
             'tx', transaction_hash, 'at', extract(epoch from event_at)::bigint::text)
           from public.launch2_events
           where instance_id = $1 and not removed and event_name = 'Graduated'
@@ -557,7 +592,7 @@ async function reproject(
           where instance_id = $1 and not removed and outcome = 'executed') as buybacks,
         i.meme_address, i.nft_address, i.curve_address, i.hook_address,
         i.project_owner, i.activation_block_number::text as activation_block,
-        i.snapshot_root
+        i.snapshot_root, i.factory_generation
       from public.launch2_instances i
       where i.instance_id = $1
       for update of i
@@ -576,6 +611,19 @@ async function reproject(
     block: string;
     tx: string;
   } | null;
+  // Decision 0122: the zero-holder opening (v3 registries only; the
+  // contract makes it exclusive with a published snapshot).
+  const openedFact = row["opened"] as {
+    payload: Record<string, string>;
+    block: string;
+    tx: string;
+  } | null;
+  const opened =
+    openedFact !== null &&
+    snapshot === null &&
+    row["factory_generation"] !== "v2"
+      ? openedFact
+      : null;
   const graduated = row["graduated"] as {
     payload: Record<string, string>;
     block: string;
@@ -651,6 +699,9 @@ async function reproject(
         buyback_usd1 = $26::numeric,
         buyback_meme = $27::numeric,
         last_buyback_at = $28::timestamptz,
+        opened_without_holders_at = $29::timestamptz,
+        opened_without_holders_block = $30::numeric,
+        opened_without_holders_tx = $31,
         projected_at = clock_timestamp()
       where instance_id = $1
     `,
@@ -687,6 +738,11 @@ async function reproject(
       buybacks.usd1,
       buybacks.meme,
       buybacks.last,
+      opened === null
+        ? null
+        : secondsToTimestamp(opened.payload["openedAt"] ?? "0"),
+      opened === null ? null : (opened.payload["openedBlock"] ?? opened.block),
+      opened?.tx ?? null,
     ],
   });
   await reprojectPositions(client, instanceId);
@@ -769,6 +825,7 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
   return Object.freeze({
     instanceId: instance.instanceId,
     launchId: instance.launchId,
+    generation: instance.generation,
     addresses: instance.addresses,
     deployBlockNumber: instance.deployBlockNumber,
     nftSaleStart: instance.nftSaleStart,
@@ -777,6 +834,7 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     graduated: instance.graduation !== null,
     snapshotPublishedAt: instance.snapshot?.publishedAt ?? null,
     closedNoHolders: instance.noHoldersClosure !== null,
+    openedWithoutHoldersAt: instance.openedWithoutHolders?.openedAt ?? null,
     activatedAt: instance.activatedAt,
     stage: instance.stage,
     nextChangeAt: instance.nextChangeAt,
@@ -862,7 +920,8 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
         `
           insert into public.launch2_instances (
             instance_id, job_id, project_id, config_version, owner_user_id,
-            chain_id, factory_address, launch_id, config_hash, project_owner,
+            chain_id, factory_address, factory_generation, launch_id,
+            config_hash, project_owner,
             name, ticker, logo_url, meme_address, hook_address, nft_address,
             curve_address, gate_address, escrow_address, snapshots_address,
             graduation_adapter_address, buyback_adapter_address,
@@ -871,7 +930,8 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             activation_block_number, price_e18
           )
           select gen_random_uuid(), t.job_id, t.project_id, t.config_version,
-            t.owner_user_id, $1, t.factory_address, t.launch_id, v.config_hash,
+            t.owner_user_id, $1, t.factory_address, f.generation, t.launch_id,
+            v.config_hash,
             t.project_owner, v.config ->> 'name', v.config ->> 'ticker',
             nullif(v.config ->> 'logoAssetUrl', ''),
             lower(t.deployed_addresses ->> 'meme'),
@@ -891,8 +951,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           from public.hooks_launch_deployment_tasks t
           join public.hooks_launch_project_config_versions v
             on v.project_id = t.project_id and v.config_version = t.config_version
+          join unnest($2::text[], $4::text[]) as f(address, generation)
+            on f.address = t.factory_address
           where t.status = 'activated'
-            and t.factory_address = $2
             and t.chain_id = 97
             and not exists (
               select 1 from public.launch2_instances i where i.job_id = t.job_id)
@@ -901,8 +962,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
         `,
         [
           input.chainId,
-          input.factoryAddress.toLowerCase(),
+          input.factories.map((factory) => factory.address.toLowerCase()),
           launch2PriceAt(0n).toString(10),
+          input.factories.map((factory) => factory.generation),
         ],
       );
       return rows.map((row) => row.instance_id);
@@ -1249,9 +1311,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           reasonCode: nullableText(row, "reason_code"),
           usd1Spent: text(row, "usd1_spent"),
           memeDelivered: text(row, "meme_delivered"),
-          minMemeOut: text(row, "min_meme_out"),
-          referencePriceE18: text(row, "reference_price_e18"),
-          spotPriceE18: text(row, "spot_price_e18"),
+          minMemeOut: nullableText(row, "min_meme_out"),
+          referencePriceE18: nullableText(row, "reference_price_e18"),
+          spotPriceE18: nullableText(row, "spot_price_e18"),
           executedAt: iso(row, "executed_at"),
           transactionHash: text(row, "transaction_hash"),
           blockNumber: text(row, "block_number"),

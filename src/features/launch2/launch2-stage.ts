@@ -15,9 +15,14 @@ import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
  *   on the testnet Factory, 7 days on mainnet), never a template constant;
  * - sale over, no `SnapshotPublished` → `snapshot_pending` (no clock: the
  *   2-of-3 publication decides);
+ * - Decision 0122 (v3 Factory): `PublicRoundOpenedWithoutHolders` seen →
+ *   `public` (the sale ended with no mint; the contract opened the public
+ *   round with no early round, `earlyRoundEndsAt = openedAt`);
  * - sale over, no `SnapshotPublished`, and the publisher recorded that the
  *   sale ended with no holder (Decision 0120: `ProjectNFT.totalMinted()` = 0
- *   at the confirmed cutoff) → `closed_no_holders` (terminal);
+ *   at the confirmed cutoff) → `closed_no_holders` (terminal). Since
+ *   Decision 0122 only v2-generation instances (no zero-holder opening in
+ *   the contract) can reach it; the value is deprecated;
  * - published ≤ now < published + 3,600 s → `priority` (next = round end);
  * - afterwards → `public` (ends only by selling out).
  *
@@ -37,6 +42,11 @@ export interface Launch2StageInput {
    * with zero NFT holders). Absent = false.
    */
   readonly closedNoHolders?: boolean;
+  /**
+   * Decision 0122: Unix seconds of the indexed
+   * `PublicRoundOpenedWithoutHolders` (v3); absent / null = not opened.
+   */
+  readonly openedWithoutHoldersAt?: bigint | null;
 }
 
 export interface Launch2StageProjection {
@@ -57,6 +67,14 @@ export function deriveLaunch2Stage(
   }
   if (input.graduated) {
     return { stage: "graduated", nextChangeAt: null };
+  }
+  if (
+    input.openedWithoutHoldersAt !== undefined &&
+    input.openedWithoutHoldersAt !== null &&
+    input.snapshotPublishedAt === null
+  ) {
+    // A chain fact: block.timestamp ≥ saleEnd when it was emitted.
+    return { stage: "public", nextChangeAt: null };
   }
   const now = input.nowSeconds;
   if (now < input.nftSaleStart) {

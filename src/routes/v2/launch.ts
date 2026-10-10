@@ -19,6 +19,7 @@ import {
 } from "../../features/launch/hooks-launch-deployment.js";
 import { InvalidHooksLaunchDraftError } from "../../features/launch/hooks-launch-config.js";
 import {
+  HooksLaunchBuybackRecipientFixedError,
   HooksLaunchProjectConfigUnavailableError,
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
@@ -52,6 +53,7 @@ import {
   hooksLaunchProjectConfigResourceSchema,
   hooksLaunchSigningRequestQuerySchema,
   hooksLaunchSigningRequestResourceSchema,
+  hooksSigningRequestErrors,
   eligibilityQuerySchema,
   eligibilityResourceSchema,
   historyResourceSchema,
@@ -133,6 +135,17 @@ const hooksLaunchDisabledReason = "HOOKS_LAUNCH_DISABLED";
 const hooksLaunchFactoryReason = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE";
 /** Decision 0119: the saved config was hashed for another sale period. */
 const hooksFactoryTemplateMismatchReason = "HOOKS_FACTORY_TEMPLATE_MISMATCH";
+/** Decision 0122: the buyback recipient is fixed by the platform. */
+const hooksBuybackRecipientFixedReason = "HOOKS_BUYBACK_RECIPIENT_FIXED";
+/** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
+const hooksBuybackRecipientUnavailableReason =
+  "HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE";
+
+function hooksRecipientFixed(): V2ApiError {
+  return V2ApiError.fromCode("VALIDATION_FAILED", {
+    reasonCode: hooksBuybackRecipientFixedReason,
+  });
+}
 
 function hooksUnavailable(reasonCode: string): V2ApiError {
   return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
@@ -158,11 +171,16 @@ function projectConfigError(error: unknown): never {
   if (error instanceof InvalidHooksLaunchDraftError) {
     throw V2ApiError.invalidRequest();
   }
+  if (error instanceof HooksLaunchBuybackRecipientFixedError) {
+    throw hooksRecipientFixed();
+  }
   if (error instanceof HooksLaunchProjectConfigUnavailableError) {
     throw hooksUnavailable(
       error.source === "factory"
         ? hooksLaunchFactoryReason
-        : hooksLaunchDisabledReason,
+        : error.source === "recipient"
+          ? hooksBuybackRecipientUnavailableReason
+          : hooksLaunchDisabledReason,
     );
   }
   throw error;
@@ -175,6 +193,10 @@ function submissionError(error: unknown): never {
         throw hooksUnavailable(hooksLaunchFactoryReason);
       case "template_mismatch":
         throw hooksUnavailable(hooksFactoryTemplateMismatchReason);
+      case "recipient_fixed":
+        throw hooksRecipientFixed();
+      case "recipient_unavailable":
+        throw hooksUnavailable(hooksBuybackRecipientUnavailableReason);
       case "not_found":
         throw V2ApiError.notFound();
       case "conflict":
@@ -216,7 +238,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchProjectConfig",
         summary: "Read the caller's fixed-template Hooks project configuration",
         description:
-          "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
+          "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). Decision 0122: approval.status rejected (a reviewer rejected this version; approval.rejection = {reasonCode, note, at}; saving a new version resubmits it), buybackRecipientFixed (always true) and fixedBuybackRecipient (LAUNCH2_BUYBACK_RECIPIENT, null when not configured). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -275,14 +297,20 @@ export function registerV2LaunchRoutes(
               ? null
               : {
                   configVersion: draft.version,
+                  // Decision 0122: a reviewer rejection of this version.
                   status:
-                    progress.approvedAt === null
-                      ? "awaiting_approval"
-                      : "approved",
+                    progress.approvedAt !== null
+                      ? "approved"
+                      : progress.rejection !== null
+                        ? "rejected"
+                        : "awaiting_approval",
                   approvedAt: progress.approvedAt,
+                  rejection: progress.rejection,
                 },
           latestDeployment,
           minSaleLeadSeconds: hooksConfigService.minimumLeadSeconds,
+          buybackRecipientFixed: true,
+          fixedBuybackRecipient: hooksConfigService.fixedBuybackRecipient,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -298,7 +326,7 @@ export function registerV2LaunchRoutes(
         operationId: "saveV2HooksLaunchProjectConfig",
         summary: "Save an owner-scoped fixed-template Hooks project draft",
         description:
-          "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
+          "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Decision 0122: config.buybackRecipient must be the platform's fixed recipient (LAUNCH2_BUYBACK_RECIPIENT, case-insensitive), else 422 VALIDATION_FAILED (reasonCode HOOKS_BUYBACK_RECIPIENT_FIXED); not configured → 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE. Never publishes, deploys, or activates.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -345,7 +373,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchSigningRequest",
         summary: "Prepare the owner's BSC Testnet Hooks deployment signature",
         description:
-          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again).",
+          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient).",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -353,7 +381,7 @@ export function registerV2LaunchRoutes(
         querystring: hooksLaunchSigningRequestQuerySchema,
         response: {
           200: hooksLaunchSigningRequestResourceSchema,
-          ...launchReadErrors,
+          ...hooksSigningRequestErrors,
         },
       },
       onRequest: validateCommonHeaders,
@@ -381,6 +409,10 @@ export function registerV2LaunchRoutes(
           if (error.kind === "template_mismatch") {
             throw hooksUnavailable(hooksFactoryTemplateMismatchReason);
           }
+          if (error.kind === "recipient_fixed") throw hooksRecipientFixed();
+          if (error.kind === "recipient_unavailable") {
+            throw hooksUnavailable(hooksBuybackRecipientUnavailableReason);
+          }
           if (error.kind === "busy") reply.header("retry-after", "5");
           throw hooksUnavailable(hooksLaunchFactoryReason);
         }
@@ -396,7 +428,7 @@ export function registerV2LaunchRoutes(
         operationId: "submitV2HooksLaunchDeployment",
         summary: "Verify and record a project-signed Testnet deployment task",
         description:
-          "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded.",
+          "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded. Decision 0122: a config naming another buyback recipient than LAUNCH2_BUYBACK_RECIPIENT is 422 VALIDATION_FAILED (HOOKS_BUYBACK_RECIPIENT_FIXED); none configured is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE; nothing recorded.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

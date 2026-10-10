@@ -36,6 +36,8 @@ function candidate(
     nftSaleStart: new Date(Number(saleStart) * 1000).toISOString(),
     holdReason: null,
     graduated: false,
+    generation: "v3",
+    openedWithoutHolders: false,
     snapshotRoot: null,
     snapshotVerification: null,
     active: null,
@@ -55,9 +57,12 @@ function fakeChain(options: {
   revert?: string;
   minted?: bigint;
   root?: string;
+  publishedAt?: bigint;
+  openRevert?: string;
 }) {
   const sent: string[] = [];
   const signed: bigint[] = [];
+  const opened: bigint[] = [];
   const stamp = (n: bigint) => saleStart - 100n + 10n * n;
   const state = { ...options };
   const chain: Launch2PublisherChain = {
@@ -85,6 +90,15 @@ function fakeChain(options: {
         nft: addr("a"),
       }),
     registryRoot: () => Promise.resolve(state.root ?? zero),
+    registryPublishedAt: () => Promise.resolve(state.publishedAt ?? 0n),
+    estimateOpenWithoutHolders: () =>
+      state.openRevert === undefined
+        ? Promise.resolve(60_000n)
+        : Promise.reject(new Launch2PublisherRevertError(state.openRevert)),
+    signOpenWithoutHolders: (_, tx) => {
+      opened.push(tx.nonce);
+      return Promise.resolve({ txHash: hash("88"), rawTx: "0xf8bb" });
+    },
     isSnapshotSigner: (_, address) => Promise.resolve(address !== addr("9")),
     totalMintedAt: () => Promise.resolve(state.minted ?? 2n),
     snapshotDigest: () => Promise.resolve(hash("dd")),
@@ -113,7 +127,7 @@ function fakeChain(options: {
             },
       ),
   };
-  return { chain, sent, signed, state };
+  return { chain, sent, signed, opened, state };
 }
 
 function memoryRepository(initial: Launch2PublicationCandidate) {
@@ -167,6 +181,7 @@ function memoryRepository(initial: Launch2PublicationCandidate) {
       const row: Launch2PublicationRecord = {
         publicationId: `p${rows.length + 1}`,
         instanceId: input.instanceId,
+        action: input.action ?? "publish_snapshot",
         attempt: input.attempt,
         status: "pending",
         snapshots: input.snapshots,
@@ -256,9 +271,10 @@ function setup(
     { address: addr("4"), balance: 1 },
     { address: addr("3"), balance: 1 },
   ],
+  candidateOverrides: Partial<Launch2PublicationCandidate> = {},
 ) {
   const fake = fakeChain(chainOptions);
-  const memory = memoryRepository(candidate());
+  const memory = memoryRepository(candidate(candidateOverrides));
   const publisher = createLaunch2SnapshotPublisher({
     repository: memory.repository,
     launch2: {
@@ -329,8 +345,10 @@ describe("Decision 0118 snapshot publisher", () => {
     expect([...incomplete.closures, ...lagging.closures]).toEqual([]);
   });
 
-  it("closes a sale with no holder once (Decision 0120) and stops waiting", async () => {
-    const empty = setup({ head: 400n, minted: 0n }, "1000", []);
+  it("closes a v2-generation sale with no holder once (Decision 0120) and stops waiting", async () => {
+    const empty = setup({ head: 400n, minted: 0n }, "1000", [], {
+      generation: "v2",
+    });
     const first = await empty.publisher.runOnce();
     expect(first.waiting[id]).toBe("LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS");
     expect(empty.closures).toEqual([
@@ -361,6 +379,88 @@ describe("Decision 0118 snapshot publisher", () => {
       "LAUNCH2_SNAPSHOT_INDEXER_BEHIND",
     );
     expect([...shallow.closures, ...behind.closures]).toEqual([]);
+  });
+
+  it("opens a v3 zero-holder sale publicly: row first, simulate, sign, send, confirm (Decision 0122)", async () => {
+    const empty = setup(
+      {
+        head: 400n,
+        minted: 0n,
+        receipt: { status: "success", blockNumber: 398n },
+      },
+      "1000",
+      [],
+    );
+    const first = await empty.publisher.runOnce();
+    expect(first.waiting[id]).toBe("LAUNCH2_SNAPSHOT_OPENING_WITHOUT_HOLDERS");
+    expect(empty.closures).toEqual([]);
+    expect(empty.rows).toHaveLength(1);
+    expect(empty.rows[0]).toMatchObject({
+      action: "open_without_holders",
+      status: "broadcast",
+      memberCount: 0,
+      root: zero,
+      dataHash: zero,
+      signerAddresses: [],
+      signatures: [],
+      cutoffBlock: cutoffBlock.toString(10),
+      txHash: hash("88"),
+      txNonce: "7",
+    });
+    // The open call shape was signed, never a publishSnapshot.
+    expect(empty.opened).toEqual([7n]);
+    expect(empty.signed).toEqual([]);
+    expect(empty.sent).toEqual(["0xf8bb"]);
+    await empty.publisher.runOnce();
+    expect(empty.rows[0]?.status).toBe("confirmed");
+    // Indexed by the lane: nothing more to do, not re-sent.
+    empty.setBase({ openedWithoutHolders: true });
+    const after = await empty.publisher.runOnce();
+    expect(after.waiting).toEqual({});
+    expect(empty.sent).toEqual(["0xf8bb"]);
+  });
+
+  it("a v3 opening another account already made is not repeated (Decision 0122)", async () => {
+    const opened = setup(
+      { head: 400n, minted: 0n, publishedAt: saleEnd + 5n },
+      "1000",
+      [],
+    );
+    expect((await opened.publisher.runOnce()).waiting[id]).toBe(
+      "LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN",
+    );
+    expect(opened.rows).toEqual([]);
+    const raced = setup(
+      {
+        head: 400n,
+        minted: 0n,
+        receipt: { status: "reverted", blockNumber: 398n },
+      },
+      "1000",
+      [],
+    );
+    await raced.publisher.runOnce();
+    raced.state.publishedAt = saleEnd + 1n;
+    await raced.publisher.runOnce();
+    expect(raced.rows[0]).toMatchObject({
+      status: "failed",
+      failureCode: "LAUNCH2_SNAPSHOT_OPENED_BY_OTHER",
+      failureRetryable: false,
+    });
+    const refused = setup(
+      { head: 400n, minted: 0n, openRevert: "HoldersExist" },
+      "1000",
+      [],
+    );
+    await refused.publisher.runOnce();
+    expect(refused.rows[0]).toMatchObject({
+      action: "open_without_holders",
+      status: "failed",
+      failureCode: "LAUNCH2_SNAPSHOT_CONTRACT_REVERTED",
+      failureDetail: "HoldersExist",
+      failureRetryable: false,
+    });
+    expect(refused.sent).toEqual([]);
   });
 
   it("refuses when an on-chain root already exists", async () => {

@@ -3,12 +3,15 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { z } from "zod";
 
+import { hooksLaunchRejectionReasons } from "../features/launch/hooks-launch-project-config.js";
+
 import {
   bscChainId,
   launchChainIds,
   type LaunchChainId,
 } from "../features/chain/chain-contract.js";
 import {
+  canApplicantEdit,
   isVenueMilestoneTransitionAllowed,
   launchCommandDigestVersion,
   launchCommandIdempotencyScope,
@@ -109,6 +112,14 @@ const projectRowSchema = z
     review_status: z.enum(launchReviewStatuses),
     kyb_status: z.enum(launchKybStatuses),
     review_reason_code: z.string().nullable(),
+    rejection: z
+      .object({
+        reasonCode: z.enum(hooksLaunchRejectionReasons),
+        note: z.string().nullable(),
+        at: z.string(),
+      })
+      .strict()
+      .nullable(),
     submitted_at: dateSchema.nullable(),
     reviewed_at: dateSchema.nullable(),
     launch_id: opaqueIdSchema.nullable(),
@@ -203,6 +214,13 @@ const projectColumns = `
   p.review_status,
   p.kyb_status,
   p.review_reason_code,
+  -- Decision 0122: the reviewer rejection the applicant sees (status rejected).
+  case when p.review_status = 'rejected' then (
+    select jsonb_build_object('reasonCode', r.reason_code, 'note', r.note,
+      'at', r.created_at)
+    from public.launch_project_rejections r
+    where r.project_id = p.project_id
+    order by r.created_at desc, r.rejection_id desc limit 1) end as rejection,
   p.submitted_at,
   p.reviewed_at,
   l.launch_id,
@@ -239,6 +257,14 @@ function mapProject(raw: unknown): LaunchProjectRecord {
     reviewStatus: row.review_status,
     kybStatus: row.kyb_status,
     reviewReasonCode: row.review_reason_code,
+    rejection:
+      row.rejection === null
+        ? null
+        : Object.freeze({
+            reasonCode: row.rejection.reasonCode,
+            note: row.rejection.note,
+            at: new Date(row.rejection.at).toISOString(),
+          }),
     submittedAt: toNullableIsoString(row.submitted_at),
     reviewedAt: toNullableIsoString(row.reviewed_at),
     launchId: row.launch_id,
@@ -567,7 +593,8 @@ export function createPostgresLaunchRepository(
           if (current === null || current.ownerUserId !== ownerUserId) {
             throw new LaunchNotFoundError();
           }
-          if (!["draft", "returned"].includes(current.reviewStatus)) {
+          // Decision 0122: draft, returned, or rejected material is editable.
+          if (!canApplicantEdit(current.reviewStatus)) {
             throw new LaunchDataStaleError();
           }
           if (current.version !== expectedVersion) {

@@ -41,7 +41,10 @@ import {
   createLaunch2BuybackKeeper,
   type Launch2BuybackKeeperPolicy,
 } from "../src/features/launch2/launch2-buyback-keeper.js";
-import { createLaunch2Service } from "../src/features/launch2/launch2-service.js";
+import {
+  createLaunch2Service,
+  launch2NextOrderBlockedReason,
+} from "../src/features/launch2/launch2-service.js";
 import { createLaunch2SnapshotPublisher } from "../src/features/launch2/launch2-snapshot-publisher.js";
 import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-client.js";
 import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks-launch-executor-chain.js";
@@ -78,12 +81,13 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
  * 0.5 % quota until the last buy graduates the curve into the official v4
  * pool. Then the `launch2_buyback_keeper`:
  *
- * - simulates before the price recorder has a 30-minute window → the
- *   contract refuses (`ReferenceUnavailable`): one `rejected` row, nothing
- *   sent, refreshed (not duplicated) while it persists;
- * - with a fresh reference executes three orders, each ≥ 10 s after the
+ * - Decision 0122 (v3 Factory, no price protection): right after
+ *   graduation, without any PriceRecorder sample, `quoteNextOrder()` is
+ *   executable and the keeper executes three orders, each ≥ 10 s after the
  *   previous success, each followed to `confirmed` and aligned with the
- *   `launch2_event` lane's ledger row of the same transaction;
+ *   `launch2_event` lane's ledger row of the same transaction (whose
+ *   protection columns are null); between orders the quote is not
+ *   executable and the read model names `BUYBACK_TOO_SOON`;
  * - after `pause()` sends nothing (chain pre-check, then the read model);
  * - a key that is not a Factory keeper is refused, the fallback keeper is
  *   accepted.
@@ -128,7 +132,6 @@ async function admin<T>(run: (client: pg.Client) => Promise<T>): Promise<T> {
 
 const usd1MintAbi = parseAbi(["function mint(address to, uint256 amount)"]);
 const nftMintAbi = parseAbi(["function mint() returns (uint256)"]);
-const recorderAbi = parseAbi(["function record() returns (uint192)"]);
 
 function encode(
   abi: Abi | readonly unknown[],
@@ -334,6 +337,7 @@ describe.skipIf(skipReason !== null)(
       });
       const walletId = walletIdOf(ownerUserId);
       const prepared = await createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -358,6 +362,7 @@ describe.skipIf(skipReason !== null)(
         },
       });
       const job = await createHooksLaunchSubmissionService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -444,7 +449,16 @@ describe.skipIf(skipReason !== null)(
         repository,
         chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
         chainId: "eip155:97",
-        factoryAddress: deployed.factory,
+        factories: [
+          { address: deployed.factory, generation: "v3", current: true },
+          // Decision 0122: a read-only legacy Factory registers nothing here
+          // and never changes the generation of the current one's launches.
+          {
+            address: "0x6a69ba7a5a71c114301e20ef95f62cd83d07d9c0",
+            generation: "v2",
+            current: false,
+          },
+        ],
         reorgDepthBlocks: 15,
         pollIntervalMs: 1_000,
         now: () => new Date(Number(chainNow) * 1000),
@@ -465,7 +479,7 @@ describe.skipIf(skipReason !== null)(
     }
 
     /** The keeper compares backoffs with the wall clock (+ this skew). */
-    let skewMs = 0;
+    const skewMs = 0;
     const keeperPolicy: Launch2BuybackKeeperPolicy = {
       chainId: "eip155:97",
       factoryAddress: "",
@@ -530,7 +544,7 @@ describe.skipIf(skipReason !== null)(
       expect(await keeperWith(anvilPrivateKey(5)).verifyKeeper()).toBe("ok");
     });
 
-    it("graduates a launch, refuses without a reference, executes three orders ≥ 10 s apart aligned with the ledger, and sends nothing once paused", async () => {
+    it("graduates a launch, executes three orders without any price sample ≥ 10 s apart aligned with the ledger, and sends nothing once paused", async () => {
       const launch = await activatedLaunch("BUYB");
       const repository = createPostgresLaunch2Repository(pool);
       const lane = laneFor(repository);
@@ -542,8 +556,10 @@ describe.skipIf(skipReason !== null)(
       );
       const instanceId = instanceRows.rows[0]!.instance_id;
       const record = (await repository.getInstance(instanceId))!;
-      const { nft, curve, buybackExecutor, priceRecorder, snapshots } =
+      const { nft, curve, buybackExecutor, escrow, snapshots } =
         record.addresses;
+      // Decision 0122: the anvil build is the current (v3) generation.
+      expect(record.generation).toBe("v3");
 
       // NFT sale: five holders → 500 USD1 in escrow.
       await warpTo(launch.saleStart + 10n);
@@ -639,69 +655,33 @@ describe.skipIf(skipReason !== null)(
         "graduated",
       );
 
-      // No reference window yet: the contract refuses the simulation.
+      // Decision 0122 (v3 Factory): no price protection — no reference
+      // window to wait for, nobody feeds PriceRecorder. The executor quote
+      // says executable right after graduation.
       const nonceBefore = await keeperNonce();
-      const refused = await keeper.runOnce();
-      expect(refused.waiting[instanceId]).toBe(
-        "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
-      );
+      const reader = createLaunch2Chain({ rpcUrls: [chain.rpcUrl] });
+      const executorState = () =>
+        reader.readBuybackState({
+          buybackExecutor,
+          escrow,
+          generation: "v3",
+        });
+      expect(await executorState()).toMatchObject({
+        nextOrderAmountIn: 100n * wad,
+        nextOrderExecutable: true,
+      });
       let rows = await attemptRows(instanceId);
-      expect(rows).toEqual([
-        expect.objectContaining({
-          attempt: 1,
-          status: "rejected",
-          simulation: "reverted",
-          reason_code: "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
-          reason_detail: "ReferenceUnavailable",
-          rejection_count: 1,
-          tx_hash: null,
-          order_usd1: (100n * wad).toString(),
-        }),
-      ]);
-      // Inside the backoff nothing is simulated; after it the same row counts.
-      await keeper.runOnce();
-      expect(await attemptRows(instanceId)).toEqual(rows);
-      skewMs += 20_000;
-      await keeper.runOnce();
-      rows = await attemptRows(instanceId);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.rejection_count).toBe(2);
-      expect(await keeperNonce()).toBe(nonceBefore);
-
-      // PriceRecorder: a sample every 60 s for 31 minutes (permissionless).
-      let lastSample = await refreshNow();
-      const sample = async (at: bigint) => {
-        await chain.request("evm_setNextBlockTimestamp", [toHex(at)]);
-        await send(
-          anvilPrivateKey(1),
-          priceRecorder,
-          encode(recorderAbi, "record"),
-        );
-        lastSample = at;
-        await refreshNow();
-      };
-      for (let index = 0; index < 33; index += 1) {
-        await sample(lastSample + 60n);
-      }
-      const keepFresh = async () => {
-        const now = await refreshNow();
-        if (now - lastSample > 45n)
-          await sample(
-            now + 1n > lastSample + 60n ? now + 1n : lastSample + 60n,
-          );
-      };
+      expect(rows).toEqual([]);
 
       // Three orders, each ≥ 10 s after the previous success.
-      skewMs += 3_600_000; // past the refusal backoff
       const executed: string[] = [];
       for (let order = 0; order < 3; order += 1) {
-        await keepFresh();
         const tick = await keeper.runOnce();
         expect(tick.waiting[instanceId], `order ${order + 1}`).toBeUndefined();
         rows = await attemptRows(instanceId);
         const sent = rows.at(-1)!;
         expect(sent).toMatchObject({
-          attempt: 2 + order,
+          attempt: 1 + order,
           status: "broadcast",
           simulation: "passed",
           keeper_address: anvilAccount(5).address.toLowerCase(),
@@ -725,10 +705,20 @@ describe.skipIf(skipReason !== null)(
         const aligned = (await attemptRows(instanceId)).at(-1)!;
         expect(aligned.buyback_id).not.toBeNull();
         executed.push(aligned.tx_hash!);
-        // Within MIN_SUCCESS_INTERVAL: the pre-check waits, no row.
+        // Within MIN_SUCCESS_INTERVAL: the pre-check waits, no row; the
+        // quote says not executable and the read model names TOO_SOON.
         expect((await keeper.runOnce()).waiting[instanceId]).toBe(
           "LAUNCH2_BUYBACK_TOO_SOON",
         );
+        const tooSoon = await executorState();
+        expect(tooSoon.nextOrderExecutable).toBe(false);
+        expect(
+          launch2NextOrderBlockedReason({
+            generation: "v3",
+            graduated: true,
+            state: tooSoon,
+          }),
+        ).toBe("BUYBACK_TOO_SOON");
         const last = await publicClient().readContract({
           address: buybackExecutor as Address,
           abi: buybackExecutorAbi,
@@ -744,14 +734,26 @@ describe.skipIf(skipReason !== null)(
         transaction_hash: string;
         usd1_spent: string;
         executed_at: Date;
+        min_meme_out: string | null;
+        reference_price_e18: string | null;
+        spot_price_e18: string | null;
       }>(
-        `select buyback_id::text, transaction_hash, usd1_spent::text, executed_at
+        `select buyback_id::text, transaction_hash, usd1_spent::text, executed_at,
+           min_meme_out::text, reference_price_e18::text, spot_price_e18::text
          from public.launch2_buybacks
          where instance_id = $1 and not removed and outcome = 'executed'
          order by executed_at`,
         [instanceId],
       );
       expect(ledger.rows.map((row) => row.transaction_hash)).toEqual(executed);
+      // Decision 0122: a v3 BuybackCompleted carries no protection fields.
+      for (const row of ledger.rows) {
+        expect([
+          row.min_meme_out,
+          row.reference_price_e18,
+          row.spot_price_e18,
+        ]).toEqual([null, null, null]);
+      }
       expect(
         ledger.rows.every((row) => row.usd1_spent === (100n * wad).toString()),
       ).toBe(true);
@@ -762,7 +764,7 @@ describe.skipIf(skipReason !== null)(
         ).toBeGreaterThanOrEqual(10_000);
       }
       rows = await attemptRows(instanceId);
-      expect(rows.slice(1).map((row) => row.buyback_id)).toEqual(
+      expect(rows.map((row) => row.buyback_id)).toEqual(
         ledger.rows.map((row) => row.buyback_id),
       );
       const afterOrders = (await repository.getInstance(instanceId))!;
@@ -815,16 +817,7 @@ describe.skipIf(skipReason !== null)(
         "confirmed",
         "confirmed",
         "confirmed",
-        "rejected",
       ]);
-      expect(consoleDetail?.buybackAttempts[3]).toMatchObject({
-        reason: {
-          code: "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
-          detail: "ReferenceUnavailable",
-        },
-        rejectionCount: 2,
-        txHash: null,
-      });
       expect(JSON.stringify(consoleDetail?.buybackAttempts)).not.toContain(
         "rawTx",
       );
@@ -835,7 +828,6 @@ describe.skipIf(skipReason !== null)(
         buybackExecutor,
         encode(buybackExecutorAbi, "pause"),
       );
-      await keepFresh();
       expect((await keeper.runOnce()).waiting[instanceId]).toBe(
         "LAUNCH2_BUYBACK_PAUSED",
       );
@@ -848,7 +840,7 @@ describe.skipIf(skipReason !== null)(
       expect((await keeper.runOnce()).waiting[instanceId]).toBe(
         "LAUNCH2_BUYBACK_PAUSED",
       );
-      expect(await attemptRows(instanceId)).toHaveLength(4);
+      expect(await attemptRows(instanceId)).toHaveLength(3);
       expect(await keeperNonce()).toBe(nonceBefore + 3);
 
       // Evidence is append-only.

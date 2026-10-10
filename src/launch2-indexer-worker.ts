@@ -15,14 +15,17 @@ import type {
   Launch2Repository,
   Launch2SnapshotMemberRecord,
 } from "./features/launch2/launch2-ports.js";
+import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
 
 /**
  * Decision 0114: the `launch2_event` lane (default off,
  * `LAUNCH2_INDEXER_ENABLED`). One tick:
  *
- * 1. registers every S132 task that reached `activated` on the configured
- *    Factory (the task row is the registry: launchId + 11 module addresses);
+ * 1. registers every S132 task that reached `activated` on a configured
+ *    Factory (the task row is the registry: launchId + 11 module addresses;
+ *    Decision 0122: the current Factory and the read-only legacy ones, the
+ *    Factory's generation recorded on the instance);
  * 2. reads the logs of the Factory and every instance's gate / NFT /
  *    snapshot registry / curve / buyback executor over ≤ `maxLogRange`
  *    blocks, with the Decision 0034 checkpoint discipline of the S116 lanes
@@ -57,7 +60,11 @@ export interface Launch2LaneOptions {
   readonly repository: Launch2Repository;
   readonly chain: Launch2Chain;
   readonly chainId: string;
-  readonly factoryAddress: string;
+  /**
+   * Decision 0122: the current Factory first, then the read-only legacy
+   * ones (`LAUNCH2_LEGACY_FACTORIES`), each with its generation.
+   */
+  readonly factories: readonly Launch2FactoryEntry[];
   readonly reorgDepthBlocks: number;
   readonly maxLogRange?: bigint;
   readonly pollIntervalMs: number;
@@ -81,16 +88,16 @@ function aborted(signal: AbortSignal | undefined): boolean {
 }
 
 function rolesOf(
-  factoryAddress: string,
+  factories: readonly Launch2FactoryEntry[],
   instances: readonly Launch2LaneInstance[],
 ): {
   readonly roles: Map<string, Launch2ContractRole>;
   readonly owners: Map<string, string>;
   readonly byLaunchId: Map<string, string>;
 } {
-  const roles = new Map<string, Launch2ContractRole>([
-    [factoryAddress, "factory"],
-  ]);
+  const roles = new Map<string, Launch2ContractRole>(
+    factories.map((factory) => [factory.address, "factory"]),
+  );
   const owners = new Map<string, string>();
   const byLaunchId = new Map<string, string>();
   for (const instance of instances) {
@@ -100,7 +107,11 @@ function rolesOf(
       [instance.addresses.nft, "nft"],
       [instance.addresses.snapshots, "snapshots"],
       [instance.addresses.curve, "curve"],
-      [instance.addresses.buybackExecutor, "buybackExecutor"],
+      // Decision 0122: the executor ABI follows the instance's generation.
+      [
+        instance.addresses.buybackExecutor,
+        instance.generation === "v2" ? "buybackExecutorV2" : "buybackExecutor",
+      ],
     ];
     for (const [address, role] of entries) {
       roles.set(address, role);
@@ -138,7 +149,9 @@ export interface Launch2Lane {
 export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
   const now = options.now ?? ((): Date => new Date());
   const maxRange = options.maxLogRange ?? launch2DefaultMaxLogRange;
-  const factory = options.factoryAddress.toLowerCase();
+  const factories = options.factories.map((factory) =>
+    Object.freeze({ ...factory, address: factory.address.toLowerCase() }),
+  );
 
   async function verifySnapshots(): Promise<number> {
     const pending = await options.repository.listSnapshotsToVerify(
@@ -241,6 +254,12 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         graduated: instance.graduated,
         holdReason: instance.holdReason,
         closedNoHolders: instance.closedNoHolders,
+        openedWithoutHoldersAt:
+          instance.openedWithoutHoldersAt === null
+            ? null
+            : BigInt(
+                Math.floor(Date.parse(instance.openedWithoutHoldersAt) / 1000),
+              ),
       });
       const nextChangeAt =
         projection.nextChangeAt === null
@@ -266,7 +285,10 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
     }
     const registered = await options.repository.registerActivatedInstances({
       chainId: options.chainId,
-      factoryAddress: factory,
+      factories: factories.map(({ address, generation }) => ({
+        address,
+        generation,
+      })),
     });
     const instances = await options.repository.listLaneInstances(
       options.chainId,
@@ -317,7 +339,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const maximumTo = fromBlock + maxRange - 1n;
       const toBlock =
         maximumTo < head.blockNumber ? maximumTo : head.blockNumber;
-      const { roles, owners, byLaunchId } = rolesOf(factory, instances);
+      const { roles, owners, byLaunchId } = rolesOf(factories, instances);
       const decoded = await options.chain.getLogs({
         roles,
         fromBlock,

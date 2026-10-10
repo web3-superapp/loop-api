@@ -527,6 +527,7 @@ function projectProjection(
     reviewReasonText: owner
       ? launchReviewReasonText(record.reviewStatus, record.reviewReasonCode)
       : null,
+    rejection: owner ? record.rejection : null,
     kyb: Object.freeze({
       status: "unavailable" as const,
       state: record.kybStatus,

@@ -355,12 +355,16 @@ export function launchProjectFixture(
     name: "Project",
     ticker: "MEME",
     ownerUserId: randomUUID(),
+    kind: "launch2",
     launchReviewStatus: "approved",
+    materialVersion: 1,
+    rejection: null,
     stage: "awaiting_approval",
     latestConfigVersion: 1,
     latestConfigHash: `0x${"ab".repeat(32)}`,
     latestEditedBy: { kind: "owner", userId: randomUUID() },
     latestApproval: null,
+    latestRejection: null,
     latestAcceptanceOutcome: null,
     activeDeploymentJobId: null,
     createdAt: "2026-10-09T00:00:00.000Z",
@@ -394,6 +398,9 @@ export function createInMemoryAdminLaunchReview(
             (project) => input.stage === null || project.stage === input.stage,
           )
           .filter(
+            (project) => input.kind === null || project.kind === input.kind,
+          )
+          .filter(
             (project) =>
               input.after === null || project.projectId < input.after.projectId,
           )
@@ -418,6 +425,7 @@ export function createInMemoryAdminLaunchReview(
                 (release) => release.projectId === project.projectId,
               ),
               snapshotClosure: null,
+              projectRejections: [],
             },
       );
     },
@@ -497,7 +505,9 @@ export function createFakeHooksReview(input: {
     listTestnetAcceptances: () => Promise.reject(new Error("unused")),
     execute(actor, command) {
       const permission =
-        command.action === "launch.config.approve"
+        command.action === "launch.config.approve" ||
+        command.action === "launch.config.reject" ||
+        command.action === "launch.project.reject"
           ? "launch.approve"
           : command.action === "testnet.acceptance.record"
             ? "testnet.accept"
@@ -527,9 +537,9 @@ export function createFakeHooksReview(input: {
       if (owner === actor) {
         return Promise.reject(
           new HooksLaunchReviewError(
-            command.action === "launch.config.approve"
-              ? "OPS_SELF_APPROVAL"
-              : "OPS_SELF_ACCEPTANCE",
+            command.action === "testnet.acceptance.record"
+              ? "OPS_SELF_ACCEPTANCE"
+              : "OPS_SELF_APPROVAL",
           ),
         );
       }
@@ -545,23 +555,43 @@ export function createFakeHooksReview(input: {
               reason: command.reason,
               approved_at: now,
             }
-          : command.action === "testnet.acceptance.record"
+          : command.action === "launch.config.reject"
             ? {
-                acceptance_id: command.operationId,
                 project_id: command.target,
                 config_version: command.payload.configVersion,
-                chain_id: 97,
                 config_hash: command.payload.configHash.toLowerCase(),
-                contract_manifest_hash:
-                  command.payload.contractManifestHash.toLowerCase(),
-                checklist_version: command.payload.checklistVersion,
-                outcome: command.payload.outcome,
-                evidence: command.payload.evidence,
-                actor_id: actor,
-                reason: command.reason,
-                created_at: now,
+                reviewer_id: actor,
+                reason_code: command.payload.reasonCode,
+                note: command.payload.note,
+                rejected_at: now,
               }
-            : {};
+            : command.action === "launch.project.reject"
+              ? {
+                  rejection_id: command.operationId,
+                  project_id: command.target,
+                  material_version: command.payload.materialVersion,
+                  reviewer_user_id: actor,
+                  reason_code: command.payload.reasonCode,
+                  note: command.payload.note,
+                  created_at: now,
+                }
+              : command.action === "testnet.acceptance.record"
+                ? {
+                    acceptance_id: command.operationId,
+                    project_id: command.target,
+                    config_version: command.payload.configVersion,
+                    chain_id: 97,
+                    config_hash: command.payload.configHash.toLowerCase(),
+                    contract_manifest_hash:
+                      command.payload.contractManifestHash.toLowerCase(),
+                    checklist_version: command.payload.checklistVersion,
+                    outcome: command.payload.outcome,
+                    evidence: command.payload.evidence,
+                    actor_id: actor,
+                    reason: command.reason,
+                    created_at: now,
+                  }
+                : {};
       operations.set(command.operationId, { actor, body, result });
       return Promise.resolve({
         operationId: command.operationId,

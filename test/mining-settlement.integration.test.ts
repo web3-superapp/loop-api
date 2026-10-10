@@ -200,9 +200,10 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
            project_owner, name, ticker, meme_address, hook_address, nft_address,
            curve_address, gate_address, escrow_address, snapshots_address,
            graduation_adapter_address, buyback_adapter_address, price_recorder_address,
-           buyback_executor_address, buyback_recipient, nft_sale_start, deploy_block_number)
+           buyback_executor_address, buyback_recipient, nft_sale_start, deploy_block_number,
+           factory_generation)
          values ($1, $2, $3, 1, $4, $5, $6, $7, $7, $6, 'S138', 'FROG', $8, $6, $9,
-           $6, $6, $6, $6, $6, $6, $6, $6, $6, '2026-10-01', 1)`,
+           $6, $6, $6, $6, $6, $6, $6, $6, $6, '2026-10-01', 1, 'v3')`,
         [
           instanceId,
           randomUUID(),

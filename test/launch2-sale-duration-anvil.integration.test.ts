@@ -296,6 +296,7 @@ describe.skipIf(skipReason !== null)(
 
     const deploymentService = () =>
       createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs: createPostgresHooksLaunchProjectConfigRepository(pool),
         wallets,
         reader: reader(),
@@ -374,6 +375,7 @@ describe.skipIf(skipReason !== null)(
       const nowSeconds = await refreshNow();
       const saleStart = nowSeconds + 2n * 86_400n;
       const saved = await createHooksLaunchProjectConfigService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         repository: createPostgresHooksLaunchProjectConfigRepository(pool),
         factory: reader(),
         minimumLeadSeconds: 86_400,
@@ -412,6 +414,7 @@ describe.skipIf(skipReason !== null)(
       });
       const submissions = createPostgresHooksLaunchSubmissionRepository(pool);
       const job = await createHooksLaunchSubmissionService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs: createPostgresHooksLaunchProjectConfigRepository(pool),
         wallets,
         reader: reader(),
@@ -506,7 +509,9 @@ describe.skipIf(skipReason !== null)(
         repository,
         chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
         chainId: "eip155:97",
-        factoryAddress: deployed.factory,
+        factories: [
+          { address: deployed.factory, generation: "v3", current: true },
+        ],
         reorgDepthBlocks: 15,
         pollIntervalMs: 1_000,
         now: () => new Date(Number(chainNow) * 1000),

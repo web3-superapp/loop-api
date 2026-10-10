@@ -41,6 +41,7 @@ import {
 import type { HooksLaunchExecutorRepository } from "./features/launch/hooks-launch-executor.js";
 import { createHooksLaunchExecutorLane } from "./hooks-launch-executor-worker.js";
 import { createLaunch2Lane } from "./launch2-indexer-worker.js";
+import { launch2FactoryEntries } from "./features/launch2/launch2-generation.js";
 import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import {
@@ -813,7 +814,11 @@ export async function runReconciliationWorker(
               rpcUrls: launchChainConfig.rpcUrls,
             }),
             chainId: launchChainConfig.chainId,
-            factoryAddress: launch2Config.factoryAddress as string,
+            factories: launch2FactoryEntries({
+              current: launch2Config.factoryAddress as string,
+              currentCodeHash: launch2Config.factoryCodeHash,
+              legacy: launch2Config.legacyFactories,
+            }),
             reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
             pollIntervalMs: launch2Config.pollIntervalMs,
             onWarning: (warning) => {
@@ -841,6 +846,8 @@ export async function runReconciliationWorker(
             ...logFields(),
             lane: "launch2_event",
             factoryAddress: launch2Config.factoryAddress as string,
+            // Decision 0122: how many read-only legacy Factories are indexed.
+            count: launch2Config.legacyFactories.length,
           },
           "LOOP launch2_event lane enabled",
         );

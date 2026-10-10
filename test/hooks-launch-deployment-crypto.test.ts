@@ -207,7 +207,11 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
       getOwnedDraft: () => Promise.resolve(config),
       saveOwnedDraft: () => Promise.resolve(config),
       getOwnedProgress: () =>
-        Promise.resolve({ approvedAt: null, latestJobId: null }),
+        Promise.resolve({
+          approvedAt: null,
+          rejection: null,
+          latestJobId: null,
+        }),
     } as HooksLaunchProjectConfigRepository;
     const wallets = {
       get: (userId: string, walletId: string) =>
@@ -244,6 +248,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
         }),
     };
     const service = createHooksLaunchDeploymentService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       configs: repository,
       wallets,
       reader,
@@ -274,6 +279,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
 
   it("does not prepare a signing request for a wallet that is not the owner's active wallet", async () => {
     const service = createHooksLaunchDeploymentService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       configs: {
         getOwnedDraft: () => Promise.resolve(null),
         saveOwnedDraft: () => Promise.reject(new Error("unused")),
@@ -341,6 +347,7 @@ describe("deployment preparation admission control", () => {
       release = resolve;
     });
     const service = createHooksLaunchDeploymentService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       configs: {} as HooksLaunchProjectConfigRepository,
       wallets: {
         get: async () => {

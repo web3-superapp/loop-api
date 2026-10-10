@@ -1,7 +1,10 @@
 /**
  * Decision 0112: which ABI items of the loop-contracts Foundry build the
  * Hooks deployment executor consumes; Decision 0114 adds the events and
- * views the `launch2_event` lane and the `/v2/launch2/*` reads/prepares use. Errors of every listed contract are
+ * views the `launch2_event` lane and the `/v2/launch2/*` reads/prepares use.
+ * Decision 0122: the selection is the current (v3) Factory generation; the
+ * v2 BuybackExecutor items live frozen in
+ * `src/integrations/launch/hooks-launch-protocol-abi-legacy-v2.ts`. Errors of every listed contract are
  * always kept so reverts decode to a contract error name.
  */
 export const hooksLaunchAbiSelection = {
@@ -163,6 +166,10 @@ export const hooksLaunchAbiSelection = {
     "snapshotDigest",
     "publishSnapshot",
     "SnapshotPublished",
+    // Decision 0122 (v3 Factory generation): zero-holder public opening.
+    "openedWithoutHolders",
+    "openPublicWithoutSnapshot",
+    "PublicRoundOpenedWithoutHolders",
   ],
 } as const satisfies Record<string, readonly string[]>;
 

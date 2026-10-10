@@ -391,6 +391,7 @@ describe.skipIf(skipReason !== null)(
       });
       const walletId = walletIdOf(ownerUserId);
       const prepared = await createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -419,6 +420,7 @@ describe.skipIf(skipReason !== null)(
         },
       });
       const job = await createHooksLaunchSubmissionService({
+        fixedBuybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
         configs,
         wallets,
         reader,
@@ -482,7 +484,9 @@ describe.skipIf(skipReason !== null)(
         repository,
         chain: launch2Chain,
         chainId: "eip155:97",
-        factoryAddress: deployed.factory,
+        factories: [
+          { address: deployed.factory, generation: "v3", current: true },
+        ],
         reorgDepthBlocks: 15,
         pollIntervalMs: 1_000,
         now: () => new Date(Number(chainNow) * 1000),
