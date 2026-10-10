@@ -10,6 +10,9 @@
   only, idempotent, evidence rows), Decision 0119 (ABI sync), S137 report round 2
   observation 1, `BuybackExecutor.sol`, `NftEscrow.sol`, `PriceRecorder.sol`,
   `LoopLaunchFactory.sol`, loop-contracts Decision 0002 §5.
+- Merge: `integration/v2` `548066c` (S142, Decision 0120) merged in; `closed_no_holders`
+  is a read-model stage like the others (quote / trade prepare 409
+  `LAUNCH2_STAGE_MISMATCH` with that stage).
 - Scope: migration `000065_launch2_buyback_keeper` (000064 is S142's), worker lane
   `launch2_buyback_keeper` (default off), optional `buyback.keeper` on
   `GET /v2/launch2/instances/{id}` and `summary.keeper` on `GET …/buybacks`,
@@ -181,17 +184,22 @@ refreshed refusal is silent.
 
 ## Open (for the coordinator)
 
-1. **Nobody feeds `PriceRecorder.record()`**: on the testnet every buyback is refused
-   (`LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE`) until something samples every 60–90 s for
-   30 minutes and keeps doing it (one transaction per minute per graduated instance).
-   Proposal: a `record()` sampler in this lane behind its own flag (same key / nonce lock),
-   or an ops cron; needs a product decision on who pays the gas.
+1. **Price protection is being removed (user ruling, 2026-10-10)**: 价格保护将在 S144-contracts
+   移除，sampler 不做。S144-contracts drops the reference / spot / output branches and the
+   `PriceRecorder` dependency from `BuybackExecutor` (100 USD1 per order, 10 s interval,
+   principal ≥ 10,000 and order ≤ 1 % stay). Until then, instances of the current Factory
+   are refused with `LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE` because nobody calls
+   `PriceRecorder.record()` (the anvil suite feeds it by hand). The keeper keeps the
+   `price_protection` refusal family so those old instances still classify correctly.
+   Note for the record: the recorder needs ≥ 30 samples in 1,800 s with ≥ 60 s between
+   samples, i.e. a spacing of ~60–61 s; a 60–90 s cadence would never have made it ready.
+   After S144 the ABI is re-synced and the anvil suite drops the manual sampling.
 2. The task said "escrow ≥ 100 USD1"; the contract (and loop-contracts 0002 "每笔 100，末笔可少")
    orders `min(available, 100)`. The keeper follows the contract (it also orders a
    last partial amount). With NFTs priced at exactly 100 USD1 the two are the same.
-3. Migration order: this branch has `000063 → 000065`; S142 adds `000064`. Merge S142
-   first (or run `node-pg-migrate` with `--no-check-order` once) — a database that has
-   applied 000065 refuses to apply an older 000064 by default.
+3. Migration order: resolved — `integration/v2` (with S142's `000064`) is merged into this
+   branch, so the chain is `000063 → 000064 → 000065`. Databases that applied the
+   pre-merge `000065` without `000064` (only throwaway S143 test databases) are recreated.
 4. No console action to pause / resume (the pause authority signs on chain) or to clear a
    backoff; an operator waits for `nextEligibleAt`.
 5. Mainnet key custody (above); the keeper must not share the executor account on mainnet
