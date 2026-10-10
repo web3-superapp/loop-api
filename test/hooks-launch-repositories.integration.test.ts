@@ -405,14 +405,18 @@ describe("Hooks operator review (000052–000053)", () => {
         payload: { expectedVersion, config: soon },
       });
     // Default (86,400 s): a sale 5,000 s ahead is refused.
-    await expect(review.execute(editor, save(1))).rejects.toMatchObject({
+    await expect(
+      review.execute(editor, save(1), { nftSaleDurationSeconds: 604_800 }),
+    ).rejects.toMatchObject({
       code: "OPS_INVALID_LAUNCH_CONFIG",
     });
     const testnet = createPostgresHooksLaunchReviewRepository(pool, {
       now: () => 1_800_000_000,
       minimumLeadSeconds: 4_200,
     });
-    const saved = await testnet.execute(editor, save(1));
+    const saved = await testnet.execute(editor, save(1), {
+      nftSaleDurationSeconds: 604_800,
+    });
     expect(saved.result).toMatchObject({ config_version: 2 });
     const tooSoon = {
       ...draftInput,
@@ -428,6 +432,7 @@ describe("Hooks operator review (000052–000053)", () => {
           reason: "Below the floor",
           payload: { expectedVersion: 2, config: tooSoon },
         }),
+        { nftSaleDurationSeconds: 604_800 },
       ),
     ).rejects.toMatchObject({ code: "OPS_INVALID_LAUNCH_CONFIG" });
   });
