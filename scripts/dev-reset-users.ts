@@ -175,6 +175,15 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     hooks_launch_executor_nonces: "user",
     hooks_launch_deployment_authorizations: "user",
     hooks_launch_submission_commands: "user",
+    // MEME v2 read model (Decision 0114): rooted in a deployment task
+    launch2_instances: "user",
+    launch2_events: "user",
+    launch2_nft_mints: "user",
+    launch2_trades: "user",
+    launch2_buybacks: "user",
+    launch2_snapshot_members: "user",
+    launch2_positions: "user",
+    launch2_intents: "user",
     // Mining
     mining_formula_versions: "platform",
     mining_snapshots: "platform",
@@ -222,6 +231,8 @@ const doomedApprovals = `(select project_id, config_version from public.hooks_la
   where (project_id, config_version) in ${doomedConfigVersions} or ${ownedBy("approver_id")})`;
 const doomedDeploymentTasks = `(select job_id from public.hooks_launch_deployment_tasks
   where ${ownedBy()} or (project_id, config_version) in ${doomedApprovals})`;
+const doomedLaunch2Instances = `(select instance_id from public.launch2_instances
+  where ${ownedBy()} or job_id in ${doomedDeploymentTasks})`;
 const doomedVoiceRooms = `(select voice_room_id from public.voice_rooms where ${ownedBy("created_by_user_id")})`;
 const doomedChatOperations = `(select operation_id from public.chat_operations where ${ownedBy()})`;
 
@@ -323,15 +334,26 @@ export const mixedSteps: readonly ResetStep[] = Object.freeze([
 
 /** Child before parent along every foreign key. */
 export const deleteSteps: readonly ResetStep[] = Object.freeze([
+  // MEME v2 read model of the doomed deployment tasks (Decision 0114)
+  del(
+    "launch2_intents",
+    `${ownedBy()} or instance_id in ${doomedLaunch2Instances}
+      or idempotency_record_id in ${ownedIdempotency}`,
+  ),
+  del("launch2_positions", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_snapshot_members", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_buybacks", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_trades", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_nft_mints", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_events", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_instances", `instance_id in ${doomedLaunch2Instances}`),
   // Hooks Launch project-side configuration and signing tasks
+  del("hooks_launch_deployment_events", `job_id in ${doomedDeploymentTasks}`),
+  del("hooks_launch_executor_nonces", `job_id in ${doomedDeploymentTasks}`),
   del(
     "hooks_launch_submission_commands",
     `${ownedBy()} or job_id in ${doomedDeploymentTasks}`,
   ),
-  // S132: executor evidence hangs off the task (append-only; its guard
-  // triggers are disabled for the run like the others').
-  del("hooks_launch_deployment_events", `job_id in ${doomedDeploymentTasks}`),
-  del("hooks_launch_executor_nonces", `job_id in ${doomedDeploymentTasks}`),
   del(
     "hooks_launch_deployment_authorizations",
     `job_id in ${doomedDeploymentTasks}`,

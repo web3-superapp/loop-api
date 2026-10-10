@@ -282,6 +282,12 @@ export interface V2ProductPolicyRuntime {
     readonly configured: boolean;
     readonly reasonCode: string | null;
   };
+  /**
+   * Decision 0114: the `launch2` runtime. `reasonCode` null = composed with
+   * the Hooks Factory on the BSC Testnet launch slot and a repository.
+   * Optional; absent is unavailable.
+   */
+  readonly launch2State?: () => { readonly reasonCode: string | null };
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -367,6 +373,13 @@ export const v2BscWritesDisabledReasonCode = "BSC_WRITES_DISABLED" as const;
  */
 export const v2PrivySwapEvidencePendingReasonCode =
   "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING" as const;
+export const v2Launch2ModuleDeferredReasonCode =
+  "LAUNCH2_MODULE_NOT_ENABLED" as const;
+export const v2Launch2RuntimeUnavailableReasonCode =
+  "LAUNCH2_RUNTIME_UNAVAILABLE" as const;
+/** No BSC Testnet end-to-end evidence yet (S137); never `confirmed` here. */
+export const v2Launch2EvidencePendingReasonCode =
+  "LAUNCH2_TESTNET_EVIDENCE_PENDING" as const;
 export const v2MemeModuleDeferredReasonCode =
   "MEME_MODULE_NOT_ENABLED" as const;
 export const v2MemeRuntimeUnavailableReasonCode =
@@ -476,6 +489,7 @@ export const v2ModuleCapabilityIds = Object.freeze({
   settings: "settings",
   support: "support",
   meme: "meme",
+  launch2: "launch2",
 } as const satisfies Readonly<Record<V2ModuleId, string | null>>);
 
 export const v2CapabilityIds = Object.freeze([
@@ -511,6 +525,7 @@ export const v2CapabilityIds = Object.freeze([
   "dappExecution",
   "communityAi",
   "meme",
+  "launch2",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -1006,6 +1021,36 @@ function memeCapability(
   });
 }
 
+/**
+ * Decision 0114: `launch2` (default off). Available when the module is
+ * enabled and the runtime reports no reason (Hooks Factory pair on the BSC
+ * Testnet launch slot, repository composed); otherwise unavailable with the
+ * reason and every `/v2/launch2/*` route answers 503. Evidence stays
+ * pending until a BSC Testnet run is recorded.
+ */
+function launch2Capability(
+  config: AppConfig,
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const capabilityId = v2ModuleCapabilityIds.launch2;
+  if (!config.v2ModulesEnabled.has("launch2")) {
+    return deferredCapability(capabilityId, v2Launch2ModuleDeferredReasonCode);
+  }
+  const reasonCode =
+    runtime.launch2State === undefined
+      ? v2Launch2RuntimeUnavailableReasonCode
+      : runtime.launch2State().reasonCode;
+  return Object.freeze({
+    capabilityId,
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "pending" as const,
+      reasonCode: reasonCode ?? v2Launch2EvidencePendingReasonCode,
+    }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1232,6 +1277,7 @@ export async function createV2CapabilitiesProjection(
         })
       : deferredCapability("communityAi", "COMMUNITY_AI_RUNTIME_DEFERRED"),
     memeCapability(config, runtime),
+    launch2Capability(config, runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

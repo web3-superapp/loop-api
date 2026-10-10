@@ -35,6 +35,7 @@ import type { HooksLaunchSubmissionService } from "../../features/launch/hooks-l
 import type { MiningService } from "../../features/mining/mining-service.js";
 import type { ReferralService } from "../../features/referral/referral-service.js";
 import type { MemeService } from "../../features/meme/meme-service.js";
+import type { Launch2Service } from "../../features/launch2/launch2-service.js";
 import type { AdminSettingsReader } from "../../features/admin/admin-settings-reader.js";
 import { registerV2ApprovalRoutes } from "./approvals.js";
 import { registerV2ChainRoutes } from "./chain.js";
@@ -46,6 +47,7 @@ import { registerV2MiningRoutes } from "./mining.js";
 import { registerV2ReferralRoutes } from "./referral.js";
 import { registerV2MarketRoutes } from "./market.js";
 import { registerV2MemeRoutes } from "./meme.js";
+import { registerV2Launch2Routes } from "./launch2.js";
 import { registerV2MetaRoutes } from "./meta.js";
 import { registerV2NotificationRoutes } from "./notifications.js";
 import { registerV2ProfileRoutes } from "./profile.js";
@@ -106,6 +108,8 @@ export interface V2RouteDependencies {
   readonly referralService: ReferralService;
   /** MEME curve launchpad (Decision 0101). */
   readonly memeService: MemeService;
+  /** MEME v2 read model (Decision 0114). */
+  readonly launch2Service: Launch2Service;
   /**
    * Decision 0102: operator overrides (recommended communities, intel
    * promotions). Absent or null: the shipped constants are in force.
@@ -127,7 +131,7 @@ export type V2ModuleRegistrar = (
  * `community` and `search`: 0031; `communication`: 0032; `chain`, `wallet`,
  * and `watchlist`: 0033; `market` and `notifications`: 0034; `swap` and
  * `sendApprovals`: 0035; `launch`, `mining`, and `referral`: 0036;
- * `security`, `settings`, and `support`: 0037; `meme`: 0101).
+ * `security`, `settings`, and `support`: 0037; `meme`: 0101; `launch2`: 0114).
  */
 export const v2ModuleRegistrars: Readonly<
   Record<V2ModuleId, V2ModuleRegistrar | null>
@@ -156,6 +160,7 @@ export const v2ModuleRegistrars: Readonly<
   settings: registerV2SettingsRoutes,
   support: registerV2SupportRoutes,
   meme: registerV2MemeRoutes,
+  launch2: registerV2Launch2Routes,
 });
 
 export function registeredV2ModuleIds(

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000060_join_notifications_preference";
+export const latestMigrationName = "000061_launch2_read_model";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -143,4 +143,12 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.admin_accounts",
   "public.admin_account_commands",
   "public.admin_login_attempts",
+  "public.launch2_instances",
+  "public.launch2_events",
+  "public.launch2_nft_mints",
+  "public.launch2_trades",
+  "public.launch2_buybacks",
+  "public.launch2_snapshot_members",
+  "public.launch2_positions",
+  "public.launch2_intents",
 ] as const);

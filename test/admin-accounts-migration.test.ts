@@ -64,7 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000060_join_notifications_preference");
+    expect(latestMigrationName).toBe("000061_launch2_read_model");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

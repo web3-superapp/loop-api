@@ -51,6 +51,7 @@ export const v2ModuleIds = Object.freeze([
   "settings",
   "support",
   "meme",
+  "launch2",
 ] as const);
 
 export type V2ModuleId = (typeof v2ModuleIds)[number];
@@ -592,6 +593,10 @@ const environmentSchema = z
     // LAUNCH_CHAIN_ID=97. No address is shipped in source.
     HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
     HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
+    // Decision 0114: MEME v2 (`launch2`) quote lifetime and default
+    // slippage. The routes exist only with `launch2` in V2_MODULES_ENABLED.
+    LAUNCH2_QUOTE_TTL_SECONDS: positiveIntegerString(10, 600),
+    LAUNCH2_DEFAULT_SLIPPAGE_BPS: positiveIntegerString(0, 5_000),
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
@@ -804,6 +809,8 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_INDEXER_ENABLED: booleanString,
     LAUNCH_INDEXER_ENABLED: booleanString,
     MEME_INDEXER_ENABLED: booleanString,
+    LAUNCH2_INDEXER_ENABLED: booleanString,
+    LAUNCH2_INDEXER_POLL_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
     MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
     MEME_GRADUATION_DELAY_SECONDS: positiveIntegerString(0, 600),
     LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
@@ -1317,6 +1324,14 @@ export interface AppConfig {
   /** MEME curve launchpad (Decision 0101); `contract` null keeps it unavailable. */
   readonly meme: MemeConfig;
   /**
+   * Decision 0114: MEME v2 read model. The Factory comes from `hooksLaunch`
+   * (HOOKS_LAUNCH_FACTORY_ADDRESS); these are the quote knobs.
+   */
+  readonly launch2: {
+    readonly quoteTtlSeconds: number;
+    readonly defaultSlippageBps: number;
+  };
+  /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
    * Development seed's `mock_seed` balances. Default false; the schema
    * refuses it under `NODE_ENV=production`. Only `pnpm mining:snapshot`
@@ -1411,6 +1426,15 @@ export interface ReconciliationWorkerConfig {
    */
   readonly meme: MemeConfig;
   readonly memeIndexerEnabled: boolean;
+  /**
+   * Decision 0114: the `launch2_event` lane (`LAUNCH2_INDEXER_ENABLED`,
+   * default false). `factoryAddress` null (no HOOKS_LAUNCH_FACTORY_ADDRESS)
+   * keeps the lane idle with LAUNCH2_FACTORY_NOT_CONFIGURED.
+   */
+  readonly launch2Indexer: {
+    readonly factoryAddress: string | null;
+    readonly pollIntervalMs: number;
+  } | null;
   /**
    * Present only while the executor is enabled; the key is never logged.
    * `delaySeconds` (MEME_GRADUATION_DELAY_SECONDS, default 15, 0-600,
@@ -2806,6 +2830,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
     HOOKS_LAUNCH_FACTORY_CODE_HASH:
       environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
+    LAUNCH2_DEFAULT_SLIPPAGE_BPS:
+      environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
   });
 
   if (!parsed.success) {
@@ -2944,6 +2971,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
         parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
     },
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
+    launch2: Object.freeze({
+      quoteTtlSeconds: parsed.data.LAUNCH2_QUOTE_TTL_SECONDS,
+      defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
+    }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty,
@@ -2996,6 +3027,9 @@ export function loadReconciliationWorkerConfig(
     BSC_INDEXER_ENABLED: environment["BSC_INDEXER_ENABLED"] ?? "false",
     LAUNCH_INDEXER_ENABLED: environment["LAUNCH_INDEXER_ENABLED"] ?? "false",
     MEME_INDEXER_ENABLED: environment["MEME_INDEXER_ENABLED"] ?? "false",
+    LAUNCH2_INDEXER_ENABLED: environment["LAUNCH2_INDEXER_ENABLED"] ?? "false",
+    LAUNCH2_INDEXER_POLL_INTERVAL_MS:
+      environment["LAUNCH2_INDEXER_POLL_INTERVAL_MS"] ?? "3000",
     MEME_GRADUATION_EXECUTOR_ENABLED:
       environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
     MEME_GRADUATION_DELAY_SECONDS:
@@ -3151,6 +3185,13 @@ export function loadReconciliationWorkerConfig(
     launchIndexerEnabled: parsed.data.LAUNCH_INDEXER_ENABLED,
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     memeIndexerEnabled: parsed.data.MEME_INDEXER_ENABLED,
+    launch2Indexer: parsed.data.LAUNCH2_INDEXER_ENABLED
+      ? Object.freeze({
+          factoryAddress:
+            parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
+          pollIntervalMs: parsed.data.LAUNCH2_INDEXER_POLL_INTERVAL_MS,
+        })
+      : null,
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
     market: parseMarketConfig(parsed.data),

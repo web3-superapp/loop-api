@@ -24,10 +24,10 @@ describe("000060 join notification preference", () => {
     expect(sql).not.toContain("create table");
   });
 
-  it("rolls back both columns and is the head", () => {
+  it("rolls back both columns (head moved on to 000061 in S134)", () => {
     const sql = captureSql(joinNotifications.down);
     expect(sql).toContain("drop column notifications_applied_at");
     expect(sql).toContain("drop column notifications;");
-    expect(latestMigrationName).toBe("000060_join_notifications_preference");
+    expect(latestMigrationName).toBe("000061_launch2_read_model");
   });
 });
