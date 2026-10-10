@@ -27,6 +27,8 @@ const agentAddress = "0x3333333333333333333333333333333333333333";
 
 const truncateAll = `
   truncate table
+    public.hooks_launch_executor_nonces,
+    public.hooks_launch_deployment_events,
     public.hooks_launch_submission_commands,
     public.hooks_launch_deployment_authorizations,
     public.hooks_launch_deployment_tasks,

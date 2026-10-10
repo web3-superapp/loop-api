@@ -751,3 +751,68 @@ Content-Type: application/json
 | `account.disable`（扩充）                    | `admin_account`          | 原字段 + `operatorEnabledBefore`                                                                     |
 | `mining.formula.approve`（CLI，actor `cli`） | `mining_formula_version` | `channel: "cli"`、`approvedBy: "cli:<name>"`、`reason`、`bypass`、`draftAuthor`、`retiredVersion`    |
 | `mining.formula.approve.failed`（CLI）       | `mining_formula_version` | `channel: "cli"`、`approvedBy`、`reason`、`bypass`、`reasonCode`                                     |
+
+## 11. S132 变更（决策 0112）：Hooks 部署执行器进度
+
+机器契约：`openapi/loop-admin.v1.json`（无新操作，只扩充 `GET /admin/v1/launch/projects` 的
+`stage` 与 `GET /admin/v1/launch/projects/{projectId}` 的 `deploymentTasks[]`）。决策见
+`docs/decisions/0112-hooks-deployment-executor.md`。Base URL、cookie、错误体同 §1 / §6。
+
+### 11.0 给 loop-admin 的改动清单
+
+1. `stage`（列表项与详情 `project.stage`，及列表 `?stage=` 过滤）新增 **`activated`**：最新配置版本
+   的任务已在链上激活。`deploying` 的含义扩大为「执行器仍持有的任务」：`awaiting_executor`、
+   `claimed`、`broadcast`、`confirmed`、`verified`、`reorged`，或可重试的 `failed`。
+   `activeDeploymentJobId` 同口径（`activated` 时为 `null`）。不可重试的 `failed` 不算进行中，
+   `stage` 回落到 `accepted` / `approved`。
+2. 详情 `deploymentTasks[]` 的 `status` 取值扩为 9 个（同 App 文档 §9.1），每项新增只读字段：
+
+| 字段                                                         | 类型                                | 说明                                                                                                                                                             |
+| ------------------------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executorAddress`                                            | address \| null                     | 执行账户（Factory 的 `deploymentExecutor`）                                                                                                                      |
+| `claimedBy`                                                  | string \| null                      | 执行器实例 ID（`hooks-executor:<host>:<pid>:<rand>`）                                                                                                            |
+| `attemptCount`                                               | integer                             | 部署尝试次数（含重试）                                                                                                                                           |
+| `txHash` / `txNonce`                                         | hash \| null / 十进制字符串 \| null | 部署交易（**广播前已入库**）与执行账户 nonce                                                                                                                     |
+| `blockNumber` / `blockHash`                                  | 十进制字符串 \| null / hash \| null | 回执所在区块（重组后清空）                                                                                                                                       |
+| `confirmations`                                              | integer \| null                     | 最近观测的确认数                                                                                                                                                 |
+| `launchId`                                                   | bytes32 \| null                     | 核验后写入；链上事实，不是主键                                                                                                                                   |
+| `deployedAddresses`                                          | object \| null                      | 核验后写入：`launchId`、`meme`、`hook`、`nft`、`curve`、`gate`、`escrow`、`snapshots`、`graduationAdapter`、`buybackAdapter`、`priceRecorder`、`buybackExecutor` |
+| `verifiedChecks`                                             | string[]                            | 通过的核验项（28 项，见决策 0112 §4）                                                                                                                            |
+| `activationTxHash` / `activationBlockNumber` / `activatedAt` | hash / 十进制字符串 / ISO \| null   | 激活交易与时间                                                                                                                                                   |
+| `failure`                                                    | `{code, retryable}` \| null         | 失败码同 App 文档 §9.2                                                                                                                                           |
+| `events[]`                                                   | array（≤100，升序）                 | 见 §11.1                                                                                                                                                         |
+| `updatedAt`                                                  | ISO                                 | 最近一次状态/进度写入                                                                                                                                            |
+
+3. 建议详情页「部署任务」卡片：状态徽标 + `txHash` / `activationTxHash` 链接（BscScan Testnet）+
+   `confirmations` + 地址表（预测 vs 实际，二者 `meme` / `hook` 必须相同）+ 事件时间线。
+   `failure.code = HOOKS_VERIFICATION_MISMATCH` 时把最后一条 `failed` 事件的 `details.failedChecks`
+   原样列出（标红），这是「核验不一致、未激活」的审计证据。
+
+### 11.1 `events[]`（详情专有字段）
+
+```json
+{
+  "sequence": 6,
+  "fromStatus": "confirmed",
+  "toStatus": "failed",
+  "kind": "failed",
+  "txHash": "0x9a0c…41de",
+  "blockNumber": null,
+  "blockHash": null,
+  "confirmations": null,
+  "errorCode": "HOOKS_VERIFICATION_MISMATCH",
+  "details": { "retryable": false, "failedChecks": ["hook_params"] },
+  "actor": "hooks-executor:loop-dev:4127:5f2c1a9b",
+  "createdAt": "2026-10-10T03:41:12.000Z"
+}
+```
+
+- `details` 只含安全字段：`failedChecks`、`retryable`、`attempt`、`nonce`、`revert`（合约错误名）、
+  `previousExecutor`、`checks`（通过项计数）。永不含私钥、签名、原始交易。
+- `actor`：执行器实例；`created` / `cancelled`（项目方动作）为 `null`。
+- 后台**没有**任何执行器写接口：重试由执行器按 `retryable` 自动完成；不可重试的失败需要项目方重新签名
+  （新任务）或平台排查。
+
+### 11.2 错误与不可用
+
+无新错误码。执行器关闭（默认）时任务停在 `awaiting_executor`，`stage = deploying`，详情照常返回。

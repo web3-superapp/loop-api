@@ -177,6 +177,10 @@ function submissionError(error: unknown): never {
         throw V2ApiError.fromCode("POLICY_BLOCKED", {
           reasonCode: "HOOKS_CONFIG_NOT_APPROVED",
         });
+      case "not_cancellable":
+        throw V2ApiError.fromCode("VERSION_CONFLICT", {
+          reasonCode: "HOOKS_DEPLOYMENT_NOT_CANCELLABLE",
+        });
       case "invalid":
         throw V2ApiError.invalidRequest();
     }
@@ -384,7 +388,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchDeployment",
         summary: "Read an owner-scoped Hooks deployment task",
         description:
-          "Decision 0108. A task of another account or project is NOT_FOUND. The response never contains the saved signature.",
+          "Decision 0108 / 0112. A task of another account or project is NOT_FOUND. Returns the executor state (status, txHash, confirmations, predicted and deployed addresses, failure, the latest 100 events). The response never contains the saved signature or the raw transaction.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -424,7 +428,7 @@ export function registerV2LaunchRoutes(
         operationId: "cancelV2HooksLaunchDeployment",
         summary: "Cancel an owner-scoped task before any broadcast",
         description:
-          "Decision 0108. awaiting_executor -> cancelled; an already cancelled task is returned unchanged (idempotent). Cancelling does not revoke an EIP-712 signature already shared on chain.",
+          "Decision 0108 / 0112. awaiting_executor -> cancelled; an already cancelled task is returned unchanged (idempotent). Once an executor has claimed the task it is 409 VERSION_CONFLICT (reasonCode HOOKS_DEPLOYMENT_NOT_CANCELLABLE). Cancelling does not revoke an EIP-712 signature already shared on chain.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

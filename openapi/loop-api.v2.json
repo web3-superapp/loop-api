@@ -95813,7 +95813,15 @@
                     "status",
                     "memeAddress",
                     "hookAddress",
-                    "createdAt"
+                    "txHash",
+                    "confirmations",
+                    "activationTxHash",
+                    "addresses",
+                    "failure",
+                    "attemptCount",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
                   ],
                   "properties": {
                     "jobId": {
@@ -95832,18 +95840,274 @@
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["awaiting_executor", "cancelled"],
-                      "description": "awaiting_executor: verified and recorded, not broadcast. cancelled: withdrawn before any broadcast (does not revoke a signature already shared)."
+                      "enum": [
+                        "awaiting_executor",
+                        "claimed",
+                        "broadcast",
+                        "confirmed",
+                        "verified",
+                        "activated",
+                        "failed",
+                        "reorged",
+                        "cancelled"
+                      ],
+                      "description": "Decision 0112. awaiting_executor: verified and recorded, not claimed. claimed: an executor holds the task and re-checks config, approval, deadline and nonces. broadcast: the signed deployLaunch transaction is persisted (txHash) and sent; waiting for confirmations. confirmed: enough confirmations; module verification pending. verified: every module read back and matched; activation pending. activated: LaunchPublicationGate published (NFT sale / curve may accept funds from their own start times). failed: see failure (retryable → the executor retries automatically). reorged: the receipt left the canonical chain; the same transaction is re-sent. cancelled: withdrawn before any claim (does not revoke a signature already shared)."
                     },
                     "memeAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) MEME address; same as addresses.predicted.meme."
                     },
                     "hookAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) Hook address; same as addresses.predicted.hook."
                     },
-                    "createdAt": { "type": "string", "format": "date-time" }
+                    "txHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ],
+                      "description": "The deployLaunch transaction hash, persisted before it is sent."
+                    },
+                    "confirmations": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 0 },
+                        { "type": "null" }
+                      ],
+                      "description": "Confirmations of txHash last observed by the executor."
+                    },
+                    "activationTxHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "addresses": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["predicted", "deployed"],
+                      "properties": {
+                        "predicted": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["meme", "hook"],
+                          "properties": {
+                            "meme": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "hook": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            }
+                          }
+                        },
+                        "deployed": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "launchId",
+                                "meme",
+                                "hook",
+                                "nft",
+                                "curve",
+                                "gate",
+                                "escrow",
+                                "snapshots",
+                                "graduationAdapter",
+                                "buybackAdapter",
+                                "priceRecorder",
+                                "buybackExecutor"
+                              ],
+                              "properties": {
+                                "launchId": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "meme": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "hook": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "nft": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "curve": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "gate": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "escrow": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "snapshots": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "graduationAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "priceRecorder": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackExecutor": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Read back from the Factory after verification; null before verified."
+                        }
+                      }
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["code", "retryable"],
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "pattern": "^[A-Z0-9_]{1,64}$"
+                            },
+                            "retryable": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "attemptCount": { "type": "integer", "minimum": 0 },
+                    "events": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "sequence",
+                          "fromStatus",
+                          "toStatus",
+                          "kind",
+                          "txHash",
+                          "blockNumber",
+                          "blockHash",
+                          "confirmations",
+                          "errorCode",
+                          "createdAt"
+                        ],
+                        "properties": {
+                          "sequence": { "type": "integer", "minimum": 1 },
+                          "fromStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "awaiting_executor",
+                                  "claimed",
+                                  "broadcast",
+                                  "confirmed",
+                                  "verified",
+                                  "activated",
+                                  "failed",
+                                  "reorged",
+                                  "cancelled"
+                                ]
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "toStatus": {
+                            "type": "string",
+                            "enum": [
+                              "awaiting_executor",
+                              "claimed",
+                              "broadcast",
+                              "confirmed",
+                              "verified",
+                              "activated",
+                              "failed",
+                              "reorged",
+                              "cancelled"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "pattern": "^[a-z_]{1,40}$",
+                            "description": "Executor step: created, claimed, retry_claimed, broadcast, rebroadcast, receipt_found, included, confirmed, reorg_detected, reclaimed_after_reorg, verified, activation_broadcast, activation_included, activation_reorged, activation_reverted, activation_dropped, activation_rejected, activated, failed, lease_taken_over, cancelled. New kinds may be added; render unknown kinds generically."
+                          },
+                          "txHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "blockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Decimal string."
+                          },
+                          "blockHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "confirmations": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 0 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z0-9_]{1,64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "description": "Most recent 100 executor events, oldest first."
+                    },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" }
                   }
                 }
               }
@@ -96445,7 +96709,7 @@
         "operationId": "getV2HooksLaunchDeployment",
         "summary": "Read an owner-scoped Hooks deployment task",
         "tags": ["launch"],
-        "description": "Decision 0108. A task of another account or project is NOT_FOUND. The response never contains the saved signature.",
+        "description": "Decision 0108 / 0112. A task of another account or project is NOT_FOUND. Returns the executor state (status, txHash, confirmations, predicted and deployed addresses, failure, the latest 100 events). The response never contains the saved signature or the raw transaction.",
         "parameters": [
           {
             "schema": {
@@ -96501,7 +96765,15 @@
                     "status",
                     "memeAddress",
                     "hookAddress",
-                    "createdAt"
+                    "txHash",
+                    "confirmations",
+                    "activationTxHash",
+                    "addresses",
+                    "failure",
+                    "attemptCount",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
                   ],
                   "properties": {
                     "jobId": {
@@ -96520,18 +96792,274 @@
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["awaiting_executor", "cancelled"],
-                      "description": "awaiting_executor: verified and recorded, not broadcast. cancelled: withdrawn before any broadcast (does not revoke a signature already shared)."
+                      "enum": [
+                        "awaiting_executor",
+                        "claimed",
+                        "broadcast",
+                        "confirmed",
+                        "verified",
+                        "activated",
+                        "failed",
+                        "reorged",
+                        "cancelled"
+                      ],
+                      "description": "Decision 0112. awaiting_executor: verified and recorded, not claimed. claimed: an executor holds the task and re-checks config, approval, deadline and nonces. broadcast: the signed deployLaunch transaction is persisted (txHash) and sent; waiting for confirmations. confirmed: enough confirmations; module verification pending. verified: every module read back and matched; activation pending. activated: LaunchPublicationGate published (NFT sale / curve may accept funds from their own start times). failed: see failure (retryable → the executor retries automatically). reorged: the receipt left the canonical chain; the same transaction is re-sent. cancelled: withdrawn before any claim (does not revoke a signature already shared)."
                     },
                     "memeAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) MEME address; same as addresses.predicted.meme."
                     },
                     "hookAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) Hook address; same as addresses.predicted.hook."
                     },
-                    "createdAt": { "type": "string", "format": "date-time" }
+                    "txHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ],
+                      "description": "The deployLaunch transaction hash, persisted before it is sent."
+                    },
+                    "confirmations": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 0 },
+                        { "type": "null" }
+                      ],
+                      "description": "Confirmations of txHash last observed by the executor."
+                    },
+                    "activationTxHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "addresses": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["predicted", "deployed"],
+                      "properties": {
+                        "predicted": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["meme", "hook"],
+                          "properties": {
+                            "meme": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "hook": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            }
+                          }
+                        },
+                        "deployed": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "launchId",
+                                "meme",
+                                "hook",
+                                "nft",
+                                "curve",
+                                "gate",
+                                "escrow",
+                                "snapshots",
+                                "graduationAdapter",
+                                "buybackAdapter",
+                                "priceRecorder",
+                                "buybackExecutor"
+                              ],
+                              "properties": {
+                                "launchId": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "meme": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "hook": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "nft": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "curve": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "gate": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "escrow": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "snapshots": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "graduationAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "priceRecorder": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackExecutor": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Read back from the Factory after verification; null before verified."
+                        }
+                      }
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["code", "retryable"],
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "pattern": "^[A-Z0-9_]{1,64}$"
+                            },
+                            "retryable": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "attemptCount": { "type": "integer", "minimum": 0 },
+                    "events": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "sequence",
+                          "fromStatus",
+                          "toStatus",
+                          "kind",
+                          "txHash",
+                          "blockNumber",
+                          "blockHash",
+                          "confirmations",
+                          "errorCode",
+                          "createdAt"
+                        ],
+                        "properties": {
+                          "sequence": { "type": "integer", "minimum": 1 },
+                          "fromStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "awaiting_executor",
+                                  "claimed",
+                                  "broadcast",
+                                  "confirmed",
+                                  "verified",
+                                  "activated",
+                                  "failed",
+                                  "reorged",
+                                  "cancelled"
+                                ]
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "toStatus": {
+                            "type": "string",
+                            "enum": [
+                              "awaiting_executor",
+                              "claimed",
+                              "broadcast",
+                              "confirmed",
+                              "verified",
+                              "activated",
+                              "failed",
+                              "reorged",
+                              "cancelled"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "pattern": "^[a-z_]{1,40}$",
+                            "description": "Executor step: created, claimed, retry_claimed, broadcast, rebroadcast, receipt_found, included, confirmed, reorg_detected, reclaimed_after_reorg, verified, activation_broadcast, activation_included, activation_reorged, activation_reverted, activation_dropped, activation_rejected, activated, failed, lease_taken_over, cancelled. New kinds may be added; render unknown kinds generically."
+                          },
+                          "txHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "blockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Decimal string."
+                          },
+                          "blockHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "confirmations": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 0 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z0-9_]{1,64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "description": "Most recent 100 executor events, oldest first."
+                    },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" }
                   }
                 }
               }
@@ -96983,7 +97511,7 @@
         "operationId": "cancelV2HooksLaunchDeployment",
         "summary": "Cancel an owner-scoped task before any broadcast",
         "tags": ["launch"],
-        "description": "Decision 0108. awaiting_executor -> cancelled; an already cancelled task is returned unchanged (idempotent). Cancelling does not revoke an EIP-712 signature already shared on chain.",
+        "description": "Decision 0108 / 0112. awaiting_executor -> cancelled; an already cancelled task is returned unchanged (idempotent). Once an executor has claimed the task it is 409 VERSION_CONFLICT (reasonCode HOOKS_DEPLOYMENT_NOT_CANCELLABLE). Cancelling does not revoke an EIP-712 signature already shared on chain.",
         "parameters": [
           {
             "schema": {
@@ -97048,7 +97576,15 @@
                     "status",
                     "memeAddress",
                     "hookAddress",
-                    "createdAt"
+                    "txHash",
+                    "confirmations",
+                    "activationTxHash",
+                    "addresses",
+                    "failure",
+                    "attemptCount",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
                   ],
                   "properties": {
                     "jobId": {
@@ -97067,18 +97603,274 @@
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["awaiting_executor", "cancelled"],
-                      "description": "awaiting_executor: verified and recorded, not broadcast. cancelled: withdrawn before any broadcast (does not revoke a signature already shared)."
+                      "enum": [
+                        "awaiting_executor",
+                        "claimed",
+                        "broadcast",
+                        "confirmed",
+                        "verified",
+                        "activated",
+                        "failed",
+                        "reorged",
+                        "cancelled"
+                      ],
+                      "description": "Decision 0112. awaiting_executor: verified and recorded, not claimed. claimed: an executor holds the task and re-checks config, approval, deadline and nonces. broadcast: the signed deployLaunch transaction is persisted (txHash) and sent; waiting for confirmations. confirmed: enough confirmations; module verification pending. verified: every module read back and matched; activation pending. activated: LaunchPublicationGate published (NFT sale / curve may accept funds from their own start times). failed: see failure (retryable → the executor retries automatically). reorged: the receipt left the canonical chain; the same transaction is re-sent. cancelled: withdrawn before any claim (does not revoke a signature already shared)."
                     },
                     "memeAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) MEME address; same as addresses.predicted.meme."
                     },
                     "hookAddress": {
                       "type": "string",
-                      "pattern": "^0x[0-9a-f]{40}$"
+                      "pattern": "^0x[0-9a-f]{40}$",
+                      "description": "Predicted (EIP-712-bound) Hook address; same as addresses.predicted.hook."
                     },
-                    "createdAt": { "type": "string", "format": "date-time" }
+                    "txHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ],
+                      "description": "The deployLaunch transaction hash, persisted before it is sent."
+                    },
+                    "confirmations": {
+                      "anyOf": [
+                        { "type": "integer", "minimum": 0 },
+                        { "type": "null" }
+                      ],
+                      "description": "Confirmations of txHash last observed by the executor."
+                    },
+                    "activationTxHash": {
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "addresses": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["predicted", "deployed"],
+                      "properties": {
+                        "predicted": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["meme", "hook"],
+                          "properties": {
+                            "meme": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "hook": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            }
+                          }
+                        },
+                        "deployed": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "launchId",
+                                "meme",
+                                "hook",
+                                "nft",
+                                "curve",
+                                "gate",
+                                "escrow",
+                                "snapshots",
+                                "graduationAdapter",
+                                "buybackAdapter",
+                                "priceRecorder",
+                                "buybackExecutor"
+                              ],
+                              "properties": {
+                                "launchId": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "meme": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "hook": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "nft": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "curve": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "gate": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "escrow": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "snapshots": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "graduationAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackAdapter": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "priceRecorder": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buybackExecutor": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Read back from the Factory after verification; null before verified."
+                        }
+                      }
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["code", "retryable"],
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "pattern": "^[A-Z0-9_]{1,64}$"
+                            },
+                            "retryable": { "type": "boolean" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "attemptCount": { "type": "integer", "minimum": 0 },
+                    "events": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "sequence",
+                          "fromStatus",
+                          "toStatus",
+                          "kind",
+                          "txHash",
+                          "blockNumber",
+                          "blockHash",
+                          "confirmations",
+                          "errorCode",
+                          "createdAt"
+                        ],
+                        "properties": {
+                          "sequence": { "type": "integer", "minimum": 1 },
+                          "fromStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "awaiting_executor",
+                                  "claimed",
+                                  "broadcast",
+                                  "confirmed",
+                                  "verified",
+                                  "activated",
+                                  "failed",
+                                  "reorged",
+                                  "cancelled"
+                                ]
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "toStatus": {
+                            "type": "string",
+                            "enum": [
+                              "awaiting_executor",
+                              "claimed",
+                              "broadcast",
+                              "confirmed",
+                              "verified",
+                              "activated",
+                              "failed",
+                              "reorged",
+                              "cancelled"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "pattern": "^[a-z_]{1,40}$",
+                            "description": "Executor step: created, claimed, retry_claimed, broadcast, rebroadcast, receipt_found, included, confirmed, reorg_detected, reclaimed_after_reorg, verified, activation_broadcast, activation_included, activation_reorged, activation_reverted, activation_dropped, activation_rejected, activated, failed, lease_taken_over, cancelled. New kinds may be added; render unknown kinds generically."
+                          },
+                          "txHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "blockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Decimal string."
+                          },
+                          "blockHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "confirmations": {
+                            "anyOf": [
+                              { "type": "integer", "minimum": 0 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z0-9_]{1,64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "description": "Most recent 100 executor events, oldest first."
+                    },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" }
                   }
                 }
               }

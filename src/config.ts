@@ -844,6 +844,26 @@ const reconciliationWorkerEnvironmentSchema = z
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
     ...marketEnvironmentShape,
+    HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
+    HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
+    HOOKS_LAUNCH_EXECUTOR_ENABLED: z.enum(["off", "on"]),
+    HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS: positiveIntegerString(1, 64),
+    HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS: positiveIntegerString(
+      1_000,
+      600_000,
+    ),
+    HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS: positiveIntegerString(30, 3_600),
+    HOOKS_LAUNCH_EXECUTOR_MAX_ATTEMPTS: positiveIntegerString(1, 10),
+    HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS: positiveIntegerString(
+      10,
+      86_400,
+    ),
+    HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP: positiveIntegerString(
+      1_000_000,
+      30_000_000,
+    ),
+    HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI: positiveIntegerString(1, 1_000),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -853,6 +873,7 @@ const reconciliationWorkerEnvironmentSchema = z
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
+    refineHooksLaunchFactoryEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1400,6 +1421,13 @@ export interface ReconciliationWorkerConfig {
     readonly privateKey: `0x${string}`;
     readonly delaySeconds: number;
   } | null;
+  /**
+   * Hooks deployment executor (Decision 0112). Present only with
+   * `HOOKS_LAUNCH_EXECUTOR_ENABLED=on`; enabling it without a well-formed
+   * `HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY`, without the Factory pair, or off
+   * BSC Testnet refuses boot. The key is never logged.
+   */
+  readonly hooksLaunchExecutor: HooksLaunchExecutorConfig | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -2006,6 +2034,80 @@ export function parseMemeGraduationExecutor(data: {
     delaySeconds:
       data.MEME_GRADUATION_DELAY_SECONDS ??
       MEME_GRADUATION_DEFAULT_DELAY_SECONDS,
+  });
+}
+
+export interface HooksLaunchExecutorConfig {
+  readonly privateKey: `0x${string}`;
+  readonly factoryAddress: string;
+  readonly factoryCodeHash: string;
+  readonly confirmations: number;
+  readonly pollIntervalMs: number;
+  readonly leaseSeconds: number;
+  readonly maxAttempts: number;
+  readonly retryDelaySeconds: number;
+  readonly gasLimitCap: number;
+  readonly maxGasPriceGwei: number;
+}
+
+/**
+ * Decision 0112: the Hooks deployment executor signs `deployLaunch` /
+ * `activateLaunch` on the BSC Testnet Factory. `off` (default) → null.
+ * `on` refuses boot unless the executor key, the Factory address + code
+ * hash pair, and `LAUNCH_CHAIN_ID=97` are all present. The key never enters
+ * a log line or an error message.
+ */
+export function parseHooksLaunchExecutor(data: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly HOOKS_LAUNCH_EXECUTOR_ENABLED: "off" | "on";
+  readonly HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?: string | undefined;
+  readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+  readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
+  readonly HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_MAX_ATTEMPTS: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP: number;
+  readonly HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI: number;
+}): HooksLaunchExecutorConfig | null {
+  if (data.HOOKS_LAUNCH_EXECUTOR_ENABLED !== "on") {
+    return null;
+  }
+  const issues: string[] = [];
+  const key = data.HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?.trim();
+  if (key === undefined || key === "" || !privateKeyPattern.test(key)) {
+    issues.push(
+      "HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: a 32-byte hex key is required when HOOKS_LAUNCH_EXECUTOR_ENABLED=on",
+    );
+  }
+  if (data.LAUNCH_CHAIN_ID !== "97") {
+    issues.push(
+      "HOOKS_LAUNCH_EXECUTOR_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
+    );
+  }
+  if (
+    data.HOOKS_LAUNCH_FACTORY_ADDRESS === undefined ||
+    data.HOOKS_LAUNCH_FACTORY_CODE_HASH === undefined
+  ) {
+    issues.push(
+      "HOOKS_LAUNCH_EXECUTOR_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH",
+    );
+  }
+  if (issues.length > 0 || key === undefined) {
+    throw new ConfigurationError(issues);
+  }
+  return Object.freeze({
+    privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
+    factoryAddress: data.HOOKS_LAUNCH_FACTORY_ADDRESS!.toLowerCase(),
+    factoryCodeHash: data.HOOKS_LAUNCH_FACTORY_CODE_HASH!.toLowerCase(),
+    confirmations: data.HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS,
+    pollIntervalMs: data.HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS,
+    leaseSeconds: data.HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS,
+    maxAttempts: data.HOOKS_LAUNCH_EXECUTOR_MAX_ATTEMPTS,
+    retryDelaySeconds: data.HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS,
+    gasLimitCap: data.HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP,
+    maxGasPriceGwei: data.HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI,
   });
 }
 
@@ -2942,6 +3044,27 @@ export function loadReconciliationWorkerConfig(
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
+    HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
+    HOOKS_LAUNCH_FACTORY_CODE_HASH:
+      environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    HOOKS_LAUNCH_EXECUTOR_ENABLED:
+      environment["HOOKS_LAUNCH_EXECUTOR_ENABLED"] ?? "off",
+    HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY:
+      environment["HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY"],
+    HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS:
+      environment["HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS"] ?? "3",
+    HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS:
+      environment["HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS"] ?? "5000",
+    HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS:
+      environment["HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS"] ?? "120",
+    HOOKS_LAUNCH_EXECUTOR_MAX_ATTEMPTS:
+      environment["HOOKS_LAUNCH_EXECUTOR_MAX_ATTEMPTS"] ?? "3",
+    HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS:
+      environment["HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS"] ?? "60",
+    HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP:
+      environment["HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP"] ?? "16000000",
+    HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI:
+      environment["HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI"] ?? "20",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -3029,6 +3152,7 @@ export function loadReconciliationWorkerConfig(
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     memeIndexerEnabled: parsed.data.MEME_INDEXER_ENABLED,
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
+    hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED

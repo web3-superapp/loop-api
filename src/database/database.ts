@@ -1,3 +1,5 @@
+import { createPostgresHooksLaunchExecutorRepository } from "./hooks-launch-executor-repository.js";
+import type { HooksLaunchExecutorRepository } from "../features/launch/hooks-launch-executor.js";
 import pg from "pg";
 import { z } from "zod";
 
@@ -227,6 +229,10 @@ export interface Database {
   readonly hooksLaunchReview?: HooksLaunchReviewRepository;
   /** Decision 0108: project-signed deployment tasks (awaiting executor). */
   readonly hooksLaunchSubmissions?: HooksLaunchSubmissionRepository;
+  /** Decision 0112: the deployment executor's lease-scoped repository. */
+  readonly hooksLaunchExecutor?: (
+    leaseSeconds: number,
+  ) => HooksLaunchExecutorRepository;
   /** Launch chain facts: lane, projections, allowlist roots, Intents (Decision 0077). */
   readonly launchChain?: LaunchChainRepository;
   /** Mining formula versions, weights, and snapshots (Decision 0036). */
@@ -463,6 +469,8 @@ export function createPostgresDatabase(
       createPostgresHooksLaunchProjectConfigRepository(pool),
     hooksLaunchReview: createPostgresHooksLaunchReviewRepository(pool),
     hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
+    hooksLaunchExecutor: (leaseSeconds: number) =>
+      createPostgresHooksLaunchExecutorRepository(pool, { leaseSeconds }),
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     admin: createPostgresAdminRepository(pool),

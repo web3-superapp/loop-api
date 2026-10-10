@@ -1,3 +1,4 @@
+import { hooksLaunchDeploymentStatuses } from "./features/launch/hooks-launch-deployment-status.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 
 type WorkerLogLevel = ReconciliationWorkerConfig["logLevel"];
@@ -37,6 +38,7 @@ const indexerLanes = new Set([
   "meme_salt_pool",
   "meme_intent_reconcile",
   "meme_graduation_executor",
+  "hooks_launch_executor",
 ]);
 const memeGraduationOutcomes = new Set([
   "confirmed",
@@ -52,6 +54,10 @@ const launchIntentSettlements = new Set([
   "failed",
   "expired",
 ]);
+
+const hooksDeploymentStatusSet: ReadonlySet<string> = new Set(
+  hooksLaunchDeploymentStatuses,
+);
 
 export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker started"
@@ -69,6 +75,10 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP meme lanes stay idle: the MEME contract is not configured"
   | "LOOP meme graduation executor stays idle"
   | "LOOP meme graduation executor attempted graduate"
+  | "LOOP hooks launch executor stays idle"
+  | "LOOP hooks launch executor is idle"
+  | "LOOP hooks launch executor enabled"
+  | "LOOP hooks launch executor step"
   | "LOOP meme salt pool refilled"
   | "LOOP meme intent settled from its receipt"
   | "LOOP meme intent receipt read failed"
@@ -184,6 +194,18 @@ export interface ReconciliationWorkerLogFields {
    */
   readonly memeTokenId?: string;
   readonly memeIntentId?: string;
+  /**
+   * Decision 0112 Hooks executor: the opaque task ID, the status pair and
+   * step name, the executor / Factory addresses (public), and the
+   * configured confirmations. Never a key, a raw transaction, or a URL.
+   */
+  readonly hooksDeploymentJobId?: string;
+  readonly fromStatus?: string;
+  readonly toStatus?: string;
+  readonly step?: string;
+  readonly executorAddress?: string;
+  readonly factoryAddress?: string;
+  readonly confirmations?: number;
   readonly outcome?: string;
   readonly attempts?: number;
   readonly needsOperator?: boolean;
@@ -361,6 +383,7 @@ function sanitizeFields(
         "inserted",
         "free",
         "count",
+        "confirmations",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];
@@ -393,6 +416,25 @@ function sanitizeFields(
     /^0x[0-9a-f]{64}$/.test(fields.transactionHash)
       ? fields.transactionHash
       : undefined;
+  const hooksDeploymentJobId =
+    fields.hooksDeploymentJobId !== undefined &&
+    safeUuidPattern.test(fields.hooksDeploymentJobId)
+      ? fields.hooksDeploymentJobId
+      : undefined;
+  const hooksStatus = (value: string | undefined): string | undefined =>
+    value !== undefined && hooksDeploymentStatusSet.has(value)
+      ? value
+      : undefined;
+  const fromStatus = hooksStatus(fields.fromStatus);
+  const toStatus = hooksStatus(fields.toStatus);
+  const step =
+    fields.step !== undefined && /^[a-z_]{1,40}$/u.test(fields.step)
+      ? fields.step
+      : undefined;
+  const publicAddress = (value: string | undefined): string | undefined =>
+    value !== undefined && /^0x[0-9a-f]{40}$/u.test(value) ? value : undefined;
+  const executorAddress = publicAddress(fields.executorAddress);
+  const factoryAddress = publicAddress(fields.factoryAddress);
   const unreadInputs =
     fields.unreadInputs === undefined
       ? undefined
@@ -441,6 +483,12 @@ function sanitizeFields(
     ...(outcome === undefined ? {} : { outcome }),
     ...(needsOperator === undefined ? {} : { needsOperator }),
     ...(transactionHash === undefined ? {} : { transactionHash }),
+    ...(hooksDeploymentJobId === undefined ? {} : { hooksDeploymentJobId }),
+    ...(fromStatus === undefined ? {} : { fromStatus }),
+    ...(toStatus === undefined ? {} : { toStatus }),
+    ...(step === undefined ? {} : { step }),
+    ...(executorAddress === undefined ? {} : { executorAddress }),
+    ...(factoryAddress === undefined ? {} : { factoryAddress }),
     ...limits,
   });
 }

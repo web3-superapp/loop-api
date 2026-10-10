@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
+
 import { configureOutboundKeepAlive } from "./core/http/outbound-keep-alive.js";
 import {
   createBscIndexerWorker,
@@ -31,6 +34,12 @@ import {
   type MemeGraduationSender,
 } from "./integrations/meme/meme-graduation-sender.js";
 import { createLaunchContractAdapter } from "./integrations/launch/launch-contract-adapter.js";
+import {
+  HooksLaunchExecutorChainRefusedError,
+  createHooksLaunchExecutorChain,
+} from "./integrations/launch/hooks-launch-executor-chain.js";
+import type { HooksLaunchExecutorRepository } from "./features/launch/hooks-launch-executor.js";
+import { createHooksLaunchExecutorLane } from "./hooks-launch-executor-worker.js";
 import {
   createAlertEvaluatorWorker,
   type AlertEvaluatorWorker,
@@ -198,6 +207,10 @@ export interface ReconciliationWorkerDatabase {
   readonly launchChain?: LaunchChainRepository;
   /** MEME launchpad lanes (Decision 0101); absent keeps them off. */
   readonly meme?: MemeRepository;
+  /** Hooks deployment executor (Decision 0112); absent keeps it off. */
+  readonly hooksLaunchExecutor?: (
+    leaseSeconds: number,
+  ) => HooksLaunchExecutorRepository;
   readonly communityChannelSync: CommunityChannelSyncRepository;
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   /** Decision 0095: identities the channel sync upserts; absent keeps `{id}`. */
@@ -283,6 +296,9 @@ export interface RunReconciliationWorkerOptions {
   readonly createLaunchIndexerWorker?: LaunchIndexerWorkerFactory;
   /** Test seam for the MEME graduation signer (Decision 0101). */
   readonly createMemeGraduationSender?: typeof createMemeGraduationSender;
+  /** Test seams for the Hooks executor chain client and lane (Decision 0112). */
+  readonly createHooksLaunchExecutorChain?: typeof createHooksLaunchExecutorChain;
+  readonly createHooksLaunchExecutorLane?: typeof createHooksLaunchExecutorLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -613,6 +629,106 @@ export async function runReconciliationWorker(
     // MEME_INDEXER_ENABLED; the graduation fallback signs only behind
     // MEME_GRADUATION_EXECUTOR_ENABLED, on the testnet slot.
     const memeLanes: PeriodicLane[] = [];
+    // Hooks deployment executor (Decision 0112), default off. Config load
+    // already refused boot for `on` without a key / Factory / chain 97.
+    const hooksExecutorConfig = options.config.hooksLaunchExecutor;
+    if (hooksExecutorConfig !== null) {
+      const repositoryFactory = database.hooksLaunchExecutor;
+      let chain: ReturnType<typeof createHooksLaunchExecutorChain> | null =
+        null;
+      try {
+        chain = (
+          options.createHooksLaunchExecutorChain ??
+          createHooksLaunchExecutorChain
+        )({
+          privateKey: hooksExecutorConfig.privateKey,
+          factoryAddress: hooksExecutorConfig.factoryAddress,
+          rpcUrls: launchChainConfig.rpcUrls,
+        });
+      } catch (error) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "hooks_launch_executor",
+            reasonCode:
+              error instanceof HooksLaunchExecutorChainRefusedError
+                ? error.reasonCode
+                : "HOOKS_EXECUTOR_CHAIN_UNAVAILABLE",
+          },
+          "LOOP hooks launch executor stays idle",
+        );
+      }
+      if (repositoryFactory === undefined) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "hooks_launch_executor",
+            reasonCode: "HOOKS_EXECUTOR_REPOSITORY_UNAVAILABLE",
+          },
+          "LOOP hooks launch executor stays idle",
+        );
+      } else if (chain !== null) {
+        const executorId = `hooks-executor:${hostname()
+          .replace(/[^A-Za-z0-9.-]/gu, "-")
+          .slice(0, 64)}:${process.pid}:${randomUUID().slice(0, 8)}`;
+        memeLanes.push(
+          (
+            options.createHooksLaunchExecutorLane ??
+            createHooksLaunchExecutorLane
+          )({
+            repository: repositoryFactory(hooksExecutorConfig.leaseSeconds),
+            chain,
+            config: hooksExecutorConfig,
+            executorId,
+            onStep: (event) => {
+              const log =
+                event.errorCode === null
+                  ? options.logger.info.bind(options.logger)
+                  : options.logger.warn.bind(options.logger);
+              log(
+                {
+                  ...logFields(),
+                  lane: "hooks_launch_executor",
+                  hooksDeploymentJobId: event.jobId,
+                  fromStatus: event.from,
+                  toStatus: event.to,
+                  step: event.kind,
+                  ...(event.txHash === null
+                    ? {}
+                    : { transactionHash: event.txHash }),
+                  ...(event.errorCode === null
+                    ? {}
+                    : { reasonCode: event.errorCode }),
+                },
+                "LOOP hooks launch executor step",
+              );
+            },
+            onIdle: (reasonCode) => {
+              options.logger.warn(
+                { ...logFields(), lane: "hooks_launch_executor", reasonCode },
+                "LOOP hooks launch executor is idle",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "hooks_launch_executor",
+            executorAddress: chain.executorAddress,
+            factoryAddress: hooksExecutorConfig.factoryAddress,
+            confirmations: hooksExecutorConfig.confirmations,
+          },
+          "LOOP hooks launch executor enabled",
+        );
+      }
+    }
     const memeIndexerWorker = (() => {
       const memeConfig = options.config.meme;
       const memeRepository = database.meme;

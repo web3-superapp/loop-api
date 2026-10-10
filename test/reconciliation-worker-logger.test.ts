@@ -373,4 +373,59 @@ describe("reconciliation worker logger", () => {
     expect(stdout).not.toHaveBeenCalled();
     expect(stderr).not.toHaveBeenCalled();
   });
+  it("keeps only safe Hooks executor fields (Decision 0112)", () => {
+    const stdout = vi.fn<(line: string) => void>();
+    const logger = createReconciliationWorkerLogger({
+      level: "info",
+      serviceVersion: "0.1.0",
+      now: () => new Date("2026-10-10T10:00:00.000Z"),
+      writeStdout: stdout,
+    });
+    const txHash = `0x${"ab".repeat(32)}`;
+    logger.info(
+      {
+        lane: "hooks_launch_executor",
+        hooksDeploymentJobId: "00000000-0000-4000-8000-000000000011",
+        fromStatus: "claimed",
+        toStatus: "broadcast",
+        step: "broadcast",
+        transactionHash: txHash,
+        executorAddress: "0x2222222222222222222222222222222222222222",
+        confirmations: 3,
+      },
+      "LOOP hooks launch executor step",
+    );
+    logger.info(
+      {
+        lane: "hooks_launch_executor",
+        hooksDeploymentJobId: "not-a-uuid",
+        fromStatus: "pwned",
+        step: "Bad Step!",
+        executorAddress: "0xKEY",
+        factoryAddress: `0x${"42".repeat(32)}`,
+      },
+      "LOOP hooks launch executor step",
+    );
+    const [first, second] = stdout.mock.calls.map(
+      ([line]) => JSON.parse(line) as Record<string, unknown>,
+    );
+    expect(first).toMatchObject({
+      lane: "hooks_launch_executor",
+      hooksDeploymentJobId: "00000000-0000-4000-8000-000000000011",
+      fromStatus: "claimed",
+      toStatus: "broadcast",
+      step: "broadcast",
+      transactionHash: txHash,
+      executorAddress: "0x2222222222222222222222222222222222222222",
+      confirmations: 3,
+    });
+    expect(second).toEqual({
+      level: "info",
+      time: "2026-10-10T10:00:00.000Z",
+      service: "loop-reconciliation-worker",
+      version: "0.1.0",
+      lane: "hooks_launch_executor",
+      msg: "LOOP hooks launch executor step",
+    });
+  });
 });

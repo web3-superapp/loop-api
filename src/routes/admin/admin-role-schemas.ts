@@ -7,6 +7,7 @@ import {
   adminPasswordMinimumLength,
 } from "../../features/admin/admin-accounts.js";
 import { adminLaunchStages } from "../../features/admin/admin-launch-review.js";
+import { hooksLaunchDeploymentStatuses } from "../../features/launch/hooks-launch-deployment-status.js";
 import {
   adminPermissions,
   adminRoles,
@@ -380,7 +381,7 @@ const projectSummarySchema = {
       type: "string",
       enum: [...adminLaunchStages],
       description:
-        "Of the latest config version: draft (none saved), awaiting_approval, approved, accepted (a passed BSC Testnet acceptance), deploying (an awaiting_executor task).",
+        "Of the latest config version: draft (none saved), awaiting_approval, approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain).",
     },
     latestConfigVersion: { type: ["integer", "null"], minimum: 1 },
     latestConfigHash: { anyOf: [hash32Schema, { type: "null" }] },
@@ -554,6 +555,62 @@ const acceptanceSchema = {
   },
 } as const;
 
+const deploymentStatusSchema = {
+  type: "string",
+  enum: [...hooksLaunchDeploymentStatuses],
+} as const;
+const nullableHash32Schema = {
+  anyOf: [hash32Schema, { type: "null" }],
+} as const;
+const nullableDecimalSchema = {
+  anyOf: [
+    { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
+    { type: "null" },
+  ],
+} as const;
+
+const deploymentEventSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "sequence",
+    "fromStatus",
+    "toStatus",
+    "kind",
+    "txHash",
+    "blockNumber",
+    "blockHash",
+    "confirmations",
+    "errorCode",
+    "details",
+    "actor",
+    "createdAt",
+  ],
+  properties: {
+    sequence: { type: "integer", minimum: 1 },
+    fromStatus: { anyOf: [deploymentStatusSchema, { type: "null" }] },
+    toStatus: deploymentStatusSchema,
+    kind: { type: "string", pattern: "^[a-z_]{1,40}$" },
+    txHash: nullableHash32Schema,
+    blockNumber: nullableDecimalSchema,
+    blockHash: nullableHash32Schema,
+    confirmations: { type: ["integer", "null"], minimum: 0 },
+    errorCode: { type: ["string", "null"] },
+    details: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "Safe step details: failedChecks (verification check names), retryable, attempt, nonce, revert (contract error name). Never a key, signature, or raw transaction.",
+    },
+    actor: {
+      type: ["string", "null"],
+      description:
+        "Executor instance ID (host:pid:random); null for owner/system rows.",
+    },
+    createdAt: dateTimeSchema,
+  },
+} as const;
+
 const deploymentTaskSchema = {
   type: "object",
   additionalProperties: false,
@@ -570,12 +627,33 @@ const deploymentTaskSchema = {
     "predictedHookAddress",
     "authorizationCount",
     "latestAuthorizationAt",
+    "executorAddress",
+    "claimedBy",
+    "attemptCount",
+    "txHash",
+    "txNonce",
+    "blockNumber",
+    "blockHash",
+    "confirmations",
+    "launchId",
+    "deployedAddresses",
+    "verifiedChecks",
+    "activationTxHash",
+    "activationBlockNumber",
+    "activatedAt",
+    "failure",
+    "events",
     "createdAt",
+    "updatedAt",
   ],
   properties: {
     jobId: uuidSchema,
     configVersion: { type: "integer", minimum: 1 },
-    status: { type: "string", enum: ["awaiting_executor", "cancelled"] },
+    status: {
+      ...deploymentStatusSchema,
+      description:
+        "Decision 0112 state machine: awaiting_executor → claimed → broadcast → confirmed → verified → activated; failed (failure.retryable → retried), reorged (→ claimed, same transaction re-sent), cancelled.",
+    },
     chainId: { type: "integer", const: 97 },
     factoryAddress: addressSchema,
     projectOwner: {
@@ -603,7 +681,57 @@ const deploymentTaskSchema = {
         "Signed authorizations on file (deadline renewals). The signatures themselves are never returned.",
     },
     latestAuthorizationAt: nullableDateTimeSchema,
+    executorAddress: { anyOf: [addressSchema, { type: "null" }] },
+    claimedBy: { type: ["string", "null"] },
+    attemptCount: { type: "integer", minimum: 0 },
+    txHash: nullableHash32Schema,
+    txNonce: nullableDecimalSchema,
+    blockNumber: nullableDecimalSchema,
+    blockHash: nullableHash32Schema,
+    confirmations: { type: ["integer", "null"], minimum: 0 },
+    launchId: nullableHash32Schema,
+    deployedAddresses: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
+        { type: "null" },
+      ],
+      description:
+        "launchId and every module address read back from the Factory (meme, hook, nft, curve, gate, escrow, snapshots, graduationAdapter, buybackAdapter, priceRecorder, buybackExecutor).",
+    },
+    verifiedChecks: {
+      type: "array",
+      maxItems: 64,
+      items: { type: "string" },
+      description: "Verification checks that passed before activation.",
+    },
+    activationTxHash: nullableHash32Schema,
+    activationBlockNumber: nullableDecimalSchema,
+    activatedAt: nullableDateTimeSchema,
+    failure: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "retryable"],
+          properties: {
+            code: { type: "string" },
+            retryable: { type: "boolean" },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    events: {
+      type: "array",
+      maxItems: 100,
+      items: deploymentEventSchema,
+      description: "Latest 100 executor events, oldest first.",
+    },
     createdAt: dateTimeSchema,
+    updatedAt: dateTimeSchema,
   },
 } as const;
 

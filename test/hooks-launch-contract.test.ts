@@ -117,6 +117,62 @@ describe("Hooks launch OpenAPI contract (Decision 0108)", () => {
     expect(errorCodes(op, "400")).toEqual(["INVALID_REQUEST"]);
   });
 
+  it("publishes the Decision 0112 executor state on every task response", () => {
+    for (const [path, method] of [
+      [`${base}/hooks-deployments`, "post"],
+      [`${base}/hooks-deployments/{jobId}`, "get"],
+      [`${base}/hooks-deployments/{jobId}`, "delete"],
+    ] as const) {
+      const schema = operation(path, method).responses["200"]?.content?.[
+        "application/json"
+      ].schema as {
+        readonly required: readonly string[];
+        readonly properties: Record<
+          string,
+          {
+            readonly enum?: readonly string[];
+            readonly items?: {
+              readonly properties: Record<string, { readonly anyOf?: unknown }>;
+            };
+          }
+        >;
+      };
+      expect(schema.required).toEqual(
+        expect.arrayContaining([
+          "status",
+          "txHash",
+          "confirmations",
+          "addresses",
+          "events",
+          "failure",
+        ]),
+      );
+      expect(schema.properties["status"]?.enum).toEqual([
+        "awaiting_executor",
+        "claimed",
+        "broadcast",
+        "confirmed",
+        "verified",
+        "activated",
+        "failed",
+        "reorged",
+        "cancelled",
+      ]);
+      // Block numbers travel as decimal strings, never JS numbers.
+      expect(
+        JSON.stringify(
+          schema.properties["events"]?.items?.properties["blockNumber"],
+        ),
+      ).toContain('"type":"string"');
+      expect(Object.keys(schema.properties)).not.toEqual(
+        expect.arrayContaining(["rawTx"]),
+      );
+      expect(Object.keys(schema.properties)).not.toContain("signature");
+    }
+    const cancel = operation(`${base}/hooks-deployments/{jobId}`, "delete");
+    expect(errorCodes(cancel, "409")).toContain("VERSION_CONFLICT");
+  });
+
   it("publishes every fixed-economics amount as a decimal string", () => {
     const resource = operation(`${base}/hooks-config`, "put").responses["200"]
       ?.content?.["application/json"].schema as {

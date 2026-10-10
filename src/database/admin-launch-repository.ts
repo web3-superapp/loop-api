@@ -11,11 +11,14 @@ import {
   type AdminLaunchTestnetAcceptance,
 } from "../features/admin/admin-launch-review.js";
 import { AdminRepositoryUnavailableError } from "../features/admin/admin-repository.js";
+import { hooksLaunchDeploymentStatuses } from "../features/launch/hooks-launch-deployment-status.js";
 
 /**
  * Decision 0109: read projection of the Hooks launch review for the
  * console. Stage, in order of precedence, of the latest config version:
- * `deploying` (an `awaiting_executor` task) > `accepted` (a `passed` BSC
+ * `activated` (Decision 0112: an activated task) > `deploying` (a task the
+ * executor still owns: awaiting_executor … verified, reorged, retryable
+ * failed) > `accepted` (a `passed` BSC
  * Testnet acceptance) > `approved` > `awaiting_approval`; `draft` when no
  * config version exists yet. Signed payloads are never selected.
  */
@@ -92,9 +95,10 @@ const summarySql = `
     c.edited_by_operator_id,
     a.approver_id, a.approved_at,
     acc.outcome as acceptance_outcome,
-    d.job_id as active_job_id,
+    case when d.status = 'activated' then null else d.job_id end as active_job_id,
     case
       when c.config_version is null then 'draft'
+      when d.status = 'activated' then 'activated'
       when d.job_id is not null then 'deploying'
       when a.approver_id is null then 'awaiting_approval'
       when acc.has_passed then 'accepted'
@@ -120,10 +124,13 @@ const summarySql = `
     where project_id = p.project_id and config_version = c.config_version
   ) acc on true
   left join lateral (
-    select job_id
+    select job_id, status
     from public.hooks_launch_deployment_tasks
     where project_id = p.project_id and config_version = c.config_version
-      and status = 'awaiting_executor'
+      and (status in ('awaiting_executor','claimed','broadcast','confirmed',
+        'verified','reorged','activated')
+        or (status = 'failed' and failure_retryable))
+    order by created_at desc
     limit 1
   ) d on true
   where ($1::boolean or p.project_id::text = any($2::text[]))
@@ -221,11 +228,29 @@ function mapAcceptance(raw: unknown): AdminLaunchTestnetAcceptance {
   });
 }
 
+const nullableHash = z.string().nullable();
+const eventRowSchema = z
+  .object({
+    sequence: z.union([z.number(), z.string()]),
+    fromStatus: z.enum(hooksLaunchDeploymentStatuses).nullable(),
+    toStatus: z.enum(hooksLaunchDeploymentStatuses),
+    kind: z.string(),
+    txHash: nullableHash,
+    blockNumber: z.union([z.string(), z.number()]).nullable(),
+    blockHash: nullableHash,
+    confirmations: z.number().int().nullable(),
+    errorCode: z.string().nullable(),
+    details: z.record(z.string(), z.unknown()),
+    actor: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .strict();
+
 const taskRowSchema = z
   .object({
     job_id: uuid,
     config_version: z.number().int().positive(),
-    status: z.enum(["awaiting_executor", "cancelled"]),
+    status: z.enum(hooksLaunchDeploymentStatuses),
     chain_id: z.number().int(),
     factory_address: z.string(),
     project_owner: z.string(),
@@ -235,12 +260,31 @@ const taskRowSchema = z
     hook_address: z.string(),
     authorization_count: z.number().int().nonnegative(),
     latest_authorization_at: date.nullable(),
+    executor_address: z.string().nullable(),
+    claimed_by: z.string().nullable(),
+    attempt_count: z.number().int().nonnegative(),
+    tx_hash: nullableHash,
+    tx_nonce: z.string().nullable(),
+    block_number: z.string().nullable(),
+    block_hash: nullableHash,
+    confirmations: z.number().int().nullable(),
+    launch_id: nullableHash,
+    deployed_addresses: z.record(z.string(), z.string()).nullable(),
+    verification: z.record(z.string(), z.unknown()).nullable(),
+    activation_tx_hash: nullableHash,
+    activation_block_number: z.string().nullable(),
+    activated_at: date.nullable(),
+    failure_code: z.string().nullable(),
+    failure_retryable: z.boolean().nullable(),
+    events: z.array(eventRowSchema),
     created_at: date,
+    updated_at: date,
   })
   .strict();
 
 function mapTask(raw: unknown): AdminLaunchDeploymentTask {
   const row = taskRowSchema.parse(raw);
+  const checks = row.verification?.["checks"];
   return Object.freeze({
     jobId: row.job_id,
     configVersion: row.config_version,
@@ -254,7 +298,55 @@ function mapTask(raw: unknown): AdminLaunchDeploymentTask {
     predictedHookAddress: row.hook_address,
     authorizationCount: row.authorization_count,
     latestAuthorizationAt: row.latest_authorization_at?.toISOString() ?? null,
+    executorAddress: row.executor_address,
+    claimedBy: row.claimed_by,
+    attemptCount: row.attempt_count,
+    txHash: row.tx_hash,
+    txNonce: row.tx_nonce,
+    blockNumber: row.block_number,
+    blockHash: row.block_hash,
+    confirmations: row.confirmations,
+    launchId: row.launch_id,
+    deployedAddresses:
+      row.deployed_addresses === null
+        ? null
+        : Object.freeze({ ...row.deployed_addresses }),
+    verifiedChecks: Object.freeze(
+      Array.isArray(checks)
+        ? checks.filter((value): value is string => typeof value === "string")
+        : [],
+    ),
+    activationTxHash: row.activation_tx_hash,
+    activationBlockNumber: row.activation_block_number,
+    activatedAt: row.activated_at?.toISOString() ?? null,
+    failure:
+      row.failure_code === null
+        ? null
+        : Object.freeze({
+            code: row.failure_code,
+            retryable: row.failure_retryable === true,
+          }),
+    events: Object.freeze(
+      row.events.map((event) =>
+        Object.freeze({
+          sequence: Number(event.sequence),
+          fromStatus: event.fromStatus,
+          toStatus: event.toStatus,
+          kind: event.kind,
+          txHash: event.txHash,
+          blockNumber:
+            event.blockNumber === null ? null : String(event.blockNumber),
+          blockHash: event.blockHash,
+          confirmations: event.confirmations,
+          errorCode: event.errorCode,
+          details: Object.freeze({ ...event.details }),
+          actor: event.actor,
+          createdAt: new Date(event.createdAt).toISOString(),
+        }),
+      ),
+    ),
     createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
   });
 }
 
@@ -356,7 +448,26 @@ export function createPostgresAdminLaunchReviewRepository(
                  where z.job_id = t.job_id) as authorization_count,
                (select max(z.created_at) from public.hooks_launch_deployment_authorizations z
                  where z.job_id = t.job_id) as latest_authorization_at,
-               t.created_at
+               t.executor_address, t.claimed_by, t.attempt_count, t.tx_hash,
+               t.tx_nonce::text as tx_nonce, t.block_number::text as block_number,
+               t.block_hash, t.confirmations, t.launch_id, t.deployed_addresses,
+               t.verification, t.activation_tx_hash,
+               t.activation_block_number::text as activation_block_number,
+               t.activated_at, t.failure_code, t.failure_retryable,
+               coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                   'sequence', e.event_id, 'fromStatus', e.from_status,
+                   'toStatus', e.to_status, 'kind', e.kind, 'txHash', e.tx_hash,
+                   'blockNumber', e.block_number::text, 'blockHash', e.block_hash,
+                   'confirmations', e.confirmations, 'errorCode', e.error_code,
+                   'details', e.details, 'actor', e.actor,
+                   'createdAt', e.created_at) order by e.event_id)
+                 from (
+                   select * from public.hooks_launch_deployment_events
+                   where job_id = t.job_id order by event_id desc limit 100
+                 ) e
+               ), '[]'::jsonb) as events,
+               t.created_at, t.updated_at
              from public.hooks_launch_deployment_tasks t
              where t.project_id = $1
              order by t.created_at desc, t.job_id desc
