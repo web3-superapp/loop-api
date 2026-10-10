@@ -739,7 +739,13 @@ export const launchProjectDetailResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["project", "versions", "testnetAcceptances", "deploymentTasks"],
+  required: [
+    "project",
+    "versions",
+    "testnetAcceptances",
+    "deploymentTasks",
+    "deploymentChainId",
+  ],
   properties: {
     project: projectSummarySchema,
     versions: {
@@ -777,6 +783,12 @@ export const launchProjectDetailResourceSchema = {
       type: "array",
       maxItems: 200,
       items: deploymentTaskSchema,
+    },
+    deploymentChainId: {
+      type: "integer",
+      enum: [56, 97],
+      description:
+        "Decision 0117, read-only: the chain this API deploys Hooks launches to (LAUNCH_CHAIN_ID). versions[].config.fixedEconomics.chainId is the template value (always 56) and is not the deployment chain.",
     },
   },
 } as const;

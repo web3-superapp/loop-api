@@ -90,7 +90,7 @@ export function instanceFixture(
     nftMintedCount: "2",
     soldSupply: "0",
     reserveUsd1: "0",
-    priceE18: "41666666625000",
+    priceE18: "41666666250000",
     tradeCount: "0",
     buyVolumeUsd1: "0",
     taxUsd1: "0",

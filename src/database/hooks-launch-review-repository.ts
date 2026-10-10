@@ -22,7 +22,11 @@ import {
  * failed command writes a sanitized audit row after rollback.
  */
 
-const minimumLeadSeconds = 86_400;
+/**
+ * Decision 0117: default sale-start lead when the caller passes none (the
+ * API passes HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS).
+ */
+const defaultMinimumLeadSeconds = 86_400;
 
 async function authorize(
   client: Pick<PoolClient, "query">,
@@ -116,6 +120,7 @@ async function saveConfig(
   actor: string,
   command: Extract<HooksLaunchReviewCommand, { action: "launch.config.save" }>,
   nowUnixSeconds: number,
+  minimumLeadSeconds: number,
 ): Promise<unknown> {
   const projectId = command.target;
   const project = await lockApprovedProject(client, projectId, "update");
@@ -279,9 +284,15 @@ async function recordAcceptance(
 
 export function createPostgresHooksLaunchReviewRepository(
   pool: Pool,
-  options: { readonly now?: () => number } = {},
+  options: {
+    readonly now?: () => number;
+    /** Decision 0117: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS; default 86,400. */
+    readonly minimumLeadSeconds?: number;
+  } = {},
 ): HooksLaunchReviewRepository {
   const now = options.now ?? (() => Math.floor(Date.now() / 1_000));
+  const minimumLeadSeconds =
+    options.minimumLeadSeconds ?? defaultMinimumLeadSeconds;
   return Object.freeze({
     async session(actor: string) {
       return readOnly(pool, async (client) => {
@@ -404,7 +415,13 @@ export function createPostgresHooksLaunchReviewRepository(
         }
         let result: unknown;
         if (command.action === "launch.config.save") {
-          result = await saveConfig(client, actor, command, now());
+          result = await saveConfig(
+            client,
+            actor,
+            command,
+            now(),
+            minimumLeadSeconds,
+          );
         } else if (command.action === "launch.config.approve") {
           result = await approveConfig(client, actor, command);
         } else {

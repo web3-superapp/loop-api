@@ -702,6 +702,7 @@ describe("launch chain slot (Decision 0038)", () => {
       enabled: false,
       factoryAddress: null,
       factoryCodeHash: null,
+      minimumSaleLeadSeconds: 86_400,
     });
     const environment = validEnvironment();
     environment["HOOKS_LAUNCH_ENABLED"] = "on";
@@ -710,6 +711,22 @@ describe("launch chain slot (Decision 0038)", () => {
       const invalid = validEnvironment();
       invalid["HOOKS_LAUNCH_ENABLED"] = value;
       expect(() => loadConfig(invalid), value).toThrow(/HOOKS_LAUNCH_ENABLED/);
+    }
+  });
+
+  it("reads the Hooks sale-start lead with the activation-buffer floor (Decision 0117)", () => {
+    const at = (value: string) =>
+      loadConfig({
+        ...validEnvironment(),
+        HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: value,
+      }).hooksLaunch.minimumSaleLeadSeconds;
+    expect(at("4200")).toBe(4_200);
+    expect(at("86400")).toBe(86_400);
+    expect(at("2592000")).toBe(2_592_000);
+    for (const value of ["4199", "3600", "0", "-1", "1.5", "abc", "2592001"]) {
+      expect(() => at(value), value).toThrow(
+        /HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS/,
+      );
     }
   });
 
@@ -726,6 +743,7 @@ describe("launch chain slot (Decision 0038)", () => {
       enabled: false,
       factoryAddress: "0x1111111111111111111111111111111111111abc",
       factoryCodeHash: `0x${"ab".repeat(32)}`,
+      minimumSaleLeadSeconds: 86_400,
     });
     expect(() =>
       loadConfig({

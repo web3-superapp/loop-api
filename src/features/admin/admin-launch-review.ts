@@ -1,3 +1,4 @@
+import type { LaunchChainReference } from "../chain/chain-contract.js";
 import type { HooksLaunchDeploymentStatus } from "../launch/hooks-launch-deployment-status.js";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -268,6 +269,11 @@ function auditReference(audit: AdminAuditRecord | null) {
 
 export function createAdminLaunchReviewConsoleService(options: {
   readonly repository: AdminLaunchReviewRepository | null;
+  /**
+   * Decision 0117: the chain deployments go to (`LAUNCH_CHAIN_ID`), shown
+   * next to the template's `fixedEconomics.chainId` (always 56).
+   */
+  readonly deploymentChainId: LaunchChainReference;
   readonly review: HooksLaunchReviewService;
   readonly audit: Pick<AdminRepository, "appendAudit">;
   readonly sessionSecret: string;
@@ -605,6 +611,7 @@ export function createAdminLaunchReviewConsoleService(options: {
           versions: detail.versions,
           testnetAcceptances: detail.testnetAcceptances,
           deploymentTasks: detail.deploymentTasks,
+          deploymentChainId: options.deploymentChainId,
         });
       } catch (error) {
         return translate(error);

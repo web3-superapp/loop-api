@@ -98,6 +98,8 @@ export const launch2ReasonCodes = Object.freeze({
   gasInsufficient: "LAUNCH2_GAS_INSUFFICIENT",
   // Policy (403 POLICY_BLOCKED).
   notInSnapshot: "LAUNCH2_NOT_IN_SNAPSHOT",
+  /** Decision 0117: a prepare target outside the activated instance. */
+  counterpartyNotInstance: "LAUNCH2_COUNTERPARTY_NOT_INSTANCE",
   // Intent signing state.
   approvalRequired: "LAUNCH2_APPROVAL_REQUIRED",
   simulationReverted: "LAUNCH2_SIMULATION_REVERTED",

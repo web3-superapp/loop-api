@@ -250,7 +250,7 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         saleSupply: "800000000",
         soldSupply: "0",
         graduationReserveUsd1: "133333.332",
-        priceUsd1: "0.000041666666625",
+        priceUsd1: "0.00004166666625",
       },
     });
     expect(body.nextCursor).toBeNull();
@@ -618,6 +618,87 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(poor.json()).toMatchObject({
       code: "INSUFFICIENT_BALANCE",
       detailsSafe: { reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT" },
+    });
+  });
+
+  it("trusts the activated instance's contracts over the static counterparty allowlist (Decision 0117)", async () => {
+    const stranger = "0x9999999999999999999999999999999999999999";
+    const repository = createInMemoryLaunch2Repository();
+    const selling = instanceFixture();
+    repository.instances.set(selling.instanceId, selling);
+    const chain = defaultChainState();
+    chain.viewer.curve = { earlyRoundEndsAt: 0n };
+    const { app } = await createApp({
+      repository,
+      chain,
+      // A non-empty allowlist that names none of the instance's contracts.
+      env: { BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: stranger },
+    });
+    const minted = await post(
+      app,
+      `/v2/launch2/instances/${selling.instanceId}/nft/prepare`,
+      { walletId },
+    );
+    expect(minted.statusCode).toBe(201);
+    expect(minted.json()).toMatchObject({
+      launch2Intent: {
+        contractAddress: selling.addresses.nft,
+        approval: { spender: selling.addresses.nft },
+      },
+    });
+
+    // Curve buy: curve + USD1 approve, same allowlist.
+    const tradeRepository = createInMemoryLaunch2Repository();
+    const priority = priorityInstance();
+    tradeRepository.instances.set(priority.instanceId, priority);
+    seedMember(tradeRepository, priority.instanceId);
+    const { app: trading } = await createApp({
+      repository: tradeRepository,
+      chain: defaultChainState(),
+      env: { BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: stranger },
+    });
+    const quote = (
+      await get(
+        trading,
+        `/v2/launch2/instances/${priority.instanceId}/quote?side=buy&amount=10&walletId=${walletId}`,
+      )
+    ).json<{ quote: { minOut: string } }>().quote;
+    const bought = await post(
+      trading,
+      `/v2/launch2/instances/${priority.instanceId}/trade/prepare`,
+      {
+        walletId,
+        side: "buy",
+        amount: "10",
+        minOut: quote.minOut,
+        deadline: iso(launch2NowSeconds + 60n),
+      },
+    );
+    expect(bought.statusCode).toBe(201);
+    expect(bought.json()).toMatchObject({
+      launch2Intent: {
+        kind: "buy",
+        contractAddress: priority.addresses.curve,
+        approval: { spender: priority.addresses.curve },
+      },
+    });
+
+    // The USD1 must still be a canary asset.
+    const { app: strict } = await createApp({
+      repository,
+      chain,
+      env: { BSC_WRITE_CANARY_ASSETS: `eip155:97:${stranger}` },
+    });
+    const blocked = await post(
+      strict,
+      `/v2/launch2/instances/${selling.instanceId}/nft/prepare`,
+      { walletId },
+      s7IdempotencyKey("d"),
+    );
+    expect(blocked.statusCode).toBe(403);
+    expect(blocked.json()).toMatchObject({
+      code: "POLICY_BLOCKED",
+      detailsSafe: { reasonCode: "ASSET_NOT_IN_CANARY_ALLOWLIST" },
     });
   });
 

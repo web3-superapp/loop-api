@@ -62,6 +62,7 @@ const accounts = createAdminAccountService({
 });
 const launch = createAdminLaunchReviewConsoleService({
   repository: createPostgresAdminLaunchReviewRepository(pool),
+  deploymentChainId: 97,
   review: createHooksLaunchReviewService({ repository: hooksReview }),
   audit: adminRepository,
   sessionSecret,

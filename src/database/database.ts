@@ -285,6 +285,11 @@ export interface PostgresDatabaseConfig {
    * here, to stamp newly approved launches. Absent means `eip155:56`.
    */
   readonly launchChain?: { readonly chainId: LaunchChainId };
+  /**
+   * Decision 0117: the operator config-save path keeps the same sale-start
+   * lead as the owner path. Absent (worker processes) means 86,400 s.
+   */
+  readonly hooksLaunch?: { readonly minimumSaleLeadSeconds: number };
 }
 
 export interface PostgresDatabaseLogger {
@@ -471,7 +476,11 @@ export function createPostgresDatabase(
     launch,
     hooksLaunchProjectConfigs:
       createPostgresHooksLaunchProjectConfigRepository(pool),
-    hooksLaunchReview: createPostgresHooksLaunchReviewRepository(pool),
+    hooksLaunchReview: createPostgresHooksLaunchReviewRepository(pool, {
+      ...(config.hooksLaunch === undefined
+        ? {}
+        : { minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds }),
+    }),
     hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
     hooksLaunchExecutor: (leaseSeconds: number) =>
       createPostgresHooksLaunchExecutorRepository(pool, { leaseSeconds }),

@@ -461,6 +461,33 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(unsigned.statusCode).toBe(401);
   });
 
+  it("reads the sale-start lead from HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS (Decision 0117)", async () => {
+    const put = (app: FastifyInstance, expectedVersion: number, lead: number) =>
+      app.inject({
+        method: "PUT",
+        url: `/v2/launch/projects/${projectId}/hooks-config`,
+        headers: s7CommonHeaders(),
+        payload: {
+          expectedVersion,
+          config: {
+            ...draftBody,
+            nftSaleStartAt: String(Math.floor(Date.now() / 1_000) + lead),
+          },
+        },
+      });
+    const production = await createApp({ configs: configRepositoryFake() });
+    const refused = await put(production, 0, 5_000);
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({ code: "INVALID_REQUEST" });
+
+    const testnet = await createApp({
+      overrides: { ...enabled, HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: "4200" },
+      configs: configRepositoryFake(),
+    });
+    expect((await put(testnet, 0, 5_000)).statusCode).toBe(200);
+    expect((await put(testnet, 1, 4_100)).statusCode).toBe(400);
+  });
+
   it("returns owner-wallet EIP-712 data and CREATE2 salts without signing", async () => {
     const app = await createApp({
       configs: configRepositoryFake(),

@@ -15419,7 +15419,8 @@
                     "project",
                     "versions",
                     "testnetAcceptances",
-                    "deploymentTasks"
+                    "deploymentTasks",
+                    "deploymentChainId"
                   ],
                   "properties": {
                     "project": {
@@ -16064,6 +16065,11 @@
                           }
                         }
                       }
+                    },
+                    "deploymentChainId": {
+                      "type": "integer",
+                      "enum": [56, 97],
+                      "description": "Decision 0117, read-only: the chain this API deploys Hooks launches to (LAUNCH_CHAIN_ID). versions[].config.fixedEconomics.chainId is the template value (always 56) and is not the deployment chain."
                     }
                   }
                 }

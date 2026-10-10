@@ -44,7 +44,6 @@ import {
 import {
   dailyCanaryAdmission,
   enforceCanaryCeiling,
-  requireCanaryCounterparty,
 } from "../wallet-intents/intent-preparation.js";
 import {
   formatLaunch2Amount,
@@ -56,6 +55,7 @@ import {
   type Launch2IntentKind,
   type Launch2Stage,
 } from "./launch2-contract.js";
+import { requireLaunch2Counterparties } from "./launch2-counterparty.js";
 import {
   launch2Max,
   launch2PriceAt,
@@ -860,7 +860,16 @@ export function createLaunch2Service(
         walletIntentRefusalReasonCodes.assetNotInCanaryAllowlist,
       );
     }
-    requireCanaryCounterparty(writes, input.contract);
+    // Decision 0117: counterparties come from the activated instance's
+    // registry row (and its curve-bound USD1), not the static env allowlist.
+    requireLaunch2Counterparties({
+      record: input.record,
+      usd1: input.state.usd1,
+      targets: [
+        input.contract,
+        ...(input.approval === null ? [] : [input.approval.token]),
+      ],
+    });
     const valueUsd = formatLaunch2Amount(input.valueUsd);
     enforceCanaryCeiling(writes, valueUsd);
     let approvalTarget = input.approval;

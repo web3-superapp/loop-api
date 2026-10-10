@@ -76,7 +76,9 @@
 
 无草稿时 `{"draft": null, "contractVersion": "2.0"}`。所有 `*Raw` 为 18 位小数最小单位
 的十进制字符串（展示时自行除以 10^18）；bps/秒为小整数。`fixedEconomics` 由服务端给出，
-前端只展示不可编辑。
+前端只展示不可编辑。`fixedEconomics.chainId` 是模板值（恒为 `"56"`，参与 configHash），**不是**
+部署链；部署链以服务端 `LAUNCH_CHAIN_ID` 为准（当前仅测试网 97，见 §4 `typedData.domain.chainId`），
+不要把它展示成「部署到 BSC 主网」（决策 0117）。
 
 ## 3. `PUT /v2/launch/projects/{projectId}/hooks-config`（`saveV2HooksLaunchProjectConfig`）
 
@@ -98,7 +100,10 @@
 ```
 
 - `expectedVersion` = 当前最新版本（无则 0）；过期 `409 VERSION_CONFLICT`，重新 GET 后再存。
-- `nftSaleStartAt` 为 unix 秒字符串，须 ≥ 当前 + 24 小时；`links` ≤ 8 条且必须 https；
+- `nftSaleStartAt` 为 unix 秒字符串，须 ≥ 当前 + 开售提前量（服务端 env
+  `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS`，生产默认 86,400 s = 24 小时；Development / 测试网可配到
+  下限 4,200 s = 合约激活缓冲 3,600 s + 执行器余量 600 s，决策 0117），不足 `400 INVALID_REQUEST`；
+  前端不要写死 24 小时，以服务端拒绝为准；`links` ≤ 8 条且必须 https；
   ticker 2–12 位字母数字（服务端转大写）。
 - 任何多余字段（例如想改税率）→ `400 INVALID_REQUEST`。
 - 200 返回与 §2 `draft` 相同结构的新版本。保存新版本会使旧版本的审批失效（需重新审批）。
@@ -193,7 +198,15 @@
   （`detailsSafe.reasonCode = "HOOKS_CONFIG_NOT_APPROVED"`），前端显示「等待平台审批」。
 - 同一 `Idempotency-Key` 重放同一请求返回同一任务（超时重试请复用 key 与签名）；同 key
   不同内容 `409 IDEMPOTENCY_CONFLICT`。
-- 签名或字段不匹配：`400 INVALID_REQUEST`；配置已变或与已有任务冲突：`409 VERSION_CONFLICT`。
+- **请求体格式错误 → `400 INVALID_REQUEST`**：缺字段 / 多字段 / 类型或格式不对（地址、hex、
+  uint 字符串）、`walletId` 不是本人活跃钱包或与 `request.projectOwner` 不符、`deadline` 已过期
+  或超过 1 小时、签名非 65 字节 low-s / 恢复出的签名人不是该钱包、CREATE2 推出的 MEME 不以
+  `6666` 结尾或 Hook 地址标志位不符。
+- **字段与已批准配置不一致 → `409 VERSION_CONFLICT`**：`request` 里的 `configVersion`、
+  `configHash`、`name`、`ticker`、`nftSaleStart`、`buybackRecipient` 任一与当前最新配置不同
+  （例如签名后配置被改、或篡改 `nftSaleStart`），或钱包在 Factory 的 nonce 已变化，或与已有任务
+  冲突。前端处理：重新 `GET` §4 签名请求、重新签名，换新 `Idempotency-Key` 提交。（S137 实测：
+  篡改 `nftSaleStart` → 409。）
 - `awaiting_executor` 只表示「已验签登记」，**不是**已上链；之后由执行器推进（§9）。
 
 ## 6. `GET` / `DELETE …/hooks-deployments/{jobId}`
@@ -208,17 +221,17 @@ cancelled`，已取消再取消返回原状态。**执行器认领之后（`clai
 
 ## 7. 错误码汇总
 
-| 状态 | code                             | 场景                                                                                                                              |
-| ---- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | 结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符 |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                 |
-| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                       |
-| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                  |
-| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                         |
-| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                   |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                  |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                      |
-| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                 |
+| 状态 | code                             | 场景                                                                                                                                                                      |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | 请求体格式错误：结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                         |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                         |
+| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                               |
+| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                          |
+| 409  | `VERSION_CONFLICT`               | CAS 过期；提交字段与已批准的最新配置不一致（版本/hash/名称/ticker/开售时间/收币地址）或 nonce 已变；任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`） |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                           |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                          |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                                                              |
+| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                         |
 
 ## 8. unavailable 行为
 
@@ -278,11 +291,18 @@ cancelled`，已取消再取消返回原状态。**执行器认领之后（`clai
 
 ### 9.3 `events[]`
 
-最近 100 条，按 `sequence` 升序；`kind` 取值见 OpenAPI 描述（`created`、`claimed`、
-`broadcast`、`included`、`confirmed`、`reorg_detected`、`reclaimed_after_reorg`、
-`rebroadcast`、`verified`、`activation_broadcast`、`activation_included`、`activated`、
-`failed`、`cancelled` 等），未知 kind 按通用文案显示。`blockNumber` 为十进制字符串。事件中
-不含签名、原始交易或任何密钥。
+最近 100 条，按 `sequence` 升序。正常成功路径的事件序列为（S137 测试网实测）：
+
+`created` → `claimed` → `broadcast` → `confirmed` → `verified` → `activation_broadcast` →
+`activated`
+
+只在特定条件出现、**前端不得依赖**的 kind：`included` / `activation_included`（执行器第一次
+看到回执时确认数尚未达到 `HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS` 才会记录；测试网出块快，通常
+直接跳到 `confirmed` / `activated`）、`retry_claimed`、`rebroadcast`、`receipt_found`、
+`reorg_detected`、`reclaimed_after_reorg`、`activation_reorged`、`activation_reverted`、
+`activation_dropped`、`activation_rejected`、`lease_taken_over`；终态另有 `failed`、`cancelled`。
+完整列表见 OpenAPI 描述；进度展示以 `status`（§9.1）为准，未知 kind 按通用文案显示。
+`blockNumber` 为十进制字符串。事件中不含签名、原始交易或任何密钥。
 
 ### 9.4 unavailable
 
