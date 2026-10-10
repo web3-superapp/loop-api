@@ -18,15 +18,11 @@ import {
 } from "../src/features/launch/launch-contract.js";
 
 describe("launch application state machine", () => {
-  it("lets the applicant submit only from draft or returned", () => {
+  it("lets the applicant submit only from draft, returned, or rejected (Decision 0122)", () => {
     expect(submitTransition("draft")).toBe("submitted");
     expect(submitTransition("returned")).toBe("submitted");
-    for (const status of [
-      "submitted",
-      "in_review",
-      "approved",
-      "rejected",
-    ] as const) {
+    expect(submitTransition("rejected")).toBe("submitted");
+    for (const status of ["submitted", "in_review", "approved"] as const) {
       expect(submitTransition(status), status).toBeNull();
     }
   });
@@ -205,7 +201,7 @@ describe("applicant-facing review copy (Decision 0041)", () => {
       "材料还不完整，补齐后可以重新提交审核。",
     );
     expect(launchReviewReasonText("rejected", "policy_violation")).toBe(
-      "材料不符合上线规则，这份申请不会继续；调整后可以新建项目再提交。",
+      "材料不符合上线规则，按规则调整后可以重新提交审核。",
     );
   });
 
@@ -225,7 +221,7 @@ describe("applicant-facing review copy (Decision 0041)", () => {
     // A catalog code used against another status explains the status instead
     // of telling the applicant to do what the state machine forbids.
     expect(launchReviewReasonText("rejected", "needs_more_material")).toBe(
-      "审核未通过，这份申请不能再提交，需要的话可以新建项目。",
+      "审核未通过，按审核意见修改后可以重新提交。",
     );
   });
 

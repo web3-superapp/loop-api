@@ -602,7 +602,7 @@ describe("Hooks signed deployment tasks (000054)", () => {
         ownerUserId: owner,
         configVersion: 1,
       }),
-    ).toEqual({ approvedAt: null, latestJobId: null });
+    ).toEqual({ approvedAt: null, rejection: null, latestJobId: null });
     await configs.saveOwnedDraft({
       projectId,
       ownerUserId: owner,
@@ -620,7 +620,7 @@ describe("Hooks signed deployment tasks (000054)", () => {
         ownerUserId: owner,
         configVersion: 1,
       }),
-    ).toEqual({ approvedAt: null, latestJobId: null });
+    ).toEqual({ approvedAt: null, rejection: null, latestJobId: null });
 
     const input = await seed();
     const approved = await configs.getOwnedProgress({
@@ -637,7 +637,11 @@ describe("Hooks signed deployment tasks (000054)", () => {
         ownerUserId: input.ownerUserId,
         configVersion: 1,
       }),
-    ).toEqual({ approvedAt: approved.approvedAt, latestJobId: job.jobId });
+    ).toEqual({
+      approvedAt: approved.approvedAt,
+      rejection: null,
+      latestJobId: job.jobId,
+    });
     // Another account sees nothing; a newer draft version is not approved.
     expect(
       await configs.getOwnedProgress({
@@ -645,7 +649,7 @@ describe("Hooks signed deployment tasks (000054)", () => {
         ownerUserId: owner,
         configVersion: 1,
       }),
-    ).toEqual({ approvedAt: null, latestJobId: null });
+    ).toEqual({ approvedAt: null, rejection: null, latestJobId: null });
     await configs.saveOwnedDraft({
       projectId: input.projectId,
       ownerUserId: input.ownerUserId,
@@ -661,7 +665,7 @@ describe("Hooks signed deployment tasks (000054)", () => {
         ownerUserId: input.ownerUserId,
         configVersion: 2,
       }),
-    ).toEqual({ approvedAt: null, latestJobId: job.jobId });
+    ).toEqual({ approvedAt: null, rejection: null, latestJobId: job.jobId });
   });
 
   it("ten simultaneous identical submissions create one durable task and authorization", async () => {

@@ -1,4 +1,11 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122)
+
+> **S145 / 决策 0122 变化（给 App）**：① 第三版工厂（BSC 测试网 `0xc3ac…d1d2`）的回购**没有价格保护**；
+> `GET …/buybacks` 的 `minMemeOut / referencePriceUsd1 / spotPriceUsd1` 可为 `null`（新工厂的成交），
+> `live.nextOrderBlockedReason` 重定义（§3.6；`BUYBACK_PROTECTION_BLOCKED` 不再出现）。② **NFT 一个都没卖出
+> 时不再关闭**：新工厂实例直接进 `public`，`snapshot.status = "opened_without_holders"`，新增
+> `snapshot.openedWithoutHolders`（§2、§3.2）；`closed_no_holders` 只可能出现在旧工厂实例上（deprecated，
+> 保留一个版本）。③ keeper 拒绝原因去掉价格保护类（只剩旧工厂实例会出现，§3.2）。
 
 Status: implemented on `feat/S134-launch2-read-model`, follow-ups in `fix/S139-launch2-followups`
 (Decision 0117); Development / BSC Testnet (chain 97) only. Evidence: anvil end-to-end
@@ -21,16 +28,16 @@ with the read model matching the chain 40/40; NFT mint and later stages not yet 
 
 ## 2. Stages (服务端唯一真相)
 
-| `stage`             | Meaning                                 | `nextChangeAt` | App                            |
-| ------------------- | --------------------------------------- | -------------- | ------------------------------ |
-| `upcoming`          | Activated, NFT sale not open yet        | sale start     | 即将开售 · 倒计时              |
-| `nft_sale`          | NFT sale until `nftSale.endAt`          | sale end       | NFT 发售中 · 剩余 d h m        |
-| `snapshot_pending`  | Sale over, holder list not published    | `null`         | 名单生成中                     |
-| `closed_no_holders` | Sale over with **no** NFT holder (0120) | `null`         | 已结束 · 无人参与 NFT 发售     |
-| `priority`          | Snapshot holders only, 3,600 s          | round end      | 提前购 · 持有人优先 · 剩余 m s |
-| `public`            | Public curve until sold out             | `null`         | 公开内盘                       |
-| `graduated`         | Sold out → official pool (either round) | `null`         | 已毕业 · 官方池交易中          |
-| `paused`            | Integrity hold (`holdReason`)           | `null`         | 已暂停 + reason                |
+| `stage`             | Meaning                                                                           | `nextChangeAt` | App                            |
+| ------------------- | --------------------------------------------------------------------------------- | -------------- | ------------------------------ |
+| `upcoming`          | Activated, NFT sale not open yet                                                  | sale start     | 即将开售 · 倒计时              |
+| `nft_sale`          | NFT sale until `nftSale.endAt`                                                    | sale end       | NFT 发售中 · 剩余 d h m        |
+| `snapshot_pending`  | Sale over, holder list not published                                              | `null`         | 名单生成中                     |
+| `closed_no_holders` | **Deprecated (0122)**: old-Factory sale with no NFT holder (0120)                 | `null`         | 已结束 · 无人参与 NFT 发售     |
+| `priority`          | Snapshot holders only, 3,600 s                                                    | round end      | 提前购 · 持有人优先 · 剩余 m s |
+| `public`            | Public curve until sold out (0122: also straight after a sale with no NFT minted) | `null`         | 公开内盘                       |
+| `graduated`         | Sold out → official pool (either round)                                           | `null`         | 已毕业 · 官方池交易中          |
+| `paused`            | Integrity hold (`holdReason`)                                                     | `null`         | 已暂停 + reason                |
 
 **NFT 发售期（S141 / 决策 0119）**：发售结束时刻由实例的 `nftSale.endAt` 决定（= 该实例
 `ProjectNFT.saleEnd()`，部署核验时读链得到），**不是**模板常量 7 天。BSC 测试网工厂为
@@ -38,7 +45,15 @@ with the read model matching the chain 40/40; NFT mint and later stages not yet 
 （604800）。倒计时一律以 `nftSale.endAt` / `nextChangeAt` 为准，「剩余 d h m」在 1 小时期间
 应显示为「剩余 m s」；不要写死「7 天」文案，时长展示用 `template.nftSaleSeconds`。
 
-**`closed_no_holders`（S142 / 决策 0120，终态）**：NFT 发售结束时一个 NFT 都没卖出（发布器在已确认的
+**无人认购直接进公开内盘（S145 / 决策 0122，需求方答复 10）**：第三版工厂起，NFT 发售结束时一个都没卖出，
+服务端发布器在截止块确认、索引器追上、链上 `totalMinted() = 0` 后代调 `SnapshotRegistry.openPublicWithoutSnapshot()`
+（先写记录再广播，12 确认）；索引到 `PublicRoundOpenedWithoutHolders` 后实例直接为 `public`：没有提前购、
+无需 proof、可买可卖。期间（发售结束 → 事件确认，测试网约 1 分钟）阶段仍是 `snapshot_pending`。
+详情 `snapshot.status = "opened_without_holders"`、`snapshot.openedWithoutHolders` 非 null、`snapshot.publication = null`、
+`snapshot.closure = null`，`earlyRoundEndsAt = openedAt`。App 显示「公开内盘 · 无提前购」即可，不要显示「名单」。
+
+**`closed_no_holders`（S142 / 决策 0120，终态；0122 起 deprecated，只会出现在第二版及更早工厂的实例上——旧合约没有
+零持有人开盘函数）**：NFT 发售结束时一个 NFT 都没卖出（发布器在已确认的
 截止块上读到 `ProjectNFT.totalMinted() = 0`，且索引器已追上）。合约要求名单根非零，所以名单永远无法
 发布、提前购和公开内盘都不会开始；`snapshot.closure` 非 null（见 §3.2），报价 / 交易准备一律
 `409 LAUNCH2_STAGE_MISMATCH`（`detailsSafe.stage = "closed_no_holders"`）。旧 App 不认识该值时应按
@@ -231,7 +246,15 @@ snapshot_pending`): `publication = null` → 等待截止块确认; `pending | b
 `snapshot.publishedAt` (unchanged); a `confirmed` publication alone does not open
 buying — wait for `stage = priority` and `snapshot.verification = verified`.
 
-`snapshot.closure` (Decision 0120, required key, added): `null`, or
+`snapshot.openedWithoutHolders` (Decision 0122, added; optional in the schema, always present in
+answers): `null`, or `{"openedAt": "…", "blockNumber": "4567", "transactionHash": "0x…"}` after the
+indexed `PublicRoundOpenedWithoutHolders` (v3 Factory, no NFT minted). Then `snapshot.status =
+"opened_without_holders"`, `root / dataHash / cutoffBlockNumber / cutoffBlockHash / publishedAt /
+memberCount / signers / verification / publication / closure` are `null`, `earlyRoundEndsAt =
+openedAt`, stage `public`. `viewer.snapshot.member = false`, `eligibleNow = true`.
+
+`snapshot.closure` (Decision 0120, required key, added; **deprecated** by Decision 0122 — only
+instances of a pre-S144 Factory can still get one): `null`, or
 `{"reason": "no_holders", "cutoffBlock": "1234", "closedAt": "…"}` when the sale ended with no
 NFT holder (stage `closed_no_holders`, terminal). With a closure, `snapshot.status` stays
 `pending` and `publication` stays `null`; show 已结束 · 无人参与 NFT 发售, no spinner. `graduation` once graduated:
@@ -247,7 +270,7 @@ never eligible). Also in `GET …/buybacks` → `summary.keeper`.
 "keeper": {
   "lastAttemptAt": "2027-01-24T08:00:15.000Z",
   "lastResult": "rejected",
-  "reasonCode": "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
+  "reasonCode": "LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT",
   "nextEligibleAt": "2027-01-24T08:00:45.000Z"
 }
 ```
@@ -260,12 +283,14 @@ never eligible). Also in `GET …/buybacks` → `summary.keeper`.
 | `confirmed`  | final on chain; the ledger row (`latest`) follows from the event lane                    | show `latest` (100 USD1 / 时间)                |
 | `failed`     | prepared or sent but not executed (gas, funds, reverted); retried after `nextEligibleAt` | 「回购暂缓，稍后重试」                         |
 
-`reasonCode` for `rejected`: `LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE` (参考价未就绪 — the
-30-minute price window is not filled), `LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION` (现价偏离参考价
-超过 5%), `LAUNCH2_BUYBACK_OUTPUT_BELOW_PROTECTION` (到账低于保护线), `LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT`
-(池子本金保护), `LAUNCH2_BUYBACK_TOO_SOON` (两笔成功间隔 < 10 s), `LAUNCH2_BUYBACK_NO_BUDGET`
-(托管余额为 0), `LAUNCH2_BUYBACK_PAUSED` (回购已暂停), `LAUNCH2_BUYBACK_NOT_KEEPER`,
-`LAUNCH2_BUYBACK_NOT_GRADUATED`, `LAUNCH2_BUYBACK_CONTRACT_REVERTED` (其它，平台处理). For
+`reasonCode` for `rejected` (Decision 0122: the v3 Factory has no price protection):
+`LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT` (池子本金保护：官方池 USD1 本金 < 10,000 或单笔 > 1%),
+`LAUNCH2_BUYBACK_TOO_SOON` (两笔成功间隔 < 10 s), `LAUNCH2_BUYBACK_NO_BUDGET` (托管余额为 0),
+`LAUNCH2_BUYBACK_PAUSED` (回购已暂停), `LAUNCH2_BUYBACK_NOT_KEEPER`, `LAUNCH2_BUYBACK_NOT_GRADUATED`,
+`LAUNCH2_BUYBACK_NO_OUTPUT` (0122: 成交到账为 0，平台处理), `LAUNCH2_BUYBACK_CONTRACT_REVERTED`
+(其它，平台处理). Only instances of a pre-S144 Factory can still show the legacy protection codes
+`LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE` (参考价未就绪), `LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION`,
+`LAUNCH2_BUYBACK_OUTPUT_BELOW_PROTECTION` (show them as 「回购暂缓」). For
 `failed`: `LAUNCH2_BUYBACK_TX_REVERTED`, `LAUNCH2_BUYBACK_TX_DROPPED`,
 `LAUNCH2_BUYBACK_TX_REJECTED`, `LAUNCH2_BUYBACK_GAS_ABOVE_CAP`,
 `LAUNCH2_BUYBACK_KEEPER_INSUFFICIENT_FUNDS`, `LAUNCH2_BUYBACK_NONCE_CONSUMED`,
@@ -477,9 +502,9 @@ Refusals to handle in the panel (no toast, no error page):
       "reasonCode": null,
       "usd1Spent": "100",
       "memeDelivered": "150000",
-      "minMemeOut": "148500",
-      "referencePriceUsd1": "0.00066…",
-      "spotPriceUsd1": "0.00066…",
+      "minMemeOut": null,
+      "referencePriceUsd1": null,
+      "spotPriceUsd1": null,
       "executedAt": "…",
       "transactionHash": "0x…",
       "blockNumber": "…"
@@ -490,9 +515,17 @@ Refusals to handle in the panel (no toast, no error page):
 }
 ```
 
-`nextOrderBlockedReason`: `null` | `BUYBACK_PAUSED` | `BUYBACK_NOT_GRADUATED` |
-`BUYBACK_NO_BUDGET` | `BUYBACK_PROTECTION_BLOCKED` (reference / spot / principal protection
-would refuse now) | `BUYBACK_PRICE_SOURCE_UNAVAILABLE`. Refused attempts are not listed in
+`buybacks[].minMemeOut / referencePriceUsd1 / spotPriceUsd1` (Decision 0122): `decimal | null` —
+`null` for every execution of a v3 (third Factory) instance, which has no price protection
+(minOut 0); old-Factory executions keep all three. Do not render them when null.
+
+`nextOrderBlockedReason` (Decision 0122, redefined from `quoteNextOrder().executable` of one
+block): `null` = the next order can run now | `BUYBACK_PAUSED` (回购已暂停) |
+`BUYBACK_NOT_GRADUATED` (未毕业) | `BUYBACK_NO_BUDGET` (托管余额为 0) | `BUYBACK_TOO_SOON` (距上一笔
+成功 < 10 s) | `BUYBACK_PRINCIPAL_INSUFFICIENT` (官方池本金保护：USD1 本金 < 10,000 或单笔 > 1%) |
+`BUYBACK_QUOTE_UNAVAILABLE` (合约报价读取失败) | `BUYBACK_LEGACY_PRICE_PROTECTION` (仅旧工厂实例：参考价
+未就绪或价格保护会拒绝). `BUYBACK_PROTECTION_BLOCKED` and `BUYBACK_PRICE_SOURCE_UNAVAILABLE` are no
+longer produced; treat any unknown value as 「回购暂缓」. Refused attempts are not listed in
 `buybacks` (they revert without a log); the keeper's latest refusal is
 `summary.keeper` (§3.2, Decision 0121). `live: null` + `liveUnavailable.reasonCode` when the
 chain read fails. Copy: 「回购不等于销毁」 in ⓘ.

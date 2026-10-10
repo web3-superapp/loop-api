@@ -1,6 +1,10 @@
 import { keccak256, stringToHex } from "viem";
 
 import { buildLaunchMerkleTree } from "../launch/launch-merkle.js";
+import {
+  launch2CanOpenWithoutHolders,
+  type Launch2FactoryGeneration,
+} from "./launch2-generation.js";
 import type { Launch2Repository } from "./launch2-ports.js";
 
 /**
@@ -24,12 +28,35 @@ import type { Launch2Repository } from "./launch2-ports.js";
  *    a reverted simulation or receipt is `failed`; a root the lane does not
  *    reproduce, or another root on chain, is `mismatch`.
  *
+ * Decision 0122: when the indexed holder set at the cutoff is empty and
+ * `ProjectNFT.totalMinted()` agrees (0), a v3-generation instance is not
+ * closed: the publisher records an `open_without_holders` row and sends
+ * `SnapshotRegistry.openPublicWithoutSnapshot()` through the same steps
+ * (simulate, sign + record under the shared nonce lock, send, follow to
+ * `confirmed`); the `launch2_event` lane indexes
+ * `PublicRoundOpenedWithoutHolders` and the instance becomes `public`.
+ * A v2-generation instance (no such function) is still closed
+ * (Decision 0120).
+ *
  * The `launch2_event` lane then verifies the published snapshot as before.
  * Fail closed: anything not ready leaves the instance waiting with a
  * reason code; nothing is published from a partial view.
  */
 
 export const launch2SnapshotPublisherLane = "launch2_snapshot_publisher";
+
+/**
+ * Decision 0122: what a publication row sends. `publish_snapshot` = the
+ * Decision 0118 2-of-3 signed root; `open_without_holders` = the v3
+ * `openPublicWithoutSnapshot()` call (no members, zero root / dataHash, no
+ * snapshot signatures).
+ */
+export const launch2PublicationActions = Object.freeze([
+  "publish_snapshot",
+  "open_without_holders",
+] as const);
+export type Launch2PublicationAction =
+  (typeof launch2PublicationActions)[number];
 
 export const launch2PublicationStatuses = Object.freeze([
   "pending",
@@ -54,9 +81,18 @@ export const launch2PublisherReasonCodes = Object.freeze({
   /**
    * Decision 0120: the sale ended with no holder (`totalMinted() = 0` at the
    * confirmed cutoff); a closure is recorded and the instance is never a
-   * candidate again (stage `closed_no_holders`).
+   * candidate again (stage `closed_no_holders`). Since Decision 0122 only
+   * for v2-generation instances.
    */
   closedNoHolders: "LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS",
+  /**
+   * Decision 0122: a v3 instance with zero mints — the publisher is
+   * opening the public round without a snapshot (an
+   * `open_without_holders` row exists).
+   */
+  openingWithoutHolders: "LAUNCH2_SNAPSHOT_OPENING_WITHOUT_HOLDERS",
+  /** Decision 0122: someone else's `openPublicWithoutSnapshot()` won. */
+  openedByOther: "LAUNCH2_SNAPSHOT_OPENED_BY_OTHER",
   digestMismatch: "LAUNCH2_SNAPSHOT_DIGEST_MISMATCH",
   retryWait: "LAUNCH2_SNAPSHOT_RETRY_WAIT",
   attemptsExhausted: "LAUNCH2_SNAPSHOT_ATTEMPTS_EXHAUSTED",
@@ -102,6 +138,7 @@ export function launch2SnapshotDataHash(addresses: readonly string[]): string {
 export interface Launch2PublicationRecord {
   readonly publicationId: string;
   readonly instanceId: string;
+  readonly action: Launch2PublicationAction;
   readonly attempt: number;
   readonly status: Launch2PublicationStatus;
   readonly snapshots: string;
@@ -136,6 +173,10 @@ export interface Launch2PublicationCandidate {
   readonly nftSaleStart: string;
   readonly holdReason: string | null;
   readonly graduated: boolean;
+  /** Decision 0122: the deploying Factory's generation. */
+  readonly generation: Launch2FactoryGeneration;
+  /** Decision 0122: `PublicRoundOpenedWithoutHolders` is indexed. */
+  readonly openedWithoutHolders: boolean;
   /** The indexed on-chain snapshot (null until `SnapshotPublished`). */
   readonly snapshotRoot: string | null;
   readonly snapshotVerification: "verified" | "mismatch" | null;
@@ -167,6 +208,8 @@ export interface Launch2PublicationRepository {
   }): Promise<boolean>;
   /** Inserts a `pending` attestation; null when another row is active. */
   insertPending(input: {
+    /** Decision 0122; absent = `publish_snapshot`. */
+    readonly action?: Launch2PublicationAction;
     readonly instanceId: string;
     readonly chainId: string;
     readonly attempt: number;
@@ -250,11 +293,29 @@ export interface Launch2PublisherChain {
   }>;
   /** The published root (zero hash until `publishSnapshot`). */
   registryRoot(snapshots: string): Promise<string>;
+  /**
+   * Decision 0122: `rootPublishedAt()` — non-zero once a snapshot was
+   * published or (v3) the public round was opened without holders.
+   */
+  registryPublishedAt(snapshots: string): Promise<bigint>;
   isSnapshotSigner(snapshots: string, address: string): Promise<boolean>;
   totalMintedAt(nft: string, blockNumber: bigint): Promise<bigint>;
   snapshotDigest(call: Omit<Launch2PublishCall, "signatures">): Promise<string>;
   /** Throws `Launch2PublisherRevertError` with the contract error name. */
   estimatePublish(call: Launch2PublishCall): Promise<bigint>;
+  /**
+   * Decision 0122: simulates then estimates
+   * `openPublicWithoutSnapshot()`; throws `Launch2PublisherRevertError`.
+   */
+  estimateOpenWithoutHolders(snapshots: string): Promise<bigint>;
+  signOpenWithoutHolders(
+    snapshots: string,
+    tx: {
+      readonly nonce: bigint;
+      readonly gas: bigint;
+      readonly gasPrice: bigint;
+    },
+  ): Promise<{ readonly txHash: string; readonly rawTx: string }>;
   gasPrice(): Promise<bigint>;
   pendingNonce(): Promise<bigint>;
   signPublish(
@@ -345,12 +406,15 @@ function contractFailureCode(errorName: string): {
   readonly retryable: boolean;
 } {
   // `SnapshotNotReady` can only mean our view of time was early; the rest
-  // (bad signatures, already published, bad data) need an operator.
+  // (bad signatures, already published / opened, `HoldersExist`, bad data)
+  // need an operator.
   return {
     code: launch2PublisherReasonCodes.contractReverted,
     retryable: errorName === "SnapshotNotReady",
   };
 }
+
+const zeroBytes32 = `0x${"0".repeat(64)}`;
 
 export function createLaunch2SnapshotPublisher(options: {
   readonly repository: Launch2PublicationRepository;
@@ -484,10 +548,13 @@ export function createLaunch2SnapshotPublisher(options: {
       await sendSigned(record);
       return null;
     }
+    const opening = record.action === "open_without_holders";
     const call = callOf(record);
     let estimate: bigint;
     try {
-      estimate = await chain.estimatePublish(call);
+      estimate = opening
+        ? await chain.estimateOpenWithoutHolders(record.snapshots)
+        : await chain.estimatePublish(call);
     } catch (error) {
       if (error instanceof Launch2PublisherRevertError) {
         const failure = contractFailureCode(error.errorName);
@@ -524,7 +591,14 @@ export function createLaunch2SnapshotPublisher(options: {
       publicationId: record.publicationId,
       submitterAddress: chain.submitterAddress,
       chainPendingNonce,
-      sign: (nonce) => chain.signPublish(call, { nonce, gas, gasPrice }),
+      sign: (nonce) =>
+        opening
+          ? chain.signOpenWithoutHolders(record.snapshots, {
+              nonce,
+              gas,
+              gasPrice,
+            })
+          : chain.signPublish(call, { nonce, gas, gasPrice }),
     });
     if (signed === null) return null;
     await sendSigned(signed);
@@ -555,6 +629,22 @@ export function createLaunch2SnapshotPublisher(options: {
       return;
     }
     if (receipt.status === "reverted") {
+      if (record.action === "open_without_holders") {
+        // Anyone may open; a reverted call after another opening is not ours
+        // to repeat (the lane indexes the other transaction's event).
+        const opened =
+          (await chain.registryPublishedAt(record.snapshots)) !== 0n;
+        await move(record, "failed", {
+          failure: {
+            code: opened
+              ? launch2PublisherReasonCodes.openedByOther
+              : launch2PublisherReasonCodes.txReverted,
+            detail: null,
+            retryable: false,
+          },
+        });
+        return;
+      }
       const onChainRoot = await chain.registryRoot(record.snapshots);
       if (onChainRoot !== zeroHash && onChainRoot !== record.root) {
         await move(record, "mismatch", {
@@ -601,6 +691,13 @@ export function createLaunch2SnapshotPublisher(options: {
     candidate: Launch2PublicationCandidate,
     record: Launch2PublicationRecord,
   ): Promise<void> {
+    // Decision 0122: an opening is done once the lane indexed the event.
+    if (
+      record.action === "open_without_holders" &&
+      candidate.openedWithoutHolders
+    ) {
+      return;
+    }
     if (candidate.snapshotRoot !== null) {
       if (candidate.snapshotRoot !== record.root) {
         await move(record, "mismatch", {
@@ -661,7 +758,11 @@ export function createLaunch2SnapshotPublisher(options: {
     ) {
       return launch2PublisherReasonCodes.retryWait;
     }
-    if ((await chain.registryRoot(candidate.snapshots)) !== zeroHash) {
+    if (
+      (await chain.registryRoot(candidate.snapshots)) !== zeroHash ||
+      (await chain.registryPublishedAt(candidate.snapshots)) !== 0n
+    ) {
+      // Published, or (v3) opened without holders by anyone.
       return launch2PublisherReasonCodes.alreadyOnChain;
     }
     const cutoff = await findCutoff(
@@ -702,6 +803,38 @@ export function createLaunch2SnapshotPublisher(options: {
       const mintedAtCutoff = await chain.totalMintedAt(candidate.nft, cutoff);
       if (mintedAtCutoff !== 0n) {
         return launch2PublisherReasonCodes.indexerIncomplete;
+      }
+      if (launch2CanOpenWithoutHolders(candidate.generation)) {
+        // Decision 0122: record first, then open the public round.
+        const opening = await repository.insertPending({
+          action: "open_without_holders",
+          instanceId: candidate.instanceId,
+          chainId: policy.chainId,
+          attempt: candidate.lastAttempt + 1,
+          snapshots: candidate.snapshots,
+          cutoffBlock: cutoff.toString(10),
+          cutoffBlockHash: cutoffBlock.hash,
+          saleEndAt: new Date(Number(registry.nftSaleEnd) * 1000).toISOString(),
+          members: [],
+          root: zeroBytes32,
+          dataHash: zeroBytes32,
+          signerAddresses: [],
+          signatures: [],
+          submitterAddress: chain.submitterAddress,
+        });
+        if (opening === null) return null;
+        options.onStep?.({
+          instanceId: opening.instanceId,
+          publicationId: opening.publicationId,
+          from: null,
+          to: "pending",
+          txHash: null,
+          failureCode: null,
+        });
+        return (
+          (await advancePending(opening)) ??
+          launch2PublisherReasonCodes.openingWithoutHolders
+        );
       }
       await repository.recordNoHoldersClosure({
         instanceId: candidate.instanceId,
@@ -808,6 +941,7 @@ export function createLaunch2SnapshotPublisher(options: {
       if (active === null) {
         if (
           candidate.snapshotRoot !== null ||
+          candidate.openedWithoutHolders ||
           candidate.holdReason !== null ||
           candidate.graduated
         ) {

@@ -19122,7 +19122,7 @@
         "operationId": "listAdminLaunchProjects",
         "summary": "List Hooks launch projects by review stage",
         "tags": ["admin-launch"],
-        "description": "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, approved, accepted, deploying. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
+        "description": "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
         "parameters": [
           {
             "schema": {
@@ -19130,6 +19130,7 @@
               "enum": [
                 "draft",
                 "awaiting_approval",
+                "rejected",
                 "approved",
                 "accepted",
                 "deploying",
@@ -19139,6 +19140,13 @@
             "in": "query",
             "name": "status",
             "required": false
+          },
+          {
+            "schema": { "type": "string", "enum": ["all", "ido", "launch2"] },
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "description": "Decision 0122: product kind filter (default all); bound into the cursor."
           },
           {
             "schema": { "type": "string", "minLength": 1, "maxLength": 1024 },
@@ -19201,21 +19209,79 @@
                           "name": { "type": "string" },
                           "ticker": { "type": "string" },
                           "ownerUserId": { "type": "string", "format": "uuid" },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["ido", "launch2"],
+                            "description": "Decision 0122 (optional in the schema, always present): the catalog product kind (Decision 0120); filter with ?kind=."
+                          },
                           "launchReviewStatus": {
                             "type": "string",
-                            "description": "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`."
+                            "description": "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`. Decision 0122: a reviewer may reject `submitted` / `in_review` material (POST …/reject); `rejected` material can be edited and resubmitted by the applicant."
+                          },
+                          "materialVersion": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Decision 0122 (optional in the schema, always present): launch_projects.material_version — send it as materialVersion when rejecting the catalog material."
+                          },
+                          "rejection": {
+                            "description": "Decision 0122 (optional in the schema, always present): the latest catalog rejection while launchReviewStatus is rejected; null otherwise.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "reasonCode",
+                                  "note",
+                                  "reviewerUserId",
+                                  "materialVersion",
+                                  "rejectedAt"
+                                ],
+                                "properties": {
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "incomplete_materials",
+                                      "name_or_ticker_conflict",
+                                      "buyback_recipient_invalid",
+                                      "community_binding_mismatch",
+                                      "other"
+                                    ]
+                                  },
+                                  "note": {
+                                    "anyOf": [
+                                      { "type": "string" },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "reviewerUserId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "materialVersion": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                  },
+                                  "rejectedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "stage": {
                             "type": "string",
                             "enum": [
                               "draft",
                               "awaiting_approval",
+                              "rejected",
                               "approved",
                               "accepted",
                               "deploying",
                               "activated"
                             ],
-                            "description": "Of the latest config version: draft (none saved), awaiting_approval, approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain)."
+                            "description": "Of the latest config version: draft (none saved), awaiting_approval, rejected (Decision 0122: a reviewer rejected it; the owner saves a new version), approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain)."
                           },
                           "latestConfigVersion": {
                             "type": ["null", "integer"],
@@ -19262,6 +19328,27 @@
                                     "format": "uuid"
                                   },
                                   "approvedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "latestRejection": {
+                            "description": "Decision 0122 (optional in the schema, always present): the latest config version's reviewer rejection; null otherwise.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["reviewerUserId", "rejectedAt"],
+                                "properties": {
+                                  "reviewerUserId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "rejectedAt": {
                                     "type": "string",
                                     "format": "date-time"
                                   }
@@ -19682,21 +19769,79 @@
                         "name": { "type": "string" },
                         "ticker": { "type": "string" },
                         "ownerUserId": { "type": "string", "format": "uuid" },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["ido", "launch2"],
+                          "description": "Decision 0122 (optional in the schema, always present): the catalog product kind (Decision 0120); filter with ?kind=."
+                        },
                         "launchReviewStatus": {
                           "type": "string",
-                          "description": "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`."
+                          "description": "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`. Decision 0122: a reviewer may reject `submitted` / `in_review` material (POST …/reject); `rejected` material can be edited and resubmitted by the applicant."
+                        },
+                        "materialVersion": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "Decision 0122 (optional in the schema, always present): launch_projects.material_version — send it as materialVersion when rejecting the catalog material."
+                        },
+                        "rejection": {
+                          "description": "Decision 0122 (optional in the schema, always present): the latest catalog rejection while launchReviewStatus is rejected; null otherwise.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "reasonCode",
+                                "note",
+                                "reviewerUserId",
+                                "materialVersion",
+                                "rejectedAt"
+                              ],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "incomplete_materials",
+                                    "name_or_ticker_conflict",
+                                    "buyback_recipient_invalid",
+                                    "community_binding_mismatch",
+                                    "other"
+                                  ]
+                                },
+                                "note": {
+                                  "anyOf": [
+                                    { "type": "string" },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "reviewerUserId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "materialVersion": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "rejectedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "stage": {
                           "type": "string",
                           "enum": [
                             "draft",
                             "awaiting_approval",
+                            "rejected",
                             "approved",
                             "accepted",
                             "deploying",
                             "activated"
                           ],
-                          "description": "Of the latest config version: draft (none saved), awaiting_approval, approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain)."
+                          "description": "Of the latest config version: draft (none saved), awaiting_approval, rejected (Decision 0122: a reviewer rejected it; the owner saves a new version), approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain)."
                         },
                         "latestConfigVersion": {
                           "type": ["null", "integer"],
@@ -19740,6 +19885,27 @@
                                   "format": "uuid"
                                 },
                                 "approvedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "latestRejection": {
+                          "description": "Decision 0122 (optional in the schema, always present): the latest config version's reviewer rejection; null otherwise.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reviewerUserId", "rejectedAt"],
+                              "properties": {
+                                "reviewerUserId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "rejectedAt": {
                                   "type": "string",
                                   "format": "date-time"
                                 }
@@ -19888,6 +20054,53 @@
                                   },
                                   "reason": { "type": "string" },
                                   "approvedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "rejection": {
+                            "description": "Decision 0122 (optional in the schema, always present): the reviewer rejection of this version; a version is approved or rejected, never both.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "reviewerUserId",
+                                  "configHash",
+                                  "reasonCode",
+                                  "note",
+                                  "rejectedAt"
+                                ],
+                                "properties": {
+                                  "reviewerUserId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "configHash": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                                  },
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "incomplete_materials",
+                                      "name_or_ticker_conflict",
+                                      "buyback_recipient_invalid",
+                                      "community_binding_mismatch",
+                                      "other"
+                                    ]
+                                  },
+                                  "note": {
+                                    "anyOf": [
+                                      { "type": "string" },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "rejectedAt": {
                                     "type": "string",
                                     "format": "date-time"
                                   }
@@ -20341,6 +20554,14 @@
                           },
                           "instanceId": { "type": "string", "format": "uuid" },
                           "jobId": { "type": "string", "format": "uuid" },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "publish_snapshot",
+                              "open_without_holders"
+                            ],
+                            "description": "Decision 0122 (optional in the schema, always present): open_without_holders = the v3 zero-holder openPublicWithoutSnapshot() call (memberCount 0, zero root / dataHash, no signers)."
+                          },
                           "attempt": { "type": "integer", "minimum": 1 },
                           "status": {
                             "type": "string",
@@ -20360,7 +20581,7 @@
                             "type": "string",
                             "pattern": "^0x[0-9a-fA-F]{64}$"
                           },
-                          "memberCount": { "type": "integer", "minimum": 1 },
+                          "memberCount": { "type": "integer", "minimum": 0 },
                           "root": {
                             "type": "string",
                             "pattern": "^0x[0-9a-fA-F]{64}$"
@@ -20371,7 +20592,7 @@
                           },
                           "signerAddresses": {
                             "type": "array",
-                            "minItems": 2,
+                            "minItems": 0,
                             "maxItems": 2,
                             "items": {
                               "type": "string",
@@ -20703,6 +20924,51 @@
                         },
                         { "type": "null" }
                       ]
+                    },
+                    "projectRejections": {
+                      "type": "array",
+                      "maxItems": 200,
+                      "description": "Decision 0122 (optional in the schema, always present): every catalog material rejection, newest first.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "rejectionId",
+                          "materialVersion",
+                          "reasonCode",
+                          "note",
+                          "reviewerUserId",
+                          "rejectedAt"
+                        ],
+                        "properties": {
+                          "rejectionId": { "type": "string", "format": "uuid" },
+                          "materialVersion": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "reasonCode": {
+                            "type": "string",
+                            "enum": [
+                              "incomplete_materials",
+                              "name_or_ticker_conflict",
+                              "buyback_recipient_invalid",
+                              "community_binding_mismatch",
+                              "other"
+                            ]
+                          },
+                          "note": {
+                            "anyOf": [{ "type": "string" }, { "type": "null" }]
+                          },
+                          "reviewerUserId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "rejectedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -21176,6 +21442,1281 @@
                         },
                         "reason": { "type": "string" },
                         "approvedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "audit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["auditId", "seq", "at"],
+                          "properties": {
+                            "auditId": { "type": "string", "format": "uuid" },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "Display number of the audit row (「审计 #seq」)."
+                            },
+                            "at": { "type": "string", "format": "date-time" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ADMIN_SESSION_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["ADMIN_CONFLICT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CAPABILITY_UNAVAILABLE", "REQUEST_TIMEOUT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/launch/projects/{projectId}/versions/{version}/reject": {
+      "post": {
+        "operationId": "rejectAdminLaunchConfigVersion",
+        "summary": "Reject a Hooks launch config version (reviewer)",
+        "tags": ["admin-launch"],
+        "description": "Decision 0122 (`launch.approve`: reviewer only — the platform administrator cannot reject, same permission model as approve). Runs the `launch.config.reject` command as the account's bound LOOP user with operationId = Idempotency-Key. Body: configHash of the latest version, reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, note (shown to the applicant; required for other, 1–500 characters). The owner sees approval.status rejected with the reason on GET /v2/launch/projects/{projectId}/hooks-config and resubmits by saving a new version. Refusals: 403 OPS_SELF_APPROVAL (the version's editor / the project owner) / OPS_FORBIDDEN, 404 OPS_NOT_FOUND, 409 OPS_VERSION_CONFLICT (stale version or hash) / OPS_LAUNCH_CONFIG_DECIDED (already approved or rejected) / OPS_LAUNCH_NOT_APPROVED / OPS_IDEMPOTENCY_CONFLICT, 422 ADMIN_REJECTION_NOTE_REQUIRED / ADMIN_REJECTION_NOTE_INVALID. Audit: `launch.config.reject.requested` before (503 ADMIN_AUDIT_UNAVAILABLE when it cannot be written, nothing runs), then `.decided` or `.failed`; the service writes ops_audit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["configHash", "reasonCode"],
+                "properties": {
+                  "configHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                  },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "incomplete_materials",
+                      "name_or_ticker_conflict",
+                      "buyback_recipient_invalid",
+                      "community_binding_mismatch",
+                      "other"
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      { "type": "string", "maxLength": 2000 },
+                      { "type": "null" }
+                    ],
+                    "description": "Shown to the applicant. Required for other; 1–500 characters after trimming (blank = none)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$" },
+            "in": "path",
+            "name": "version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "Lower-case UUIDv4. The same key with the same body replays the first result (`replayed: true`); with another body or actor it is 409 ADMIN_CONFLICT (ADMIN_IDEMPOTENCY_CONFLICT / OPS_IDEMPOTENCY_CONFLICT)."
+          }
+        ],
+        "security": [{ "adminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operationId", "replayed", "rejection", "audit"],
+                  "properties": {
+                    "operationId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "= the Idempotency-Key (ops_operations.operation_id)."
+                    },
+                    "replayed": { "type": "boolean" },
+                    "rejection": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "projectId",
+                        "configVersion",
+                        "configHash",
+                        "reviewerUserId",
+                        "reasonCode",
+                        "note",
+                        "rejectedAt"
+                      ],
+                      "properties": {
+                        "projectId": { "type": "string", "format": "uuid" },
+                        "configVersion": { "type": "integer", "minimum": 1 },
+                        "configHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-fA-F]{64}$"
+                        },
+                        "reviewerUserId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "reasonCode": {
+                          "type": "string",
+                          "enum": [
+                            "incomplete_materials",
+                            "name_or_ticker_conflict",
+                            "buyback_recipient_invalid",
+                            "community_binding_mismatch",
+                            "other"
+                          ]
+                        },
+                        "note": {
+                          "anyOf": [{ "type": "string" }, { "type": "null" }]
+                        },
+                        "rejectedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "audit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["auditId", "seq", "at"],
+                          "properties": {
+                            "auditId": { "type": "string", "format": "uuid" },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "Display number of the audit row (「审计 #seq」)."
+                            },
+                            "at": { "type": "string", "format": "date-time" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ADMIN_SESSION_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["ADMIN_CONFLICT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CAPABILITY_UNAVAILABLE", "REQUEST_TIMEOUT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/launch/projects/{projectId}/reject": {
+      "post": {
+        "operationId": "rejectAdminLaunchProject",
+        "summary": "Reject a launch project's catalog material (reviewer)",
+        "tags": ["admin-launch"],
+        "description": "Decision 0122 (`launch.approve`: reviewer only, the project owner excluded). Rejects `submitted` / `in_review` catalog material (compare-and-swap on materialVersion): review_status becomes rejected, reviewReasonCode = the reason, a launch_project_rejections row and a launch_review_events operator row are written in the same transaction. The applicant sees reviewStatus rejected and rejection {reasonCode, note, at} on GET /v2/launch/projects/{projectId}, may edit (materialVersion + 1) and resubmit. Refusals: 403 OPS_SELF_APPROVAL / OPS_FORBIDDEN, 404 OPS_NOT_FOUND, 409 OPS_LAUNCH_NOT_IN_REVIEW / OPS_VERSION_CONFLICT / OPS_IDEMPOTENCY_CONFLICT, 422 ADMIN_REJECTION_NOTE_REQUIRED / ADMIN_REJECTION_NOTE_INVALID. Audit: `launch.project.reject.requested` / `.decided` / `.failed` + ops_audit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["materialVersion", "reasonCode"],
+                "properties": {
+                  "materialVersion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647,
+                    "description": "project.materialVersion as read (compare-and-swap)."
+                  },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "incomplete_materials",
+                      "name_or_ticker_conflict",
+                      "buyback_recipient_invalid",
+                      "community_binding_mismatch",
+                      "other"
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      { "type": "string", "maxLength": 2000 },
+                      { "type": "null" }
+                    ],
+                    "description": "Shown to the applicant. Required for other; 1–500 characters after trimming (blank = none)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "Lower-case UUIDv4. The same key with the same body replays the first result (`replayed: true`); with another body or actor it is 409 ADMIN_CONFLICT (ADMIN_IDEMPOTENCY_CONFLICT / OPS_IDEMPOTENCY_CONFLICT)."
+          }
+        ],
+        "security": [{ "adminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operationId", "replayed", "rejection", "audit"],
+                  "properties": {
+                    "operationId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "= the Idempotency-Key (= rejection.rejectionId)."
+                    },
+                    "replayed": { "type": "boolean" },
+                    "rejection": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "rejectionId",
+                        "projectId",
+                        "materialVersion",
+                        "reviewerUserId",
+                        "reasonCode",
+                        "note",
+                        "rejectedAt"
+                      ],
+                      "properties": {
+                        "rejectionId": { "type": "string", "format": "uuid" },
+                        "projectId": { "type": "string", "format": "uuid" },
+                        "materialVersion": { "type": "integer", "minimum": 1 },
+                        "reviewerUserId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "reasonCode": {
+                          "type": "string",
+                          "enum": [
+                            "incomplete_materials",
+                            "name_or_ticker_conflict",
+                            "buyback_recipient_invalid",
+                            "community_binding_mismatch",
+                            "other"
+                          ]
+                        },
+                        "note": {
+                          "anyOf": [{ "type": "string" }, { "type": "null" }]
+                        },
+                        "rejectedAt": {
                           "anyOf": [
                             { "type": "string", "format": "date-time" },
                             { "type": "null" }

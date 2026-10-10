@@ -197,6 +197,37 @@ export const replaceProjectRequestSchema = {
   },
 } as const;
 
+/**
+ * Decision 0122: a reviewer rejection as the applicant sees it (catalog
+ * project or one Hooks config version).
+ */
+export const hooksLaunchRejectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["reasonCode", "note", "at"],
+  properties: {
+    reasonCode: {
+      type: "string",
+      enum: [
+        "incomplete_materials",
+        "name_or_ticker_conflict",
+        "buyback_recipient_invalid",
+        "community_binding_mismatch",
+        "other",
+      ],
+    },
+    note: {
+      description:
+        "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: 500 },
+        { type: "null" },
+      ],
+    },
+    at: { type: "string", format: "date-time" },
+  },
+} as const;
+
 const projectProjectionSchema = {
   type: "object",
   additionalProperties: false,
@@ -259,6 +290,11 @@ const projectProjectionSchema = {
       ],
       description:
         "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null.",
+    },
+    rejection: {
+      description:
+        "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+      anyOf: [hooksLaunchRejectionSchema, { type: "null" }],
     },
     kyb: {
       type: "object",
@@ -2190,14 +2226,21 @@ export const hooksLaunchProjectConfigReadSchema = {
               maximum: 2_147_483_647,
             },
             status: {
+              description:
+                "Decision 0122 adds rejected: a reviewer rejected this version (see rejection); saving a new version (expectedVersion = this version) resubmits it as awaiting_approval.",
               type: "string",
-              enum: ["awaiting_approval", "approved"],
+              enum: ["awaiting_approval", "approved", "rejected"],
             },
             approvedAt: {
               anyOf: [
                 { type: "string", format: "date-time" },
                 { type: "null" },
               ],
+            },
+            rejection: {
+              description:
+                "Decision 0122 (optional in the schema, always present in answers): non-null exactly when status is rejected.",
+              anyOf: [hooksLaunchRejectionSchema, { type: "null" }],
             },
           },
         },
@@ -2215,6 +2258,17 @@ export const hooksLaunchProjectConfigReadSchema = {
       maximum: 2_592_000,
       description:
         "Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS. A save accepts nftSaleStartAt ≥ server now + this value (400 otherwise).",
+    },
+    buybackRecipientFixed: {
+      description:
+        "Decision 0122 (optional in the schema, always present in answers): always true — the buyback recipient is fixed by the platform; the App shows fixedBuybackRecipient read-only and sends it unchanged as config.buybackRecipient.",
+      type: "boolean",
+      const: true,
+    },
+    fixedBuybackRecipient: {
+      description:
+        "Decision 0122 (optional in the schema, always present in answers): LAUNCH2_BUYBACK_RECIPIENT (lower-case). null = not configured: every save, signing request and submission is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE.",
+      anyOf: [addressSchema, { type: "null" }],
     },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
@@ -2295,6 +2349,12 @@ export const launchReadErrors = {
     "PROVIDER_DISCONNECTED",
     "REQUEST_TIMEOUT",
   ]),
+} as const;
+
+/** Decision 0122: the signing request can refuse a non-fixed recipient. */
+export const hooksSigningRequestErrors = {
+  ...launchReadErrors,
+  422: v2ErrorResponseSchema(["VALIDATION_FAILED"]),
 } as const;
 
 export const launchCommandErrors = {

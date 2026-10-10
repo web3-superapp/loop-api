@@ -371,22 +371,28 @@ describe("Decision 0121 refusal classification and backoff", () => {
       [
         "ReferenceUnavailable",
         "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
-        "price_protection",
+        "legacy_price_protection",
       ],
       [
         "SpotOutsideProtection",
         "LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION",
-        "price_protection",
+        "legacy_price_protection",
       ],
       [
         "OutputBelowProtection",
         "LAUNCH2_BUYBACK_OUTPUT_BELOW_PROTECTION",
-        "price_protection",
+        "legacy_price_protection",
       ],
       [
         "LockedPrincipalInsufficient",
         "LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT",
-        "price_protection",
+        "principal",
+      ],
+      ["NoOutput", "LAUNCH2_BUYBACK_NO_OUTPUT", "other"],
+      [
+        "RecipientBalanceMismatch",
+        "LAUNCH2_BUYBACK_CONTRACT_REVERTED",
+        "other",
       ],
       ["TooSoon", "LAUNCH2_BUYBACK_TOO_SOON", "interval"],
       ["NoBudget", "LAUNCH2_BUYBACK_NO_BUDGET", "budget"],
@@ -408,7 +414,7 @@ describe("Decision 0121 refusal classification and backoff", () => {
   });
 
   it("doubles from the lane interval up to the cap; TooSoon waits one contract interval", () => {
-    const price = { category: "price_protection" as const };
+    const price = { category: "principal" as const };
     expect(
       [1, 2, 3, 4, 5, 6, 30].map((count) =>
         launch2KeeperBackoffSeconds(price, count, policy),

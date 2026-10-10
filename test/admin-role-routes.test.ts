@@ -398,6 +398,152 @@ describe("Operator console role separation (Decision 0109)", () => {
     expect(actions).toContain("testnet.acceptance.record.decided");
   });
 
+  it("lets only a reviewer reject a config version or the catalog material, with a reason, audited (Decision 0122)", async () => {
+    const harness = await createHarness();
+    const admin = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    const reviewer = await seedAndLogin(
+      harness,
+      "reviewer",
+      harness.reviewerUserId,
+    );
+    const owner = await seedAndLogin(harness, "reviewer", harness.ownerUserId);
+    const rejectVersion = (
+      cookie: string,
+      payload: Record<string, unknown>,
+      key = randomUUID(),
+    ) =>
+      harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/launch/projects/${harness.projectId}/versions/1/reject`,
+        headers: { cookie, "idempotency-key": key },
+        payload: { configHash: `0x${"ab".repeat(32)}`, ...payload },
+      });
+    const rejectProject = (
+      cookie: string,
+      payload: Record<string, unknown>,
+      key = randomUUID(),
+    ) =>
+      harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/launch/projects/${harness.projectId}/reject`,
+        headers: { cookie, "idempotency-key": key },
+        payload: { materialVersion: 1, ...payload },
+      });
+    // Same permission model as approve: the platform administrator cannot.
+    expectError(
+      await rejectVersion(admin, { reasonCode: "incomplete_materials" }),
+      403,
+      "PERMISSION_DENIED",
+    );
+    expectError(
+      await rejectProject(admin, { reasonCode: "incomplete_materials" }),
+      403,
+      "PERMISSION_DENIED",
+    );
+    // other needs a note; an unknown reason is a bad request.
+    expectError(
+      await rejectVersion(reviewer, { reasonCode: "other", note: "   " }),
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_REJECTION_NOTE_REQUIRED",
+    );
+    expectError(
+      await rejectProject(reviewer, { reasonCode: "too_ugly" }),
+      400,
+      "INVALID_REQUEST",
+    );
+    // The project owner is never the reviewer.
+    expectError(
+      await rejectProject(owner, { reasonCode: "other", note: "mine" }),
+      403,
+      "PERMISSION_DENIED",
+      "OPS_SELF_APPROVAL",
+    );
+    expect(harness.hooks.executed).toHaveLength(0);
+
+    const key = randomUUID();
+    const rejected = await rejectVersion(
+      reviewer,
+      {
+        reasonCode: "buyback_recipient_invalid",
+        note: " Use the platform recipient ",
+      },
+      key,
+    );
+    expect(rejected.statusCode, rejected.body).toBe(200);
+    expect(rejected.json()).toMatchObject({
+      operationId: key,
+      replayed: false,
+      rejection: {
+        projectId: harness.projectId,
+        configVersion: 1,
+        reviewerUserId: harness.reviewerUserId,
+        reasonCode: "buyback_recipient_invalid",
+        note: "Use the platform recipient",
+      },
+    });
+    const replay = await rejectVersion(
+      reviewer,
+      {
+        reasonCode: "buyback_recipient_invalid",
+        note: " Use the platform recipient ",
+      },
+      key,
+    );
+    expect(replay.json()).toMatchObject({ replayed: true });
+    const material = await rejectProject(reviewer, {
+      reasonCode: "name_or_ticker_conflict",
+    });
+    expect(material.statusCode, material.body).toBe(200);
+    expect(material.json()).toMatchObject({
+      rejection: {
+        projectId: harness.projectId,
+        materialVersion: 1,
+        reasonCode: "name_or_ticker_conflict",
+        note: null,
+      },
+    });
+    expect(harness.hooks.executed.map((command) => command.action)).toEqual([
+      "launch.config.reject",
+      "launch.project.reject",
+    ]);
+    const actions = harness.admin.audit.map((row) => row.action);
+    for (const action of [
+      "launch.config.reject.requested",
+      "launch.config.reject.decided",
+      "launch.project.reject.requested",
+      "launch.project.reject.decided",
+    ]) {
+      expect(actions).toContain(action);
+    }
+
+    // The console list carries kind and filters by it (Decision 0122).
+    const list = await harness.app.inject({
+      url: "/admin/v1/launch/projects?kind=launch2",
+      headers: { cookie: reviewer },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    const items = list.json<{ items: Record<string, unknown>[] }>().items;
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item).toMatchObject({ kind: "launch2", materialVersion: 1 });
+    }
+    const none = await harness.app.inject({
+      url: "/admin/v1/launch/projects?kind=ido",
+      headers: { cookie: reviewer },
+    });
+    expect(none.json<{ items: unknown[] }>().items).toEqual([]);
+    expectError(
+      await harness.app.inject({
+        url: "/admin/v1/launch/projects?kind=meme",
+        headers: { cookie: reviewer },
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+  });
+
   it("lets only the platform administrator release a blocked snapshot publication, audited (Decision 0120)", async () => {
     const harness = await createHarness();
     const admin = (await login(harness.app, "operator", bootstrapPassword))

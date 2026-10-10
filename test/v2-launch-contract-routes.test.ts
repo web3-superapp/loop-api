@@ -68,6 +68,7 @@ const project = Object.freeze({
   reviewStatus: "approved" as const,
   kybStatus: "unavailable" as const,
   reviewReasonCode: null,
+  rejection: null,
   submittedAt: createdAt,
   reviewedAt: createdAt,
   launchId,

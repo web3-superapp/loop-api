@@ -30,11 +30,14 @@ import {
   projectNFTAbi,
   snapshotRegistryAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
+import { legacyV2BuybackExecutorAbi } from "../launch/hooks-launch-protocol-abi-legacy-v2.js";
 
 /**
  * Decision 0114: the launch slot (BSC Testnet, chain 97) reader of the
  * launch2 read model. Logs are decoded per contract role with the ABI
  * generated from the loop-contracts Foundry build (`pnpm hooks:abi-sync`);
+ * Decision 0122: the buyback executor of a v2-generation instance uses the
+ * frozen v2 ABI (`buybackExecutorV2` role, other `BuybackCompleted` topic);
  * a log of an unexpected event is counted, never guessed. Reads of one
  * route answer are pinned to one block. It never signs or sends.
  */
@@ -58,13 +61,20 @@ const roleAbis: Readonly<
   factory: { abi: loopLaunchFactoryAbi, events: ["LaunchDeployed"] },
   gate: { abi: launchPublicationGateAbi, events: ["LaunchActivated"] },
   nft: { abi: projectNFTAbi, events: ["NftMinted", "Transfer"] },
-  snapshots: { abi: snapshotRegistryAbi, events: ["SnapshotPublished"] },
+  snapshots: {
+    abi: snapshotRegistryAbi,
+    events: ["SnapshotPublished", "PublicRoundOpenedWithoutHolders"],
+  },
   curve: {
     abi: curveEngineAbi,
     events: ["CurveBought", "CurveSold", "Graduated"],
   },
   buybackExecutor: {
     abi: buybackExecutorAbi,
+    events: ["BuybackCompleted", "BuybackPausedEvent", "BuybackResumed"],
+  },
+  buybackExecutorV2: {
+    abi: legacyV2BuybackExecutorAbi,
     events: ["BuybackCompleted", "BuybackPausedEvent", "BuybackResumed"],
   },
 };
@@ -349,8 +359,12 @@ export function createLaunch2Chain(input: {
     },
 
     async readBuybackState(request): Promise<Launch2BuybackChainState> {
-      const block = await client.getBlockNumber();
-      const executorAbi = buybackExecutorAbi as Abi;
+      const head = await client.getBlock({ blockTag: "latest" });
+      const block = head.number;
+      const legacy = request.generation === "v2";
+      const executorAbi = (
+        legacy ? legacyV2BuybackExecutorAbi : buybackExecutorAbi
+      ) as Abi;
       const escrowAbi = nftEscrowAbi as Abi;
       const [
         paused,
@@ -377,7 +391,9 @@ export function createLaunch2Chain(input: {
         read<bigint>(request.escrow, escrowAbi, "availableBudget", [], block),
         read<bigint>(request.escrow, escrowAbi, "totalRecorded", [], block),
         read<bigint>(request.escrow, escrowAbi, "totalSpent", [], block),
-        read<readonly [bigint, bigint, bigint]>(
+        // v3: (amountIn, executable); v2: (amountIn, expectedNetOut,
+        // minMemeOut) and a revert while the price recorder is not ready.
+        read<readonly unknown[]>(
           request.buybackExecutor,
           executorAbi,
           "quoteNextOrder",
@@ -385,14 +401,23 @@ export function createLaunch2Chain(input: {
           block,
         ).catch(() => null),
       ]);
+      let nextOrderAmountIn: bigint | null = null;
+      let nextOrderExecutable: boolean | null = null;
+      if (next !== null) {
+        nextOrderAmountIn = BigInt(next[0] as bigint);
+        nextOrderExecutable = legacy
+          ? BigInt(next[2] as bigint) > 0n
+          : next[1] === true;
+      }
       return {
+        blockTimestamp: head.timestamp,
         paused,
         lastSuccessfulAt: BigInt(lastSuccessfulAt),
         availableBudget,
         totalRecorded,
         totalSpent,
-        nextOrderAmountIn: next === null ? null : next[0],
-        nextOrderMinMemeOut: next === null ? null : next[2],
+        nextOrderAmountIn,
+        nextOrderExecutable,
       };
     },
   });

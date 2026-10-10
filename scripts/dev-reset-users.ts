@@ -169,6 +169,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch_settlement_records: "user",
     hooks_launch_project_config_versions: "user",
     hooks_launch_config_approvals: "user",
+    // Decision 0122: reviewer rejections (catalog material / config version)
+    hooks_launch_config_rejections: "user",
+    launch_project_rejections: "user",
     hooks_testnet_acceptances: "user",
     hooks_launch_deployment_tasks: "user",
     hooks_launch_deployment_events: "user",
@@ -392,6 +395,13 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "hooks_launch_config_approvals",
     `(project_id, config_version) in ${doomedApprovals}`,
   ),
+  // Decision 0122: rejections of doomed versions or by doomed reviewers
+  del(
+    "hooks_launch_config_rejections",
+    `(project_id, config_version) in ${doomedConfigVersions}
+      or ${ownedBy("reviewer_id")}`,
+  ),
+  del("launch_project_rejections", ownedBy("reviewer_user_id")),
   del(
     "hooks_launch_project_config_versions",
     `(project_id, config_version) in ${doomedConfigVersions}`,

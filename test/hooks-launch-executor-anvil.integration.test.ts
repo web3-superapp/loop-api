@@ -247,6 +247,7 @@ describe.skipIf(skipReason !== null)(
       );
       const walletId = `wallet-${ownerUserId}`;
       const prepared = await createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
         configs,
         wallets,
         reader: reader(),
@@ -270,6 +271,7 @@ describe.skipIf(skipReason !== null)(
         },
       });
       const job = await createHooksLaunchSubmissionService({
+        fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
         configs,
         wallets,
         reader: reader(),

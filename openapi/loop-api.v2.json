@@ -94076,7 +94076,7 @@
         "operationId": "getV2HooksLaunchProjectConfig",
         "summary": "Read the caller's fixed-template Hooks project configuration",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
+        "description": "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). Decision 0122: approval.status rejected (a reviewer rejected this version; approval.rejection = {reasonCode, note, at}; saving a new version resubmits it), buybackRecipientFixed (always true) and fixedBuybackRecipient (LAUNCH2_BUYBACK_RECIPIENT, null when not configured). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
         "parameters": [
           {
             "schema": {
@@ -94318,12 +94318,55 @@
                               "maximum": 2147483647
                             },
                             "status": {
+                              "description": "Decision 0122 adds rejected: a reviewer rejected this version (see rejection); saving a new version (expectedVersion = this version) resubmits it as awaiting_approval.",
                               "type": "string",
-                              "enum": ["awaiting_approval", "approved"]
+                              "enum": [
+                                "awaiting_approval",
+                                "approved",
+                                "rejected"
+                              ]
                             },
                             "approvedAt": {
                               "anyOf": [
                                 { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            },
+                            "rejection": {
+                              "description": "Decision 0122 (optional in the schema, always present in answers): non-null exactly when status is rejected.",
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["reasonCode", "note", "at"],
+                                  "properties": {
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "incomplete_materials",
+                                        "name_or_ticker_conflict",
+                                        "buyback_recipient_invalid",
+                                        "community_binding_mismatch",
+                                        "other"
+                                      ]
+                                    },
+                                    "note": {
+                                      "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
                                 { "type": "null" }
                               ]
                             }
@@ -94670,6 +94713,18 @@
                       "minimum": 4200,
                       "maximum": 2592000,
                       "description": "Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS. A save accepts nftSaleStartAt ≥ server now + this value (400 otherwise)."
+                    },
+                    "buybackRecipientFixed": {
+                      "description": "Decision 0122 (optional in the schema, always present in answers): always true — the buyback recipient is fixed by the platform; the App shows fixedBuybackRecipient read-only and sends it unchanged as config.buybackRecipient.",
+                      "type": "boolean",
+                      "enum": [true]
+                    },
+                    "fixedBuybackRecipient": {
+                      "description": "Decision 0122 (optional in the schema, always present in answers): LAUNCH2_BUYBACK_RECIPIENT (lower-case). null = not configured: every save, signing request and submission is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE.",
+                      "anyOf": [
+                        { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+                        { "type": "null" }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -95123,7 +95178,7 @@
         "operationId": "saveV2HooksLaunchProjectConfig",
         "summary": "Save an owner-scoped fixed-template Hooks project draft",
         "tags": ["launch"],
-        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
+        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Decision 0122: config.buybackRecipient must be the platform's fixed recipient (LAUNCH2_BUYBACK_RECIPIENT, case-insensitive), else 422 VALIDATION_FAILED (reasonCode HOOKS_BUYBACK_RECIPIENT_FIXED); not configured → 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE. Never publishes, deploys, or activates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -95997,7 +96052,7 @@
         "operationId": "getV2HooksLaunchSigningRequest",
         "summary": "Prepare the owner's BSC Testnet Hooks deployment signature",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again).",
+        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient).",
         "parameters": [
           {
             "schema": {
@@ -96447,6 +96502,76 @@
               }
             }
           },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Default Response",
             "headers": {
@@ -96602,7 +96727,7 @@
         "operationId": "submitV2HooksLaunchDeployment",
         "summary": "Verify and record a project-signed Testnet deployment task",
         "tags": ["launch"],
-        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded.",
+        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded. Decision 0122: a config naming another buyback recipient than LAUNCH2_BUYBACK_RECIPIENT is 422 VALIDATION_FAILED (HOOKS_BUYBACK_RECIPIENT_FIXED); none configured is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE; nothing recorded.",
         "requestBody": {
           "required": true,
           "content": {
@@ -101405,6 +101530,44 @@
                             ],
                             "description": "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null."
                           },
+                          "rejection": {
+                            "description": "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["reasonCode", "note", "at"],
+                                "properties": {
+                                  "reasonCode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "incomplete_materials",
+                                      "name_or_ticker_conflict",
+                                      "buyback_recipient_invalid",
+                                      "community_binding_mismatch",
+                                      "other"
+                                    ]
+                                  },
+                                  "note": {
+                                    "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 500
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "kyb": {
                             "type": "object",
                             "additionalProperties": false,
@@ -102213,6 +102376,44 @@
                             { "type": "null" }
                           ],
                           "description": "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null."
+                        },
+                        "rejection": {
+                          "description": "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "note", "at"],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "incomplete_materials",
+                                    "name_or_ticker_conflict",
+                                    "buyback_recipient_invalid",
+                                    "community_binding_mismatch",
+                                    "other"
+                                  ]
+                                },
+                                "note": {
+                                  "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 500
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "kyb": {
                           "type": "object",
@@ -103079,6 +103280,44 @@
                           ],
                           "description": "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null."
                         },
+                        "rejection": {
+                          "description": "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "note", "at"],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "incomplete_materials",
+                                    "name_or_ticker_conflict",
+                                    "buyback_recipient_invalid",
+                                    "community_binding_mismatch",
+                                    "other"
+                                  ]
+                                },
+                                "note": {
+                                  "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 500
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
                         "kyb": {
                           "type": "object",
                           "additionalProperties": false,
@@ -103888,6 +104127,44 @@
                             { "type": "null" }
                           ],
                           "description": "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null."
+                        },
+                        "rejection": {
+                          "description": "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "note", "at"],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "incomplete_materials",
+                                    "name_or_ticker_conflict",
+                                    "buyback_recipient_invalid",
+                                    "community_binding_mismatch",
+                                    "other"
+                                  ]
+                                },
+                                "note": {
+                                  "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 500
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "kyb": {
                           "type": "object",
@@ -104762,6 +105039,44 @@
                             { "type": "null" }
                           ],
                           "description": "Display projection of reviewReasonCode: one applicant-facing sentence, rendered as-is and never parsed back into a code. Null exactly when reviewReasonCode is null."
+                        },
+                        "rejection": {
+                          "description": "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["reasonCode", "note", "at"],
+                              "properties": {
+                                "reasonCode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "incomplete_materials",
+                                    "name_or_ticker_conflict",
+                                    "buyback_recipient_invalid",
+                                    "community_binding_mismatch",
+                                    "other"
+                                  ]
+                                },
+                                "note": {
+                                  "description": "The reviewer's note to the applicant (1–500 characters; always present for other, optional otherwise).",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 500
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
                         },
                         "kyb": {
                           "type": "object",
@@ -153530,7 +153845,7 @@
         "operationId": "getV2Launch2Instance",
         "summary": "Get one MEME v2 launch instance",
         "tags": ["launch2"],
-        "description": "Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -153935,8 +154250,13 @@
                           ],
                           "properties": {
                             "status": {
+                              "description": "pending = no snapshot yet; published = SnapshotPublished indexed; opened_without_holders (Decision 0122, v3 Factory) = the NFT sale ended with no mint and the public round opened without a snapshot (root / dataHash / cutoff / memberCount / signers null, earlyRoundEndsAt = the opening time).",
                               "type": "string",
-                              "enum": ["pending", "published"]
+                              "enum": [
+                                "pending",
+                                "published",
+                                "opened_without_holders"
+                              ]
                             },
                             "verification": {
                               "anyOf": [
@@ -154015,7 +154335,7 @@
                               ]
                             },
                             "publication": {
-                              "description": "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
+                              "description": "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one, and null for a zero-holder opening — Decision 0122). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -154060,7 +154380,7 @@
                               ]
                             },
                             "closure": {
-                              "description": "Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block). Nothing can be published; stage is closed_no_holders (terminal).",
+                              "description": "Deprecated (Decision 0122). Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block) on a v2-generation Factory instance, which cannot open without a snapshot; stage closed_no_holders (terminal). Never produced for v3 instances (see openedWithoutHolders).",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -154082,6 +154402,35 @@
                                     "closedAt": {
                                       "type": "string",
                                       "format": "date-time"
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "openedWithoutHolders": {
+                              "description": "Decision 0122 (optional in the schema, always present in answers): non-null after the indexed PublicRoundOpenedWithoutHolders (v3 Factory) — the sale ended with no mint, the public round opened at openedAt with no early round; stage public.",
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "openedAt",
+                                    "blockNumber",
+                                    "transactionHash"
+                                  ],
+                                  "properties": {
+                                    "openedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "blockNumber": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "transactionHash": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{64}$"
                                     }
                                   }
                                 },
@@ -154225,16 +154574,34 @@
                                       "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
                                     },
                                     "minMemeOut": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      "description": "Decision 0122: the v2 (price-protected) executor's protected minimum; null for a v3 execution (no price protection, minOut 0).",
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                        },
+                                        { "type": "null" }
+                                      ]
                                     },
                                     "referencePriceUsd1": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      "description": "Decision 0122: v2 executors only (30-minute reference price); null for v3.",
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                        },
+                                        { "type": "null" }
+                                      ]
                                     },
                                     "spotPriceUsd1": {
-                                      "type": "string",
-                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      "description": "Decision 0122: v2 executors only; null for v3.",
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                        },
+                                        { "type": "null" }
+                                      ]
                                     },
                                     "executedAt": {
                                       "type": "string",
@@ -157679,7 +158046,7 @@
         "operationId": "listV2Launch2Buybacks",
         "summary": "List the NFT-escrow buybacks of a MEME v2 instance",
         "tags": ["launch2"],
-        "description": "BuybackCompleted logs indexed by the launch2_event lane (100 USD1 per order, the last may be smaller; ≥ 10 s between successes), newest first, plus the ledger summary and a live read of the executor and escrow (paused, budget, next order and the protection that would refuse it now: nextOrderBlockedReason). A protection refusal reverts on chain and leaves no log, so refused attempts are not listed (outcome rejected is reserved for the keeper). live is null with liveUnavailable.reasonCode when the chain read fails. Signed cursor; limit <= 100 (default 30). 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "BuybackCompleted logs indexed by the launch2_event lane (100 USD1 per order, the last may be smaller; ≥ 10 s between successes), newest first, plus the ledger summary and a live read of the executor and escrow (paused, budget, next order and why it cannot run now: nextOrderBlockedReason, Decision 0122 — from quoteNextOrder().executable on the v3 Factory, which has no price protection; minMemeOut / referencePriceUsd1 / spotPriceUsd1 are null for v3 executions). A refusal reverts on chain and leaves no log, so refused attempts are not listed (outcome rejected is reserved for the keeper). live is null with liveUnavailable.reasonCode when the chain read fails. Signed cursor; limit <= 100 (default 30). 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -157840,16 +158207,34 @@
                                   "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
                                 },
                                 "minMemeOut": {
-                                  "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  "description": "Decision 0122: the v2 (price-protected) executor's protected minimum; null for a v3 execution (no price protection, minOut 0).",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ]
                                 },
                                 "referencePriceUsd1": {
-                                  "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  "description": "Decision 0122: v2 executors only (30-minute reference price); null for v3.",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ]
                                 },
                                 "spotPriceUsd1": {
-                                  "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  "description": "Decision 0122: v2 executors only; null for v3.",
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ]
                                 },
                                 "executedAt": {
                                   "type": "string",
@@ -157961,6 +158346,7 @@
                               ]
                             },
                             "nextOrderBlockedReason": {
+                              "description": "Decision 0122: null = the next order can run now. v3: BUYBACK_PAUSED | BUYBACK_NOT_GRADUATED | BUYBACK_NO_BUDGET | BUYBACK_TOO_SOON (< 10 s since the last success) | BUYBACK_PRINCIPAL_INSUFFICIENT (official-pool USD1 principal < 10,000 or order > 1 % of it) | BUYBACK_QUOTE_UNAVAILABLE (quoteNextOrder unreadable). v2-generation instances only: BUYBACK_LEGACY_PRICE_PROTECTION (reference not ready / protection would refuse). BUYBACK_PROTECTION_BLOCKED and BUYBACK_PRICE_SOURCE_UNAVAILABLE are no longer produced.",
                               "anyOf": [
                                 {
                                   "type": "string",
@@ -158036,16 +158422,34 @@
                             "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
                           },
                           "minMemeOut": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            "description": "Decision 0122: the v2 (price-protected) executor's protected minimum; null for a v3 execution (no price protection, minOut 0).",
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "referencePriceUsd1": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            "description": "Decision 0122: v2 executors only (30-minute reference price); null for v3.",
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "spotPriceUsd1": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            "description": "Decision 0122: v2 executors only; null for v3.",
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ]
                           },
                           "executedAt": {
                             "type": "string",

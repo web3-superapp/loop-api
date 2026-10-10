@@ -45,7 +45,7 @@ function makeHarness() {
       return Promise.resolve(record);
     },
     getOwnedProgress: () =>
-      Promise.resolve({ approvedAt: null, latestJobId: null }),
+      Promise.resolve({ approvedAt: null, rejection: null, latestJobId: null }),
   };
   return { repository, getRecord: () => record };
 }
@@ -54,6 +54,7 @@ describe("Hooks project config service", () => {
   it("persists owner-scoped drafts with the immutable Hooks economics", async () => {
     const harness = makeHarness();
     const service = createHooksLaunchProjectConfigService({
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
       repository: harness.repository,
       factory: {
         nftSaleDuration: () =>
@@ -81,6 +82,7 @@ describe("Hooks project config service", () => {
   it("rejects stale writes and does not mutate the last saved version", async () => {
     const harness = makeHarness();
     const service = createHooksLaunchProjectConfigService({
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
       repository: harness.repository,
       factory: {
         nftSaleDuration: () =>
@@ -110,6 +112,7 @@ describe("Hooks project config service", () => {
 
   it("does not disclose another owner's project", async () => {
     const service = createHooksLaunchProjectConfigService({
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
       repository: makeHarness().repository,
       factory: {
         nftSaleDuration: () =>
@@ -131,6 +134,7 @@ describe("Hooks project config service", () => {
 
   it("rejects economic overrides even when submitted as extra config keys", async () => {
     const service = createHooksLaunchProjectConfigService({
+      fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
       repository: makeHarness().repository,
       factory: {
         nftSaleDuration: () =>
@@ -157,6 +161,7 @@ describe("Hooks project config service", () => {
       >[0]["factory"],
     ) =>
       createHooksLaunchProjectConfigService({
+        fixedBuybackRecipient: "0x1234567890123456789012345678901234567890",
         repository: makeHarness().repository,
         factory,
         minimumLeadSeconds: 86_400,

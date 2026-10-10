@@ -1268,6 +1268,8 @@ describe("PostgreSQL Spot reconciliation repository", () => {
     truncate table
     public.community_review_notes,
     public.launch2_snapshot_publication_releases,
+    public.launch_project_rejections,
+    public.hooks_launch_config_rejections,
     public.launch2_snapshot_closures,
     public.launch2_buyback_attempts,
     public.launch2_snapshot_publications,

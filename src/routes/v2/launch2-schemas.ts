@@ -281,9 +281,20 @@ const buybackItemSchema = {
     reasonCode: nullableReasonCodeSchema,
     usd1Spent: decimalSchema,
     memeDelivered: decimalSchema,
-    minMemeOut: decimalSchema,
-    referencePriceUsd1: decimalSchema,
-    spotPriceUsd1: decimalSchema,
+    minMemeOut: {
+      description:
+        "Decision 0122: the v2 (price-protected) executor's protected minimum; null for a v3 execution (no price protection, minOut 0).",
+      anyOf: [decimalSchema, { type: "null" }],
+    },
+    referencePriceUsd1: {
+      description:
+        "Decision 0122: v2 executors only (30-minute reference price); null for v3.",
+      anyOf: [decimalSchema, { type: "null" }],
+    },
+    spotPriceUsd1: {
+      description: "Decision 0122: v2 executors only; null for v3.",
+      anyOf: [decimalSchema, { type: "null" }],
+    },
     executedAt: dateTimeSchema,
     transactionHash: txHashSchema,
     blockNumber: uintStringSchema,
@@ -496,7 +507,12 @@ const snapshotSchema = {
     "closure",
   ],
   properties: {
-    status: { type: "string", enum: ["pending", "published"] },
+    status: {
+      description:
+        "pending = no snapshot yet; published = SnapshotPublished indexed; opened_without_holders (Decision 0122, v3 Factory) = the NFT sale ended with no mint and the public round opened without a snapshot (root / dataHash / cutoff / memberCount / signers null, earlyRoundEndsAt = the opening time).",
+      type: "string",
+      enum: ["pending", "published", "opened_without_holders"],
+    },
     verification: {
       anyOf: [
         { type: "string", enum: ["pending", "verified", "mismatch"] },
@@ -518,7 +534,7 @@ const snapshotSchema = {
     },
     publication: {
       description:
-        "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
+        "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one, and null for a zero-holder opening — Decision 0122). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
       anyOf: [
         {
           type: "object",
@@ -539,7 +555,7 @@ const snapshotSchema = {
     },
     closure: {
       description:
-        "Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block). Nothing can be published; stage is closed_no_holders (terminal).",
+        "Deprecated (Decision 0122). Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block) on a v2-generation Factory instance, which cannot open without a snapshot; stage closed_no_holders (terminal). Never produced for v3 instances (see openedWithoutHolders).",
       anyOf: [
         {
           type: "object",
@@ -549,6 +565,23 @@ const snapshotSchema = {
             reason: { type: "string", const: "no_holders" },
             cutoffBlock: uintStringSchema,
             closedAt: dateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    openedWithoutHolders: {
+      description:
+        "Decision 0122 (optional in the schema, always present in answers): non-null after the indexed PublicRoundOpenedWithoutHolders (v3 Factory) — the sale ended with no mint, the public round opened at openedAt with no early round; stage public.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["openedAt", "blockNumber", "transactionHash"],
+          properties: {
+            openedAt: dateTimeSchema,
+            blockNumber: uintStringSchema,
+            transactionHash: txHashSchema,
           },
         },
         { type: "null" },
@@ -788,7 +821,11 @@ export const launch2BuybacksResourceSchema = {
             escrowSpentUsd1: decimalSchema,
             escrowAvailableUsd1: decimalSchema,
             nextOrderUsd1: { anyOf: [decimalSchema, { type: "null" }] },
-            nextOrderBlockedReason: nullableReasonCodeSchema,
+            nextOrderBlockedReason: {
+              description:
+                "Decision 0122: null = the next order can run now. v3: BUYBACK_PAUSED | BUYBACK_NOT_GRADUATED | BUYBACK_NO_BUDGET | BUYBACK_TOO_SOON (< 10 s since the last success) | BUYBACK_PRINCIPAL_INSUFFICIENT (official-pool USD1 principal < 10,000 or order > 1 % of it) | BUYBACK_QUOTE_UNAVAILABLE (quoteNextOrder unreadable). v2-generation instances only: BUYBACK_LEGACY_PRICE_PROTECTION (reference not ready / protection would refuse). BUYBACK_PROTECTION_BLOCKED and BUYBACK_PRICE_SOURCE_UNAVAILABLE are no longer produced.",
+              ...nullableReasonCodeSchema,
+            },
           },
         },
         { type: "null" },

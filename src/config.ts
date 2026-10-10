@@ -11,6 +11,12 @@ import {
   type LaunchChainId,
   type LaunchChainReference,
 } from "./features/chain/chain-contract.js";
+import {
+  Launch2LegacyFactoriesInvalidError,
+  launch2FactoryEntries,
+  parseLaunch2LegacyFactories,
+  type Launch2FactoryGeneration,
+} from "./features/launch2/launch2-generation.js";
 import type { LaunchContractConfig } from "./integrations/launch/launch-contract-adapter.js";
 import {
   memeContractReasonCodes,
@@ -280,6 +286,33 @@ function refineLaunchChainEnvironment(
   }
 }
 
+/**
+ * Decision 0122: parses `LAUNCH2_LEGACY_FACTORIES` for the worker; any
+ * problem is a configuration error (boot refused), never a silent skip.
+ */
+function parseLaunch2LegacyFactoriesEnvironment(
+  value: string | undefined,
+  currentFactory: string | undefined,
+): readonly {
+  readonly address: string;
+  readonly generation: Launch2FactoryGeneration;
+}[] {
+  try {
+    const legacy = parseLaunch2LegacyFactories(value);
+    if (currentFactory !== undefined) {
+      launch2FactoryEntries({ current: currentFactory, legacy });
+    }
+    return legacy;
+  } catch (error) {
+    if (error instanceof Launch2LegacyFactoriesInvalidError) {
+      throw new ConfigurationError([
+        `LAUNCH2_LEGACY_FACTORIES: ${error.message}`,
+      ]);
+    }
+    throw error;
+  }
+}
+
 /** Decision 0108: Hooks launch switches (API process only). */
 export interface HooksLaunchConfig {
   readonly enabled: boolean;
@@ -294,6 +327,13 @@ export interface HooksLaunchConfig {
    * executor to deploy, confirm, verify and activate).
    */
   readonly minimumSaleLeadSeconds: number;
+  /**
+   * Decision 0122 (requirer ruling 9): `LAUNCH2_BUYBACK_RECIPIENT`, the one
+   * buyback recipient every Hooks config must name (lower-case). Null =
+   * not configured: saves, signing requests and submissions are 503
+   * `HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE`.
+   */
+  readonly fixedBuybackRecipient: string | null;
 }
 
 /** Decision 0117: the Gate activation buffer (3,600 s) + 600 s executor margin. */
@@ -687,6 +727,13 @@ const environmentSchema = z
       hooksLaunchMinimumSaleLeadFloorSeconds,
       2_592_000,
     ),
+    // Decision 0122: the fixed buyback recipient of every Hooks config.
+    // Blank = Hooks config saves / signing / submissions stay unavailable.
+    LAUNCH2_BUYBACK_RECIPIENT: z
+      .string()
+      .trim()
+      .regex(/^0x[0-9a-fA-F]{40}$/u, "must be a 0x-prefixed 20-byte address")
+      .optional(),
     // Decision 0114: MEME v2 (`launch2`) quote lifetime and default
     // slippage. The routes exist only with `launch2` in V2_MODULES_ENABLED.
     LAUNCH2_QUOTE_TTL_SECONDS: positiveIntegerString(10, 600),
@@ -905,6 +952,9 @@ const reconciliationWorkerEnvironmentSchema = z
     MEME_INDEXER_ENABLED: booleanString,
     LAUNCH2_INDEXER_ENABLED: booleanString,
     LAUNCH2_INDEXER_POLL_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
+    // Decision 0122: read-only older Factories (`v2:0x…,…`) the
+    // launch2_event lane keeps indexing beside HOOKS_LAUNCH_FACTORY_ADDRESS.
+    LAUNCH2_LEGACY_FACTORIES: optionalCredential(2_048),
     MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
     MEME_GRADUATION_DELAY_SECONDS: positiveIntegerString(0, 600),
     LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
@@ -1551,6 +1601,17 @@ export interface ReconciliationWorkerConfig {
    */
   readonly launch2Indexer: {
     readonly factoryAddress: string | null;
+    /** Decision 0122: HOOKS_LAUNCH_FACTORY_CODE_HASH (generation lookup). */
+    readonly factoryCodeHash: string | null;
+    /**
+     * Decision 0122: `LAUNCH2_LEGACY_FACTORIES` — older Factories indexed
+     * read-only, each with its bytecode generation. Malformed, duplicated,
+     * or equal to HOOKS_LAUNCH_FACTORY_ADDRESS refuses boot.
+     */
+    readonly legacyFactories: readonly {
+      readonly address: string;
+      readonly generation: Launch2FactoryGeneration;
+    }[];
     readonly pollIntervalMs: number;
   } | null;
   /**
@@ -3149,6 +3210,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS:
       environment["HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS"] ??
       String(hooksLaunchDefaultSaleLeadSeconds),
+    LAUNCH2_BUYBACK_RECIPIENT:
+      environment["LAUNCH2_BUYBACK_RECIPIENT"]?.trim() === ""
+        ? undefined
+        : environment["LAUNCH2_BUYBACK_RECIPIENT"],
     LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
@@ -3289,6 +3354,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       factoryCodeHash:
         parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
       minimumSaleLeadSeconds: parsed.data.HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS,
+      fixedBuybackRecipient:
+        parsed.data.LAUNCH2_BUYBACK_RECIPIENT?.toLowerCase() ?? null,
     },
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     launch2: Object.freeze({
@@ -3351,6 +3418,7 @@ export function loadReconciliationWorkerConfig(
     LAUNCH2_INDEXER_ENABLED: environment["LAUNCH2_INDEXER_ENABLED"] ?? "false",
     LAUNCH2_INDEXER_POLL_INTERVAL_MS:
       environment["LAUNCH2_INDEXER_POLL_INTERVAL_MS"] ?? "3000",
+    LAUNCH2_LEGACY_FACTORIES: environment["LAUNCH2_LEGACY_FACTORIES"],
     MEME_GRADUATION_EXECUTOR_ENABLED:
       environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
     MEME_GRADUATION_DELAY_SECONDS:
@@ -3537,6 +3605,12 @@ export function loadReconciliationWorkerConfig(
       ? Object.freeze({
           factoryAddress:
             parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
+          factoryCodeHash:
+            parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
+          legacyFactories: parseLaunch2LegacyFactoriesEnvironment(
+            parsed.data.LAUNCH2_LEGACY_FACTORIES,
+            parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS,
+          ),
           pollIntervalMs: parsed.data.LAUNCH2_INDEXER_POLL_INTERVAL_MS,
         })
       : null,

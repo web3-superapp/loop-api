@@ -191,11 +191,20 @@ async function approveConfig(
             where project_id = c.project_id) as latest_version
        from public.hooks_launch_project_config_versions c
        where c.project_id = $1 and c.config_version = $2
-       for share`,
+       for update`,
       [projectId, command.payload.configVersion],
     )
   ).rows[0];
   if (!config) throw new HooksLaunchReviewError("OPS_NOT_FOUND");
+  // Decision 0122: the version row lock serializes approve and reject; a
+  // rejected version is never approved (the owner saves a new one).
+  const rejected = await client.query(
+    "select 1 from public.hooks_launch_config_rejections where project_id = $1 and config_version = $2",
+    [projectId, command.payload.configVersion],
+  );
+  if (rejected.rowCount) {
+    throw new HooksLaunchReviewError("OPS_LAUNCH_CONFIG_DECIDED");
+  }
   // The editor of a version is the operator who saved it, or the project
   // owner for an owner-saved draft. Neither may approve it, and the project
   // owner may never approve their own project.
@@ -230,6 +239,161 @@ async function approveConfig(
   if (!inserted.rowCount) {
     throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
   }
+  return inserted.rows[0];
+}
+
+/**
+ * Decision 0122: a reviewer rejects one config version — same separation
+ * of duties, catalog gate, latest-version and configHash rules as the
+ * approval; a version is approved or rejected once.
+ */
+async function rejectConfig(
+  client: PoolClient,
+  actor: string,
+  command: Extract<
+    HooksLaunchReviewCommand,
+    { action: "launch.config.reject" }
+  >,
+): Promise<unknown> {
+  const projectId = command.target;
+  const project = await lockApprovedProject(client, projectId, "share");
+  const config = (
+    await client.query<{
+      config_hash: string;
+      owner_user_id: string;
+      edited_by_operator_id: string | null;
+      latest_version: number;
+    }>(
+      `select c.config_hash, c.owner_user_id, c.edited_by_operator_id,
+         (select max(config_version)::integer
+            from public.hooks_launch_project_config_versions
+            where project_id = c.project_id) as latest_version
+       from public.hooks_launch_project_config_versions c
+       where c.project_id = $1 and c.config_version = $2
+       for update`,
+      [projectId, command.payload.configVersion],
+    )
+  ).rows[0];
+  if (!config) throw new HooksLaunchReviewError("OPS_NOT_FOUND");
+  const editor = config.edited_by_operator_id ?? config.owner_user_id;
+  if (
+    editor === actor ||
+    config.owner_user_id === actor ||
+    project.ownerUserId === actor
+  ) {
+    throw new HooksLaunchReviewError("OPS_SELF_APPROVAL");
+  }
+  if (
+    config.config_hash !== command.payload.configHash.toLowerCase() ||
+    config.latest_version !== command.payload.configVersion
+  ) {
+    throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
+  }
+  const decided = await client.query(
+    `select 1 from public.hooks_launch_config_approvals
+       where project_id = $1 and config_version = $2
+     union all
+     select 1 from public.hooks_launch_config_rejections
+       where project_id = $1 and config_version = $2`,
+    [projectId, command.payload.configVersion],
+  );
+  if (decided.rowCount) {
+    throw new HooksLaunchReviewError("OPS_LAUNCH_CONFIG_DECIDED");
+  }
+  const inserted = await client.query(
+    `insert into public.hooks_launch_config_rejections (
+       project_id, config_version, config_hash, reviewer_id, reason_code, note
+     ) values ($1, $2, $3, $4, $5, $6)
+     returning project_id, config_version, config_hash, reviewer_id,
+       reason_code, note, rejected_at`,
+    [
+      projectId,
+      command.payload.configVersion,
+      command.payload.configHash.toLowerCase(),
+      actor,
+      command.payload.reasonCode,
+      command.payload.note,
+    ],
+  );
+  return inserted.rows[0];
+}
+
+/**
+ * Decision 0122: a reviewer rejects the catalog material of a submitted /
+ * in-review project (compare-and-swap on `material_version`). The project
+ * becomes `rejected`, `review_reason_code` = the reason; the applicant may
+ * edit (material version + 1) and resubmit. The owner can never reject
+ * their own project. Writes the rejection row and a `launch_review_events`
+ * operator row in the same transaction.
+ */
+async function rejectProject(
+  client: PoolClient,
+  actor: string,
+  command: Extract<
+    HooksLaunchReviewCommand,
+    { action: "launch.project.reject" }
+  >,
+): Promise<unknown> {
+  const projectId = command.target;
+  const project = (
+    await client.query<{
+      owner_user_id: string;
+      review_status: string;
+      material_version: number;
+    }>(
+      `select owner_user_id, review_status, material_version
+       from public.launch_projects where project_id = $1 for update`,
+      [projectId],
+    )
+  ).rows[0];
+  if (!project) throw new HooksLaunchReviewError("OPS_NOT_FOUND");
+  if (project.owner_user_id === actor) {
+    throw new HooksLaunchReviewError("OPS_SELF_APPROVAL");
+  }
+  if (!["submitted", "in_review"].includes(project.review_status)) {
+    throw new HooksLaunchReviewError("OPS_LAUNCH_NOT_IN_REVIEW");
+  }
+  if (project.material_version !== command.payload.materialVersion) {
+    throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
+  }
+  await client.query(
+    `update public.launch_projects set
+       review_status = 'rejected',
+       review_reason_code = $2,
+       reviewed_at = clock_timestamp(),
+       record_version = record_version + 1,
+       updated_at = clock_timestamp()
+     where project_id = $1`,
+    [projectId, command.payload.reasonCode],
+  );
+  await client.query(
+    `insert into public.launch_review_events (
+       project_id, actor_type, actor_user_id, event_type, from_status,
+       to_status, reason_code, request_id
+     ) values ($1, 'operator', null, 'project_rejected', $2, 'rejected', $3, $4)`,
+    [
+      projectId,
+      project.review_status,
+      command.payload.reasonCode,
+      command.operationId,
+    ],
+  );
+  const inserted = await client.query(
+    `insert into public.launch_project_rejections (
+       rejection_id, project_id, material_version, reason_code, note,
+       reviewer_user_id
+     ) values ($1, $2, $3, $4, $5, $6)
+     returning rejection_id, project_id, material_version, reason_code, note,
+       reviewer_user_id, created_at`,
+    [
+      command.operationId,
+      projectId,
+      command.payload.materialVersion,
+      command.payload.reasonCode,
+      command.payload.note,
+      actor,
+    ],
+  );
   return inserted.rows[0];
 }
 
@@ -436,6 +600,10 @@ export function createPostgresHooksLaunchReviewRepository(
           );
         } else if (command.action === "launch.config.approve") {
           result = await approveConfig(client, actor, command);
+        } else if (command.action === "launch.config.reject") {
+          result = await rejectConfig(client, actor, command);
+        } else if (command.action === "launch.project.reject") {
+          result = await rejectProject(client, actor, command);
         } else {
           result = await recordAcceptance(client, actor, command);
         }

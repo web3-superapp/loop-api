@@ -161,6 +161,7 @@ describe("Hooks launch review service", () => {
     const execute = vi.fn(() => Promise.resolve({}));
     const repository = { execute } as unknown as HooksLaunchReviewRepository;
     const hourly = createHooksLaunchReviewService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       repository,
       factory: {
         nftSaleDuration: () =>
@@ -179,17 +180,21 @@ describe("Hooks launch review service", () => {
     ]) {
       execute.mockClear();
       await expect(
-        createHooksLaunchReviewService({ repository, factory }).execute(
-          actor,
-          save,
-        ),
+        createHooksLaunchReviewService({
+          fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+          repository,
+          factory,
+        }).execute(actor, save),
       ).rejects.toMatchObject({ code: "OPS_UNAVAILABLE" });
       expect(execute).not.toHaveBeenCalled();
     }
   });
 
   it("fails closed without a repository", async () => {
-    const service = createHooksLaunchReviewService({ repository: null });
+    const service = createHooksLaunchReviewService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+      repository: null,
+    });
     await expect(service.execute(actor, approval)).rejects.toMatchObject({
       code: "OPS_UNAVAILABLE",
     });
@@ -198,6 +203,7 @@ describe("Hooks launch review service", () => {
   it("rejects malformed commands and non-UUID actors before the repository", async () => {
     const execute = vi.fn();
     const service = createHooksLaunchReviewService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
       repository: { execute } as unknown as HooksLaunchReviewRepository,
     });
     await expect(
@@ -212,6 +218,92 @@ describe("Hooks launch review service", () => {
     await expect(service.execute("not-a-user", approval)).rejects.toMatchObject(
       { code: "OPS_FORBIDDEN" },
     );
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("Decision 0122 review rejections and the fixed recipient", () => {
+  const reject = {
+    operationId: "1c6f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4",
+    action: "launch.config.reject",
+    target: project,
+    reason: "incomplete_materials",
+    payload: {
+      configVersion: 1,
+      configHash: `0x${"ab".repeat(32)}`,
+      reasonCode: "incomplete_materials",
+      note: null,
+    },
+  };
+
+  it("maps both rejects to launch.approve and requires a note for other", async () => {
+    expect(hooksLaunchCommandPermission("launch.config.reject")).toBe(
+      "launch.approve",
+    );
+    expect(hooksLaunchCommandPermission("launch.project.reject")).toBe(
+      "launch.approve",
+    );
+    const execute = vi.fn(() => Promise.resolve({}));
+    const service = createHooksLaunchReviewService({
+      fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+      repository: { execute } as unknown as HooksLaunchReviewRepository,
+    });
+    await service.execute(actor, reject);
+    await service.execute(actor, {
+      ...reject,
+      action: "launch.project.reject",
+      payload: { materialVersion: 2, reasonCode: "other", note: "Logo" },
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    for (const payload of [
+      { ...reject.payload, reasonCode: "other", note: null },
+      { ...reject.payload, reasonCode: "not_a_reason" },
+      { ...reject.payload, note: "x".repeat(501) },
+    ]) {
+      await expect(
+        service.execute(actor, { ...reject, payload }),
+      ).rejects.toMatchObject({ code: "OPS_INVALID_COMMAND" });
+    }
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an operator save naming another recipient, and fails closed without one", async () => {
+    const save = {
+      operationId: "2c6f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4",
+      action: "launch.config.save",
+      target: project,
+      reason: "Operator correction",
+      payload: {
+        expectedVersion: 1,
+        config: {
+          name: "Project",
+          ticker: "MEME",
+          logoAssetUrl: "https://example.com/logo.png",
+          description: "Test",
+          links: [],
+          nftSaleStartAt: "1900000000",
+          buybackRecipient: "0x4444444444444444444444444444444444444444",
+        },
+      },
+    };
+    const execute = vi.fn(() => Promise.resolve({}));
+    const repository = { execute } as unknown as HooksLaunchReviewRepository;
+    const factory = {
+      nftSaleDuration: () => Promise.resolve({ seconds: 3_600, legacy: false }),
+    };
+    await expect(
+      createHooksLaunchReviewService({
+        fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+        repository,
+        factory,
+      }).execute(actor, save),
+    ).rejects.toMatchObject({ code: "OPS_BUYBACK_RECIPIENT_FIXED" });
+    await expect(
+      createHooksLaunchReviewService({ repository, factory }).execute(
+        actor,
+        save,
+      ),
+    ).rejects.toMatchObject({ code: "OPS_UNAVAILABLE" });
     expect(execute).not.toHaveBeenCalled();
   });
 });

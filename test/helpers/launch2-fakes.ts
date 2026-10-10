@@ -68,6 +68,7 @@ export function instanceFixture(
     ownerUserId: "0f1e2d3c-4b5a-4968-8776-655443322110",
     chainId: "eip155:97",
     factoryAddress: launch2Factory,
+    generation: "v3",
     launchId: `0x${"11".repeat(32)}`,
     configHash: `0x${"22".repeat(32)}`,
     projectOwner: address("7"),
@@ -109,6 +110,7 @@ export function instanceFixture(
     snapshot: null,
     snapshotPublication: null,
     noHoldersClosure: null,
+    openedWithoutHolders: null,
     graduation: null,
     buyback: { paused: false, count: "0", usd1: "0", meme: "0", lastAt: null },
     buybackKeeper: null,
@@ -323,13 +325,14 @@ export function createFakeLaunch2Chain(
     },
     readBuybackState: () =>
       Promise.resolve({
+        blockTimestamp: launch2NowSeconds,
         paused: false,
         lastSuccessfulAt: 0n,
         availableBudget: 200n * wad,
         totalRecorded: 200n * wad,
         totalSpent: 0n,
         nextOrderAmountIn: 100n * wad,
-        nextOrderMinMemeOut: 0n,
+        nextOrderExecutable: false,
       }),
   };
 }

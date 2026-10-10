@@ -1979,6 +1979,8 @@ export async function buildApp(
         factory: hooksFactoryReader,
         // Decision 0117: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS (default 86,400).
         minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds,
+        // Decision 0122: LAUNCH2_BUYBACK_RECIPIENT (null fails saves closed).
+        fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
       })
     : undefined;
   const hooksLaunchDeploymentService = hooksLaunchEnabled
@@ -1988,6 +1990,7 @@ export async function buildApp(
         reader: hooksFactoryReader,
         signatureLifetimeSeconds: 900,
         maxSaltAttempts: 1_000_000,
+        fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
       })
     : undefined;
   const hooksLaunchSubmissionService = hooksLaunchEnabled
@@ -1996,6 +1999,7 @@ export async function buildApp(
         wallets: database.accountWallets ?? null,
         reader: hooksFactoryReader,
         repository: database.hooksLaunchSubmissions ?? null,
+        fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
       })
     : undefined;
   const miningRuntimeAvailable =
@@ -2562,6 +2566,7 @@ export async function buildApp(
         review: createHooksLaunchReviewService({
           repository: database.hooksLaunchReview ?? null,
           factory: hooksFactoryReader,
+          fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
         }),
         audit: adminRepository,
         sessionSecret: adminConfig.sessionSecret,

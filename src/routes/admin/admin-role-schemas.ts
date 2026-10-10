@@ -348,6 +348,18 @@ const editorSchema = {
   },
 } as const;
 
+/** Decision 0122: the five review rejection reasons. */
+const rejectionReasonSchema = {
+  type: "string",
+  enum: [
+    "incomplete_materials",
+    "name_or_ticker_conflict",
+    "buyback_recipient_invalid",
+    "community_binding_mismatch",
+    "other",
+  ],
+} as const;
+
 const projectSummarySchema = {
   type: "object",
   additionalProperties: false,
@@ -372,16 +384,53 @@ const projectSummarySchema = {
     name: { type: "string" },
     ticker: { type: "string" },
     ownerUserId: uuidSchema,
+    kind: {
+      type: "string",
+      enum: ["ido", "launch2"],
+      description:
+        "Decision 0122 (optional in the schema, always present): the catalog product kind (Decision 0120); filter with ?kind=.",
+    },
     launchReviewStatus: {
       type: "string",
       description:
-        "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`.",
+        "launch_projects.review_status (draft, submitted, in_review, returned, approved, rejected). Hooks review commands need `approved`. Decision 0122: a reviewer may reject `submitted` / `in_review` material (POST …/reject); `rejected` material can be edited and resubmitted by the applicant.",
+    },
+    materialVersion: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Decision 0122 (optional in the schema, always present): launch_projects.material_version — send it as materialVersion when rejecting the catalog material.",
+    },
+    rejection: {
+      description:
+        "Decision 0122 (optional in the schema, always present): the latest catalog rejection while launchReviewStatus is rejected; null otherwise.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "reasonCode",
+            "note",
+            "reviewerUserId",
+            "materialVersion",
+            "rejectedAt",
+          ],
+          properties: {
+            reasonCode: rejectionReasonSchema,
+            note: { anyOf: [{ type: "string" }, { type: "null" }] },
+            reviewerUserId: uuidSchema,
+            materialVersion: { type: "integer", minimum: 1 },
+            rejectedAt: dateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
     },
     stage: {
       type: "string",
       enum: [...adminLaunchStages],
       description:
-        "Of the latest config version: draft (none saved), awaiting_approval, approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain).",
+        "Of the latest config version: draft (none saved), awaiting_approval, rejected (Decision 0122: a reviewer rejected it; the owner saves a new version), approved, accepted (a passed BSC Testnet acceptance), deploying (a task the executor still owns: awaiting_executor, claimed, broadcast, confirmed, verified, reorged, or a retryable failure), activated (Decision 0112: the launch is activated on chain).",
     },
     latestConfigVersion: { type: ["integer", "null"], minimum: 1 },
     latestConfigHash: { anyOf: [hash32Schema, { type: "null" }] },
@@ -395,6 +444,22 @@ const projectSummarySchema = {
           properties: {
             approverUserId: uuidSchema,
             approvedAt: dateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    latestRejection: {
+      description:
+        "Decision 0122 (optional in the schema, always present): the latest config version's reviewer rejection; null otherwise.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["reviewerUserId", "rejectedAt"],
+          properties: {
+            reviewerUserId: uuidSchema,
+            rejectedAt: dateTimeSchema,
           },
         },
         { type: "null" },
@@ -417,6 +482,12 @@ export const launchProjectsQuerySchema = {
   additionalProperties: false,
   properties: {
     status: { type: "string", enum: [...adminLaunchStages] },
+    kind: {
+      type: "string",
+      enum: ["all", "ido", "launch2"],
+      description:
+        "Decision 0122: product kind filter (default all); bound into the cursor.",
+    },
     cursor: { type: "string", minLength: 1, maxLength: 1024 },
     limit: { type: "integer", minimum: 1, maximum: 100 },
   },
@@ -765,6 +836,12 @@ const snapshotPublicationSchema = {
     publicationId: uuidSchema,
     instanceId: uuidSchema,
     jobId: uuidSchema,
+    action: {
+      type: "string",
+      enum: ["publish_snapshot", "open_without_holders"],
+      description:
+        "Decision 0122 (optional in the schema, always present): open_without_holders = the v3 zero-holder openPublicWithoutSnapshot() call (memberCount 0, zero root / dataHash, no signers).",
+    },
     attempt: { type: "integer", minimum: 1 },
     status: {
       type: "string",
@@ -772,12 +849,12 @@ const snapshotPublicationSchema = {
     },
     cutoffBlock: { type: "string", pattern: "^(0|[1-9][0-9]*)$" },
     cutoffBlockHash: hash32Schema,
-    memberCount: { type: "integer", minimum: 1 },
+    memberCount: { type: "integer", minimum: 0 },
     root: hash32Schema,
     dataHash: hash32Schema,
     signerAddresses: {
       type: "array",
-      minItems: 2,
+      minItems: 0,
       maxItems: 2,
       items: addressSchema,
     },
@@ -961,6 +1038,48 @@ const snapshotClosureSchema = {
   ],
 } as const;
 
+/** Decision 0122: a config version's reviewer rejection. */
+const configRejectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "reviewerUserId",
+    "configHash",
+    "reasonCode",
+    "note",
+    "rejectedAt",
+  ],
+  properties: {
+    reviewerUserId: uuidSchema,
+    configHash: hash32Schema,
+    reasonCode: rejectionReasonSchema,
+    note: { anyOf: [{ type: "string" }, { type: "null" }] },
+    rejectedAt: dateTimeSchema,
+  },
+} as const;
+
+/** Decision 0122: one catalog material rejection. */
+const projectRejectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "rejectionId",
+    "materialVersion",
+    "reasonCode",
+    "note",
+    "reviewerUserId",
+    "rejectedAt",
+  ],
+  properties: {
+    rejectionId: uuidSchema,
+    materialVersion: { type: "integer", minimum: 1 },
+    reasonCode: rejectionReasonSchema,
+    note: { anyOf: [{ type: "string" }, { type: "null" }] },
+    reviewerUserId: uuidSchema,
+    rejectedAt: dateTimeSchema,
+  },
+} as const;
+
 export const launchProjectDetailResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -1001,6 +1120,11 @@ export const launchProjectDetailResourceSchema = {
           editedBy: editorSchema,
           createdAt: dateTimeSchema,
           approval: { anyOf: [approvalSchema, { type: "null" }] },
+          rejection: {
+            description:
+              "Decision 0122 (optional in the schema, always present): the reviewer rejection of this version; a version is approved or rejected, never both.",
+            anyOf: [configRejectionSchema, { type: "null" }],
+          },
         },
       },
     },
@@ -1039,6 +1163,124 @@ export const launchProjectDetailResourceSchema = {
       description: "Decision 0120: retry grants, newest first.",
     },
     snapshotClosure: snapshotClosureSchema,
+    projectRejections: {
+      type: "array",
+      maxItems: 200,
+      description:
+        "Decision 0122 (optional in the schema, always present): every catalog material rejection, newest first.",
+      items: projectRejectionSchema,
+    },
+  },
+} as const;
+
+/** Decision 0122: `POST …/reject` (catalog material). */
+export const launchProjectRejectRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["materialVersion", "reasonCode"],
+  properties: {
+    materialVersion: {
+      type: "integer",
+      minimum: 1,
+      maximum: 2_147_483_647,
+      description: "project.materialVersion as read (compare-and-swap).",
+    },
+    reasonCode: rejectionReasonSchema,
+    note: {
+      anyOf: [{ type: "string", maxLength: 2000 }, { type: "null" }],
+      description:
+        "Shown to the applicant. Required for other; 1–500 characters after trimming (blank = none).",
+    },
+  },
+} as const;
+
+export const launchProjectRejectResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["operationId", "replayed", "rejection", "audit"],
+  properties: {
+    operationId: {
+      ...uuidSchema,
+      description: "= the Idempotency-Key (= rejection.rejectionId).",
+    },
+    replayed: { type: "boolean" },
+    rejection: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "rejectionId",
+        "projectId",
+        "materialVersion",
+        "reviewerUserId",
+        "reasonCode",
+        "note",
+        "rejectedAt",
+      ],
+      properties: {
+        rejectionId: uuidSchema,
+        projectId: uuidSchema,
+        materialVersion: { type: "integer", minimum: 1 },
+        reviewerUserId: uuidSchema,
+        reasonCode: rejectionReasonSchema,
+        note: { anyOf: [{ type: "string" }, { type: "null" }] },
+        rejectedAt: nullableDateTimeSchema,
+      },
+    },
+    audit: nullableAuditReferenceSchema,
+  },
+} as const;
+
+/** Decision 0122: `POST …/versions/{version}/reject`. */
+export const launchConfigRejectRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["configHash", "reasonCode"],
+  properties: {
+    configHash: hash32Schema,
+    reasonCode: rejectionReasonSchema,
+    note: {
+      anyOf: [{ type: "string", maxLength: 2000 }, { type: "null" }],
+      description:
+        "Shown to the applicant. Required for other; 1–500 characters after trimming (blank = none).",
+    },
+  },
+} as const;
+
+export const launchConfigRejectResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["operationId", "replayed", "rejection", "audit"],
+  properties: {
+    operationId: {
+      ...uuidSchema,
+      description: "= the Idempotency-Key (ops_operations.operation_id).",
+    },
+    replayed: { type: "boolean" },
+    rejection: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "projectId",
+        "configVersion",
+        "configHash",
+        "reviewerUserId",
+        "reasonCode",
+        "note",
+        "rejectedAt",
+      ],
+      properties: {
+        projectId: uuidSchema,
+        configVersion: { type: "integer", minimum: 1 },
+        configHash: hash32Schema,
+        reviewerUserId: uuidSchema,
+        reasonCode: rejectionReasonSchema,
+        note: { anyOf: [{ type: "string" }, { type: "null" }] },
+        rejectedAt: nullableDateTimeSchema,
+      },
+    },
+    audit: nullableAuditReferenceSchema,
   },
 } as const;
 

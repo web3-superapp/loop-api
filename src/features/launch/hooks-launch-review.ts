@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import {
+  HooksLaunchBuybackRecipientFixedError,
+  assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchRejectionReasons,
+} from "./hooks-launch-project-config.js";
 
 /**
  * Decision 0108: platform-side Hooks launch review (ported from the requirer
@@ -57,6 +62,12 @@ export const hooksLaunchReviewErrorCodes = [
   "OPS_IDEMPOTENCY_CONFLICT",
   "OPS_UNAVAILABLE",
   "OPS_COMMAND_FAILED",
+  /** Decision 0122: a config names another buyback recipient. */
+  "OPS_BUYBACK_RECIPIENT_FIXED",
+  /** Decision 0122: the catalog project is not submitted / in review. */
+  "OPS_LAUNCH_NOT_IN_REVIEW",
+  /** Decision 0122: the config version was already approved or rejected. */
+  "OPS_LAUNCH_CONFIG_DECIDED",
 ] as const;
 
 export type HooksLaunchReviewErrorCode =
@@ -113,6 +124,28 @@ const commandBase = {
   reason: z.string().trim().min(1).max(500),
 };
 
+/**
+ * Decision 0122 (requirer ruling 7): a rejection names one of five reasons;
+ * `other` needs a note (1–500 characters after trim). The note is shown
+ * to the applicant.
+ */
+const rejectionFields = {
+  reasonCode: z.enum(hooksLaunchRejectionReasons),
+  note: z.string().trim().min(1).max(500).nullable(),
+};
+function requireOtherNote(
+  value: { readonly reasonCode: string; readonly note: string | null },
+  context: z.RefinementCtx,
+): void {
+  if (value.reasonCode === "other" && value.note === null) {
+    context.addIssue({
+      code: "custom",
+      message: "other requires a note",
+      path: ["note"],
+    });
+  }
+}
+
 export const hooksLaunchReviewCommandSchema = z.discriminatedUnion("action", [
   z
     .object({
@@ -145,6 +178,34 @@ export const hooksLaunchReviewCommandSchema = z.discriminatedUnion("action", [
       payload: hooksTestnetAcceptanceSchema,
     })
     .strict(),
+  // Decision 0122: reviewer rejections.
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("launch.config.reject"),
+      payload: z
+        .object({
+          configVersion: z.number().int().positive().max(2_147_483_647),
+          configHash: hash32Schema,
+          ...rejectionFields,
+        })
+        .strict()
+        .superRefine(requireOtherNote),
+    })
+    .strict(),
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("launch.project.reject"),
+      payload: z
+        .object({
+          materialVersion: z.number().int().positive().max(2_147_483_647),
+          ...rejectionFields,
+        })
+        .strict()
+        .superRefine(requireOtherNote),
+    })
+    .strict(),
 ]);
 
 export type HooksLaunchReviewCommand = z.infer<
@@ -155,7 +216,14 @@ export function hooksLaunchCommandPermission(
   action: HooksLaunchReviewCommand["action"],
 ): HooksLaunchOpsPermission {
   if (action === "launch.config.save") return "launch.edit";
-  if (action === "launch.config.approve") return "launch.approve";
+  // Decision 0122: rejecting follows the approval permission model.
+  if (
+    action === "launch.config.approve" ||
+    action === "launch.config.reject" ||
+    action === "launch.project.reject"
+  ) {
+    return "launch.approve";
+  }
   return "testnet.accept";
 }
 
@@ -244,6 +312,12 @@ export function createHooksLaunchReviewService(input: {
   readonly repository: HooksLaunchReviewRepository | null;
   /** The target Factory (Decision 0119); null fails config saves closed. */
   readonly factory?: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
+  /**
+   * Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; an operator save naming
+   * another address is `OPS_BUYBACK_RECIPIENT_FIXED`, none configured
+   * `OPS_UNAVAILABLE`. Absent = not configured.
+   */
+  readonly fixedBuybackRecipient?: string | null;
 }): HooksLaunchReviewService {
   function requireRepository(): HooksLaunchReviewRepository {
     if (input.repository === null) {
@@ -288,6 +362,18 @@ export function createHooksLaunchReviewService(input: {
       const operator = requireActor(actor);
       if (parsed.data.action !== "launch.config.save") {
         return repository.execute(operator, parsed.data);
+      }
+      try {
+        assertHooksLaunchFixedBuybackRecipient(
+          input.fixedBuybackRecipient ?? null,
+          parsed.data.payload.config.buybackRecipient,
+        );
+      } catch (error) {
+        throw new HooksLaunchReviewError(
+          error instanceof HooksLaunchBuybackRecipientFixedError
+            ? "OPS_BUYBACK_RECIPIENT_FIXED"
+            : "OPS_UNAVAILABLE",
+        );
       }
       const factory = input.factory ?? null;
       let nftSaleDurationSeconds: number;

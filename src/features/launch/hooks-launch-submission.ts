@@ -9,7 +9,11 @@ import {
   type Hex,
 } from "viem";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
-import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
+import {
+  HooksLaunchBuybackRecipientFixedError,
+  assertHooksLaunchFixedBuybackRecipient,
+  type HooksLaunchProjectConfigRepository,
+} from "./hooks-launch-project-config.js";
 import {
   assertHooksLaunchFactoryTemplate,
   type HooksLaunchFactoryReader,
@@ -183,6 +187,10 @@ export class HooksLaunchSubmissionError extends Error {
       | "not_approved"
       | "not_cancellable"
       | "template_mismatch"
+      /** Decision 0122: the draft names another buyback recipient. */
+      | "recipient_fixed"
+      /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
+      | "recipient_unavailable"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
@@ -212,6 +220,8 @@ export function createHooksLaunchSubmissionService(input: {
   readonly reader: HooksLaunchFactoryReader | null;
   readonly repository: HooksLaunchSubmissionRepository | null;
   readonly now?: () => number;
+  /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails closed. */
+  readonly fixedBuybackRecipient?: string | null;
 }): HooksLaunchSubmissionService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1000));
   return {
@@ -317,6 +327,18 @@ export function createHooksLaunchSubmissionService(input: {
           request.buybackRecipient.toLowerCase()
       )
         throw new HooksLaunchSubmissionError("conflict");
+      try {
+        assertHooksLaunchFixedBuybackRecipient(
+          input.fixedBuybackRecipient ?? null,
+          draft.config.buybackRecipient,
+        );
+      } catch (error) {
+        throw new HooksLaunchSubmissionError(
+          error instanceof HooksLaunchBuybackRecipientFixedError
+            ? "recipient_fixed"
+            : "recipient_unavailable",
+        );
+      }
       const signature = body.signature as Hex;
       const halfOrder =
         0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;

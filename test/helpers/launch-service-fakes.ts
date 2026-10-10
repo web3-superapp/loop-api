@@ -64,6 +64,7 @@ export function registeredDetail(tierModeV1 = "whitelist"): LaunchDetailRecord {
       reviewStatus: "approved",
       kybStatus: "unavailable",
       reviewReasonCode: null,
+      rejection: null,
       submittedAt: createdAt,
       reviewedAt: createdAt,
       launchId,

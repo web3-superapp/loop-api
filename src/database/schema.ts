@@ -1,4 +1,4 @@
-export const latestMigrationName = "000065_launch2_buyback_keeper";
+export const latestMigrationName = "000066_launch2_generation_v3_and_rulings";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -155,6 +155,8 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_snapshot_closures",
   "public.launch2_snapshot_publication_releases",
   "public.launch2_buyback_attempts",
+  "public.launch_project_rejections",
+  "public.hooks_launch_config_rejections",
   "public.mining_parameter_versions",
   "public.mining_epochs",
   "public.mining_epoch_rewards",

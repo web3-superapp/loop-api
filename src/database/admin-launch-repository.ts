@@ -42,6 +42,13 @@ const summaryRowSchema = z
     ticker: z.string(),
     owner_user_id: uuid,
     review_status: z.string(),
+    kind: z.enum(["ido", "launch2"]),
+    material_version: z.number().int().positive(),
+    rejection_reason_code: z.string().nullable(),
+    rejection_note: z.string().nullable(),
+    rejection_reviewer_id: uuid.nullable(),
+    rejection_material_version: z.number().int().nullable(),
+    rejected_at: date.nullable(),
     created_at: date,
     updated_at: date,
     cursor_key: z.string(),
@@ -51,6 +58,8 @@ const summaryRowSchema = z
     edited_by_operator_id: uuid.nullable(),
     approver_id: uuid.nullable(),
     approved_at: date.nullable(),
+    config_reviewer_id: uuid.nullable(),
+    config_rejected_at: date.nullable(),
     acceptance_outcome: outcome.nullable(),
     active_job_id: uuid.nullable(),
     stage: z.enum(adminLaunchStages),
@@ -64,7 +73,23 @@ function mapSummary(raw: unknown): AdminLaunchProjectSummary {
     name: row.name,
     ticker: row.ticker,
     ownerUserId: row.owner_user_id,
+    kind: row.kind,
     launchReviewStatus: row.review_status,
+    materialVersion: row.material_version,
+    rejection:
+      row.review_status !== "rejected" ||
+      row.rejection_reason_code === null ||
+      row.rejection_reviewer_id === null ||
+      row.rejected_at === null ||
+      row.rejection_material_version === null
+        ? null
+        : Object.freeze({
+            reasonCode: row.rejection_reason_code,
+            note: row.rejection_note,
+            reviewerUserId: row.rejection_reviewer_id,
+            materialVersion: row.rejection_material_version,
+            rejectedAt: row.rejected_at.toISOString(),
+          }),
     stage: row.stage,
     latestConfigVersion: row.config_version,
     latestConfigHash: row.config_hash,
@@ -84,6 +109,13 @@ function mapSummary(raw: unknown): AdminLaunchProjectSummary {
             approverUserId: row.approver_id,
             approvedAt: row.approved_at.toISOString(),
           },
+    latestRejection:
+      row.config_reviewer_id === null || row.config_rejected_at === null
+        ? null
+        : {
+            reviewerUserId: row.config_reviewer_id,
+            rejectedAt: row.config_rejected_at.toISOString(),
+          },
     latestAcceptanceOutcome: row.acceptance_outcome,
     activeDeploymentJobId: row.active_job_id,
     createdAt: row.created_at.toISOString(),
@@ -95,22 +127,35 @@ function mapSummary(raw: unknown): AdminLaunchProjectSummary {
 /** `$1` = all projects, `$2` = scoped project IDs. */
 const summarySql = `
   select p.project_id, p.name, p.ticker, p.owner_user_id, p.review_status,
+    p.kind, p.material_version,
+    rj.reason_code as rejection_reason_code, rj.note as rejection_note,
+    rj.reviewer_user_id as rejection_reviewer_id,
+    rj.material_version as rejection_material_version,
+    rj.created_at as rejected_at,
     p.created_at, p.updated_at,
     to_char(p.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_key,
     c.config_version, c.config_hash, c.owner_user_id as config_owner_user_id,
     c.edited_by_operator_id,
     a.approver_id, a.approved_at,
+    r.reviewer_id as config_reviewer_id, r.rejected_at as config_rejected_at,
     acc.outcome as acceptance_outcome,
     case when d.status = 'activated' then null else d.job_id end as active_job_id,
     case
       when c.config_version is null then 'draft'
       when d.status = 'activated' then 'activated'
       when d.job_id is not null then 'deploying'
+      when a.approver_id is null and r.reviewer_id is not null then 'rejected'
       when a.approver_id is null then 'awaiting_approval'
       when acc.has_passed then 'accepted'
       else 'approved'
     end as stage
   from public.launch_projects p
+  left join lateral (
+    select reason_code, note, reviewer_user_id, material_version, created_at
+    from public.launch_project_rejections
+    where project_id = p.project_id
+    order by created_at desc, rejection_id desc limit 1
+  ) rj on true
   left join lateral (
     select config_version, config_hash, owner_user_id, edited_by_operator_id
     from public.hooks_launch_project_config_versions
@@ -122,6 +167,11 @@ const summarySql = `
     from public.hooks_launch_config_approvals
     where project_id = p.project_id and config_version = c.config_version
   ) a on true
+  left join lateral (
+    select reviewer_id, rejected_at
+    from public.hooks_launch_config_rejections
+    where project_id = p.project_id and config_version = c.config_version
+  ) r on true
   left join lateral (
     select
       (array_agg(outcome order by created_at desc, acceptance_id desc))[1] as outcome,
@@ -155,6 +205,11 @@ const versionRowSchema = z
     approval_hash: z.string().nullable(),
     approval_reason: z.string().nullable(),
     approved_at: date.nullable(),
+    rejection_reviewer_id: uuid.nullable(),
+    rejection_hash: z.string().nullable(),
+    rejection_reason_code: z.string().nullable(),
+    rejection_note: z.string().nullable(),
+    rejected_at: date.nullable(),
   })
   .strict();
 
@@ -197,6 +252,19 @@ function mapVersion(raw: unknown): AdminLaunchConfigVersion {
             configHash: row.approval_hash,
             reason: row.approval_reason,
             approvedAt: row.approved_at.toISOString(),
+          }),
+    rejection:
+      row.rejection_reviewer_id === null ||
+      row.rejection_hash === null ||
+      row.rejection_reason_code === null ||
+      row.rejected_at === null
+        ? null
+        : Object.freeze({
+            reviewerUserId: row.rejection_reviewer_id,
+            configHash: row.rejection_hash,
+            reasonCode: row.rejection_reason_code,
+            note: row.rejection_note,
+            rejectedAt: row.rejected_at.toISOString(),
           }),
   });
 }
@@ -419,6 +487,10 @@ function mapPublication(
     publicationId: String(row["publication_id"]),
     instanceId: String(row["instance_id"]),
     jobId: String(row["job_id"]),
+    action:
+      row["action"] === "open_without_holders"
+        ? "open_without_holders"
+        : "publish_snapshot",
     attempt: Number(row["attempt"]),
     status: row["status"] as AdminLaunchSnapshotPublication["status"],
     cutoffBlock: String(row["cutoff_block"]),
@@ -520,6 +592,7 @@ export function createPostgresAdminLaunchReviewRepository(
           `with base as (${summarySql})
            select * from base
            where ($3::text is null or stage = $3)
+             and ($7::text is null or kind = $7)
              and ($4::timestamptz is null
                or created_at < $4::timestamptz
                or (created_at = $4::timestamptz and project_id < $5::uuid))
@@ -532,6 +605,7 @@ export function createPostgresAdminLaunchReviewRepository(
             input.after?.cursorKey ?? null,
             input.after?.projectId ?? null,
             input.limit,
+            input.kind,
           ],
         );
         return Object.freeze(result.rows.map(mapSummary));
@@ -556,14 +630,21 @@ export function createPostgresAdminLaunchReviewRepository(
           attempts,
           releases,
           closures,
+          projectRejections,
         ] = await Promise.all([
           pool.query(
             `select c.config_version, c.template_version, c.config_hash, c.config,
                c.owner_user_id, c.edited_by_operator_id, c.created_at,
                a.approver_id, a.config_hash as approval_hash,
-               a.reason as approval_reason, a.approved_at
+               a.reason as approval_reason, a.approved_at,
+               r.reviewer_id as rejection_reviewer_id,
+               r.config_hash as rejection_hash,
+               r.reason_code as rejection_reason_code,
+               r.note as rejection_note, r.rejected_at
              from public.hooks_launch_project_config_versions c
              left join public.hooks_launch_config_approvals a
+               using (project_id, config_version)
+             left join public.hooks_launch_config_rejections r
                using (project_id, config_version)
              where c.project_id = $1
              order by c.config_version desc
@@ -616,7 +697,7 @@ export function createPostgresAdminLaunchReviewRepository(
           ),
           pool.query(
             `select p.publication_id::text, p.instance_id::text, i.job_id::text,
-               p.attempt, p.status, p.cutoff_block::text as cutoff_block,
+               p.action, p.attempt, p.status, p.cutoff_block::text as cutoff_block,
                p.cutoff_block_hash, p.member_count, p.root, p.data_hash,
                p.signer_addresses, p.submitter_address, p.tx_hash,
                p.block_number::text as block_number, p.confirmations,
@@ -665,6 +746,16 @@ export function createPostgresAdminLaunchReviewRepository(
              limit 1`,
             [input.projectId],
           ),
+          // Decision 0122: every catalog rejection, newest first.
+          pool.query(
+            `select rejection_id::text, material_version, reason_code, note,
+               reviewer_user_id::text, created_at
+             from public.launch_project_rejections
+             where project_id = $1
+             order by created_at desc, rejection_id desc
+             limit $2`,
+            [input.projectId, adminLaunchDetailMaximumRows],
+          ),
         ]);
         return Object.freeze({
           project: mapSummary(summary.rows[0]),
@@ -682,6 +773,20 @@ export function createPostgresAdminLaunchReviewRepository(
             closures.rows[0] === undefined
               ? null
               : mapClosure(closures.rows[0] as Record<string, unknown>),
+          projectRejections: Object.freeze(
+            projectRejections.rows.map((row: Record<string, unknown>) =>
+              Object.freeze({
+                rejectionId: String(row["rejection_id"]),
+                materialVersion: Number(row["material_version"]),
+                reasonCode: String(row["reason_code"]),
+                note: typeof row["note"] === "string" ? row["note"] : null,
+                reviewerUserId: String(row["reviewer_user_id"]),
+                rejectedAt: new Date(
+                  row["created_at"] as Date | string,
+                ).toISOString(),
+              }),
+            ),
+          ),
         });
       });
     },
@@ -733,7 +838,9 @@ export function createPostgresAdminLaunchReviewRepository(
           snapshot_root: string | null;
           closed: boolean;
         }>(
-          `select i.instance_id::text, i.snapshot_root,
+          `select i.instance_id::text,
+             -- Decision 0122: a zero-holder opening is on chain too.
+             coalesce(i.snapshot_root, i.opened_without_holders_tx) as snapshot_root,
              exists (select 1 from public.launch2_snapshot_closures c
                where c.instance_id = i.instance_id) as closed
            from public.launch2_instances i

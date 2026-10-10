@@ -28,6 +28,7 @@ import {
   loopLaunchFactoryAbi,
   nftEscrowAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
+import { legacyV2BuybackExecutorAbi } from "../launch/hooks-launch-protocol-abi-legacy-v2.js";
 
 /**
  * Decision 0121: the buyback keeper's BSC Testnet client. The keeper key
@@ -49,15 +50,23 @@ const lower = (value: string): string => value.toLowerCase();
 /**
  * `execute()` reverts inside the escrow too (`BudgetExceeded`); its error
  * items join the executor ABI so the simulation decodes either name.
+ * Decision 0122: the v2 generation's protection errors
+ * (`ReferenceUnavailable`, `SpotOutsideProtection`,
+ * `OutputBelowProtection`) join too — `execute()` has the same selector in
+ * both generations and errors decode by selector, so one ABI names a
+ * refusal of either executor.
  */
 const executeAbi = [
   ...buybackExecutorAbi,
-  ...nftEscrowAbi.filter(
-    (item) =>
+  ...[...legacyV2BuybackExecutorAbi, ...nftEscrowAbi].filter(
+    (item, index, all) =>
       item.type === "error" &&
       !buybackExecutorAbi.some(
         (own) => own.type === "error" && own.name === item.name,
-      ),
+      ) &&
+      all.findIndex(
+        (other) => other.type === "error" && other.name === item.name,
+      ) === index,
   ),
 ] as Abi;
 

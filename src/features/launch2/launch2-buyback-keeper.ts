@@ -3,8 +3,9 @@
  * MEME v2 instance whose buyback is not paused it calls
  * `BuybackExecutor.execute()` from a Factory keeper account, under the
  * contract's own rules (one order = min(escrow budget, `ORDER_AMOUNT`),
- * at least `MIN_SUCCESS_INTERVAL` between successes, reference / spot
- * price protection, pause):
+ * at least `MIN_SUCCESS_INTERVAL` between successes, the locked-principal
+ * guard, pause; Decision 0122: no price protection on the v3 Factory, the
+ * v2 instances keep theirs):
  *
  * 1. pre-checks on chain (keeper of this executor, escrow binding, not
  *    paused, budget > 0, interval elapsed) — a failed pre-check is a
@@ -50,10 +51,13 @@ export const launch2KeeperReasonCodes = Object.freeze({
   notKeeper: "LAUNCH2_BUYBACK_NOT_KEEPER",
   notGraduated: "LAUNCH2_BUYBACK_NOT_GRADUATED",
   escrowMismatch: "LAUNCH2_BUYBACK_ESCROW_MISMATCH",
+  // v2-generation (legacy) price protection only (Decision 0122).
   referenceUnavailable: "LAUNCH2_BUYBACK_REFERENCE_UNAVAILABLE",
   spotOutsideProtection: "LAUNCH2_BUYBACK_SPOT_OUTSIDE_PROTECTION",
   outputBelowProtection: "LAUNCH2_BUYBACK_OUTPUT_BELOW_PROTECTION",
   principalInsufficient: "LAUNCH2_BUYBACK_PRINCIPAL_INSUFFICIENT",
+  /** Decision 0122 (v3): the swap delivered nothing (`NoOutput`). */
+  noOutput: "LAUNCH2_BUYBACK_NO_OUTPUT",
   contractReverted: "LAUNCH2_BUYBACK_CONTRACT_REVERTED",
   // Waiting only.
   ledgerPending: "LAUNCH2_BUYBACK_LEDGER_PENDING",
@@ -68,9 +72,15 @@ export const launch2KeeperReasonCodes = Object.freeze({
   nonceConsumed: "LAUNCH2_BUYBACK_NONCE_CONSUMED",
 } as const);
 
-/** The refusal families of Decision 0121 (backoff and reporting). */
+/**
+ * The refusal families of Decision 0121 (backoff and reporting). Decision
+ * 0122: `principal` = the locked-principal guard (both generations);
+ * `legacy_price_protection` = the reference / spot / output protection that
+ * only v2-generation executors still have.
+ */
 export type Launch2KeeperRefusalCategory =
-  | "price_protection"
+  | "principal"
+  | "legacy_price_protection"
   | "interval"
   | "budget"
   | "paused"
@@ -100,13 +110,15 @@ export function classifyLaunch2BuybackRevert(
   ): Launch2KeeperRefusal => Object.freeze({ code, category, detail });
   switch (errorName) {
     case "ReferenceUnavailable":
-      return of(codes.referenceUnavailable, "price_protection");
+      return of(codes.referenceUnavailable, "legacy_price_protection");
     case "SpotOutsideProtection":
-      return of(codes.spotOutsideProtection, "price_protection");
+      return of(codes.spotOutsideProtection, "legacy_price_protection");
     case "OutputBelowProtection":
-      return of(codes.outputBelowProtection, "price_protection");
+      return of(codes.outputBelowProtection, "legacy_price_protection");
     case "LockedPrincipalInsufficient":
-      return of(codes.principalInsufficient, "price_protection");
+      return of(codes.principalInsufficient, "principal");
+    case "NoOutput":
+      return of(codes.noOutput, "other");
     case "TooSoon":
       return of(codes.tooSoon, "interval");
     case "NoBudget":

@@ -1,4 +1,5 @@
 import type { LaunchChainId } from "../chain/chain-contract.js";
+import type { HooksLaunchRejection } from "./hooks-launch-project-config.js";
 import type {
   LaunchEligibilityTier,
   LaunchKybStatus,
@@ -33,6 +34,8 @@ export interface LaunchProjectRecord {
   readonly reviewStatus: LaunchReviewStatus;
   readonly kybStatus: LaunchKybStatus;
   readonly reviewReasonCode: string | null;
+  /** Decision 0122: the latest reviewer rejection while `rejected`. */
+  readonly rejection: HooksLaunchRejection | null;
   readonly submittedAt: string | null;
   readonly reviewedAt: string | null;
   readonly launchId: string | null;
