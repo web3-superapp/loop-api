@@ -171,6 +171,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     hooks_launch_config_approvals: "user",
     hooks_testnet_acceptances: "user",
     hooks_launch_deployment_tasks: "user",
+    hooks_launch_deployment_events: "user",
+    hooks_launch_executor_nonces: "user",
     hooks_launch_deployment_authorizations: "user",
     hooks_launch_submission_commands: "user",
     // Mining
@@ -326,6 +328,10 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "hooks_launch_submission_commands",
     `${ownedBy()} or job_id in ${doomedDeploymentTasks}`,
   ),
+  // S132: executor evidence hangs off the task (append-only; its guard
+  // triggers are disabled for the run like the others').
+  del("hooks_launch_deployment_events", `job_id in ${doomedDeploymentTasks}`),
+  del("hooks_launch_executor_nonces", `job_id in ${doomedDeploymentTasks}`),
   del(
     "hooks_launch_deployment_authorizations",
     `job_id in ${doomedDeploymentTasks}`,
