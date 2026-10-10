@@ -311,6 +311,7 @@
         "buybackRecipient": "0x3333333333333333333333333333333333333333",
         "templateHash": "0x4c5e…51ca",
         "fixedEconomics": {
+          "chainId": "56",
           "nftPriceUsd1Raw": "100000000000000000000",
           "lpFee": 2500,
           "…": "…"
@@ -357,10 +358,15 @@
       "latestAuthorizationAt": "2026-10-09T16:45:54.370Z",
       "createdAt": "2026-10-09T16:45:54.369Z"
     }
-  ]
+  ],
+  "deploymentChainId": 97
 }
 ```
 
+- `deploymentChainId`（决策 0117，只读，整数 `56 | 97`）：本 API 实际部署 Hooks 发射的链，即服务端
+  `LAUNCH_CHAIN_ID`（Development / 测试网为 97）。**`versions[].config.fixedEconomics.chainId` 是模板值
+  （恒为 `"56"`，参与 configHash，不可编辑），不是部署链；部署链以 `LAUNCH_CHAIN_ID` 为准。** 后台在
+  经济参数旁展示时请标注「模板值 56，部署链见 deploymentChainId」，不要把 56 渲染成「部署到 BSC 主网」。
 - `versions` 新版本在前（最多 200）；`editedBy.kind`：`owner` = 项目方在 App 保存，`operator` = 运营编辑保存。
 - `buybackRecipient` 即「收币地址」，`nftSaleStartAt` 即 NFT 开售时间（Unix 秒字符串）。金额均为十进制字符串（`…Raw`）。
 - `deploymentTasks` 里的 `predictedMemeAddress` / `predictedHookAddress` 是 EIP-712 签名绑定的预测地址。

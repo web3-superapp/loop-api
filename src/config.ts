@@ -216,7 +216,19 @@ export interface HooksLaunchConfig {
   readonly factoryAddress: string | null;
   /** Lower-case expected Factory runtime code hash. */
   readonly factoryCodeHash: string | null;
+  /**
+   * Decision 0117: minimum seconds between "now" and a config's
+   * `nftSaleStartAt` (`HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS`, default 86,400;
+   * floor 4,200 = the Gate's 3,600 s activation buffer + 600 s for the
+   * executor to deploy, confirm, verify and activate).
+   */
+  readonly minimumSaleLeadSeconds: number;
 }
+
+/** Decision 0117: the Gate activation buffer (3,600 s) + 600 s executor margin. */
+export const hooksLaunchMinimumSaleLeadFloorSeconds = 3_600 + 600;
+/** Decision 0117: production default (unchanged from Decision 0108). */
+export const hooksLaunchDefaultSaleLeadSeconds = 86_400;
 
 /**
  * Decision 0108: the Hooks Factory address and its runtime code hash are one
@@ -593,6 +605,13 @@ const environmentSchema = z
     // LAUNCH_CHAIN_ID=97. No address is shipped in source.
     HOOKS_LAUNCH_FACTORY_ADDRESS: optionalCredential(64),
     HOOKS_LAUNCH_FACTORY_CODE_HASH: optionalCredential(66),
+    // Decision 0117: minimum NFT sale-start lead a saved config must keep.
+    // Default 86400 (production semantics); floor 4200 = the Gate's 3600 s
+    // activation buffer + 600 s executor margin; ceiling 30 days.
+    HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: positiveIntegerString(
+      hooksLaunchMinimumSaleLeadFloorSeconds,
+      2_592_000,
+    ),
     // Decision 0114: MEME v2 (`launch2`) quote lifetime and default
     // slippage. The routes exist only with `launch2` in V2_MODULES_ENABLED.
     LAUNCH2_QUOTE_TTL_SECONDS: positiveIntegerString(10, 600),
@@ -2830,6 +2849,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     HOOKS_LAUNCH_FACTORY_ADDRESS: environment["HOOKS_LAUNCH_FACTORY_ADDRESS"],
     HOOKS_LAUNCH_FACTORY_CODE_HASH:
       environment["HOOKS_LAUNCH_FACTORY_CODE_HASH"],
+    HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS:
+      environment["HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS"] ??
+      String(hooksLaunchDefaultSaleLeadSeconds),
     LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
@@ -2969,6 +2991,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
         parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS?.toLowerCase() ?? null,
       factoryCodeHash:
         parsed.data.HOOKS_LAUNCH_FACTORY_CODE_HASH?.toLowerCase() ?? null,
+      minimumSaleLeadSeconds: parsed.data.HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS,
     },
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     launch2: Object.freeze({

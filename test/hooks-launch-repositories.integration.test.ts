@@ -344,6 +344,49 @@ describe("Hooks operator review (000052–000053)", () => {
     ).rejects.toMatchObject({ code: "OPS_LAUNCH_NOT_APPROVED" });
   });
 
+  it("applies the configured sale-start lead on the operator save path (Decision 0117)", async () => {
+    const { projectId } = await ownerDraft();
+    const editor = await operator(["launch.edit"]);
+    const soon = {
+      ...draftInput,
+      nftSaleStartAt: String(1_800_000_000 + 5_000),
+    };
+    const save = (expectedVersion: number) =>
+      command({
+        operationId: randomUUID(),
+        action: "launch.config.save",
+        target: projectId,
+        reason: "Testnet same-day sale",
+        payload: { expectedVersion, config: soon },
+      });
+    // Default (86,400 s): a sale 5,000 s ahead is refused.
+    await expect(review.execute(editor, save(1))).rejects.toMatchObject({
+      code: "OPS_INVALID_LAUNCH_CONFIG",
+    });
+    const testnet = createPostgresHooksLaunchReviewRepository(pool, {
+      now: () => 1_800_000_000,
+      minimumLeadSeconds: 4_200,
+    });
+    const saved = await testnet.execute(editor, save(1));
+    expect(saved.result).toMatchObject({ config_version: 2 });
+    const tooSoon = {
+      ...draftInput,
+      nftSaleStartAt: String(1_800_000_000 + 4_199),
+    };
+    await expect(
+      testnet.execute(
+        editor,
+        command({
+          operationId: randomUUID(),
+          action: "launch.config.save",
+          target: projectId,
+          reason: "Below the floor",
+          payload: { expectedVersion: 2, config: tooSoon },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OPS_INVALID_LAUNCH_CONFIG" });
+  });
+
   it("replays an identical operationId and rejects a changed one", async () => {
     const { projectId } = await ownerDraft();
     const approver = await operator(["launch.approve"]);

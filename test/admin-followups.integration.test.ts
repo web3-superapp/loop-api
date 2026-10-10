@@ -259,6 +259,7 @@ describe("Decision 0111 console follow-ups on PostgreSQL", () => {
     });
     launch = createAdminLaunchReviewConsoleService({
       repository: createPostgresAdminLaunchReviewRepository(pool),
+      deploymentChainId: 97,
       review: createHooksLaunchReviewService({
         repository: createPostgresHooksLaunchReviewRepository(pool, {
           now: () => 1_800_000_000,

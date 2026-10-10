@@ -712,6 +712,22 @@ describe("Operator console role separation (Decision 0109)", () => {
     expectError(resetDisabled, 409, "ADMIN_CONFLICT", "ADMIN_ACCOUNT_DISABLED");
   });
 
+  it("reports the deployment chain next to the template chainId (Decision 0117)", async () => {
+    const harness = await createHarness({ LAUNCH_CHAIN_ID: "97" });
+    const acceptor = await seedAndLogin(
+      harness,
+      "testnet_acceptor",
+      harness.acceptorUserId,
+    );
+    const detail = await harness.app.inject({
+      method: "GET",
+      url: `/admin/v1/launch/projects/${harness.projectId}`,
+      headers: { cookie: acceptor },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ deploymentChainId: 97 });
+  });
+
   it("scopes the launch list and detail to the operator's grants", async () => {
     const harness = await createHarness();
     const acceptor = await seedAndLogin(
@@ -746,6 +762,8 @@ describe("Operator console role separation (Decision 0109)", () => {
       headers: { cookie: acceptor },
     });
     expect(own.statusCode).toBe(200);
+    // Decision 0117: the deployment chain is LAUNCH_CHAIN_ID (56 here).
+    expect(own.json()).toMatchObject({ deploymentChainId: 56 });
     // Grants revoked behind the console's back: fail closed.
     harness.scopes.set(harness.acceptorUserId, []);
     expectError(

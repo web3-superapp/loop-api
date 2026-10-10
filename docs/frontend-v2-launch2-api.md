@@ -1,8 +1,9 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117)
 
-Status: implemented on `feat/S134-launch2-read-model`; Development / BSC Testnet (chain 97)
-only. Evidence: anvil end-to-end (`test/launch2-anvil.integration.test.ts`); no BSC Testnet
-run yet. Project-side flow (资料 → 审核 → 签名 → 部署 → 激活) stays on the S125 routes
+Status: implemented on `feat/S134-launch2-read-model`, follow-ups in `fix/S139-launch2-followups`
+(Decision 0117); Development / BSC Testnet (chain 97) only. Evidence: anvil end-to-end
+(`test/launch2-anvil.integration.test.ts`); BSC Testnet round 1 (S137) reached `upcoming`
+with the read model matching the chain 40/40; NFT mint and later stages not yet run. Project-side flow (资料 → 审核 → 签名 → 部署 → 激活) stays on the S125 routes
 (`docs/frontend-v2-hooks-launch-api.md`).
 
 ## 1. Base URL, headers, capability
@@ -70,7 +71,7 @@ and `public` can jump straight to `graduated`. `holdReason`:
         "reserveUsd1": "0",
         "graduationReserveUsd1": "133333.332",
         "reserveBps": 0,
-        "priceUsd1": "0.000041666666625"
+        "priceUsd1": "0.00004166666625"
       },
       "graduatedAt": null
     }
@@ -81,7 +82,9 @@ and `public` can jump straight to `graduated`. `holdReason`:
 ```
 
 List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve.reserveBps`
-(储备 / 133,333.332), 当前价 = `curve.priceUsd1`.
+(储备 / 133,333.332), 当前价 = `curve.priceUsd1`. 起始价（`soldSupply` = 0）=
+`0.00004166666625` USD1（CurveMath `priceAt(0)`；S137 测试网与链上对拍一致，决策 0117 更正了
+此前文档的笔误 `0.000041666666625`）。
 
 ### 3.2 `GET /v2/launch2/instances/{instanceId}?walletId=`
 
@@ -198,6 +201,20 @@ officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address)
 
 `amount`: buy = USD1 in (tax included); sell = MEME in. `slippageBps` 0–5000 (default 100).
 
+**Only tradable stages are quoted** (Decision 0117 clarification, S137 measured). A buy quote
+exists in `priority` and `public`; a sell quote only in `public`. Every other stage is a 409,
+never a 200 with `limitedBy: "closed"`:
+
+| stage                                      | quote answer                                                                 |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| `upcoming`, `nft_sale`, `snapshot_pending` | `409 DATA_STALE` / `LAUNCH2_STAGE_MISMATCH`, `detailsSafe.stage` = the stage |
+| `priority` (sell)                          | `409 DATA_STALE` / `LAUNCH2_SELL_NOT_OPEN`, `detailsSafe.stage: "priority"`  |
+| `graduated`                                | `409 DATA_STALE` / `LAUNCH2_SOLD_OUT`                                        |
+| `paused`                                   | `409 DATA_STALE` / `LAUNCH2_INSTANCE_PAUSED` (`holdReason`)                  |
+
+The App does not call quote outside `priority` / `public` (hide the trade panel, show the
+stage countdown); if it does, treat the 409 as "not open yet" and keep polling the detail.
+
 ```json
 {
   "quote": {
@@ -215,7 +232,7 @@ officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address)
     "taxUsd1": "18518.51…",
     "taxBps": 1000,
     "refundUsd1": "0.000000000000000001",
-    "priceBeforeUsd1": "0.000041666666625",
+    "priceBeforeUsd1": "0.00004166666625",
     "priceAfterUsd1": "0.0000435…",
     "max": {
       "amountIn": "185185.18…",
@@ -243,7 +260,9 @@ officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address)
 
 - **MAX** = `max.amountIn` (fill the input with it). `limitedBy`: `quota` (0.5 % = 5,000,000
   MEME per address, both rounds, selling does not restore it) | `inventory` (remaining of
-  800M) | `balance` (wallet USD1 / MEME) | `sold_supply` (sell) | `closed`.
+  800M) | `balance` (wallet USD1 / MEME) | `sold_supply` (sell) | `closed` (parity with
+  `CurveEngine.quoteMaxBuy` only: the route answers a closed stage with the 409 above before
+  computing MAX, so the App does not see `closed` in a 200).
 - `exceedsMax: true` → show "超出可买上限" with a one-tap fill of MAX; the quote numbers are
   for MAX.
 - Pass `amount`, `minOut`, `deadline` unchanged to §3.5. Re-quote when `deadline` passes.
@@ -321,6 +340,12 @@ Signing: when `approval` is non-null send `approval.unsignedTransaction` first (
 `unsignedTransaction` (N+1), both through the embedded wallet `eth_sendTransaction`. `signing.allowed`
 false → do not sign (`LAUNCH2_INTENT_EXPIRED` → prepare again; `LAUNCH2_SIMULATION_REVERTED`).
 The first-purchase sheet must show the full sentence 「不保证成交、不保证配售，公开内盘可能不发生」.
+
+Counterparties (Decision 0117): the transaction `to`, `approval.token` and `approval.spender`
+are always contracts of this activated instance (`contracts` in §3.2) or the instance's USD1;
+the server refuses anything else with `403 POLICY_BLOCKED` / `LAUNCH2_COUNTERPARTY_NOT_INSTANCE`
+(should never happen; show "暂不可用" and do not sign). USD1 must still be a canary asset
+(`ASSET_NOT_IN_CANARY_ALLOWLIST`) and the canary per-intent / daily ceilings still apply.
 The lane shows the mint in `viewer.nft` after indexing; there is no report route.
 
 ### 3.5 `POST /v2/launch2/instances/{instanceId}/trade/prepare`
@@ -420,7 +445,7 @@ fails. Copy: 「回购不等于销毁」 in ⓘ.
 | ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                             |
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                         |
-| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065)                                                                                                 |
+| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2    |
 | 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason                                                                                                                                                                                                                            |
 | 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage`), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                 |
 | 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                   |
