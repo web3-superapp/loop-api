@@ -176,6 +176,12 @@ describe("database schema readiness contract", () => {
       "public.launch2_positions",
       "public.launch2_intents",
       "public.launch2_snapshot_publications",
+      "public.mining_parameter_versions",
+      "public.mining_epochs",
+      "public.mining_epoch_rewards",
+      "public.mining_claims",
+      "public.mining_reward_ledger_events",
+      "public.mining_reward_balances",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

@@ -1,15 +1,35 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { requireAuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import { emptyQueryStringSchema } from "../../core/http/schemas.js";
+import { parseV2CommandMetadata } from "../../features/community/community-contract.js";
+import type { MiningRewardsService } from "../../features/mining/hourly-rewards-service.js";
 import type { MiningService } from "../../features/mining/mining-service.js";
 import {
   assertNoBodyOrQueryV2,
   assertNoBodyV2,
+  assertNoQuery,
   referralRulesResourceSchema,
+  v2CommandHeadersSchema,
   v2CommonHeadersSchema,
+  validateCommandHeaders,
   validateCommonHeaders,
 } from "./community-schemas.js";
+import {
+  miningClaimCommandErrors,
+  miningClaimPrepareRequestSchema,
+  miningClaimPrepareResourceSchema,
+  miningClaimReportRequestSchema,
+  miningClaimReportResourceSchema,
+  miningClaimsResourceSchema,
+  miningCursorQuerySchema,
+  miningRewardEpochsResourceSchema,
+  miningRewardsReadErrors,
+} from "./mining-rewards-schemas.js";
+
+function idempotencyKey(request: FastifyRequest): string {
+  return parseV2CommandMetadata(request.raw.rawHeaders).idempotencyKey;
+}
 import type { V2RouteDependencies } from "./index.js";
 import {
   miningAssetsResourceSchema,
@@ -41,6 +61,7 @@ export function registerV2MiningRoutes(
 ): void {
   const { authenticateLoopBearer } = dependencies;
   const service: MiningService = dependencies.miningService;
+  const rewards: MiningRewardsService = dependencies.miningRewardsService;
 
   app.get(
     "/v2/mining/summary",
@@ -103,7 +124,7 @@ export function registerV2MiningRoutes(
         operationId: "getV2MiningRewards",
         summary: "Get the caller's reward ledger",
         description:
-          "claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes. estimatedToday is the same share-of-network-power estimate as the summary. The ledger structure exists but no route writes it.",
+          "Legacy keys unchanged: claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false; estimatedToday is the share-of-network-power estimate of the summary. Decision 0116: `hourly` is the hourly two-track settlement — totals (settled / claimed / claimable raw LOOP), the last settled hour and its minute display (derive from serverTime; never accumulate with a timer), both tracks' self / five-level referral / total power and rewards, the five levels (ratio, effective members, NFT / asset contribution), the parameters in force, and the claim state. hourly.displayState: awaiting_first_settlement | displaying | settling | unavailable. The Claim button uses hourly.totals.claimableRaw and POST /v2/mining/claim/prepare.",
         tags: ["mining"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -115,8 +136,141 @@ export function registerV2MiningRoutes(
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
-      const resource = await service.getRewards({
+      const principal = requireAuthenticatedLoopPrincipal(request);
+      const [resource, hourly] = await Promise.all([
+        service.getRewards({ principal }),
+        rewards.hourlyBlock(principal),
+      ]);
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send({ ...resource, hourly });
+    },
+  );
+
+  app.get(
+    "/v2/mining/rewards/epochs",
+    {
+      schema: {
+        operationId: "listV2MiningRewardEpochs",
+        summary: "List the caller's settled hourly rewards",
+        description:
+          "Decision 0116: the caller's rows of settled hours, newest first, 24 per page (signed cursor bound to the caller). Each row carries both tracks' self / referral / total power and the raw rewards. Hours in which the caller had no power have no row. 503 CAPABILITY_UNAVAILABLE / MINING_SETTLEMENT_UNAVAILABLE without the store.",
+        tags: ["mining"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: miningCursorQuerySchema,
+        response: {
+          200: miningRewardEpochsResourceSchema,
+          ...miningRewardsReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as { readonly cursor?: unknown };
+      const resource = await rewards.listEpochs({
         principal: requireAuthenticatedLoopPrincipal(request),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/mining/claims",
+    {
+      schema: {
+        operationId: "listV2MiningClaims",
+        summary: "List the caller's reward claims",
+        description:
+          "Decision 0116: newest first, 20 per page (signed cursor). status: claimable | submitting | confirming | succeeded | failed | expired. 503 CAPABILITY_UNAVAILABLE / MINING_SETTLEMENT_UNAVAILABLE without the store.",
+        tags: ["mining"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: miningCursorQuerySchema,
+        response: {
+          200: miningClaimsResourceSchema,
+          ...miningRewardsReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as { readonly cursor?: unknown };
+      const resource = await rewards.listClaims({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/mining/claim/prepare",
+    {
+      schema: {
+        operationId: "prepareV2MiningClaim",
+        summary:
+          "Prepare a LoopRewardClaim claim (EIP-712 voucher + unsigned transaction)",
+        description:
+          "Decision 0116: reads nonces(wallet) and claimed(w) on chain, signs Claim(wallet, cumulativeAmount, nonce, deadline = now + 600 s) with cumulativeAmount = claimed(wallet) + (settled − Σ claimed over the caller's claim wallets), simulates, checks gas, and returns the unsigned claim(...) transaction for device_eth_send_transaction (nothing is signed or sent server-side as a transaction). Every prepare signs a fresh voucher; an older one dies by nonce once any claim lands. 409 INSUFFICIENT_BALANCE: MINING_CLAIM_NOTHING_TO_CLAIM | MINING_CLAIM_BELOW_MINIMUM (minimumRaw, claimableRaw) | CLAIM_GAS_INSUFFICIENT (requiredNativeAmount, suggestedSwapFromSymbol USDT, suggestedSwapFromAssetId, suggestedSwapToSymbol BNB, suggestedSwapToAssetId, suggestedSwapToAmount) | CLAIM_NO_GAS_SOURCE (requiredNativeAmount). 409 RESOURCE_CONFLICT: MINING_CLAIM_IN_FLIGHT (claimId) | MINING_CLAIM_LEDGER_MISMATCH. 409 SIMULATION_FAILED: MINING_CLAIM_SIMULATION_REVERTED. 422 MINING_CLAIM_WALLET_NOT_EMBEDDED. 503 CAPABILITY_UNAVAILABLE: MINING_SETTLEMENT_UNAVAILABLE | MINING_CLAIM_MAINNET_CLOSED | MINING_CLAIM_CONTRACT_NOT_CONFIGURED | MINING_CLAIM_CHAIN_NOT_CONFIGURED | MINING_CLAIM_SIGNER_NOT_CONFIGURED | MINING_CLAIM_WRITES_DISABLED | MINING_CLAIM_CONTRACT_PAUSED | MINING_CLAIM_FUNDING_INSUFFICIENT | MINING_CLAIM_CHAIN_READ_FAILED. Idempotency-Key replays the same claim.",
+        tags: ["mining"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        body: miningClaimPrepareRequestSchema,
+        response: {
+          201: miningClaimPrepareResourceSchema,
+          ...miningClaimCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await rewards.prepareClaim({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(201).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/mining/claim/report",
+    {
+      schema: {
+        operationId: "reportV2MiningClaim",
+        summary: "Report the hash of a sent claim transaction",
+        description:
+          "Decision 0116: reads the receipt; only the contract's Claimed(wallet, amount, cumulativeAmount, nonce) log matching the voucher proves the claim. Not found → submitting; mined with fewer than MINING_CLAIM_CONFIRMATIONS → confirming; confirmed → succeeded (the ledger's claimed total moves by the logged amount, once); reverted → failed (balance untouched). Re-reporting the same hash is idempotent; a different hash on a claim that already has one is 409 RESOURCE_CONFLICT / MINING_CLAIM_TRANSACTION_CONFLICT; a mined transaction without this voucher's log is 409 DATA_STALE / MINING_CLAIM_TRANSACTION_MISMATCH (nothing recorded). 404 NOT_FOUND / MINING_CLAIM_NOT_FOUND. The worker keeps re-checking submitting / confirming claims.",
+        tags: ["mining"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        body: miningClaimReportRequestSchema,
+        response: {
+          200: miningClaimReportResourceSchema,
+          ...miningClaimCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await rewards.reportClaim({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

@@ -822,3 +822,122 @@ Content-Type: application/json
 ### 11.2 错误与不可用
 
 无新错误码。执行器关闭（默认）时任务停在 `awaiting_executor`，`stage = deploying`，详情照常返回。
+
+## 12. S138 变更（决策 0116）：挖矿小时结算参数、结算周期、资金对账
+
+机器契约：`openapi/loop-admin.v1.json`（`/admin/v1/mining/parameter-versions*`、`/admin/v1/mining/epochs*`、
+`/admin/v1/mining/funding`）。决策见 `docs/decisions/0116-mining-hourly-settlement.md`。Base URL、cookie、
+错误体同 §1 / §6。旧的挖矿公式（`/mining/formula-versions`，§9.1）不变，管的是快照算力；本节是新的
+小时结算参数，两者互不影响。
+
+### 12.0 给 loop-admin 的改动清单
+
+1. 新增「挖矿结算参数」页：列表 + 新建草稿（platform_admin）+ 审批（reviewer）+ 撤回（platform_admin）。
+2. 新增「结算周期」页：最近 48 个小时的结算状态、预算、分母、已分配 / 未分配、输入摘要；详情页列出每个用户两轨
+   本人 / 邀请 / 总算力与奖励；「回放」按钮（只读重算对比）。
+3. 新增「奖励资金」卡片：合约余额 vs 已确权未领取负债，`alert = true` 时标红。
+4. 仅测试环境：「手动结算某小时」按钮（`MINING_SETTLEMENT_TEST_TRIGGER=true` 时可用，否则 503）。
+
+### 12.1 权限
+
+| 路由                                                                             | 权限                                                      | 角色                                                |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------- |
+| `GET /admin/v1/mining/parameter-versions`                                        | `console.read` 或 `formula.approve`                       | platform_admin、auditor、reviewer                   |
+| `POST /admin/v1/mining/parameter-versions`                                       | `console.write`                                           | platform_admin                                      |
+| `POST /admin/v1/mining/parameter-versions/{id}/approve`                          | `formula.approve`（且不是草稿作者、绑定的运营人员启用中） | reviewer                                            |
+| `POST /admin/v1/mining/parameter-versions/{id}/withdraw`                         | `console.write`                                           | platform_admin                                      |
+| `GET /admin/v1/mining/epochs`、`/epochs/{id}`、`/epochs/{id}/replay`、`/funding` | `console.read` 或 `audit.read`                            | platform_admin、auditor、reviewer、testnet_acceptor |
+| `POST /admin/v1/mining/epochs/settle`                                            | `console.write` + 测试开关                                | platform_admin（仅测试环境）                        |
+
+### 12.2 参数草稿
+
+`POST /admin/v1/mining/parameter-versions`
+
+```json
+{
+  "configVersion": "miningHourlyV1",
+  "effectiveFrom": "2026-10-11T00:00:00.000Z",
+  "parameters": {
+    "releaseStartAt": "2026-10-11T00:00:00.000Z",
+    "referralRatiosBps": [1000, 500, 300, 200, 100],
+    "dailyBudgetNftRaw": "500000000000000000000000",
+    "dailyBudgetAssetRaw": "500000000000000000000000",
+    "releaseDays": 900,
+    "minimumClaimRaw": "1000000000000000000",
+    "assetWeights": [{ "assetId": "eip155:97:0x…6666", "weight": "1" }],
+    "communityCoefficients": [{ "communityId": "…", "coefficient": "2" }]
+  }
+}
+```
+
+- `parameters` 中省略的字段取默认（列表接口 `defaults`）；`releaseStartAt` 必填（UTC 零点）。
+- `communityCoefficients` 省略时冻结复制当前已审批的社区系数（`community_mining_weights`）；版本一旦批准不可修改，
+  历史结算用当时的版本。
+- `assetWeights` 只能填 launch2 / MEME v1 的币；未列出的资产权重为 0（不参与资产池）。
+- `effectiveFrom` 必须在未来；批准时若已过去 → 409 `ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED`。小时内生效的版本
+  会按生效时间切片（预算与邀请比例按该小时开始时的版本）。
+- `201` → `{ version, audit }`。`version`：`versionId`、`configVersion`、`status`（`pending_approval` | `approved` |
+  `withdrawn`）、`effectiveFrom`、`document`、`draftAuthor`、`approvedBy`、`approvedAt`、`createdAt`。
+
+### 12.3 审批
+
+`POST /admin/v1/mining/parameter-versions/{versionId}/approve`（空 body）。审计先写
+`mining.parameters.approve.requested`（写不进 → 503 `ADMIN_AUDIT_UNAVAILABLE`，不批准），成功写
+`mining.parameters.approve`，失败写 `mining.parameters.approve.failed`。
+
+| HTTP | `code`                   | `reasonCode`                                                                                                                                                             |
+| ---- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`、`ADMIN_FORMULA_SELF_APPROVAL`、`ADMIN_OPERATOR_DISABLED`、`ADMIN_ACCOUNT_DISABLED`                                                               |
+| 404  | `NOT_FOUND`              | `ADMIN_MINING_PARAMETERS_NOT_FOUND`                                                                                                                                      |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_MINING_PARAMETERS_STATE`、`ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED`、`ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN`、`ADMIN_MINING_PARAMETERS_VERSION_EXISTS`（草稿） |
+| 422  | `VALIDATION_FAILED`      | `ADMIN_MINING_PARAMETERS_INVALID`（`field`）、`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`（`assetId`）                                                                      |
+| 503  | `CAPABILITY_UNAVAILABLE` | `MINING_SETTLEMENT_UNAVAILABLE`、`ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`                                                                                 |
+
+### 12.4 结算周期
+
+`GET /admin/v1/mining/epochs?before=<hourStart>` → `{ items: epoch[48], nextBefore }`。epoch 字段：
+`epochId`、`hourStart`、`hourEnd`、`status`（`pending` | `settling` | `settled` | `failed`）、`trigger`
+（`scheduled` | `test_trigger`）、`versionId`、`budgetNftRaw` / `budgetAssetRaw`、`denominatorNftPower` /
+`denominatorAssetPower`、`allocated*Raw` / `unallocated*Raw`（某池分母为 0 时整池未分配，不转入另一池）、
+`userCount`、`inputDigest`、`inputSummary`（`excludedAssets`、`unboundInstances`、`ambiguousAddressCount`、
+`unattributedHoldingCount`、`versionIds`…）、`failureReasonCode`、`attemptCount`、`settledAt`、`updatedAt`。
+
+- `failed` 的常见原因：`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`、`MINING_SETTLEMENT_PRICE_MISSING`、
+  `MINING_SETTLEMENT_INPUT_INVALID`；worker 每分钟重试。
+- 索引落后（`MINING_SETTLEMENT_INDEXER_BEHIND`）、无参数（`MINING_PARAMETERS_PENDING`）的小时不会出现失败行，只是等待。
+
+`GET /admin/v1/mining/epochs/{epochId}` → `{ epoch, rewards[≤500], rewardRowCount }`，rewards 每行：`userId`、两轨
+本人 / 邀请 / 总算力、`levels`（五级：`ratioBps`、`effectiveMembers`、`nftPower`、`assetPower`、
+`nftUnitsByCommunity`）、`nftRewardRaw`、`assetRewardRaw`、`totalRewardRaw`。
+
+`GET /admin/v1/mining/epochs/{epochId}/replay` → `{ replay: { storedDigest, replayDigest, digestMatches,
+rewardsMatch, mismatchedUserCount, reasonCode } }`。只读，不写库；`digestMatches = false` 通常表示链上事实被重组改写。
+
+### 12.5 资金对账
+
+`GET /admin/v1/mining/funding` →
+
+```json
+{
+  "status": "available",
+  "reasonCode": null,
+  "contractAddress": "0x…",
+  "liabilityRaw": "4000000000000000000",
+  "balanceRaw": "1000000000000000000000000",
+  "liabilityHintRaw": null,
+  "paused": false,
+  "blockNumber": "123456",
+  "alert": false,
+  "shortfallRaw": "0"
+}
+```
+
+`liabilityRaw` = 全部用户「累计已结算 − 累计已领取」。`alert = balanceRaw < liabilityRaw`（`shortfallRaw` 为差额）。
+未配置合约或链时 `status = unavailable`（`MINING_CLAIM_CONTRACT_NOT_CONFIGURED` / `MINING_CLAIM_CHAIN_NOT_CONFIGURED`），
+负债照常返回，余额字段为 `null`。
+
+### 12.6 手动结算（仅测试）
+
+`POST /admin/v1/mining/epochs/settle`，body `{ "hourStart": "2026-10-10T10:00:00.000Z" }`（必须是整点）→
+`{ outcome, reasonCode, epoch, audit }`，`outcome`：`settled` | `already_settled` | `skipped` | `failed`。规则与
+worker 相同（小时必须已结束 + 宽限、索引已追上、参数在生效中）；已结算小时不会重算。

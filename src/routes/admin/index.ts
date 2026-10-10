@@ -28,6 +28,8 @@ import {
   principalResourceSchema,
 } from "./admin-role-schemas.js";
 import { registerAdminRoleRoutes } from "./role-routes.js";
+import { registerAdminMiningSettlementRoutes } from "./mining-settlement-routes.js";
+import type { AdminMiningSettlementService } from "../../features/admin/admin-mining-settlement.js";
 import type {
   AdminService,
   AdminWriteContext,
@@ -84,6 +86,8 @@ export interface AdminRouteDependencies {
   /** Decision 0109: Hooks launch review. */
   readonly launchReview: AdminLaunchReviewConsoleService;
   readonly cookieSecure: boolean;
+  /** Decision 0116: hourly settlement console. */
+  readonly miningSettlement: AdminMiningSettlementService;
 }
 
 /** Decision 0109: `onRequest` hooks of a protected route. */
@@ -859,6 +863,13 @@ export function registerAdminRoutes(
       return reply.code(200).send(resource);
     },
   );
+
+  registerAdminMiningSettlementRoutes(app, {
+    service: dependencies.miningSettlement,
+    guard,
+    guardAny,
+    context,
+  });
 
   registerAdminRoleRoutes(app, {
     service,

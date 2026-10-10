@@ -115338,7 +115338,7 @@
         "operationId": "getV2MiningRewards",
         "summary": "Get the caller's reward ledger",
         "tags": ["mining"],
-        "description": "claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false: the claim button never executes. estimatedToday is the same share-of-network-power estimate as the summary. The ledger structure exists but no route writes it.",
+        "description": "Legacy keys unchanged: claimable and accumulated stay unavailable with REWARD_AUTHORITY_PENDING and claimExecutable is false; estimatedToday is the share-of-network-power estimate of the summary. Decision 0116: `hourly` is the hourly two-track settlement — totals (settled / claimed / claimable raw LOOP), the last settled hour and its minute display (derive from serverTime; never accumulate with a timer), both tracks' self / five-level referral / total power and rewards, the five levels (ratio, effective members, NFT / asset contribution), the parameters in force, and the claim state. hourly.displayState: awaiting_first_settlement | displaying | settling | unavailable. The Claim button uses hourly.totals.claimableRaw and POST /v2/mining/claim/prepare.",
         "parameters": [
           {
             "schema": {
@@ -115384,6 +115384,7 @@
                     "accumulated",
                     "ledger",
                     "source",
+                    "hourly",
                     "contractVersion"
                   ],
                   "properties": {
@@ -115495,6 +115496,614 @@
                           "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                         }
                       }
+                    },
+                    "hourly": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "serverTime",
+                        "decimals",
+                        "displayState",
+                        "reasonCode",
+                        "totals",
+                        "lastHour",
+                        "display",
+                        "tracks",
+                        "referral",
+                        "parameters",
+                        "claim"
+                      ],
+                      "properties": {
+                        "serverTime": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "decimals": { "type": "integer", "enum": [18] },
+                        "displayState": {
+                          "type": "string",
+                          "enum": [
+                            "awaiting_first_settlement",
+                            "displaying",
+                            "settling",
+                            "unavailable"
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "totals": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "settledRaw",
+                                "claimedRaw",
+                                "claimableRaw"
+                              ],
+                              "properties": {
+                                "settledRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "claimedRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "claimableRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                  "description": "settled − claimed (confirmed on chain). The Claim button uses only this; the minute display never changes it."
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "lastHour": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "epochId",
+                                "hourStart",
+                                "hourEnd",
+                                "settledAt",
+                                "nftRewardRaw",
+                                "assetRewardRaw",
+                                "totalRewardRaw"
+                              ],
+                              "properties": {
+                                "epochId": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "hourStart": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "hourEnd": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "settledAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "nftRewardRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "assetRewardRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "totalRewardRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "display": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "windowStart",
+                                "windowEnd",
+                                "totalRaw",
+                                "perMinuteRaw",
+                                "completedMinutes",
+                                "displayedRaw",
+                                "nextUpdateAt"
+                              ],
+                              "properties": {
+                                "windowStart": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "windowEnd": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "totalRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "perMinuteRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "completedMinutes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 60
+                                },
+                                "displayedRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "nextUpdateAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              },
+                              "description": "displayedRaw = floor(totalRaw × m / 60) with m = floor((now − windowStart) / 60 s) capped at 60; minute 60 shows totalRaw exactly."
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "tracks": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["nft", "asset"],
+                              "properties": {
+                                "nft": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "realNftCount",
+                                    "selfPower",
+                                    "referralPower",
+                                    "totalPower",
+                                    "networkPower",
+                                    "budgetRaw",
+                                    "rewardRaw",
+                                    "holdings"
+                                  ],
+                                  "properties": {
+                                    "realNftCount": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "selfPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "referralPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "totalPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "networkPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "budgetRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "rewardRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "holdings": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "instanceId",
+                                          "communityId",
+                                          "countAtEnd",
+                                          "power"
+                                        ],
+                                        "properties": {
+                                          "instanceId": {
+                                            "type": "string",
+                                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                          },
+                                          "communityId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                              },
+                                              { "type": "null" }
+                                            ]
+                                          },
+                                          "countAtEnd": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                          },
+                                          "power": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "asset": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "selfPower",
+                                    "referralPower",
+                                    "totalPower",
+                                    "networkPower",
+                                    "budgetRaw",
+                                    "rewardRaw",
+                                    "holdings",
+                                    "excludedAssets"
+                                  ],
+                                  "properties": {
+                                    "selfPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "referralPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "totalPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "networkPower": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "budgetRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "rewardRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "holdings": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": [
+                                          "assetId",
+                                          "balanceAtEndRaw",
+                                          "power"
+                                        ],
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                                          },
+                                          "balanceAtEndRaw": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                          },
+                                          "power": {
+                                            "type": "string",
+                                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "excludedAssets": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": ["assetId", "reasonCode"],
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                                          },
+                                          "reasonCode": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "referral": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["levels"],
+                              "properties": {
+                                "levels": {
+                                  "type": "array",
+                                  "minItems": 5,
+                                  "maxItems": 5,
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "level",
+                                      "ratioBps",
+                                      "effectiveMembers",
+                                      "nftPower",
+                                      "assetPower",
+                                      "totalPower",
+                                      "nftUnitsByCommunity"
+                                    ],
+                                    "properties": {
+                                      "level": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 5
+                                      },
+                                      "ratioBps": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 10000
+                                      },
+                                      "effectiveMembers": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "nftPower": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "assetPower": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "totalPower": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "nftUnitsByCommunity": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "additionalProperties": false,
+                                          "required": ["communityId", "units"],
+                                          "properties": {
+                                            "communityId": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                                },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "units": {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                                            }
+                                          }
+                                        },
+                                        "description": "Equivalent NFT units (count × level ratio, by source community). Reward computation only: never NFT holdings, never early-purchase eligibility."
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "parameters": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "versionId",
+                                "configVersion",
+                                "effectiveFrom",
+                                "referralRatiosBps",
+                                "minimumClaimRaw"
+                              ],
+                              "properties": {
+                                "versionId": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "configVersion": { "type": "string" },
+                                "effectiveFrom": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "referralRatiosBps": {
+                                  "type": "array",
+                                  "minItems": 5,
+                                  "maxItems": 5,
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 10000
+                                  }
+                                },
+                                "minimumClaimRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "claim": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["executable", "reasonCode", "latest"],
+                          "properties": {
+                            "executable": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "latest": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "claimId",
+                                    "walletId",
+                                    "status",
+                                    "chainId",
+                                    "chainReference",
+                                    "contractAddress",
+                                    "cumulativeAmountRaw",
+                                    "amountRaw",
+                                    "nonce",
+                                    "deadline",
+                                    "transactionHash",
+                                    "blockNumber",
+                                    "failureReasonCode",
+                                    "createdAt",
+                                    "updatedAt"
+                                  ],
+                                  "properties": {
+                                    "claimId": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                    },
+                                    "walletId": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "claimable",
+                                        "submitting",
+                                        "confirming",
+                                        "succeeded",
+                                        "failed",
+                                        "expired"
+                                      ],
+                                      "description": "claimable (voucher issued) → submitting (hash reported, not mined) → confirming (mined, < MINING_CLAIM_CONFIRMATIONS) → succeeded; failed (reverted); expired (deadline passed, nonce unused, or another voucher of the same nonce landed)."
+                                    },
+                                    "chainId": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                                    },
+                                    "chainReference": {
+                                      "anyOf": [
+                                        { "type": "integer" },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "contractAddress": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{40}$"
+                                    },
+                                    "cumulativeAmountRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "amountRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                      "description": "The amount this claim pays: the confirmed Claimed amount once succeeded, otherwise the expected delta."
+                                    },
+                                    "nonce": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "deadline": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "transactionHash": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "blockNumber": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "failureReasonCode": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "createdAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "updatedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "description": "Decision 0116 hourly settlement block. awaiting_first_settlement: no hour settled yet (show 首个小时结算后开始展示奖励, no growth). displaying: inside the hour after lastHour. settling: that hour is over and the next is not settled yet (show the full previous total). unavailable: the store is down (reasonCode)."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -115753,6 +116362,2843 @@
                       "type": "string",
                       "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
                     },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/mining/rewards/epochs": {
+      "get": {
+        "operationId": "listV2MiningRewardEpochs",
+        "summary": "List the caller's settled hourly rewards",
+        "tags": ["mining"],
+        "description": "Decision 0116: the caller's rows of settled hours, newest first, 24 per page (signed cursor bound to the caller). Each row carries both tracks' self / referral / total power and the raw rewards. Hours in which the caller had no power have no row. 503 CAPABILITY_UNAVAILABLE / MINING_SETTLEMENT_UNAVAILABLE without the store.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1536,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "nextCursor",
+                    "decimals",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 24,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "epochId",
+                          "hourStart",
+                          "hourEnd",
+                          "nftSelfPower",
+                          "nftReferralPower",
+                          "nftTotalPower",
+                          "assetSelfPower",
+                          "assetReferralPower",
+                          "assetTotalPower",
+                          "nftRewardRaw",
+                          "assetRewardRaw",
+                          "totalRewardRaw"
+                        ],
+                        "properties": {
+                          "epochId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "hourStart": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "hourEnd": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "nftSelfPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "nftReferralPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "nftTotalPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "assetSelfPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "assetReferralPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "assetTotalPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$"
+                          },
+                          "nftRewardRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "assetRewardRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "totalRewardRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 1536,
+                          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                          "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "decimals": { "type": "integer", "enum": [18] },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/mining/claims": {
+      "get": {
+        "operationId": "listV2MiningClaims",
+        "summary": "List the caller's reward claims",
+        "tags": ["mining"],
+        "description": "Decision 0116: newest first, 20 per page (signed cursor). status: claimable | submitting | confirming | succeeded | failed | expired. 503 CAPABILITY_UNAVAILABLE / MINING_SETTLEMENT_UNAVAILABLE without the store.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1536,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items",
+                    "nextCursor",
+                    "decimals",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "claimId",
+                          "walletId",
+                          "status",
+                          "chainId",
+                          "chainReference",
+                          "contractAddress",
+                          "cumulativeAmountRaw",
+                          "amountRaw",
+                          "nonce",
+                          "deadline",
+                          "transactionHash",
+                          "blockNumber",
+                          "failureReasonCode",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "properties": {
+                          "claimId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "walletId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "claimable",
+                              "submitting",
+                              "confirming",
+                              "succeeded",
+                              "failed",
+                              "expired"
+                            ],
+                            "description": "claimable (voucher issued) → submitting (hash reported, not mined) → confirming (mined, < MINING_CLAIM_CONFIRMATIONS) → succeeded; failed (reverted); expired (deadline passed, nonce unused, or another voucher of the same nonce landed)."
+                          },
+                          "chainId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                          },
+                          "chainReference": {
+                            "anyOf": [{ "type": "integer" }, { "type": "null" }]
+                          },
+                          "contractAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$"
+                          },
+                          "cumulativeAmountRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "amountRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$",
+                            "description": "The amount this claim pays: the confirmed Claimed amount once succeeded, otherwise the expected delta."
+                          },
+                          "nonce": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          },
+                          "deadline": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "transactionHash": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "blockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "failureReasonCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 1536,
+                          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                          "description": "Opaque cursor bound to the authenticated owner, route, and canonical filter. It carries the page size, so limit and cursor are mutually exclusive."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "decimals": { "type": "integer", "enum": [18] },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED", "VERSION_CONFLICT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/mining/claim/prepare": {
+      "post": {
+        "operationId": "prepareV2MiningClaim",
+        "summary": "Prepare a LoopRewardClaim claim (EIP-712 voucher + unsigned transaction)",
+        "tags": ["mining"],
+        "description": "Decision 0116: reads nonces(wallet) and claimed(w) on chain, signs Claim(wallet, cumulativeAmount, nonce, deadline = now + 600 s) with cumulativeAmount = claimed(wallet) + (settled − Σ claimed over the caller's claim wallets), simulates, checks gas, and returns the unsigned claim(...) transaction for device_eth_send_transaction (nothing is signed or sent server-side as a transaction). Every prepare signs a fresh voucher; an older one dies by nonce once any claim lands. 409 INSUFFICIENT_BALANCE: MINING_CLAIM_NOTHING_TO_CLAIM | MINING_CLAIM_BELOW_MINIMUM (minimumRaw, claimableRaw) | CLAIM_GAS_INSUFFICIENT (requiredNativeAmount, suggestedSwapFromSymbol USDT, suggestedSwapFromAssetId, suggestedSwapToSymbol BNB, suggestedSwapToAssetId, suggestedSwapToAmount) | CLAIM_NO_GAS_SOURCE (requiredNativeAmount). 409 RESOURCE_CONFLICT: MINING_CLAIM_IN_FLIGHT (claimId) | MINING_CLAIM_LEDGER_MISMATCH. 409 SIMULATION_FAILED: MINING_CLAIM_SIMULATION_REVERTED. 422 MINING_CLAIM_WALLET_NOT_EMBEDDED. 503 CAPABILITY_UNAVAILABLE: MINING_SETTLEMENT_UNAVAILABLE | MINING_CLAIM_MAINNET_CLOSED | MINING_CLAIM_CONTRACT_NOT_CONFIGURED | MINING_CLAIM_CHAIN_NOT_CONFIGURED | MINING_CLAIM_SIGNER_NOT_CONFIGURED | MINING_CLAIM_WRITES_DISABLED | MINING_CLAIM_CONTRACT_PAUSED | MINING_CLAIM_FUNDING_INSUFFICIENT | MINING_CLAIM_CHAIN_READ_FAILED. Idempotency-Key replays the same claim.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["walletId"],
+                "properties": {
+                  "walletId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "claim",
+                    "intent",
+                    "decimals",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "claim": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "claimId",
+                        "walletId",
+                        "status",
+                        "chainId",
+                        "chainReference",
+                        "contractAddress",
+                        "cumulativeAmountRaw",
+                        "amountRaw",
+                        "nonce",
+                        "deadline",
+                        "transactionHash",
+                        "blockNumber",
+                        "failureReasonCode",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "claimId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "claimable",
+                            "submitting",
+                            "confirming",
+                            "succeeded",
+                            "failed",
+                            "expired"
+                          ],
+                          "description": "claimable (voucher issued) → submitting (hash reported, not mined) → confirming (mined, < MINING_CLAIM_CONFIRMATIONS) → succeeded; failed (reverted); expired (deadline passed, nonce unused, or another voucher of the same nonce landed)."
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                        },
+                        "chainReference": {
+                          "anyOf": [{ "type": "integer" }, { "type": "null" }]
+                        },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "cumulativeAmountRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "amountRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "The amount this claim pays: the confirmed Claimed amount once succeeded, otherwise the expected delta."
+                        },
+                        "nonce": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "blockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "failureReasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "intent": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "calldata",
+                        "unsignedTransaction",
+                        "signing"
+                      ],
+                      "properties": {
+                        "calldata": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["to", "data", "value"],
+                          "properties": {
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]*$"
+                            },
+                            "value": { "type": "string", "enum": ["0"] }
+                          }
+                        },
+                        "unsignedTransaction": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "description": "The exact JSON-RPC transaction the device passes to Privy eth_sendTransaction. The client must not alter any field."
+                        },
+                        "signing": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["mode", "allowed", "reasonCode"],
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": ["device_eth_send_transaction"]
+                            },
+                            "allowed": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "decimals": { "type": "integer", "enum": [18] },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
+                        "RESOURCE_CONFLICT",
+                        "SIMULATION_FAILED",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/mining/claim/report": {
+      "post": {
+        "operationId": "reportV2MiningClaim",
+        "summary": "Report the hash of a sent claim transaction",
+        "tags": ["mining"],
+        "description": "Decision 0116: reads the receipt; only the contract's Claimed(wallet, amount, cumulativeAmount, nonce) log matching the voucher proves the claim. Not found → submitting; mined with fewer than MINING_CLAIM_CONFIRMATIONS → confirming; confirmed → succeeded (the ledger's claimed total moves by the logged amount, once); reverted → failed (balance untouched). Re-reporting the same hash is idempotent; a different hash on a claim that already has one is 409 RESOURCE_CONFLICT / MINING_CLAIM_TRANSACTION_CONFLICT; a mined transaction without this voucher's log is 409 DATA_STALE / MINING_CLAIM_TRANSACTION_MISMATCH (nothing recorded). 404 NOT_FOUND / MINING_CLAIM_NOT_FOUND. The worker keeps re-checking submitting / confirming claims.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["claimId", "transactionHash"],
+                "properties": {
+                  "claimId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  },
+                  "transactionHash": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-f]{64}$",
+                    "description": "The hash eth_sendTransaction returned on the device."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["claim", "decimals", "contractVersion"],
+                  "properties": {
+                    "claim": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "claimId",
+                        "walletId",
+                        "status",
+                        "chainId",
+                        "chainReference",
+                        "contractAddress",
+                        "cumulativeAmountRaw",
+                        "amountRaw",
+                        "nonce",
+                        "deadline",
+                        "transactionHash",
+                        "blockNumber",
+                        "failureReasonCode",
+                        "createdAt",
+                        "updatedAt"
+                      ],
+                      "properties": {
+                        "claimId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "claimable",
+                            "submitting",
+                            "confirming",
+                            "succeeded",
+                            "failed",
+                            "expired"
+                          ],
+                          "description": "claimable (voucher issued) → submitting (hash reported, not mined) → confirming (mined, < MINING_CLAIM_CONFIRMATIONS) → succeeded; failed (reverted); expired (deadline passed, nonce unused, or another voucher of the same nonce landed)."
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                        },
+                        "chainReference": {
+                          "anyOf": [{ "type": "integer" }, { "type": "null" }]
+                        },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "cumulativeAmountRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "amountRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "The amount this claim pays: the confirmed Claimed amount once succeeded, otherwise the expected delta."
+                        },
+                        "nonce": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "blockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "failureReasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updatedAt": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "decimals": { "type": "integer", "enum": [18] },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
+                        "RESOURCE_CONFLICT",
+                        "SIMULATION_FAILED",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
                     "category": {
                       "type": "string",
                       "enum": [

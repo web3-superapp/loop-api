@@ -191,6 +191,12 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     mining_snapshots: "platform",
     mining_snapshot_powers: "user",
     mining_reward_ledger: "user",
+    mining_parameter_versions: "platform",
+    mining_epochs: "platform",
+    mining_epoch_rewards: "user",
+    mining_claims: "user",
+    mining_reward_ledger_events: "user",
+    mining_reward_balances: "user",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",
@@ -383,7 +389,14 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
   del("ops_operations", ownedBy("actor_id")),
   del("ops_grants", ownedBy("user_id")),
   del("ops_operators", ownedBy("user_id")),
-  // Mining user rows
+  // Mining user rows (Decision 0116 ledger first: events reference claims)
+  del("mining_reward_ledger_events", ownedBy()),
+  del("mining_reward_balances", ownedBy()),
+  del(
+    "mining_claims",
+    `${ownedBy()} or idempotency_record_id in ${ownedIdempotency}`,
+  ),
+  del("mining_epoch_rewards", ownedBy()),
   del("mining_reward_ledger", ownedBy()),
   del("mining_snapshot_powers", ownedBy()),
   // MEME user intents

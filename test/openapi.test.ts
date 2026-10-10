@@ -167,10 +167,14 @@ describe("committed OpenAPI artifact", () => {
       "/v2/meta/capabilities",
       "/v2/meta/client-policy",
       "/v2/mining/assets",
+      "/v2/mining/claim/prepare",
+      "/v2/mining/claim/report",
+      "/v2/mining/claims",
       "/v2/mining/communities/{communityId}",
       "/v2/mining/rank",
       "/v2/mining/referral/rules",
       "/v2/mining/rewards",
+      "/v2/mining/rewards/epochs",
       "/v2/mining/rules",
       "/v2/mining/summary",
       "/v2/notification-preferences",
@@ -225,7 +229,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(176);
+    expect(operationIds).toHaveLength(180);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
@@ -1309,7 +1313,12 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/launch/projects",
       "GET /admin/v1/launch/projects/{projectId}",
       "GET /admin/v1/meme/tokens",
+      "GET /admin/v1/mining/epochs",
+      "GET /admin/v1/mining/epochs/{epochId}",
+      "GET /admin/v1/mining/epochs/{epochId}/replay",
       "GET /admin/v1/mining/formula-versions",
+      "GET /admin/v1/mining/funding",
+      "GET /admin/v1/mining/parameter-versions",
       "GET /admin/v1/overview",
       "GET /admin/v1/session",
       "GET /admin/v1/settings/intel-promotions",
@@ -1324,9 +1333,13 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/meme/tokens/{memeTokenId}/listing",
       "POST /admin/v1/meme/tokens/{memeTokenId}/pause",
       "POST /admin/v1/meme/tokens/{memeTokenId}/unpause",
+      "POST /admin/v1/mining/epochs/settle",
       "POST /admin/v1/mining/formula-versions",
       "POST /admin/v1/mining/formula-versions/{configVersion}/approve",
       "POST /admin/v1/mining/formula-versions/{configVersion}/withdraw",
+      "POST /admin/v1/mining/parameter-versions",
+      "POST /admin/v1/mining/parameter-versions/{versionId}/approve",
+      "POST /admin/v1/mining/parameter-versions/{versionId}/withdraw",
       "POST /admin/v1/session",
       "POST /admin/v1/session/password",
       "PUT /admin/v1/settings/intel-promotions",

@@ -44,6 +44,7 @@ import { registerV2CommunityRoutes } from "./community.js";
 import { registerV2DeviceRoutes } from "./devices.js";
 import { registerV2LaunchRoutes } from "./launch.js";
 import { registerV2MiningRoutes } from "./mining.js";
+import type { MiningRewardsService } from "../../features/mining/hourly-rewards-service.js";
 import { registerV2ReferralRoutes } from "./referral.js";
 import { registerV2MarketRoutes } from "./market.js";
 import { registerV2MemeRoutes } from "./meme.js";
@@ -105,6 +106,8 @@ export interface V2RouteDependencies {
   readonly hooksLaunchDeploymentService?: HooksLaunchDeploymentService;
   readonly hooksLaunchSubmissionService?: HooksLaunchSubmissionService;
   readonly miningService: MiningService;
+  /** Decision 0116: hourly settlement rewards and claims. */
+  readonly miningRewardsService: MiningRewardsService;
   readonly referralService: ReferralService;
   /** MEME curve launchpad (Decision 0101). */
   readonly memeService: MemeService;

@@ -1,3 +1,4 @@
+import { miningHourlyBlockSchema } from "./mining-rewards-schemas.js";
 import { noStoreResponseHeaders } from "../../core/http/schemas.js";
 import { v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import {
@@ -410,6 +411,7 @@ export const miningRewardsResourceSchema = {
     "accumulated",
     "ledger",
     "source",
+    "hourly",
     "contractVersion",
   ],
   properties: {
@@ -419,6 +421,7 @@ export const miningRewardsResourceSchema = {
     accumulated: unavailableSchema,
     ledger: { type: "array", maxItems: 0, items: {} },
     source: unavailableSchema,
+    hourly: miningHourlyBlockSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

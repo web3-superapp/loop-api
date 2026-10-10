@@ -441,6 +441,15 @@ import {
 } from "./features/launch2/launch2-service.js";
 import type { Launch2Chain } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
+import {
+  createMiningRewardsService,
+  type MiningRewardsService,
+} from "./features/mining/hourly-rewards-service.js";
+import type { MiningClaimChain } from "./features/mining/hourly-settlement-ports.js";
+import { createMiningClaimSigner } from "./features/mining/claim-voucher.js";
+import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
+import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
+import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
 import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
@@ -590,6 +599,9 @@ export interface BuildAppOptions {
   /** Test seams for the MEME v2 read model (Decision 0114). */
   readonly launch2Service?: Launch2Service;
   readonly launch2Chain?: Launch2Chain | null;
+  /** Decision 0116 seams: the LoopRewardClaim reader and the rewards service. */
+  readonly miningClaimChain?: MiningClaimChain | null;
+  readonly miningRewardsService?: MiningRewardsService;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
   /** Test seam for the push channel (Decision 0067); `null` keeps it closed. */
@@ -2114,6 +2126,39 @@ export async function buildApp(
           now: options.walletIntentNow ?? ((): Date => new Date()),
         })
       : createUnavailableLaunch2Service());
+  // Decision 0116: hourly settlement rewards and claims under the `mining`
+  // module. The claim chain reader exists only with the LoopRewardClaim
+  // address and launch slot endpoints; the voucher signer only with its key.
+  const miningClaimChain: MiningClaimChain | null =
+    options.miningClaimChain !== undefined
+      ? options.miningClaimChain
+      : registeredModuleIds.includes("mining") &&
+          config.miningSettlement.claimContractAddress !== null &&
+          config.launchChain.rpcUrls.length > 0
+        ? createMiningRewardClaimChain({
+            rpcUrls: config.launchChain.rpcUrls,
+            chainReference: config.launchChain.chainReference,
+          })
+        : null;
+  const miningRewardsService =
+    options.miningRewardsService ??
+    createMiningRewardsService({
+      repository: database.miningSettlement ?? null,
+      chain: miningClaimChain,
+      callClient: asChainCallClient(launchChainReadClient ?? bscReadClient),
+      wallets: database.accountWallets ?? null,
+      signer:
+        config.miningSettlement.signerPrivateKey === null
+          ? null
+          : createMiningClaimSigner(config.miningSettlement.signerPrivateKey),
+      contractAddress: config.miningSettlement.claimContractAddress,
+      chainId: config.launchChain.chainId,
+      writesEnabled: config.bscWrites !== null,
+      usdtAddress: config.miningSettlement.usdtAddress,
+      confirmations: config.miningSettlement.claimConfirmations,
+      cursorCodec: v2CursorCodec,
+      now: options.walletIntentNow ?? ((): Date => new Date()),
+    });
   // Community AI (Decision 0066). The capability opens on one fact: a
   // Provider API key (COMMUNITY_AI_API_KEY, falling back to
   // ANTHROPIC_API_KEY). Without it the composed service is the closed one,
@@ -2467,6 +2512,7 @@ export async function buildApp(
         ? {}
         : { hooksLaunchSubmissionService }),
       miningService,
+      miningRewardsService,
       referralService,
       memeService,
       launch2Service,
@@ -2485,6 +2531,24 @@ export async function buildApp(
     const adminRepository =
       database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0116: hourly settlement parameters, epochs, funding.
+      miningSettlement: createAdminMiningSettlementService({
+        repository: database.miningSettlement ?? null,
+        runner:
+          database.miningSettlement === undefined
+            ? null
+            : createMiningSettlementRunner({
+                repository: database.miningSettlement,
+                chainId: config.launchChain.chainId,
+                indexerGraceSeconds:
+                  config.miningSettlement.indexerGraceSeconds,
+                now: options.walletIntentNow ?? ((): Date => new Date()),
+              }),
+        chain: miningClaimChain,
+        contractAddress: config.miningSettlement.claimContractAddress,
+        testTrigger: config.miningSettlement.testTrigger,
+        now: options.walletIntentNow ?? ((): Date => new Date()),
+      }),
       // Decision 0109: individual accounts with fixed roles; without a
       // database only the ADMIN_USERNAME bootstrap administrator exists.
       accounts: createAdminAccountService({
