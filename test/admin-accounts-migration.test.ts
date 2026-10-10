@@ -64,9 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe(
-      "000066_launch2_generation_v3_and_rulings",
-    );
+    expect(latestMigrationName).toBe("000067_mining_quantity_weighting");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

@@ -1,6 +1,6 @@
 # 前端交接契约：挖矿奖励（小时结算 · 分钟展示 · Claim）
 
-- 决策：`docs/decisions/0116-mining-hourly-settlement.md`（S138-api）
+- 决策：`docs/decisions/0116-mining-hourly-settlement.md`（S138-api）、`docs/decisions/0123-mining-quantity-weighting-and-claim-contract.md`（S147-api：资产轨按数量加权、`claim.executable` 口径、`payloadDigest`）
 - 规则来源：`docs/16-挖矿与邀请-中心化结算方案.md`、需求方《LOOP 双轨挖矿开发说明》§6–§9
 - 机器契约：`openapi/loop-api.v2.json`（`pnpm openapi:generate` 生成，勿手改）
 - 模块：`mining`（`V2_MODULES_ENABLED` 含 `mining`），能力位不新增，看 `GET /v2/meta/capabilities` 的 `mining`
@@ -111,7 +111,7 @@ Content-Type: application/json
           {
             "assetId": "eip155:97:0x…6666",
             "balanceAtEndRaw": "1000000000000000000000",
-            "power": "12.5"
+            "power": "1500"
           }
         ],
         "excludedAssets": [
@@ -142,7 +142,11 @@ Content-Type: application/json
       "referralRatiosBps": [1000, 500, 300, 200, 100],
       "minimumClaimRaw": "1000000000000000000"
     },
-    "claim": { "executable": true, "reasonCode": null, "latest": null }
+    "claim": {
+      "executable": false,
+      "reasonCode": "MINING_CLAIM_SIGNER_NOT_CONFIGURED",
+      "latest": null
+    }
   },
   "contractVersion": "2.0"
 }
@@ -160,6 +164,8 @@ Content-Type: application/json
 | `unavailable`               | 结算服务不可用（`reasonCode`）     | 显示不可用；`totals`/`display`/`tracks` 为 `null`       |
 
 `reasonCode` 可能：`MINING_SETTLEMENT_UNAVAILABLE`、`MINING_PARAMETERS_PENDING`（尚无审批通过的参数版本）。
+
+> 本例 `executable = false` 只是演示（dev 尚未配置签名人）；`hourly.claim` 的完整口径见 §3.4。
 
 ### 3.2 分钟展示推导（前端必须照此实现，不要用计时器累加）
 
@@ -187,9 +193,30 @@ now >= windowEnd → 视同 settling：显示 totalRaw，重新拉取接口
 | 五级邀请  | `referral.levels[]`：`ratioBps`、`effectiveMembers`、`nftPower`、`assetPower`、`totalPower`                        |
 | Claim     | `totals.claimableRaw`、`claim.executable`/`claim.reasonCode`、`claim.latest`、`GET /v2/mining/claims`              |
 
+- **Meme 轨道按数量加权，不按估值**（需求方 2026-10-10 裁决，决策 0123）：`holdings[].power` 与 `selfPower`
+  = 该小时持币数量的时间加权平均（TWAB）× 后台批准的 Mining Weight，**不乘任何价格**。上例 1000 枚 × 权重 1.5
+  = `1500`。字段集合不变（`assetId`、`balanceAtEndRaw`、`power`），从来没有估值 / 价格字段；页面不要显示「估值」「美元」。
+  0123 之前已结算的小时保留当时（按估值）的数字，不重算。
+- 未在参数里单独设系数的社区，NFT 系数按 1.0 计（0123 起的参数版本）。
 - 真实 NFT 数量（`realNftCount`）与等效 NFT 单位（`nftUnitsByCommunity`）**不能合并**展示为「持有 NFT 数量」；等效单位只用于奖励计算，不带来提前购资格或额度。
 - 文案用「邀请算力加成」「贡献算力」，不用「收益分成」。
 - `tracks` 是上一已结算小时的数字（不是实时持仓）。
+
+### 3.4 `hourly.claim.executable`（决策 0123）
+
+`executable = true` 当且仅当下列全部成立；否则为 `false`，`reasonCode` 取**第一个**不满足的：
+
+| 顺序 | `reasonCode`                                                                                                                                                                     | 条件                                                 | 页面建议                     |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
+| 1    | `MINING_SETTLEMENT_UNAVAILABLE`                                                                                                                                                  | 结算服务不可用                                       | 领取不可用                   |
+| 2    | `MINING_PARAMETERS_PENDING`                                                                                                                                                      | 当前没有生效中的已批准参数版本                       | 挖矿规则待生效               |
+| 3    | `MINING_NOTHING_SETTLED`（**新**）                                                                                                                                               | 还没有任何已结算小时                                 | 首个小时结算后可领取         |
+| 4    | `MINING_CLAIM_NOTHING_TO_CLAIM`                                                                                                                                                  | `totals.claimableRaw = 0`（0123 前这里会给 `true`）  | 暂无可领取                   |
+| 5    | `MINING_CLAIM_BELOW_MINIMUM`                                                                                                                                                     | `0 < claimableRaw < parameters.minimumClaimRaw`      | 满 x LOOP 可领取             |
+| 6    | `MINING_CLAIM_IN_FLIGHT`                                                                                                                                                         | `claim.latest.status` 是 `submitting` / `confirming` | 显示该笔进度，不再发起新领取 |
+| 7    | `MINING_CLAIM_MAINNET_CLOSED`、`MINING_CLAIM_CONTRACT_NOT_CONFIGURED`、`MINING_CLAIM_CHAIN_NOT_CONFIGURED`、`MINING_CLAIM_SIGNER_NOT_CONFIGURED`、`MINING_CLAIM_WRITES_DISABLED` | 服务端领取通道未配置                                 | 领取暂不可用                 |
+
+`executable = true` 只表示「可以去 prepare」；合约暂停、资金不足、gas 不足仍由 prepare 返回（§5.5、§7）。
 
 ## 4. `GET /v2/mining/rewards/epochs?cursor=`
 
@@ -276,6 +303,7 @@ now >= windowEnd → 视同 settling：显示 totalRaw，重新拉取接口
       "maxFeePerGas": null,
       "maxPriorityFeePerGas": null
     },
+    "payloadDigest": "0x…64位hex",
     "signing": {
       "mode": "device_eth_send_transaction",
       "allowed": true,
@@ -288,6 +316,14 @@ now >= windowEnd → 视同 settling：显示 totalRaw，重新拉取接口
 ```
 
 - 设备把 `unsignedTransaction` **原样**交给 Privy `eth_sendTransaction`（与 launch2 / meme 的签名出口相同），拿到 hash 后立即调用 §5.3。
+- `intent` 恰好四个键：`calldata`、`unsignedTransaction`、`payloadDigest`、`signing`（决策 0123 新增 `payloadDigest`）。
+- `unsignedTransaction` **恰好 11 个键**（OpenAPI `additionalProperties: false`）：`chainId`（整数 56 / 97）、`to`、`data`、
+  `value`（恒 `"0x0"`）、`from`、`gas`、`nonce`、`type`（`eip1559` | `legacy`）、`maxFeePerGas`、`maxPriorityFeePerGas`、
+  `gasPrice`。费用键随 `type`：`eip1559` → 两个 `max*` 有值、`gasPrice = null`；`legacy` → `gasPrice` 有值、两个 `max*` 为 `null`。
+  多键或少键都应视为非法载荷。
+- `payloadDigest` 定义：`"0x" + hex(keccak256(utf8(canonicalJson(unsignedTransaction))))`，其中 canonicalJson = 键按码元
+  升序、无空白、`chainId` 是 JSON 数字、`null` 原样保留（与 0141 codec 的 `localDigest` 同一算法，只多 `0x` 前缀）。
+  客户端用将要交给钱包的那份 `unsignedTransaction` 自算一次，与 `payloadDigest` 不一致时不得签名。
 - 金额（`amountRaw`）= 已完成小时累计结算 − 链上已领取；**当前未结束的小时不在其中**。前端不传金额。
 - 每次点击都会签一张新凭证（10 分钟有效）；旧凭证在任意一笔领取上链后因 nonce 失效。同一 `Idempotency-Key` 重放返回同一张凭证（重复点击不会生成多张）。
 - `signing.allowed = false`（`reasonCode: MINING_CLAIM_EXPIRED`）时不要发送，重新 prepare。
@@ -339,6 +375,7 @@ prepare 返回 `409 INSUFFICIENT_BALANCE`：
 | -------------------------------------- | ----------------------------- | ----------------------------------------------------- |
 | `MINING_SETTLEMENT_UNAVAILABLE`        | 结算库不可用                  | `hourly.displayState = unavailable`；列表 / Claim 503 |
 | `MINING_PARAMETERS_PENDING`            | 尚无审批通过的参数版本        | `awaiting_first_settlement`，无奖励                   |
+| `MINING_NOTHING_SETTLED`               | 还没有已结算小时              | `hourly.claim.executable=false`（§3.4）               |
 | `MINING_CLAIM_CONTRACT_NOT_CONFIGURED` | 未配置 `LoopRewardClaim` 地址 | Claim 503，`hourly.claim.executable=false`            |
 | `MINING_CLAIM_CHAIN_NOT_CONFIGURED`    | 无 launch slot RPC            | 同上                                                  |
 | `MINING_CLAIM_SIGNER_NOT_CONFIGURED`   | 未配置凭证签名人              | 同上                                                  |

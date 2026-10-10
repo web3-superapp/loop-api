@@ -2,7 +2,7 @@ import {
   MiningParameterDocumentError,
   miningDefaultParameterDocument,
   miningSettlementReasonCodes,
-  parseMiningParameterDocument,
+  parseMiningParameterDraft,
 } from "../mining/hourly-settlement-contract.js";
 import {
   MiningSettlementConflictError,
@@ -207,7 +207,7 @@ export function createAdminMiningSettlementService(dependencies: {
           }));
         let document;
         try {
-          document = parseMiningParameterDocument({
+          document = parseMiningParameterDraft({
             ...miningDefaultParameterDocument,
             assetWeights: [],
             ...given,

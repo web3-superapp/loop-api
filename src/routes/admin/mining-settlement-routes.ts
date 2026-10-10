@@ -204,7 +204,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "listAdminMiningParameterVersions",
         summary: "List hourly settlement parameter versions",
         description:
-          "Decision 0116: newest 50 versions (pending_approval / approved / withdrawn) with their documents, plus `defaults` (docs/16: 10/5/3/2/1 % in bps, 500,000 LOOP per pool per day, 900 days, UTC, minimum claim 1 LOOP). Readable with console.read or formula.approve.",
+          "Decision 0116: newest 50 versions (pending_approval / approved / withdrawn) with their documents, plus `defaults` (docs/16, frozen 2026-10-10: 10/5/3/2/1 % in bps, 500,000 LOOP per pool per day spread over 24 UTC hours, 900 days, UTC, minimum claim 1 LOOP, assetPowerBasis quantity, defaultCommunityCoefficient 1). Documents approved before Decision 0123 have no assetPowerBasis / defaultCommunityCoefficient and are shown as valuation / 0 (the rule their hours were settled by). Readable with console.read or formula.approve.",
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -232,7 +232,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "createAdminMiningParameterDraft",
         summary: "Draft a hourly settlement parameter version",
         description:
-          "Decision 0116: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.",
+          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -275,7 +275,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "approveAdminMiningParameterVersion",
         summary: "Approve a parameter version (in force at effectiveFrom)",
         description:
-          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Approved versions are immutable; history is never rewritten.",
+          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Approved versions are immutable; history is never rewritten.",
         tags: ["admin-mining"],
         security: adminSecurity,
         params: versionParams,

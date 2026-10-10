@@ -19,6 +19,7 @@ import {
   MiningParameterDocumentError,
   miningDefaultParameterDocument,
   parseMiningParameterDocument,
+  parseMiningParameterDraft,
 } from "../src/features/mining/hourly-settlement-contract.js";
 import {
   claimContract,
@@ -46,6 +47,10 @@ function slice(
   coefficients: Record<string, string> = { [C]: "2" },
   weights: Record<string, string> = { [ASSET]: "1" },
   versionId = "v1",
+  options: {
+    readonly basis?: "quantity" | "valuation";
+    readonly defaultCoefficient?: bigint;
+  } = {},
 ): MiningParameterSlice {
   const fixed = (value: string) => {
     const [whole, fraction = ""] = value.split(".");
@@ -58,9 +63,11 @@ function slice(
     coefficients: new Map(
       Object.entries(coefficients).map(([key, value]) => [key, fixed(value)]),
     ),
+    defaultCoefficient: options.defaultCoefficient ?? loop,
     assetWeights: new Map(
       Object.entries(weights).map(([key, value]) => [key, fixed(value)]),
     ),
+    assetPowerBasis: options.basis ?? "quantity",
   };
 }
 
@@ -365,6 +372,8 @@ describe("Decision 0116 calculator rules", () => {
     const result = settleMiningHour(
       input({
         nftHoldings: [nft(user(9), 5n), nft(user(8), 3n, S, E, C2)],
+        // C2's coefficient is set to 0 (an unlisted community is 1.0).
+        parameterSlices: [slice(S, E, { [C]: "2", [C2]: "0" })],
         referralEdges: [
           ...chainEdges(user(9), [user(1)]),
           // user(8) holds only NFTs of a community without a coefficient.
@@ -397,7 +406,7 @@ describe("Decision 0116 calculator rules", () => {
     expect(upper.assetReferralPower).toBe(100n * loop);
   });
 
-  it("refuses a weighted positive holding without a price for the whole holding time", () => {
+  it("Decision 0116 replay (valuation): refuses a weighted positive holding without a price for the whole holding time", () => {
     expect(() =>
       settleMiningHour(
         input({
@@ -411,6 +420,11 @@ describe("Decision 0116 calculator rules", () => {
             },
           ],
           prices: [{ assetId: ASSET, from: S, to: S + 60n, priceE18: loop }],
+          parameterSlices: [
+            slice(S, E, { [C]: "2" }, { [ASSET]: "1" }, "v1", {
+              basis: "valuation",
+            }),
+          ],
         }),
       ),
     ).toThrow(/MINING_SETTLEMENT_PRICE_MISSING/u);
@@ -508,6 +522,141 @@ describe("Decision 0116 display and parameters", () => {
         "releaseStartAt",
       );
     }
+  });
+});
+
+describe("Decision 0123 quantity weighting and frozen defaults", () => {
+  const holding = (userId: string, balanceRaw: bigint, from = S, to = E) => ({
+    userId,
+    assetId: ASSET,
+    from,
+    to,
+    balanceRaw,
+  });
+
+  it("asset power = balance TWAB × Mining Weight; no price is needed and a price never changes it", () => {
+    const base = input({
+      parameterSlices: [slice(S, E, { [C]: "2" }, { [ASSET]: "1.5" })],
+      assetHoldings: [
+        holding(user(1), 100n * loop, S, S + 1_800n),
+        holding(user(1), 300n * loop, S + 1_800n, E),
+        holding(user(2), 200n * loop),
+      ],
+    });
+    const result = settleMiningHour(base);
+    // user(1): (100 × 30 min + 300 × 30 min) / 60 min × 1.5 = 300.
+    expect(byUser(result, user(1)).assetSelfPower).toBe(300n * loop);
+    expect(byUser(result, user(2)).assetSelfPower).toBe(300n * loop);
+    expect(byUser(result, user(1)).assetRewardRaw).toBe(500n * loop);
+    expect(byUser(result, user(1)).assetHoldings[0]).toEqual({
+      assetId: ASSET,
+      balanceAtEndRaw: 300n * loop,
+      power: 300n * loop,
+    });
+    const priced = settleMiningHour({
+      ...base,
+      prices: [{ assetId: ASSET, from: S, to: E, priceE18: 7n * loop }],
+    });
+    expect(byUser(priced, user(1)).assetSelfPower).toBe(300n * loop);
+  });
+
+  it("a non-admitted asset (weight 0) has no power; a zero-power hour's budget is void, not carried", () => {
+    const result = settleMiningHour(
+      input({
+        parameterSlices: [slice(S, E, { [C]: "2" }, {})],
+        assetHoldings: [holding(user(1), 100n * loop)],
+      }),
+    );
+    expect(result.asset.denominatorPower).toBe(0n);
+    expect(result.asset.allocatedRaw).toBe(0n);
+    expect(result.asset.unallocatedRaw).toBe(1_000n * loop);
+  });
+
+  it("asset referral power follows the quantity rule (L1 10 %)", () => {
+    const result = settleMiningHour(
+      input({
+        assetHoldings: [holding(user(9), 1_000n * loop)],
+        referralEdges: chainEdges(user(9), [user(1)]),
+      }),
+    );
+    expect(byUser(result, user(1)).assetReferralPower).toBe(100n * loop);
+  });
+
+  it("an unlisted community uses the slice default coefficient (1.0 new, 0 legacy)", () => {
+    const fresh = settleMiningHour(
+      input({ nftHoldings: [nft(user(1), 3n, S, E, C2)] }),
+    );
+    expect(byUser(fresh, user(1)).nftSelfPower).toBe(3n * loop);
+    const legacy = settleMiningHour(
+      input({
+        parameterSlices: [
+          slice(S, E, { [C]: "2" }, {}, "v0", {
+            basis: "valuation",
+            defaultCoefficient: 0n,
+          }),
+        ],
+        nftHoldings: [nft(user(1), 3n, S, E, C2)],
+      }),
+    );
+    expect(legacy.users.find((row) => row.userId === user(1))).toMatchObject({
+      nftSelfPower: 0n,
+    });
+  });
+
+  it("a stored document without the 0123 keys reads as valuation / coefficient 0; a draft is always quantity with default 1", () => {
+    const stored = parseMiningParameterDocument({
+      referralRatiosBps: [1000, 500, 300, 200, 100],
+      dailyBudgetNftRaw: "1",
+      dailyBudgetAssetRaw: "1",
+      releaseStartAt: "2026-10-10T00:00:00Z",
+      releaseDays: 900,
+      timezone: "UTC",
+      minimumClaimRaw: "1",
+      assetWeights: [],
+      communityCoefficients: [],
+    });
+    expect(stored.assetPowerBasis).toBe("valuation");
+    expect(stored.defaultCommunityCoefficient).toBe("0");
+    const { assetPowerBasis, defaultCommunityCoefficient, ...withoutKeys } =
+      miningDefaultParameterDocument;
+    expect([assetPowerBasis, defaultCommunityCoefficient]).toEqual([
+      "quantity",
+      "1",
+    ]);
+    const draft = parseMiningParameterDraft({
+      ...withoutKeys,
+      releaseStartAt: "2026-10-11T00:00:00Z",
+      assetWeights: [],
+      communityCoefficients: [],
+    });
+    expect(draft.assetPowerBasis).toBe("quantity");
+    expect(draft.defaultCommunityCoefficient).toBe("1");
+    for (const basis of ["valuation", "price", null]) {
+      try {
+        parseMiningParameterDraft({
+          ...miningDefaultParameterDocument,
+          releaseStartAt: "2026-10-11T00:00:00Z",
+          assetWeights: [],
+          communityCoefficients: [],
+          assetPowerBasis: basis,
+        });
+        expect.unreachable();
+      } catch (error) {
+        expect((error as MiningParameterDocumentError).field).toBe(
+          "assetPowerBasis",
+        );
+      }
+    }
+    // There is no price / reference-price field to send.
+    expect(() =>
+      parseMiningParameterDraft({
+        ...miningDefaultParameterDocument,
+        releaseStartAt: "2026-10-11T00:00:00Z",
+        assetWeights: [],
+        communityCoefficients: [],
+        referencePriceSource: "curve",
+      }),
+    ).toThrow(MiningParameterDocumentError);
   });
 });
 

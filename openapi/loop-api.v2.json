@@ -116529,6 +116529,7 @@
                                     },
                                     "holdings": {
                                       "type": "array",
+                                      "description": "Decision 0123: power = hour-average of balance × Mining Weight (token quantity, no price) for hours settled under a quantity-basis parameter version; hours settled before it keep their valuation-basis numbers.",
                                       "items": {
                                         "type": "object",
                                         "additionalProperties": false,
@@ -116830,7 +116831,8 @@
                                 { "type": "null" }
                               ]
                             }
-                          }
+                          },
+                          "description": "Decision 0123: executable is true only when an approved parameter version is in force, at least one hour is settled, claimable > 0 and ≥ the minimum, no claim is submitting / confirming, and the claim path is configured. Otherwise reasonCode, first match: MINING_SETTLEMENT_UNAVAILABLE, MINING_PARAMETERS_PENDING, MINING_NOTHING_SETTLED, MINING_CLAIM_NOTHING_TO_CLAIM, MINING_CLAIM_BELOW_MINIMUM, MINING_CLAIM_IN_FLIGHT, then the configuration reasons (MINING_CLAIM_MAINNET_CLOSED, MINING_CLAIM_CONTRACT_NOT_CONFIGURED, MINING_CLAIM_CHAIN_NOT_CONFIGURED, MINING_CLAIM_SIGNER_NOT_CONFIGURED, MINING_CLAIM_WRITES_DISABLED)."
                         }
                       },
                       "description": "Decision 0116 hourly settlement block. awaiting_first_settlement: no hour settled yet (show 首个小时结算后开始展示奖励, no growth). displaying: inside the hour after lastHour. settling: that hour is over and the next is not settled yet (show the full previous total). unavailable: the store is down (reasonCode)."
@@ -118557,6 +118559,7 @@
                       "required": [
                         "calldata",
                         "unsignedTransaction",
+                        "payloadDigest",
                         "signing"
                       ],
                       "properties": {
@@ -118578,8 +118581,81 @@
                         },
                         "unsignedTransaction": {
                           "type": "object",
-                          "additionalProperties": true,
-                          "description": "The exact JSON-RPC transaction the device passes to Privy eth_sendTransaction. The client must not alter any field."
+                          "additionalProperties": false,
+                          "required": [
+                            "chainId",
+                            "to",
+                            "data",
+                            "value",
+                            "from",
+                            "gas",
+                            "nonce",
+                            "type",
+                            "maxFeePerGas",
+                            "maxPriorityFeePerGas",
+                            "gasPrice"
+                          ],
+                          "properties": {
+                            "chainId": { "type": "integer", "enum": [56, 97] },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]*$"
+                            },
+                            "value": { "type": "string", "enum": ["0x0"] },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,63})$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "Decision 0123: exactly these eleven keys (no others). The exact JSON-RPC transaction the device passes to Privy eth_sendTransaction; the client must not alter any field. Fee keys follow `type`: eip1559 → maxFeePerGas and maxPriorityFeePerGas set, gasPrice null; legacy → gasPrice set, the two max* null."
+                        },
+                        "payloadDigest": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$",
+                          "description": "Decision 0123: keccak-256 over the UTF-8 bytes of the canonical JSON of unsignedTransaction (object keys sorted by code unit, no whitespace, chainId as a JSON number, null values kept), 0x + 64 lowercase hex. The client recomputes it from the unsignedTransaction it will pass to the wallet and refuses to sign on mismatch."
                         },
                         "signing": {
                           "type": "object",

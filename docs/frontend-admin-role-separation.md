@@ -871,6 +871,16 @@ Content-Type: application/json
 ```
 
 - `parameters` 中省略的字段取默认（列表接口 `defaults`）；`releaseStartAt` 必填（UTC 零点）。
+- **决策 0123（S147，需求方 2026-10-10 裁决）**：资产池**按数量加权，不按估值**——资产算力 = 持币数量 TWAB × `assetWeights`
+  权重，不乘价格。参数里**没有也不接受**任何价格 / 参考价来源字段（发 `referencePriceSource` 之类未知键 → 422
+  `ADMIN_MINING_PARAMETERS_INVALID`，`field` 为该键名）。后台表单不要出现「参考价来源」「估值」。
+  - `assetPowerBasis`：可不发；发则只能是 `"quantity"`（其他值 → 422，`field: assetPowerBasis`）。新草稿一律存为 `quantity`。
+  - `defaultCommunityCoefficient`（十进制字符串，默认 `"1"`）：`communityCoefficients` 没列出的社区按此系数计（需求方：
+    所有社区 1.0，后台可按社区调）。
+  - 列表接口 `defaults` 新增 `assetPowerBasis: "quantity"`、`defaultCommunityCoefficient: "1"`。0123 之前存的版本在
+    `document` 里显示为 `assetPowerBasis: "valuation"`、`defaultCommunityCoefficient: "0"`（它们结算时用的规则，只读）。
+  - 冻结默认（需求方 2026-10-10 确认）：五级 10/5/3/2/1 %（`[1000,500,300,200,100]`）、每池每日 500,000 LOOP 均匀到
+    24 个 UTC 小时、900 天（两池合计日 1,000,000、总 9 亿 = 领取合约的日 / 总上限）、零算力小时预算作废、NFT 转移按区块时间。
 - `communityCoefficients` 省略时冻结复制当前已审批的社区系数（`community_mining_weights`）；版本一旦批准不可修改，
   历史结算用当时的版本。
 - `assetWeights` 只能填 launch2 / MEME v1 的币；未列出的资产权重为 0（不参与资产池）。
@@ -885,13 +895,13 @@ Content-Type: application/json
 `mining.parameters.approve.requested`（写不进 → 503 `ADMIN_AUDIT_UNAVAILABLE`，不批准），成功写
 `mining.parameters.approve`，失败写 `mining.parameters.approve.failed`。
 
-| HTTP | `code`                   | `reasonCode`                                                                                                                                                             |
-| ---- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`、`ADMIN_FORMULA_SELF_APPROVAL`、`ADMIN_OPERATOR_DISABLED`、`ADMIN_ACCOUNT_DISABLED`                                                               |
-| 404  | `NOT_FOUND`              | `ADMIN_MINING_PARAMETERS_NOT_FOUND`                                                                                                                                      |
-| 409  | `ADMIN_CONFLICT`         | `ADMIN_MINING_PARAMETERS_STATE`、`ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED`、`ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN`、`ADMIN_MINING_PARAMETERS_VERSION_EXISTS`（草稿） |
-| 422  | `VALIDATION_FAILED`      | `ADMIN_MINING_PARAMETERS_INVALID`（`field`）、`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`（`assetId`）                                                                      |
-| 503  | `CAPABILITY_UNAVAILABLE` | `MINING_SETTLEMENT_UNAVAILABLE`、`ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`                                                                                 |
+| HTTP | `code`                   | `reasonCode`                                                                                                                                                                                                                                           |
+| ---- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`、`ADMIN_FORMULA_SELF_APPROVAL`、`ADMIN_OPERATOR_DISABLED`、`ADMIN_ACCOUNT_DISABLED`                                                                                                                                             |
+| 404  | `NOT_FOUND`              | `ADMIN_MINING_PARAMETERS_NOT_FOUND`                                                                                                                                                                                                                    |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_MINING_PARAMETERS_STATE`、`ADMIN_MINING_PARAMETERS_BASIS_RETIRED`（0123 前存的待批草稿，只能撤回重建）、`ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED`、`ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN`、`ADMIN_MINING_PARAMETERS_VERSION_EXISTS`（草稿） |
+| 422  | `VALIDATION_FAILED`      | `ADMIN_MINING_PARAMETERS_INVALID`（`field`）、`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`（`assetId`）                                                                                                                                                    |
+| 503  | `CAPABILITY_UNAVAILABLE` | `MINING_SETTLEMENT_UNAVAILABLE`、`ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`                                                                                                                                                               |
 
 ### 12.4 结算周期
 
@@ -900,9 +910,9 @@ Content-Type: application/json
 （`scheduled` | `test_trigger`）、`versionId`、`budgetNftRaw` / `budgetAssetRaw`、`denominatorNftPower` /
 `denominatorAssetPower`、`allocated*Raw` / `unallocated*Raw`（某池分母为 0 时整池未分配，不转入另一池）、
 `userCount`、`inputDigest`、`inputSummary`（`excludedAssets`、`unboundInstances`、`ambiguousAddressCount`、
-`unattributedHoldingCount`、`versionIds`…）、`failureReasonCode`、`attemptCount`、`settledAt`、`updatedAt`。
+`unattributedHoldingCount`、`versionIds`、`assetPowerBases`（0123：该小时用到的资产轨规则，`quantity` / `valuation`）…）、`failureReasonCode`、`attemptCount`、`settledAt`、`updatedAt`。
 
-- `failed` 的常见原因：`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`、`MINING_SETTLEMENT_PRICE_MISSING`、
+- `failed` 的常见原因：`MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`、`MINING_SETTLEMENT_PRICE_MISSING`（只可能出现在 0123 前按估值的版本）、
   `MINING_SETTLEMENT_INPUT_INVALID`；worker 每分钟重试。
 - 索引落后（`MINING_SETTLEMENT_INDEXER_BEHIND`）、无参数（`MINING_PARAMETERS_PENDING`）的小时不会出现失败行，只是等待。
 

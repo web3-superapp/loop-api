@@ -1,4 +1,4 @@
-export const latestMigrationName = "000066_launch2_generation_v3_and_rulings";
+export const latestMigrationName = "000067_mining_quantity_weighting";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

@@ -1,5 +1,6 @@
 import { allocatePoolBudget } from "./dual-pool-allocation.js";
 import {
+  type MiningAssetPowerBasis,
   miningBpsDenominator,
   miningFixedScale,
   miningReferralLevels,
@@ -32,10 +33,23 @@ export interface MiningParameterSlice {
   readonly from: bigint;
   readonly to: bigint;
   readonly versionId: string;
-  /** communityId → coefficient (1e18). Absent → 0. */
+  /**
+   * communityId → coefficient (1e18). Absent → `defaultCoefficient`; an
+   * instance bound to no single community → 0.
+   */
   readonly coefficients: ReadonlyMap<string, bigint>;
+  /**
+   * Decision 0123: coefficient of an unlisted community (1e18). 1.0 for
+   * documents approved under 0123, 0 for the 0116 ones.
+   */
+  readonly defaultCoefficient: bigint;
   /** assetId → weight (1e18). Absent → 0 (not admitted). */
   readonly assetWeights: ReadonlyMap<string, bigint>;
+  /**
+   * Decision 0123: `quantity` → power/s = balance × weight (no price);
+   * `valuation` (0116 replay only) → balance × price × weight.
+   */
+  readonly assetPowerBasis: MiningAssetPowerBasis;
 }
 
 export interface MiningNftHoldingSegment {
@@ -57,6 +71,7 @@ export interface MiningAssetHoldingSegment {
   readonly balanceRaw: bigint;
 }
 
+/** Decision 0116 replay only: read by `valuation` slices. */
 export interface MiningPriceSegment {
   readonly assetId: string;
   readonly from: bigint;
@@ -84,6 +99,7 @@ export interface MiningHourlySettlementInput {
   readonly parameterSlices: readonly MiningParameterSlice[];
   readonly nftHoldings: readonly MiningNftHoldingSegment[];
   readonly assetHoldings: readonly MiningAssetHoldingSegment[];
+  /** Only `valuation` slices read prices; empty for quantity-only hours. */
   readonly prices: readonly MiningPriceSegment[];
   readonly referralEdges: readonly MiningReferralEdge[];
 }
@@ -290,7 +306,8 @@ export function settleMiningHour(
       const coefficient =
         holding.communityId === null
           ? 0n
-          : (part.slice.coefficients.get(holding.communityId) ?? 0n);
+          : (part.slice.coefficients.get(holding.communityId) ??
+            part.slice.defaultCoefficient);
       const power = holding.count * coefficient;
       if (power > 0n) {
         pushTo(nftSelf, holding.userId, {
@@ -325,7 +342,20 @@ export function settleMiningHour(
     for (const part of slicesOver(slices, holding.from, holding.to)) {
       const weight = part.slice.assetWeights.get(holding.assetId) ?? 0n;
       if (weight === 0n || holding.balanceRaw === 0n) continue;
-      // Every second of a weighted, positive holding must be priced.
+      if (part.slice.assetPowerBasis === "quantity") {
+        // Decision 0123: token quantity × Mining Weight, no price.
+        const power = (holding.balanceRaw * weight) / miningFixedScale;
+        if (power > 0n) {
+          pushTo(assetSelf, holding.userId, {
+            from: part.from,
+            to: part.to,
+            power,
+          });
+          integral += (part.to - part.from) * power;
+        }
+        continue;
+      }
+      // Decision 0116 (valuation, replay of pre-0123 hours): every second of a weighted, positive holding must be priced.
       let covered = 0n;
       for (const price of prices.get(holding.assetId) ?? []) {
         const length = overlap(price.from, price.to, part.from, part.to);

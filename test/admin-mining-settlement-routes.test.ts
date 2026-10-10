@@ -212,6 +212,9 @@ describe("Operator console mining settlement (Decision 0116)", () => {
       dailyBudgetNftRaw: (500_000n * loop).toString(),
       releaseDays: 900,
       timezone: "UTC",
+      // Decision 0123: stored as quantity, unlisted communities 1.0.
+      assetPowerBasis: "quantity",
+      defaultCommunityCoefficient: "1",
     });
     const approveUrl = `/admin/v1/mining/parameter-versions/${version.versionId}/approve`;
     for (const role of ["platform_admin", "auditor"] as const) {
@@ -250,6 +253,37 @@ describe("Operator console mining settlement (Decision 0116)", () => {
       detailsSafe: {
         reasonCode: "ADMIN_MINING_PARAMETERS_INVALID",
         field: "referralRatiosBps",
+      },
+    });
+  });
+
+  it("Decision 0123: a draft cannot ask for the valuation rule or carry a price source", async () => {
+    const { call } = await harness();
+    for (const [extra, field] of [
+      [{ assetPowerBasis: "valuation" }, "assetPowerBasis"],
+      [{ referencePriceSource: "curve" }, "referencePriceSource"],
+      [{ defaultCommunityCoefficient: "-1" }, "defaultCommunityCoefficient"],
+    ] as const) {
+      const refused = await call(
+        "platform_admin",
+        "POST",
+        "/admin/v1/mining/parameter-versions",
+        { ...draft, parameters: { ...draft.parameters, ...extra } },
+      );
+      expect(refused.statusCode, field).toBe(422);
+      expect(refused.json()).toMatchObject({
+        detailsSafe: { reasonCode: "ADMIN_MINING_PARAMETERS_INVALID", field },
+      });
+    }
+    const listed = await call(
+      "platform_admin",
+      "GET",
+      "/admin/v1/mining/parameter-versions",
+    );
+    expect(listed.json()).toMatchObject({
+      defaults: {
+        assetPowerBasis: "quantity",
+        defaultCommunityCoefficient: "1",
       },
     });
   });
