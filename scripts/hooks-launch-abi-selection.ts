@@ -1,6 +1,7 @@
 /**
  * Decision 0112: which ABI items of the loop-contracts Foundry build the
- * Hooks deployment executor consumes. Errors of every listed contract are
+ * Hooks deployment executor consumes; Decision 0114 adds the events and
+ * views the `launch2_event` lane and the `/v2/launch2/*` reads/prepares use. Errors of every listed contract are
  * always kept so reverts decode to a contract error name.
  */
 export const hooksLaunchAbiSelection = {
@@ -41,6 +42,7 @@ export const hooksLaunchAbiSelection = {
     "deployExecutor",
     "published",
     "activatedAt",
+    "LaunchActivated",
   ],
   MemeToken: [
     "TOTAL_SUPPLY",
@@ -68,6 +70,16 @@ export const hooksLaunchAbiSelection = {
     "soldSupply",
     "accountedReserve",
     "graduated",
+    "cumulativeBought",
+    "earlyRoundEndsAt",
+    "quoteMaxBuy",
+    "quoteBuy",
+    "quoteSell",
+    "buy",
+    "sell",
+    "CurveBought",
+    "CurveSold",
+    "Graduated",
   ],
   OfficialTaxHook: [
     "TAX_BPS",
@@ -90,8 +102,21 @@ export const hooksLaunchAbiSelection = {
     "saleStart",
     "saleEnd",
     "totalMinted",
+    "mintedByAddress",
+    "balanceOf",
+    "mint",
+    "NftMinted",
+    "Transfer",
   ],
-  NftEscrow: ["usd1", "launchFactory", "projectNft", "buybackExecutor"],
+  NftEscrow: [
+    "usd1",
+    "launchFactory",
+    "projectNft",
+    "buybackExecutor",
+    "totalRecorded",
+    "totalSpent",
+    "availableBudget",
+  ],
   BuybackExecutor: [
     "usd1",
     "meme",
@@ -102,6 +127,12 @@ export const hooksLaunchAbiSelection = {
     "fallbackKeeper",
     "pauseAuthority",
     "resumeAuthority",
+    "paused",
+    "lastSuccessfulAt",
+    "quoteNextOrder",
+    "BuybackCompleted",
+    "BuybackPausedEvent",
+    "BuybackResumed",
   ],
   OfficialV4GraduationAdapter: [
     "LP_MEME_ALLOCATION",
@@ -117,7 +148,17 @@ export const hooksLaunchAbiSelection = {
     "projectBound",
     "finalized",
   ],
-  SnapshotRegistry: ["launchId", "nft", "nftSaleEnd"],
+  SnapshotRegistry: [
+    "launchId",
+    "nft",
+    "nftSaleEnd",
+    "root",
+    "rootPublishedAt",
+    "isEligible",
+    "snapshotDigest",
+    "publishSnapshot",
+    "SnapshotPublished",
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type HooksLaunchAbiContract = keyof typeof hooksLaunchAbiSelection;

@@ -32,6 +32,14 @@ describe("PostgreSQL Chat channel repository", () => {
     await pool.query(`
       truncate table
     public.community_review_notes,
+    public.launch2_intents,
+    public.launch2_positions,
+    public.launch2_snapshot_members,
+    public.launch2_buybacks,
+    public.launch2_trades,
+    public.launch2_nft_mints,
+    public.launch2_events,
+    public.launch2_instances,
     public.meme_intents,
     public.meme_holders,
     public.meme_trades,

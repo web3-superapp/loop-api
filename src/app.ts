@@ -434,6 +434,13 @@ import {
 } from "./features/meme/meme-service.js";
 import type { MemeDexQuote } from "./features/meme/meme-projection.js";
 import { memeRules } from "./features/meme/meme-contract.js";
+import {
+  createLaunch2Service,
+  createUnavailableLaunch2Service,
+  type Launch2Service,
+} from "./features/launch2/launch2-service.js";
+import type { Launch2Chain } from "./features/launch2/launch2-ports.js";
+import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
@@ -580,6 +587,9 @@ export interface BuildAppOptions {
   /** Test seams for the MEME launchpad (Decision 0101). */
   readonly memeService?: MemeService;
   readonly memeContractAdapter?: MemeContractAdapter;
+  /** Test seams for the MEME v2 read model (Decision 0114). */
+  readonly launch2Service?: Launch2Service;
+  readonly launch2Chain?: Launch2Chain | null;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
   /** Test seam for the push channel (Decision 0067); `null` keeps it closed. */
@@ -2061,6 +2071,47 @@ export async function buildApp(
   if (memeRuntimeAvailable && memeContractAdapter.contract !== null) {
     void memeContractAdapter.verifyAtStartup();
   }
+  // MEME v2 read model (Decision 0114): the launch2_event projection plus
+  // block-pinned reads of the curve / NFT on the BSC Testnet launch slot.
+  // The Factory is the Hooks one (HOOKS_LAUNCH_FACTORY_ADDRESS); anything
+  // missing keeps every /v2/launch2/* route 503 with the reason.
+  const launch2Registered = registeredModuleIds.includes("launch2");
+  const launch2UnavailableReason: string | null =
+    config.hooksLaunch.factoryAddress === null
+      ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
+      : options.launch2Chain === undefined &&
+          (config.launchChain.chainId !== bscTestnetChainId ||
+            config.launchChain.rpcUrls.length === 0)
+        ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
+        : database.launch2 === undefined
+          ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
+          : v2CursorCodec === null
+            ? "LAUNCH2_RUNTIME_UNAVAILABLE"
+            : null;
+  const launch2Chain: Launch2Chain | null =
+    options.launch2Chain !== undefined
+      ? options.launch2Chain
+      : launch2Registered && launch2UnavailableReason === null
+        ? createLaunch2Chain({ rpcUrls: config.launchChain.rpcUrls })
+        : null;
+  const launch2Service =
+    options.launch2Service ??
+    (launch2Registered
+      ? createLaunch2Service({
+          repository: database.launch2 ?? null,
+          chain: launch2Chain,
+          readClient: asChainCallClient(launchChainReadClient ?? bscReadClient),
+          wallets: database.accountWallets ?? null,
+          writes: config.bscWrites,
+          cursorCodec: v2CursorCodec,
+          chainId: config.launchChain.chainId,
+          unavailableReason: launch2UnavailableReason,
+          quoteTtlSeconds: config.launch2.quoteTtlSeconds,
+          defaultSlippageBps: config.launch2.defaultSlippageBps,
+          logger: app.log,
+          now: options.walletIntentNow ?? ((): Date => new Date()),
+        })
+      : createUnavailableLaunch2Service());
   // Community AI (Decision 0066). The capability opens on one fact: a
   // Provider API key (COMMUNITY_AI_API_KEY, falling back to
   // ANTHROPIC_API_KEY). Without it the composed service is the closed one,
@@ -2367,6 +2418,12 @@ export async function buildApp(
         communityAiRuntimeAvailable,
         pushRuntimeAvailable,
         memeRuntimeAvailable,
+        launch2State: () => ({
+          reasonCode:
+            options.launch2Service !== undefined
+              ? null
+              : launch2UnavailableReason,
+        }),
         memeContractState: () => {
           const state = memeContractAdapter.currentAvailability();
           return {
@@ -2410,6 +2467,7 @@ export async function buildApp(
       miningService,
       referralService,
       memeService,
+      launch2Service,
       deviceService,
       pushTokenService,
       securityService,

@@ -79,6 +79,10 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP hooks launch executor is idle"
   | "LOOP hooks launch executor enabled"
   | "LOOP hooks launch executor step"
+  | "LOOP launch2_event lane stays idle"
+  | "LOOP launch2_event lane is idle"
+  | "LOOP launch2_event lane enabled"
+  | "LOOP launch2_event lane skipped facts"
   | "LOOP meme salt pool refilled"
   | "LOOP meme intent settled from its receipt"
   | "LOOP meme intent receipt read failed"
@@ -200,6 +204,8 @@ export interface ReconciliationWorkerLogFields {
    * configured confirmations. Never a key, a raw transaction, or a URL.
    */
   readonly hooksDeploymentJobId?: string;
+  /** Decision 0114 launch2_event lane: the opaque instance ID. */
+  readonly instanceId?: string;
   readonly fromStatus?: string;
   readonly toStatus?: string;
   readonly step?: string;
@@ -416,6 +422,10 @@ function sanitizeFields(
     /^0x[0-9a-f]{64}$/.test(fields.transactionHash)
       ? fields.transactionHash
       : undefined;
+  const instanceId =
+    fields.instanceId !== undefined && safeUuidPattern.test(fields.instanceId)
+      ? fields.instanceId
+      : undefined;
   const hooksDeploymentJobId =
     fields.hooksDeploymentJobId !== undefined &&
     safeUuidPattern.test(fields.hooksDeploymentJobId)
@@ -484,6 +494,7 @@ function sanitizeFields(
     ...(needsOperator === undefined ? {} : { needsOperator }),
     ...(transactionHash === undefined ? {} : { transactionHash }),
     ...(hooksDeploymentJobId === undefined ? {} : { hooksDeploymentJobId }),
+    ...(instanceId === undefined ? {} : { instanceId }),
     ...(fromStatus === undefined ? {} : { fromStatus }),
     ...(toStatus === undefined ? {} : { toStatus }),
     ...(step === undefined ? {} : { step }),

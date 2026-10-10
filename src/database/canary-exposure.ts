@@ -4,7 +4,8 @@ import type { DatabaseClient } from "./v2-command-support.js";
 /**
  * One rolling canary window per account (Decisions 0065, 0077, 0101, 0104):
  * the USD value sealed into `policy.valueUsd` of every wallet, Launch, and
- * MEME Intent created at or after `since` that may still move funds. Wallet
+ * MEME Intent (and MEME v2 signing request, Decision 0114) created at or
+ * after `since` that may still move funds. Wallet
  * Send / Swap / approvals, Launch purchases, and MEME create / buy / sell all
  * read this one sum, so a ceiling spent in one module is spent in all.
  *
@@ -54,6 +55,15 @@ const exposureSql = `
         )
         or (state = 'prepared' and expires_at > clock_timestamp())
       )
+      and policy ? 'valueUsd'
+    union all
+    -- MEME v2 (Decision 0114): prepared signing requests whose window is
+    -- still open (there is no broadcast report; the lane sees the fill).
+    select (policy ->> 'valueUsd')::numeric
+    from public.launch2_intents
+    where owner_user_id = $1
+      and created_at >= $2::timestamptz
+      and expires_at > clock_timestamp()
       and policy ? 'valueUsd'
   ) as exposure
 `;

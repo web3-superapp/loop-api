@@ -56,6 +56,7 @@ import {
 import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
+import { createPostgresLaunch2Repository } from "./launch2-repository.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
 import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
 import { createPostgresAdminLoginAttemptStore } from "./admin-login-attempt-repository.js";
@@ -64,6 +65,7 @@ import type { AdminAccountRepository } from "../features/admin/admin-accounts.js
 import type { AdminLaunchReviewRepository } from "../features/admin/admin-launch-review.js";
 import type { AdminRepository } from "../features/admin/admin-repository.js";
 import type { MemeRepository } from "../features/meme/meme-repository.js";
+import type { Launch2Repository } from "../features/launch2/launch2-ports.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
 import type { MediaStorage } from "../features/media/media-storage.js";
@@ -241,6 +243,8 @@ export interface Database {
   readonly referral?: ReferralRepository;
   /** MEME curve launchpad: tokens, lane, salts, Intents (Decision 0101). */
   readonly meme?: MemeRepository;
+  /** MEME v2 read model: instances, lane facts, Intents (Decision 0114). */
+  readonly launch2?: Launch2Repository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -473,6 +477,7 @@ export function createPostgresDatabase(
       createPostgresHooksLaunchExecutorRepository(pool, { leaseSeconds }),
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
+    launch2: createPostgresLaunch2Repository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

@@ -40,6 +40,9 @@ import {
 } from "./integrations/launch/hooks-launch-executor-chain.js";
 import type { HooksLaunchExecutorRepository } from "./features/launch/hooks-launch-executor.js";
 import { createHooksLaunchExecutorLane } from "./hooks-launch-executor-worker.js";
+import { createLaunch2Lane } from "./launch2-indexer-worker.js";
+import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
+import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import {
   createAlertEvaluatorWorker,
   type AlertEvaluatorWorker,
@@ -207,6 +210,8 @@ export interface ReconciliationWorkerDatabase {
   readonly launchChain?: LaunchChainRepository;
   /** MEME launchpad lanes (Decision 0101); absent keeps them off. */
   readonly meme?: MemeRepository;
+  /** `launch2_event` lane (Decision 0114); absent keeps it off. */
+  readonly launch2?: Launch2Repository;
   /** Hooks deployment executor (Decision 0112); absent keeps it off. */
   readonly hooksLaunchExecutor?: (
     leaseSeconds: number,
@@ -299,6 +304,8 @@ export interface RunReconciliationWorkerOptions {
   /** Test seams for the Hooks executor chain client and lane (Decision 0112). */
   readonly createHooksLaunchExecutorChain?: typeof createHooksLaunchExecutorChain;
   readonly createHooksLaunchExecutorLane?: typeof createHooksLaunchExecutorLane;
+  /** Test seam for the launch2 lane's chain reader (Decision 0114). */
+  readonly createLaunch2Chain?: typeof createLaunch2Chain;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -726,6 +733,70 @@ export async function runReconciliationWorker(
             confirmations: hooksExecutorConfig.confirmations,
           },
           "LOOP hooks launch executor enabled",
+        );
+      }
+    }
+    // MEME v2 read model (Decision 0114), default off. The lane needs the
+    // Hooks Factory address and the BSC Testnet launch slot RPC; anything
+    // missing keeps it idle with the reason (never a fixture).
+    const launch2Config = options.config.launch2Indexer;
+    if (launch2Config !== null) {
+      const reason =
+        database.launch2 === undefined
+          ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
+          : launch2Config.factoryAddress === null
+            ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
+            : launchChainConfig.chainId !== "eip155:97" ||
+                launchChainConfig.rpcUrls.length === 0
+              ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
+              : null;
+      if (reason !== null || database.launch2 === undefined) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "launch2_event",
+            reasonCode: reason ?? "LAUNCH2_REPOSITORY_UNAVAILABLE",
+          },
+          "LOOP launch2_event lane stays idle",
+        );
+      } else {
+        memeLanes.push(
+          createLaunch2Lane({
+            repository: database.launch2,
+            chain: (options.createLaunch2Chain ?? createLaunch2Chain)({
+              rpcUrls: launchChainConfig.rpcUrls,
+            }),
+            chainId: launchChainConfig.chainId,
+            factoryAddress: launch2Config.factoryAddress as string,
+            reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
+            pollIntervalMs: launch2Config.pollIntervalMs,
+            onWarning: (warning) => {
+              options.logger.warn(
+                { ...logFields(), lane: "launch2_event", ...warning },
+                "LOOP launch2_event lane skipped facts",
+              );
+            },
+            onIdle: (reasonCode) => {
+              options.logger.warn(
+                { ...logFields(), lane: "launch2_event", reasonCode },
+                "LOOP launch2_event lane is idle",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "launch2_event",
+            factoryAddress: launch2Config.factoryAddress as string,
+          },
+          "LOOP launch2_event lane enabled",
         );
       }
     }

@@ -54,7 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000059_hooks_deployment_executor");
+    expect(latestMigrationName).toBe("000061_launch2_read_model");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });
