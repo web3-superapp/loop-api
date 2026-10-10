@@ -412,10 +412,21 @@ until enabled; evidence pending until a BSC Testnet run). Evidence:
 deploy); no BSC Testnet run. Frontend contract:
 `docs/frontend-v2-launch2-api.md`.
 
+Snapshot publication (Decision 0118, S140): the worker lane
+`launch2_snapshot_publisher` (`LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED`, default off;
+migration 000063 `launch2_snapshot_publications`) builds the cutoff holder list
+from the `launch2_event` transfers, signs it with two registered snapshot signer
+keys, and submits `publishSnapshot`; the instance detail adds
+`snapshot.publication` and the console project detail
+(`GET /admin/v1/launch/projects/{projectId}`) adds `snapshotPublications`.
+Evidence: `test/launch2-snapshot-publisher-anvil.integration.test.ts` (anvil
+chain 97); no BSC Testnet run (runtime `blocked-provider`: needs the signer keys
+in the worker env and a Testnet instance past its sale end).
+
 | Route                                                   | Input                                                       | Output                                                                                                                   | Contract      | Runtime                                              |
 | ------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------- |
 | `GET /v2/launch2/instances`                             | `stage`, `limit` ≤ 50 or signed `cursor`                    | Rows: stage + `nextChangeAt` (clock-derived), NFT sold, curve sold / reserve / price                                     | `implemented` | `blocked-provider`; needs the Testnet Factory + lane |
-| `GET /v2/launch2/instances/{instanceId}`                | optional `walletId`                                         | Template, contracts, snapshot (verification), graduation, buyback summary, 20 trades, viewer block                       | `implemented` | `blocked-provider`                                   |
+| `GET /v2/launch2/instances/{instanceId}`                | optional `walletId`                                         | Template, contracts, snapshot (verification, publication), graduation, buyback summary, 20 trades, viewer block          | `implemented` | `blocked-provider`                                   |
 | `GET /v2/launch2/instances/{instanceId}/quote`          | `side`, `amount`, `walletId`, `slippageBps?`                | One-block quote with tax, `minOut`, `deadline`, executable `max` (quota / inventory / balance), quota, eligibility       | `implemented` | `blocked-provider`                                   |
 | `POST /v2/launch2/instances/{instanceId}/nft/prepare`   | Write headers incl. `Idempotency-Key`; `{walletId}`         | `201` unsigned `mint()` (+ exact 100 USD1 approve); device signing exit                                                  | `implemented` | `blocked-provider`; needs `BSC_WRITES_ENABLED`       |
 | `POST /v2/launch2/instances/{instanceId}/trade/prepare` | Write headers; `{walletId, side, amount, minOut, deadline}` | `201` unsigned `buy` (with Merkle proof in the priority hour) / `sell` (+ exact approve); `QUOTE_EXPIRED`, `PRICE_MOVED` | `implemented` | `blocked-provider`; needs `BSC_WRITES_ENABLED`       |

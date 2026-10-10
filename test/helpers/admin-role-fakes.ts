@@ -407,6 +407,7 @@ export function createInMemoryAdminLaunchReview(
               versions: [],
               testnetAcceptances: [],
               deploymentTasks: [],
+              snapshotPublications: [],
             },
       );
     },

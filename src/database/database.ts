@@ -57,6 +57,7 @@ import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
+import { createPostgresLaunch2PublicationRepository } from "./launch2-snapshot-publication-repository.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
 import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
 import { createPostgresAdminLoginAttemptStore } from "./admin-login-attempt-repository.js";
@@ -66,6 +67,7 @@ import type { AdminLaunchReviewRepository } from "../features/admin/admin-launch
 import type { AdminRepository } from "../features/admin/admin-repository.js";
 import type { MemeRepository } from "../features/meme/meme-repository.js";
 import type { Launch2Repository } from "../features/launch2/launch2-ports.js";
+import type { Launch2PublicationRepository } from "../features/launch2/launch2-snapshot-publisher.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
 import type { MediaStorage } from "../features/media/media-storage.js";
@@ -245,6 +247,8 @@ export interface Database {
   readonly meme?: MemeRepository;
   /** MEME v2 read model: instances, lane facts, Intents (Decision 0114). */
   readonly launch2?: Launch2Repository;
+  /** Decision 0118: snapshot publications (2-of-3 signed, worker only). */
+  readonly launch2Publications?: Launch2PublicationRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -478,6 +482,7 @@ export function createPostgresDatabase(
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     launch2: createPostgresLaunch2Repository(pool),
+    launch2Publications: createPostgresLaunch2PublicationRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

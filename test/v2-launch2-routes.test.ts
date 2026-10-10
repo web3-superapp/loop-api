@@ -328,6 +328,55 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     });
   });
 
+  it("shows the server-side publication next to the snapshot (Decision 0118)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const pending = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 604_800n - 60n),
+      stage: "snapshot_pending",
+      snapshotPublication: {
+        status: "broadcast",
+        txHash: `0x${"7a".repeat(32)}`,
+        cutoffBlock: "123",
+        memberCount: 2,
+      },
+    });
+    repository.instances.set(pending.instanceId, pending);
+    const { app } = await createApp({ repository });
+    const response = await get(
+      app,
+      `/v2/launch2/instances/${pending.instanceId}`,
+    );
+    expect(response.statusCode).toBe(200);
+    const snapshot = response.json<{
+      instance: { snapshot: Record<string, unknown> };
+    }>().instance.snapshot;
+    expectKeys(
+      snapshot,
+      requiredOf(launch2InstanceDetailResourceSchema, ["instance", "snapshot"]),
+    );
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        status: "pending",
+        verification: null,
+        publication: {
+          status: "broadcast",
+          txHash: `0x${"7a".repeat(32)}`,
+          cutoffBlock: "123",
+          memberCount: 2,
+        },
+      }),
+    );
+    repository.instances.set(
+      pending.instanceId,
+      instanceFixture({ snapshotPublication: null }),
+    );
+    const none = await get(app, `/v2/launch2/instances/${pending.instanceId}`);
+    expect(
+      none.json<{ instance: { snapshot: Record<string, unknown> } }>().instance
+        .snapshot["publication"],
+    ).toBeNull();
+  });
+
   it("quotes a priority buy with the executable MAX and flags an over-MAX amount", async () => {
     const repository = createInMemoryLaunch2Repository();
     const instance = priorityInstance();

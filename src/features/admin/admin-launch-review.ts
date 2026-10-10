@@ -152,11 +152,45 @@ export interface AdminLaunchDeploymentTask {
   readonly updatedAt: string;
 }
 
+/**
+ * Decision 0118: one server-side snapshot publication attempt of the
+ * project's MEME v2 instance (newest attempt first). Signatures and the
+ * raw transaction are never returned.
+ */
+export interface AdminLaunchSnapshotPublication {
+  readonly publicationId: string;
+  readonly instanceId: string;
+  readonly jobId: string;
+  readonly attempt: number;
+  readonly status:
+    "pending" | "broadcast" | "confirmed" | "failed" | "mismatch";
+  readonly cutoffBlock: string;
+  readonly cutoffBlockHash: string;
+  readonly memberCount: number;
+  readonly root: string;
+  readonly dataHash: string;
+  readonly signerAddresses: readonly string[];
+  readonly submitterAddress: string;
+  readonly txHash: string | null;
+  readonly blockNumber: string | null;
+  readonly confirmations: number | null;
+  readonly failure: {
+    readonly code: string;
+    readonly detail: string | null;
+    readonly retryable: boolean | null;
+  } | null;
+  /** The `launch2_event` lane's verdict on this root (null until indexed). */
+  readonly verification: "verified" | "mismatch" | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface AdminLaunchProjectDetail {
   readonly project: AdminLaunchProjectSummary;
   readonly versions: readonly AdminLaunchConfigVersion[];
   readonly testnetAcceptances: readonly AdminLaunchTestnetAcceptance[];
   readonly deploymentTasks: readonly AdminLaunchDeploymentTask[];
+  readonly snapshotPublications: readonly AdminLaunchSnapshotPublication[];
 }
 
 /** `*` = every project; otherwise the project IDs the caller may read. */
@@ -605,6 +639,7 @@ export function createAdminLaunchReviewConsoleService(options: {
           versions: detail.versions,
           testnetAcceptances: detail.testnetAcceptances,
           deploymentTasks: detail.deploymentTasks,
+          snapshotPublications: detail.snapshotPublications,
         });
       } catch (error) {
         return translate(error);

@@ -419,10 +419,18 @@ export function createPostgresHooksLaunchExecutorRepository(
           "select pg_advisory_xact_lock(hashtextextended($1, 0))",
           [`hooks_launch_executor_nonce:97:${executor}`],
         );
+        // Decision 0118: the snapshot publisher may submit from the same
+        // account (same advisory lock); its in-flight nonces are held too.
         const pending = await client.query<{ nonce: string }>(
-          `select nonce::text as nonce from public.hooks_launch_executor_nonces
-           where chain_id = 97 and executor_address = $1 and state = 'pending'
-             and nonce >= $2::bigint
+          `select nonce::text as nonce from (
+             select nonce from public.hooks_launch_executor_nonces
+             where chain_id = 97 and executor_address = $1 and state = 'pending'
+               and nonce >= $2::bigint
+             union
+             select tx_nonce from public.launch2_snapshot_publications
+             where submitter_address = $1 and status in ('pending', 'broadcast')
+               and tx_nonce is not null and tx_nonce >= $2::bigint
+           ) as held(nonce)
            order by nonce`,
           [executor, input.chainPendingNonce.toString()],
         );

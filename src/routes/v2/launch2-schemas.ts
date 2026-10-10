@@ -458,6 +458,7 @@ const snapshotSchema = {
     "earlyRoundEndsAt",
     "memberCount",
     "signers",
+    "publication",
   ],
   properties: {
     status: { type: "string", enum: ["pending", "published"] },
@@ -477,6 +478,27 @@ const snapshotSchema = {
     signers: {
       anyOf: [
         { type: "array", maxItems: 2, items: addressSchema },
+        { type: "null" },
+      ],
+    },
+    publication: {
+      description:
+        "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "txHash", "cutoffBlock", "memberCount"],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["pending", "broadcast", "confirmed", "failed", "mismatch"],
+            },
+            txHash: nullableTxHashSchema,
+            cutoffBlock: uintStringSchema,
+            memberCount: { type: "integer", minimum: 1 },
+          },
+        },
         { type: "null" },
       ],
     },

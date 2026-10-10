@@ -77,6 +77,9 @@ function revertReason(error: unknown): string | null {
   return execution === null ? null : "EXECUTION_REVERTED";
 }
 
+/** Decision 0118: the snapshot publisher decodes reverts the same way. */
+export const revertReasonOf = revertReason;
+
 function isTransportFailure(error: unknown): boolean {
   return (
     error instanceof BaseError &&

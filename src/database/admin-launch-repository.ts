@@ -5,6 +5,7 @@ import {
   adminLaunchStages,
   type AdminLaunchConfigVersion,
   type AdminLaunchDeploymentTask,
+  type AdminLaunchSnapshotPublication,
   type AdminLaunchProjectSummary,
   type AdminLaunchReviewRepository,
   type AdminLaunchScope,
@@ -356,6 +357,57 @@ function scopeParameters(scope: AdminLaunchScope): [boolean, string[]] {
 
 export const adminLaunchDetailMaximumRows = 200;
 
+function mapPublication(
+  row: Record<string, unknown>,
+): AdminLaunchSnapshotPublication {
+  const at = (value: unknown): string =>
+    new Date(value as Date | string).toISOString();
+  const failureCode =
+    typeof row["failure_code"] === "string" ? row["failure_code"] : null;
+  const verification = row["verification"];
+  return Object.freeze({
+    publicationId: String(row["publication_id"]),
+    instanceId: String(row["instance_id"]),
+    jobId: String(row["job_id"]),
+    attempt: Number(row["attempt"]),
+    status: row["status"] as AdminLaunchSnapshotPublication["status"],
+    cutoffBlock: String(row["cutoff_block"]),
+    cutoffBlockHash: String(row["cutoff_block_hash"]),
+    memberCount: Number(row["member_count"]),
+    root: String(row["root"]),
+    dataHash: String(row["data_hash"]),
+    signerAddresses: Array.isArray(row["signer_addresses"])
+      ? Object.freeze((row["signer_addresses"] as unknown[]).map(String))
+      : Object.freeze([]),
+    submitterAddress: String(row["submitter_address"]),
+    txHash: typeof row["tx_hash"] === "string" ? row["tx_hash"] : null,
+    blockNumber:
+      typeof row["block_number"] === "string" ? row["block_number"] : null,
+    confirmations:
+      row["confirmations"] === null ? null : Number(row["confirmations"]),
+    failure:
+      failureCode === null
+        ? null
+        : Object.freeze({
+            code: failureCode,
+            detail:
+              typeof row["failure_detail"] === "string"
+                ? row["failure_detail"]
+                : null,
+            retryable:
+              typeof row["failure_retryable"] === "boolean"
+                ? row["failure_retryable"]
+                : null,
+          }),
+    verification:
+      verification === "verified" || verification === "mismatch"
+        ? verification
+        : null,
+    createdAt: at(row["created_at"]),
+    updatedAt: at(row["updated_at"]),
+  });
+}
+
 export function createPostgresAdminLaunchReviewRepository(
   pool: Pool,
 ): AdminLaunchReviewRepository {
@@ -416,7 +468,7 @@ export function createPostgresAdminLaunchReviewRepository(
         if (summary.rows[0] === undefined) {
           return null;
         }
-        const [versions, acceptances, tasks] = await Promise.all([
+        const [versions, acceptances, tasks, publications] = await Promise.all([
           pool.query(
             `select c.config_version, c.template_version, c.config_hash, c.config,
                c.owner_user_id, c.edited_by_operator_id, c.created_at,
@@ -474,6 +526,23 @@ export function createPostgresAdminLaunchReviewRepository(
              limit $2`,
             [input.projectId, adminLaunchDetailMaximumRows],
           ),
+          pool.query(
+            `select p.publication_id::text, p.instance_id::text, i.job_id::text,
+               p.attempt, p.status, p.cutoff_block::text as cutoff_block,
+               p.cutoff_block_hash, p.member_count, p.root, p.data_hash,
+               p.signer_addresses, p.submitter_address, p.tx_hash,
+               p.block_number::text as block_number, p.confirmations,
+               p.failure_code, p.failure_detail, p.failure_retryable,
+               case when i.snapshot_root = p.root then i.snapshot_verification end
+                 as verification,
+               p.created_at, p.updated_at
+             from public.launch2_snapshot_publications p
+             join public.launch2_instances i using (instance_id)
+             where i.project_id = $1
+             order by p.created_at desc, p.attempt desc
+             limit $2`,
+            [input.projectId, adminLaunchDetailMaximumRows],
+          ),
         ]);
         return Object.freeze({
           project: mapSummary(summary.rows[0]),
@@ -482,6 +551,9 @@ export function createPostgresAdminLaunchReviewRepository(
             acceptances.rows.map(mapAcceptance),
           ),
           deploymentTasks: Object.freeze(tasks.rows.map(mapTask)),
+          snapshotPublications: Object.freeze(
+            publications.rows.map(mapPublication),
+          ),
         });
       });
     },

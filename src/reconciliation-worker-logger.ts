@@ -1,3 +1,4 @@
+import { launch2PublicationStatuses } from "./features/launch2/launch2-snapshot-publisher.js";
 import { hooksLaunchDeploymentStatuses } from "./features/launch/hooks-launch-deployment-status.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 
@@ -39,6 +40,9 @@ const indexerLanes = new Set([
   "meme_intent_reconcile",
   "meme_graduation_executor",
   "hooks_launch_executor",
+  // Decision 0114 / 0118: the MEME v2 lanes.
+  "launch2_event",
+  "launch2_snapshot_publisher",
 ]);
 const memeGraduationOutcomes = new Set([
   "confirmed",
@@ -55,9 +59,11 @@ const launchIntentSettlements = new Set([
   "expired",
 ]);
 
-const hooksDeploymentStatusSet: ReadonlySet<string> = new Set(
-  hooksLaunchDeploymentStatuses,
-);
+const hooksDeploymentStatusSet: ReadonlySet<string> = new Set([
+  ...hooksLaunchDeploymentStatuses,
+  // Decision 0118: snapshot publication statuses.
+  ...launch2PublicationStatuses,
+]);
 
 export type ReconciliationWorkerLogMessage =
   | "LOOP reconciliation worker started"
@@ -83,6 +89,10 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch2_event lane is idle"
   | "LOOP launch2_event lane enabled"
   | "LOOP launch2_event lane skipped facts"
+  | "LOOP launch2 snapshot publisher stays idle"
+  | "LOOP launch2 snapshot publisher enabled"
+  | "LOOP launch2 snapshot publisher step"
+  | "LOOP launch2 snapshot publisher is waiting"
   | "LOOP meme salt pool refilled"
   | "LOOP meme intent settled from its receipt"
   | "LOOP meme intent receipt read failed"

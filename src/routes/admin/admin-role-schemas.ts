@@ -735,11 +735,100 @@ const deploymentTaskSchema = {
   },
 } as const;
 
+const snapshotPublicationSchema = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Decision 0118: one server-side 2-of-3 snapshot publication attempt (newest first). Signatures and the raw transaction are never returned.",
+  required: [
+    "publicationId",
+    "instanceId",
+    "jobId",
+    "attempt",
+    "status",
+    "cutoffBlock",
+    "cutoffBlockHash",
+    "memberCount",
+    "root",
+    "dataHash",
+    "signerAddresses",
+    "submitterAddress",
+    "txHash",
+    "blockNumber",
+    "confirmations",
+    "failure",
+    "verification",
+    "createdAt",
+    "updatedAt",
+  ],
+  properties: {
+    publicationId: uuidSchema,
+    instanceId: uuidSchema,
+    jobId: uuidSchema,
+    attempt: { type: "integer", minimum: 1 },
+    status: {
+      type: "string",
+      enum: ["pending", "broadcast", "confirmed", "failed", "mismatch"],
+    },
+    cutoffBlock: { type: "string", pattern: "^(0|[1-9][0-9]*)$" },
+    cutoffBlockHash: hash32Schema,
+    memberCount: { type: "integer", minimum: 1 },
+    root: hash32Schema,
+    dataHash: hash32Schema,
+    signerAddresses: {
+      type: "array",
+      minItems: 2,
+      maxItems: 2,
+      items: addressSchema,
+    },
+    submitterAddress: addressSchema,
+    txHash: { anyOf: [hash32Schema, { type: "null" }] },
+    blockNumber: {
+      anyOf: [
+        { type: "string", pattern: "^(0|[1-9][0-9]*)$" },
+        { type: "null" },
+      ],
+    },
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+    },
+    failure: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "detail", "retryable"],
+          properties: {
+            code: { type: "string" },
+            detail: { anyOf: [{ type: "string" }, { type: "null" }] },
+            retryable: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    verification: {
+      anyOf: [
+        { type: "string", enum: ["verified", "mismatch"] },
+        { type: "null" },
+      ],
+    },
+    createdAt: dateTimeSchema,
+    updatedAt: dateTimeSchema,
+  },
+} as const;
+
 export const launchProjectDetailResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
-  required: ["project", "versions", "testnetAcceptances", "deploymentTasks"],
+  required: [
+    "project",
+    "versions",
+    "testnetAcceptances",
+    "deploymentTasks",
+    "snapshotPublications",
+  ],
   properties: {
     project: projectSummarySchema,
     versions: {
@@ -777,6 +866,11 @@ export const launchProjectDetailResourceSchema = {
       type: "array",
       maxItems: 200,
       items: deploymentTaskSchema,
+    },
+    snapshotPublications: {
+      type: "array",
+      maxItems: 200,
+      items: snapshotPublicationSchema,
     },
   },
 } as const;
