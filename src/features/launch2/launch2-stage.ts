@@ -15,6 +15,9 @@ import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
  *   on the testnet Factory, 7 days on mainnet), never a template constant;
  * - sale over, no `SnapshotPublished` → `snapshot_pending` (no clock: the
  *   2-of-3 publication decides);
+ * - sale over, no `SnapshotPublished`, and the publisher recorded that the
+ *   sale ended with no holder (Decision 0120: `ProjectNFT.totalMinted()` = 0
+ *   at the confirmed cutoff) → `closed_no_holders` (terminal);
  * - published ≤ now < published + 3,600 s → `priority` (next = round end);
  * - afterwards → `public` (ends only by selling out).
  *
@@ -29,6 +32,11 @@ export interface Launch2StageInput {
   readonly snapshotPublishedAt: bigint | null;
   readonly graduated: boolean;
   readonly holdReason: string | null;
+  /**
+   * Decision 0120: a `launch2_snapshot_closures` row exists (the sale ended
+   * with zero NFT holders). Absent = false.
+   */
+  readonly closedNoHolders?: boolean;
 }
 
 export interface Launch2StageProjection {
@@ -59,6 +67,9 @@ export function deriveLaunch2Stage(
     return { stage: "nft_sale", nextChangeAt: saleEnd };
   }
   if (input.snapshotPublishedAt === null) {
+    if (input.closedNoHolders === true) {
+      return { stage: "closed_no_holders", nextChangeAt: null };
+    }
     return { stage: "snapshot_pending", nextChangeAt: null };
   }
   const roundEnd = launch2EarlyRoundEnd(input.snapshotPublishedAt);

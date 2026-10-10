@@ -32,6 +32,22 @@ export interface HooksLaunchProjectConfigRepository {
   saveOwnedDraft(
     input: SaveHooksLaunchProjectConfigInput,
   ): Promise<HooksLaunchProjectConfigRecord>;
+  /**
+   * Decision 0120: the owner's progress past the draft — when the operator
+   * approved `configVersion` with the same configHash (`approvedAt`), and the
+   * newest deployment task of the project (any version, any status).
+   */
+  getOwnedProgress(input: {
+    readonly projectId: string;
+    readonly ownerUserId: string;
+    readonly configVersion: number;
+  }): Promise<HooksLaunchProjectProgress>;
+}
+
+/** Decision 0120: see `HooksLaunchProjectConfigRepository.getOwnedProgress`. */
+export interface HooksLaunchProjectProgress {
+  readonly approvedAt: string | null;
+  readonly latestJobId: string | null;
 }
 
 export class HooksLaunchProjectNotFoundError extends Error {
@@ -78,10 +94,21 @@ export async function hooksLaunchFactorySaleDuration(
 }
 
 export interface HooksLaunchProjectConfigService {
+  /**
+   * Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS — the earliest
+   * nftSaleStartAt a save accepts is now + this value.
+   */
+  readonly minimumLeadSeconds: number;
   getDraft(input: {
     readonly ownerUserId: string;
     readonly projectId: string;
   }): Promise<HooksLaunchProjectConfigRecord | null>;
+  /** Decision 0120: null when there is no draft. */
+  getProgress(input: {
+    readonly ownerUserId: string;
+    readonly projectId: string;
+    readonly configVersion: number;
+  }): Promise<HooksLaunchProjectProgress>;
   saveDraft(input: {
     readonly ownerUserId: string;
     readonly projectId: string;
@@ -107,6 +134,21 @@ export function createHooksLaunchProjectConfigService(input: {
   }
 
   return Object.freeze({
+    minimumLeadSeconds: input.minimumLeadSeconds,
+    async getProgress(request: {
+      readonly ownerUserId: string;
+      readonly projectId: string;
+      readonly configVersion: number;
+    }) {
+      if (!/^[0-9a-f-]{36}$/i.test(request.projectId)) {
+        throw new HooksLaunchProjectNotFoundError();
+      }
+      return requireRepository().getOwnedProgress({
+        projectId: request.projectId,
+        ownerUserId: request.ownerUserId,
+        configVersion: request.configVersion,
+      });
+    },
     async getDraft(request: {
       readonly ownerUserId: string;
       readonly projectId: string;

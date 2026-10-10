@@ -51,9 +51,23 @@ const draftBody = {
   buybackRecipient: "0x1234567890123456789012345678901234567890",
 };
 
-function configRepositoryFake(): HooksLaunchProjectConfigRepository {
+function configRepositoryFake(
+  progress: {
+    approvedAt: string | null;
+    latestJobId: string | null;
+  } = { approvedAt: null, latestJobId: null },
+): HooksLaunchProjectConfigRepository {
   let record: HooksLaunchProjectConfigRecord | null = null;
   return {
+    getOwnedProgress(input) {
+      return Promise.resolve(
+        input.projectId === projectId &&
+          input.ownerUserId === s7AccountId &&
+          input.configVersion === record?.version
+          ? { ...progress }
+          : { approvedAt: null, latestJobId: null },
+      );
+    },
     getOwnedDraft(input) {
       return Promise.resolve(
         input.projectId === projectId && input.ownerUserId === s7AccountId
@@ -371,7 +385,13 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
       headers: s7CommonHeaders(),
     });
     expect(empty.statusCode).toBe(200);
-    expect(empty.json()).toEqual({ draft: null, contractVersion: "2.0" });
+    expect(empty.json()).toEqual({
+      draft: null,
+      approval: null,
+      latestDeployment: null,
+      minSaleLeadSeconds: 86_400,
+      contractVersion: "2.0",
+    });
 
     const saved = await saveDraft(app);
     expect(saved.headers["cache-control"]).toBe("no-store");
@@ -405,6 +425,67 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     });
     expect(read.statusCode).toBe(200);
     expect(read.json<{ draft: { version: number } }>().draft.version).toBe(1);
+    expect(read.json()).toMatchObject({
+      approval: {
+        configVersion: 1,
+        status: "awaiting_approval",
+        approvedAt: null,
+      },
+      latestDeployment: null,
+      minSaleLeadSeconds: 86_400,
+    });
+  });
+
+  it("returns the approval, the newest deployment task and the sale lead for a cold start (Decision 0120)", async () => {
+    const approvedAt = "2026-10-10T01:00:00.000Z";
+    const app = await createApp({
+      overrides: { ...enabled, HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: "4200" },
+      configs: configRepositoryFake({ approvedAt, latestJobId: jobId }),
+      submissions: submissionsFake(),
+      reader: factoryReader,
+    });
+    await saveDraft(app);
+    const read = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(read.statusCode, read.body).toBe(200);
+    expect(read.headers["cache-control"]).toBe("no-store");
+    const body = read.json<Record<string, unknown>>();
+    expect(body["approval"]).toEqual({
+      configVersion: 1,
+      status: "approved",
+      approvedAt,
+    });
+    expect(body["minSaleLeadSeconds"]).toBe(4_200);
+    // Same shape as GET hooks-deployments/{jobId}.
+    const direct = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-deployments/${jobId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(body["latestDeployment"]).toEqual(direct.json());
+    expect(body["latestDeployment"]).toMatchObject({
+      jobId,
+      status: "awaiting_executor",
+    });
+
+    // A task id the submission store no longer resolves is not invented.
+    const missing = await createApp({
+      configs: configRepositoryFake({ approvedAt: null, latestJobId: jobId }),
+      submissions: submissionsFake({
+        getOwned: () => Promise.resolve(null),
+      }),
+      reader: factoryReader,
+    });
+    await saveDraft(missing);
+    const none = await missing.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(none.json()).toMatchObject({
+      approval: { status: "awaiting_approval", approvedAt: null },
+      latestDeployment: null,
+    });
   });
 
   it("maps stale CAS, foreign projects, overrides and Idempotency-Key to the V2 error family", async () => {
@@ -526,6 +607,15 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
           verifyingContract: factoryReader.factoryAddress,
         },
         primaryType: "LaunchRequest",
+        // Decision 0120: the standard domain type is listed explicitly.
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+        },
       },
     });
     const result = response.json<{

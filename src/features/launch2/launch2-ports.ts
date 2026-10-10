@@ -199,6 +199,15 @@ export interface Launch2InstanceRecord {
     readonly cutoffBlock: string;
     readonly memberCount: number;
   } | null;
+  /**
+   * Decision 0120: the publisher's no-holder closure (the NFT sale ended
+   * with `totalMinted() = 0` at the confirmed cutoff); stage
+   * `closed_no_holders`.
+   */
+  readonly noHoldersClosure: {
+    readonly cutoffBlock: string;
+    readonly closedAt: string;
+  } | null;
   readonly graduation: {
     readonly graduatedAt: string;
     readonly blockNumber: string | null;
@@ -251,6 +260,8 @@ export interface Launch2LaneInstance {
   readonly holdReason: Launch2HoldReason | null;
   readonly graduated: boolean;
   readonly snapshotPublishedAt: string | null;
+  /** Decision 0120: a no-holder closure is recorded. */
+  readonly closedNoHolders: boolean;
   readonly activatedAt: string | null;
   readonly stage: Launch2Stage;
   readonly nextChangeAt: string | null;

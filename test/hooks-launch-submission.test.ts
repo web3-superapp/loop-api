@@ -84,6 +84,10 @@ async function payload() {
   const message = prepared.typedData.message;
   const signature = await account.signTypedData({
     ...prepared.typedData,
+    domain: {
+      ...prepared.typedData.domain,
+      chainId: BigInt(prepared.typedData.domain.chainId),
+    },
     message: {
       ...message,
       nftSaleStart: BigInt(message.nftSaleStart),
@@ -231,6 +235,10 @@ describe("Hooks signed deployment submission", { timeout: 60_000 }, () => {
     const other = privateKeyToAccount(`0x${"02".repeat(32)}`);
     body.signature = await other.signTypedData({
       ...prepared.typedData,
+      domain: {
+        ...prepared.typedData.domain,
+        chainId: BigInt(prepared.typedData.domain.chainId),
+      },
       message: {
         ...message,
         nftSaleStart: BigInt(message.nftSaleStart),

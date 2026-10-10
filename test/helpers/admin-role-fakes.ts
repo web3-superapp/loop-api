@@ -9,9 +9,11 @@ import type {
   AdminAccountRepository,
   AdminOperatorState,
 } from "../../src/features/admin/admin-accounts.js";
-import type {
-  AdminLaunchProjectSummary,
-  AdminLaunchReviewRepository,
+import {
+  AdminLaunchSnapshotRetryError,
+  type AdminLaunchProjectSummary,
+  type AdminLaunchReviewRepository,
+  type AdminLaunchSnapshotRelease,
 } from "../../src/features/admin/admin-launch-review.js";
 import {
   AdminStateConflictError,
@@ -372,6 +374,9 @@ export function createInMemoryAdminLaunchReview(
   projects: readonly AdminLaunchProjectSummary[],
   operatorScopes: Map<string, readonly string[]>,
 ): AdminLaunchReviewRepository {
+  // Decision 0120: every project has one instance whose attempt 1 failed
+  // non-retryably; one release per project.
+  const releases = new Map<string, AdminLaunchSnapshotRelease>();
   function visible(
     scope: "*" | readonly string[],
   ): AdminLaunchProjectSummary[] {
@@ -408,8 +413,63 @@ export function createInMemoryAdminLaunchReview(
               testnetAcceptances: [],
               deploymentTasks: [],
               snapshotPublications: [],
+              snapshotReleases: [...releases.values()].filter(
+                (release) => release.projectId === project.projectId,
+              ),
+              snapshotClosure: null,
             },
       );
+    },
+    releaseSnapshotPublication: (input) => {
+      const existing = releases.get(input.releaseId);
+      if (existing !== undefined) {
+        if (
+          existing.projectId !== input.projectId ||
+          existing.reason !== input.reason
+        ) {
+          return Promise.reject(
+            new AdminLaunchSnapshotRetryError(
+              "idempotency",
+              "ADMIN_IDEMPOTENCY_CONFLICT",
+            ),
+          );
+        }
+        return Promise.resolve({ release: existing, replayed: true });
+      }
+      if (!projects.some((project) => project.projectId === input.projectId)) {
+        return Promise.reject(
+          new AdminLaunchSnapshotRetryError(
+            "not_found",
+            "ADMIN_LAUNCH_PROJECT_NOT_FOUND",
+          ),
+        );
+      }
+      if (
+        [...releases.values()].some(
+          (release) => release.projectId === input.projectId,
+        )
+      ) {
+        return Promise.reject(
+          new AdminLaunchSnapshotRetryError(
+            "conflict",
+            "LAUNCH2_SNAPSHOT_ALREADY_RELEASED",
+          ),
+        );
+      }
+      const release: AdminLaunchSnapshotRelease = {
+        releaseId: input.releaseId,
+        projectId: input.projectId,
+        instanceId: "7d3f5a1e-2b4c-4d6e-8f90-a1b2c3d4e5f6",
+        publicationId: "6c2e4f0d-1a3b-4c5d-9e8f-0a1b2c3d4e5f",
+        releasedAttempt: 1,
+        releasedStatus: "failed",
+        releasedFailureCode: "LAUNCH2_SNAPSHOT_CONTRACT_REVERTED",
+        actor: input.actor,
+        reason: input.reason,
+        createdAt: "2026-10-10T00:00:00.000Z",
+      };
+      releases.set(input.releaseId, release);
+      return Promise.resolve({ release, replayed: false });
     },
   };
 }

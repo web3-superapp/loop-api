@@ -186,13 +186,72 @@ export interface AdminLaunchSnapshotPublication {
   readonly updatedAt: string;
 }
 
+/**
+ * Decision 0120: a platform administrator's retry grant for a blocked
+ * snapshot publication (append-only). Attempts up to `releasedAttempt` no
+ * longer block the publisher or count against its retry budget.
+ */
+export interface AdminLaunchSnapshotRelease {
+  readonly releaseId: string;
+  readonly projectId: string;
+  readonly instanceId: string;
+  readonly publicationId: string;
+  readonly releasedAttempt: number;
+  readonly releasedStatus: "failed" | "mismatch";
+  readonly releasedFailureCode: string;
+  readonly actor: string;
+  readonly reason: string;
+  readonly createdAt: string;
+}
+
+/** Decision 0120: the sale ended with no holder (stage closed_no_holders). */
+export interface AdminLaunchSnapshotClosure {
+  readonly instanceId: string;
+  readonly reason: "no_holders";
+  readonly cutoffBlock: string;
+  readonly cutoffBlockHash: string;
+  readonly saleEndAt: string;
+  readonly createdAt: string;
+}
+
 export interface AdminLaunchProjectDetail {
   readonly project: AdminLaunchProjectSummary;
   readonly versions: readonly AdminLaunchConfigVersion[];
   readonly testnetAcceptances: readonly AdminLaunchTestnetAcceptance[];
   readonly deploymentTasks: readonly AdminLaunchDeploymentTask[];
   readonly snapshotPublications: readonly AdminLaunchSnapshotPublication[];
+  readonly snapshotReleases: readonly AdminLaunchSnapshotRelease[];
+  readonly snapshotClosure: AdminLaunchSnapshotClosure | null;
 }
+
+/**
+ * Decision 0120: why a snapshot retry was refused. `not_found`: no project
+ * or no MEME v2 instance; `conflict`: nothing to retry (no attempt, latest
+ * attempt in flight / confirmed, already released, a root already on
+ * chain, closed with no holder); `idempotency`: the key was used for
+ * another request.
+ */
+export class AdminLaunchSnapshotRetryError extends Error {
+  constructor(
+    readonly kind: "not_found" | "conflict" | "idempotency",
+    readonly reasonCode: string,
+    readonly details: Readonly<Record<string, string>> = {},
+  ) {
+    super("Snapshot retry refused");
+    this.name = "AdminLaunchSnapshotRetryError";
+  }
+}
+
+export const adminLaunchSnapshotRetryReasonCodes = Object.freeze({
+  projectNotFound: "ADMIN_LAUNCH_PROJECT_NOT_FOUND",
+  instanceNotFound: "LAUNCH2_INSTANCE_NOT_FOUND",
+  nothingToRetry: "LAUNCH2_SNAPSHOT_NOTHING_TO_RETRY",
+  notRetryable: "LAUNCH2_SNAPSHOT_NOT_RETRYABLE",
+  alreadyReleased: "LAUNCH2_SNAPSHOT_ALREADY_RELEASED",
+  alreadyOnChain: "LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN",
+  closedNoHolders: "LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS",
+  idempotencyConflict: "ADMIN_IDEMPOTENCY_CONFLICT",
+} as const);
 
 /** `*` = every project; otherwise the project IDs the caller may read. */
 export type AdminLaunchScope = "*" | readonly string[];
@@ -216,6 +275,24 @@ export interface AdminLaunchReviewRepository {
     readonly projectId: string;
     readonly scope: AdminLaunchScope;
   }): Promise<AdminLaunchProjectDetail | null>;
+  /**
+   * Decision 0120: in one transaction, replays `releaseId` (same project and
+   * reason) or locks the project's latest MEME v2 instance and its latest
+   * publication attempt and appends a release when that attempt is
+   * `failed` / `mismatch` and not yet released. Throws
+   * `AdminLaunchSnapshotRetryError` for every refusal.
+   */
+  releaseSnapshotPublication(input: {
+    readonly releaseId: string;
+    readonly projectId: string;
+    readonly actor: string;
+    readonly actorAccountId: string | null;
+    readonly reason: string;
+    readonly requestId: string;
+  }): Promise<{
+    readonly release: AdminLaunchSnapshotRelease;
+    readonly replayed: boolean;
+  }>;
 }
 
 export interface AdminLaunchReviewLogger {
@@ -239,6 +316,13 @@ export interface AdminLaunchReviewConsoleService {
     body: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown>>;
   recordTestnetAcceptance(
+    context: AdminRequestContext,
+    idempotencyKey: unknown,
+    projectId: string,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>>;
+  /** Decision 0120 (`console.write`: platform administrator). */
+  retrySnapshotPublication(
     context: AdminRequestContext,
     idempotencyKey: unknown,
     projectId: string,
@@ -647,6 +731,8 @@ export function createAdminLaunchReviewConsoleService(options: {
           deploymentTasks: detail.deploymentTasks,
           deploymentChainId: options.deploymentChainId,
           snapshotPublications: detail.snapshotPublications,
+          snapshotReleases: detail.snapshotReleases,
+          snapshotClosure: detail.snapshotClosure,
         });
       } catch (error) {
         return translate(error);
@@ -735,6 +821,90 @@ export function createAdminLaunchReviewConsoleService(options: {
           audit: auditReference(audit),
         });
       } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async retrySnapshotPublication(context, idempotencyKey, projectId, body) {
+      assertAdminPermission(context.principal, "console.write");
+      const releaseId = requireAdminIdempotencyKey(idempotencyKey);
+      try {
+        const id = projectIdParam(projectId);
+        const reasonText = reason(body["reason"]);
+        const base = {
+          actor: context.principal.session.actor,
+          actorAccountId: context.principal.session.accountId,
+          targetType: "launch_project",
+          targetId: id,
+          requestId: context.requestId,
+        } as const;
+        const intent = await intentAudit({
+          ...base,
+          action: "launch.snapshot.retry.requested",
+          before: null,
+          after: { releaseId, reason: reasonText },
+        });
+        let outcome: Awaited<
+          ReturnType<AdminLaunchReviewRepository["releaseSnapshotPublication"]>
+        >;
+        try {
+          outcome = await repository().releaseSnapshotPublication({
+            releaseId,
+            projectId: id,
+            actor: context.principal.session.actor,
+            actorAccountId: context.principal.session.accountId,
+            reason: reasonText,
+            requestId: context.requestId,
+          });
+        } catch (error) {
+          await outcomeAudit({
+            ...base,
+            action: "launch.snapshot.retry.failed",
+            before: null,
+            after: {
+              requestedAuditId: intent.auditId,
+              releaseId,
+              errorCode:
+                error instanceof AdminLaunchSnapshotRetryError
+                  ? error.reasonCode
+                  : adminReasonCodes.databaseUnavailable,
+            },
+          });
+          throw error;
+        }
+        const audit = await outcomeAudit({
+          ...base,
+          action: "launch.snapshot.retry.decided",
+          before: {
+            publicationId: outcome.release.publicationId,
+            attempt: outcome.release.releasedAttempt,
+            status: outcome.release.releasedStatus,
+            failureCode: outcome.release.releasedFailureCode,
+          },
+          after: {
+            requestedAuditId: intent.auditId,
+            releaseId,
+            instanceId: outcome.release.instanceId,
+            nextAttempt: outcome.release.releasedAttempt + 1,
+            replayed: outcome.replayed,
+          },
+        });
+        return Object.freeze({
+          operationId: outcome.release.releaseId,
+          replayed: outcome.replayed,
+          release: Object.freeze({
+            ...outcome.release,
+            nextAttempt: outcome.release.releasedAttempt + 1,
+          }),
+          audit: auditReference(audit ?? intent),
+        });
+      } catch (error) {
+        if (error instanceof AdminLaunchSnapshotRetryError) {
+          throw new AdminApiError(
+            error.kind === "not_found" ? "NOT_FOUND" : "ADMIN_CONFLICT",
+            { reasonCode: error.reasonCode, ...error.details },
+          );
+        }
         return translate(error);
       }
     },

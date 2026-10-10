@@ -186,6 +186,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_intents: "user",
     // Snapshot publications (Decision 0118): rooted in a launch2 instance
     launch2_snapshot_publications: "user",
+    // Decision 0120: no-holder closures and retry grants of those instances
+    launch2_snapshot_closures: "user",
+    launch2_snapshot_publication_releases: "user",
     // Mining
     mining_formula_versions: "platform",
     mining_snapshots: "platform",
@@ -348,6 +351,11 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     `${ownedBy()} or instance_id in ${doomedLaunch2Instances}
       or idempotency_record_id in ${ownedIdempotency}`,
   ),
+  del(
+    "launch2_snapshot_publication_releases",
+    `instance_id in ${doomedLaunch2Instances}`,
+  ),
+  del("launch2_snapshot_closures", `instance_id in ${doomedLaunch2Instances}`),
   del(
     "launch2_snapshot_publications",
     `instance_id in ${doomedLaunch2Instances}`,

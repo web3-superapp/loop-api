@@ -941,3 +941,86 @@ rewardsMatch, mismatchedUserCount, reasonCode } }`。只读，不写库；`diges
 `POST /admin/v1/mining/epochs/settle`，body `{ "hourStart": "2026-10-10T10:00:00.000Z" }`（必须是整点）→
 `{ outcome, reasonCode, epoch, audit }`，`outcome`：`settled` | `already_settled` | `skipped` | `failed`。规则与
 worker 相同（小时必须已结束 + 宽限、索引已追上、参数在生效中）；已结算小时不会重算。
+
+## 13. S142 变更（决策 0120）：MEME v2 名单发布的「重试」与「无人持有」
+
+决策见 `docs/decisions/0120-launch2-creator-followups.md`。
+
+### 13.0 给 loop-admin 的改动清单
+
+1. 详情 `GET /admin/v1/launch/projects/{projectId}` 多两个必填字段：`snapshotReleases[]`（重试授权，新的在前，
+   最多 200 条）与 `snapshotClosure`（`null` 或无人持有的结束证据）。
+2. 新接口 `POST /admin/v1/launch/projects/{projectId}/snapshot/retry`（`console.write`，**仅 platform_admin**，
+   `Idempotency-Key` 必填）：名单发布被卡住时（最新一次发布 `failed` 或 `mismatch`）放行一次重试。
+3. 详情页「名单发布」区块：最新一次发布为 `failed` / `mismatch` 且没有对应授权时显示「放行重试」按钮（要求填写
+   理由）；`snapshotClosure` 非 null 时显示「NFT 发售无人参与，已结束」，不显示按钮。
+
+### 13.1 `POST /admin/v1/launch/projects/{projectId}/snapshot/retry`
+
+请求：`{ "reason": "签名人密钥已轮换，重新发布" }`（去掉首尾空白后 1–500 字）。
+
+作用：对该项目最新的 MEME v2 实例，若最新一次发布（attempt N）状态为 `failed` 或 `mismatch`，追加一条不可修改的
+授权记录（`releaseId` = `Idempotency-Key`）。此后发布器不再因 ≤ N 的尝试而阻塞，也不再把它们计入重试预算，下一轮
+从链上重新取数，以 attempt N + 1 重新发布。**本接口不签名、不发交易**；被放行的发布记录原样保留作证据。
+
+200：
+
+```json
+{
+  "operationId": "5a0f…",
+  "replayed": false,
+  "release": {
+    "releaseId": "5a0f…",
+    "projectId": "…",
+    "instanceId": "…",
+    "publicationId": "…",
+    "releasedAttempt": 1,
+    "releasedStatus": "mismatch",
+    "releasedFailureCode": "LAUNCH2_SNAPSHOT_DIGEST_MISMATCH",
+    "actor": "operator",
+    "reason": "签名人密钥已轮换，重新发布",
+    "createdAt": "2026-10-10T12:00:00.000Z",
+    "nextAttempt": 2
+  },
+  "audit": { "auditId": "…", "seq": 912, "at": "2026-10-10T12:00:00.000Z" }
+}
+```
+
+同一 key + 同一项目 / 理由 / 操作人 → 原结果（`replayed: true`）。
+
+错误：
+
+| HTTP | code                     | `detailsSafe.reasonCode`                                                                         |
+| ---- | ------------------------ | ------------------------------------------------------------------------------------------------ |
+| 400  | `INVALID_REQUEST`        | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`（或 schema 拒绝）                                               |
+| 422  | `VALIDATION_FAILED`      | `ADMIN_REASON_TEXT_INVALID`（理由为空或超长）                                                    |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN`（非 platform_admin）                                                      |
+| 404  | `NOT_FOUND`              | `ADMIN_LAUNCH_PROJECT_NOT_FOUND`、`LAUNCH2_INSTANCE_NOT_FOUND`（项目还没有 v2 实例）             |
+| 409  | `ADMIN_CONFLICT`         | `LAUNCH2_SNAPSHOT_NOTHING_TO_RETRY`（还没有任何发布尝试）                                        |
+| 409  | `ADMIN_CONFLICT`         | `LAUNCH2_SNAPSHOT_NOT_RETRYABLE`（最新尝试 `pending/broadcast/confirmed`，`detailsSafe.status`） |
+| 409  | `ADMIN_CONFLICT`         | `LAUNCH2_SNAPSHOT_ALREADY_RELEASED`（该尝试已放行过 / 并发放行输了）                             |
+| 409  | `ADMIN_CONFLICT`         | `LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN`（链上已有名单根）                                            |
+| 409  | `ADMIN_CONFLICT`         | `LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS`（发售无人持有，已结束）                                     |
+| 409  | `ADMIN_CONFLICT`         | `ADMIN_IDEMPOTENCY_CONFLICT`（同 key 不同项目 / 理由 / 操作人）                                  |
+| 503  | `CAPABILITY_UNAVAILABLE` | `ADMIN_DATABASE_UNAVAILABLE` / `ADMIN_AUDIT_UNAVAILABLE`（什么都没执行，可用同 key 重试）        |
+
+审计：`launch.snapshot.retry.requested`（先写，写不进去就 503 不执行）→ `launch.snapshot.retry.decided` 或
+`launch.snapshot.retry.failed`（`after.errorCode`）；`targetType = launch_project`。
+
+### 13.2 详情新增字段
+
+`snapshotReleases[]` 每项同上 `release`（不含 `nextAttempt`）。`snapshotClosure`：
+
+```json
+{
+  "instanceId": "…",
+  "reason": "no_holders",
+  "cutoffBlock": "5123456",
+  "cutoffBlockHash": "0x…",
+  "saleEndAt": "2026-10-10T11:00:00.000Z",
+  "createdAt": "2026-10-10T11:01:12.000Z"
+}
+```
+
+含义：发布器在已确认的截止块读到 `ProjectNFT.totalMinted() = 0`（且索引器已追上），名单根不能为零所以永远无法发布；
+实例阶段变为 `closed_no_holders`（终态），发布器不再处理它。

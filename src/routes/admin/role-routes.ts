@@ -32,6 +32,8 @@ import {
   launchProjectListResourceSchema,
   launchProjectParamsSchema,
   launchProjectsQuerySchema,
+  launchSnapshotRetryRequestSchema,
+  launchSnapshotRetryResourceSchema,
   launchVersionParamsSchema,
   passwordChangeRequestSchema,
   principalResourceSchema,
@@ -422,6 +424,46 @@ export function registerAdminRoleRoutes(
         idempotencyKey(request),
         projectId,
         version,
+        body(request),
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    `${adminApiPrefix}/launch/projects/:projectId/snapshot/retry`,
+    {
+      schema: {
+        operationId: "retryAdminLaunchSnapshotPublication",
+        summary:
+          "Release a blocked MEME v2 snapshot publication for one more try",
+        description:
+          "Decision 0120 (`console.write`: platform administrator only). For the project's latest MEME v2 instance whose latest snapshot publication attempt is `failed` or `mismatch`, appends an immutable retry grant (releaseId = Idempotency-Key): attempts up to that one stop blocking the `launch2_snapshot_publisher` lane and stop counting against its retry budget, so its next tick starts attempt N + 1 from the chain (the released row stays as evidence; nothing is signed or sent by this route). Refusals: 404 NOT_FOUND (ADMIN_LAUNCH_PROJECT_NOT_FOUND, LAUNCH2_INSTANCE_NOT_FOUND); 409 ADMIN_CONFLICT with reasonCode LAUNCH2_SNAPSHOT_NOTHING_TO_RETRY (no attempt yet), LAUNCH2_SNAPSHOT_NOT_RETRYABLE (latest attempt pending / broadcast / confirmed; detailsSafe.status), LAUNCH2_SNAPSHOT_ALREADY_RELEASED, LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN (a root is indexed), LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS, ADMIN_IDEMPOTENCY_CONFLICT (same key, other project / reason / actor). Same key + same body replays (`replayed: true`). Audit: `launch.snapshot.retry.requested` before (when it cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing runs), then `.decided` or `.failed`.",
+        tags: ["admin-launch"],
+        security: adminSecurity,
+        headers: idempotencyHeadersSchema,
+        params: launchProjectParamsSchema,
+        querystring: emptyQuerySchema,
+        body: launchSnapshotRetryRequestSchema,
+        response: {
+          200: launchSnapshotRetryResourceSchema,
+          ...adminErrors(
+            ...guardedErrors,
+            "NOT_FOUND",
+            "ADMIN_CONFLICT",
+            "VALIDATION_FAILED",
+          ),
+        },
+      },
+      ...guard("console.write"),
+    },
+    async (request, reply) => {
+      const { projectId } = request.params as { readonly projectId: string };
+      const resource = await launchReview.retrySnapshotPublication(
+        requestContext(request),
+        idempotencyKey(request),
+        projectId,
         body(request),
       );
       noStore(reply);

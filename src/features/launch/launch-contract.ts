@@ -171,6 +171,16 @@ export const launchProjectListFilters = [
 ] as const;
 export type LaunchProjectListFilter = (typeof launchProjectListFilters)[number];
 
+/**
+ * Decision 0120: which product a catalog project belongs to. `ido` = the
+ * original Launch application; `launch2` = MEME v2 (set at create, or by the
+ * first Hooks config save; never goes back).
+ */
+export const launchProjectKinds = ["ido", "launch2"] as const;
+export type LaunchProjectKind = (typeof launchProjectKinds)[number];
+export const launchProjectKindFilters = ["all", ...launchProjectKinds] as const;
+export type LaunchProjectKindFilter = (typeof launchProjectKindFilters)[number];
+
 export const venueMilestoneVenues = ["lbank", "binance", "bithumb"] as const;
 export type VenueMilestoneVenue = (typeof venueMilestoneVenues)[number];
 export const venueMilestoneMarketTypes = [
@@ -343,6 +353,30 @@ function normalizeLinks(
     x: value?.x ?? null,
     telegram: value?.telegram ?? null,
     discord: value?.discord ?? null,
+  });
+}
+
+/**
+ * Decision 0120: the optional create-only `kind` (absent = `ido`). It is
+ * removed before the shared project-values parse so `replace` stays as is.
+ */
+export function parseLaunchProjectCreate(value: unknown): {
+  readonly kind: LaunchProjectKind;
+  readonly values: LaunchProjectValues;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return invalid();
+  }
+  const { kind, ...rest } = value as Record<string, unknown>;
+  if (
+    kind !== undefined &&
+    !launchProjectKinds.includes(kind as LaunchProjectKind)
+  ) {
+    return invalid();
+  }
+  return Object.freeze({
+    kind: (kind as LaunchProjectKind | undefined) ?? "ido",
+    values: parseLaunchProjectValues(rest),
   });
 }
 
@@ -721,6 +755,8 @@ export interface LaunchProjectProjection {
   readonly narrative: string | null;
   readonly officialLinks: LaunchOfficialLinks;
   readonly materialVersion: number;
+  /** Decision 0120. */
+  readonly kind: LaunchProjectKind;
   readonly reviewStatus: LaunchReviewStatus;
   readonly reviewReasonCode: string | null;
   /** Display projection of `reviewReasonCode`; never parsed back into a code. */

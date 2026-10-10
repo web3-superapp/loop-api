@@ -44,6 +44,8 @@ function makeHarness() {
       });
       return Promise.resolve(record);
     },
+    getOwnedProgress: () =>
+      Promise.resolve({ approvedAt: null, latestJobId: null }),
   };
   return { repository, getRecord: () => record };
 }

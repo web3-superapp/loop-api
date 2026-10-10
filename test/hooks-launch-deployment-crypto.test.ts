@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getCreate2Address } from "viem";
+import { getCreate2Address, hashTypedData } from "viem";
 
 import {
   hooksLaunchDeploymentDomain,
@@ -9,6 +9,7 @@ import {
   mineMemeAddressSalt,
   mineMemeAddressSaltAsync,
   mineHooksLaunchSaltAsync,
+  withHooksLaunchEip712Domain,
 } from "../src/features/launch/hooks-launch-deployment-crypto.js";
 import {
   createHooksLaunchDeploymentService,
@@ -114,6 +115,63 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
     expect(JSON.stringify(typedData)).not.toContain("1800000000n");
   });
 
+  it("adds the standard EIP712Domain type without changing the digest (Decision 0120)", () => {
+    const typedData = createHooksLaunchDeploymentTypedData({
+      chainId: 97,
+      verifyingContract: "0x1111111111111111111111111111111111111111",
+      request: {
+        configHash: `0x${"cd".repeat(32)}`,
+        projectOwner: "0x2222222222222222222222222222222222222222",
+        configVersion: 3,
+        name: "Project",
+        ticker: "MEME",
+        nftSaleStart: "1800000000",
+        buybackRecipient: "0x3333333333333333333333333333333333333333",
+        deadline: "1800000900",
+        memeSalt: `0x${"00".repeat(32)}`,
+        nonce: "7",
+      },
+    });
+    const wire = withHooksLaunchEip712Domain(typedData);
+    expect(Object.keys(wire.types)).toEqual(["EIP712Domain", "LaunchRequest"]);
+    expect(wire.types.EIP712Domain).toEqual([
+      { name: "name", type: "string" },
+      { name: "version", type: "string" },
+      { name: "chainId", type: "uint256" },
+      { name: "verifyingContract", type: "address" },
+    ]);
+    expect(wire.types.LaunchRequest).toBe(typedData.types.LaunchRequest);
+    expect(wire.domain).toBe(typedData.domain);
+    expect(wire.message).toBe(typedData.message);
+    const message = {
+      ...typedData.message,
+      nftSaleStart: BigInt(typedData.message.nftSaleStart),
+      deadline: BigInt(typedData.message.deadline),
+      nonce: BigInt(typedData.message.nonce),
+    };
+    // The JSON a wallet receives (EIP712Domain listed explicitly) hashes to
+    // the same digest the submission verifies against.
+    const json = JSON.parse(JSON.stringify(wire)) as {
+      domain: Record<string, unknown>;
+      types: Record<string, { name: string; type: string }[]>;
+    };
+    expect(
+      hashTypedData({
+        domain: { ...json.domain, chainId: 97n },
+        types: json.types,
+        primaryType: "LaunchRequest",
+        message,
+      }),
+    ).toBe(
+      hashTypedData({
+        domain: typedData.domain,
+        types: typedData.types,
+        primaryType: "LaunchRequest",
+        message,
+      }),
+    );
+  });
+
   it("rejects an invalid salt search budget", () => {
     expect(() =>
       mineHooksLaunchSalt({
@@ -148,6 +206,8 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
     const repository = {
       getOwnedDraft: () => Promise.resolve(config),
       saveOwnedDraft: () => Promise.resolve(config),
+      getOwnedProgress: () =>
+        Promise.resolve({ approvedAt: null, latestJobId: null }),
     } as HooksLaunchProjectConfigRepository;
     const wallets = {
       get: (userId: string, walletId: string) =>
@@ -217,6 +277,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
       configs: {
         getOwnedDraft: () => Promise.resolve(null),
         saveOwnedDraft: () => Promise.reject(new Error("unused")),
+        getOwnedProgress: () => Promise.reject(new Error("unused")),
       },
       wallets: {
         get: () => Promise.resolve(null),

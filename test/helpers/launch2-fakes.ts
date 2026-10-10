@@ -108,6 +108,7 @@ export function instanceFixture(
     taxUsd1: "0",
     snapshot: null,
     snapshotPublication: null,
+    noHoldersClosure: null,
     graduation: null,
     buyback: { paused: false, count: "0", usd1: "0", meme: "0", lastAt: null },
     registeredAt: new Date(

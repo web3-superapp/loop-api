@@ -20,6 +20,8 @@ import {
   launchKybStatuses,
   launchListLimits,
   launchOfficialLinkKeys,
+  launchProjectKindFilters,
+  launchProjectKinds,
   launchProjectListFilters,
   launchReviewStatuses,
   launchScheduleStatuses,
@@ -167,7 +169,18 @@ const projectValuesRequestSchema = {
   },
 } as const;
 
-export const createProjectRequestSchema = projectValuesRequestSchema;
+export const createProjectRequestSchema = {
+  ...projectValuesRequestSchema,
+  properties: {
+    ...projectValuesRequestSchema.properties,
+    kind: {
+      type: "string",
+      enum: [...launchProjectKinds],
+      description:
+        "Decision 0120: ido (default when absent) or launch2 (MEME v2). A first Hooks config save also makes a project launch2; it never goes back. Part of the idempotency digest.",
+    },
+  },
+} as const;
 
 export const replaceProjectRequestSchema = {
   type: "object",
@@ -194,6 +207,7 @@ const projectProjectionSchema = {
     "narrative",
     "officialLinks",
     "materialVersion",
+    "kind",
     "reviewStatus",
     "reviewReasonCode",
     "reviewReasonText",
@@ -223,6 +237,12 @@ const projectProjectionSchema = {
     },
     officialLinks: officialLinksResponseSchema,
     materialVersion: { type: "integer", minimum: 1 },
+    kind: {
+      type: "string",
+      enum: [...launchProjectKinds],
+      description:
+        "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft).",
+    },
     reviewStatus: { type: "string", enum: [...launchReviewStatuses] },
     reviewReasonCode: {
       anyOf: [
@@ -286,6 +306,12 @@ export const projectListQuerySchema = {
   additionalProperties: false,
   properties: {
     status: { type: "string", enum: [...launchProjectListFilters] },
+    kind: {
+      type: "string",
+      enum: [...launchProjectKindFilters],
+      description:
+        "Decision 0120: all (default) | ido | launch2. Bound into the cursor when not all.",
+    },
     cursor: cursorSchema,
     limit: { type: "integer", minimum: 1, maximum: launchListLimits.maximum },
   },
@@ -1824,18 +1850,6 @@ export const hooksLaunchProjectConfigResourceSchema = {
   },
 } as const;
 
-export const hooksLaunchProjectConfigReadSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["draft", "contractVersion"],
-  properties: {
-    draft: {
-      anyOf: [hooksLaunchProjectConfigResourceSchema, { type: "null" }],
-    },
-    contractVersion: { type: "string", const: v2ContractVersion },
-  },
-} as const;
-
 export const hooksLaunchSigningRequestQuerySchema = {
   type: "object",
   additionalProperties: false,
@@ -2140,6 +2154,69 @@ export const hooksLaunchDeploymentJobSchema = {
     },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+/**
+ * Decision 0108 + 0120: the owner's draft plus what the creator flow needs
+ * to resume after a cold start (approval, newest task, sale-start lead).
+ */
+export const hooksLaunchProjectConfigReadSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "draft",
+    "approval",
+    "latestDeployment",
+    "minSaleLeadSeconds",
+    "contractVersion",
+  ],
+  properties: {
+    draft: {
+      anyOf: [hooksLaunchProjectConfigResourceSchema, { type: "null" }],
+    },
+    approval: {
+      description:
+        "Decision 0120: null without a draft. approved only when the operator approved this draft version with the same configHash; a newer save is awaiting_approval again.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["configVersion", "status", "approvedAt"],
+          properties: {
+            configVersion: {
+              type: "integer",
+              minimum: 1,
+              maximum: 2_147_483_647,
+            },
+            status: {
+              type: "string",
+              enum: ["awaiting_approval", "approved"],
+            },
+            approvedAt: {
+              anyOf: [
+                { type: "string", format: "date-time" },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    latestDeployment: {
+      description:
+        "Decision 0120: the newest deployment task of the project (any config version, any status), as GET hooks-deployments/{jobId}; null when none.",
+      anyOf: [hooksLaunchDeploymentJobSchema, { type: "null" }],
+    },
+    minSaleLeadSeconds: {
+      type: "integer",
+      minimum: 4_200,
+      maximum: 2_592_000,
+      description:
+        "Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS. A save accepts nftSaleStartAt ≥ server now + this value (400 otherwise).",
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
 

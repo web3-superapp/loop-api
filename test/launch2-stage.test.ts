@@ -48,6 +48,40 @@ describe("launch2 stage derivation (Decision 0114)", () => {
     ).toEqual({ stage: "snapshot_pending", nextChangeAt: null });
   });
 
+  it("ends at closed_no_holders when the publisher closed a sale with no holder (Decision 0120)", () => {
+    // Before the sale end a closure cannot exist; the clock still rules.
+    expect(
+      deriveLaunch2Stage({
+        ...base,
+        closedNoHolders: true,
+        nowSeconds: saleEnd - 1n,
+      }),
+    ).toEqual({ stage: "nft_sale", nextChangeAt: saleEnd });
+    expect(
+      deriveLaunch2Stage({
+        ...base,
+        closedNoHolders: true,
+        nowSeconds: saleEnd,
+      }),
+    ).toEqual({ stage: "closed_no_holders", nextChangeAt: null });
+    expect(
+      deriveLaunch2Stage({
+        ...base,
+        closedNoHolders: false,
+        nowSeconds: saleEnd,
+      }),
+    ).toEqual({ stage: "snapshot_pending", nextChangeAt: null });
+    // An integrity hold still wins.
+    expect(
+      deriveLaunch2Stage({
+        ...base,
+        closedNoHolders: true,
+        holdReason: "LAUNCH2_ACTIVATION_MISSING",
+        nowSeconds: saleEnd,
+      }),
+    ).toEqual({ stage: "paused", nextChangeAt: null });
+  });
+
   it("runs the priority hour from the publication, then the public curve", () => {
     const published = saleEnd + 500n;
     expect(launch2EarlyRoundEnd(published)).toBe(published + 3_600n);

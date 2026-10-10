@@ -240,6 +240,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               ),
         graduated: instance.graduated,
         holdReason: instance.holdReason,
+        closedNoHolders: instance.closedNoHolders,
       });
       const nextChangeAt =
         projection.nextChangeAt === null

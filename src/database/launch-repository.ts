@@ -16,6 +16,7 @@ import {
   launchKybStatuses,
   launchOfficialLinkKeys,
   launchReviewEventTypes,
+  launchProjectKinds,
   launchReviewStatuses,
   launchScheduleStatuses,
   launchSlotStatuses,
@@ -104,6 +105,7 @@ const projectRowSchema = z
     narrative: z.string().min(1).nullable(),
     official_links: linksSchema,
     material_version: z.number().int().min(1),
+    kind: z.enum(launchProjectKinds),
     review_status: z.enum(launchReviewStatuses),
     kyb_status: z.enum(launchKybStatuses),
     review_reason_code: z.string().nullable(),
@@ -197,6 +199,7 @@ const projectColumns = `
   p.narrative,
   p.official_links,
   p.material_version,
+  p.kind,
   p.review_status,
   p.kyb_status,
   p.review_reason_code,
@@ -232,6 +235,7 @@ function mapProject(raw: unknown): LaunchProjectRecord {
     narrative: row.narrative,
     officialLinks: mapLinks(row.official_links),
     materialVersion: row.material_version,
+    kind: row.kind,
     reviewStatus: row.review_status,
     kybStatus: row.kyb_status,
     reviewReasonCode: row.review_reason_code,
@@ -467,9 +471,10 @@ export function createPostgresLaunchRepository(
           await client.query({
             text: `
               insert into public.launch_projects (
-                project_id, owner_user_id, name, ticker, narrative, official_links
+                project_id, owner_user_id, name, ticker, narrative, official_links,
+                kind
               )
-              values ($1, $2, $3, $4, $5, $6::jsonb)
+              values ($1, $2, $3, $4, $5, $6::jsonb, $7)
             `,
             values: [
               projectId,
@@ -478,6 +483,7 @@ export function createPostgresLaunchRepository(
               rawInput.values.ticker,
               rawInput.values.narrative,
               linksJson(rawInput.values),
+              z.enum(launchProjectKinds).parse(rawInput.kind),
             ],
           });
           await appendReviewAudit(client, {
@@ -519,6 +525,10 @@ export function createPostgresLaunchRepository(
         if (rawInput.status !== null) {
           values.push(rawInput.status);
           clauses.push(`p.review_status = $${String(values.length)}`);
+        }
+        if (rawInput.kind !== null) {
+          values.push(z.enum(launchProjectKinds).parse(rawInput.kind));
+          clauses.push(`p.kind = $${String(values.length)}`);
         }
         if (rawInput.after !== null) {
           values.push(rawInput.after.createdAt, rawInput.after.projectId);
