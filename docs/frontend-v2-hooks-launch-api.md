@@ -15,6 +15,15 @@
   `503 CAPABILITY_UNAVAILABLE`，`detailsSafe.reasonCode = "HOOKS_LAUNCH_DISABLED"`。
 - 签名准备与提交另需测试网 Factory 配置；缺失时
   `503`，`reasonCode = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE"`。
+- **S141 / 决策 0119 起，保存草稿（`PUT hooks-config`）也需要 Factory**：服务端在算
+  `configHash` 前读目标工厂 `nftSaleDuration()`，写入
+  `config.fixedEconomics.nftSaleDurationSeconds`（BSC 测试网 1 小时工厂 = `3600`；主网 / 旧工厂
+  = `604800`，此时 `configHash` 与 S141 之前逐字节相同）。工厂未配置或读链失败时保存返回
+  `503`，`reasonCode = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE"`（绝不回退到常量）。
+- 已保存配置的 `nftSaleDurationSeconds` 与目标工厂不一致（例如工厂由 7 天换成 1 小时后，
+  旧的 604800 配置）：签名准备与提交返回 `503`，
+  `reasonCode = "HOOKS_FACTORY_TEMPLATE_MISMATCH"`，不签名、不记录任务。处理方式：重新保存
+  一版配置（会按新工厂重算 hash）并重新走独立审批；重试同一版本不会成功。
 - **不新增 capability**；`GET /v2/meta/capabilities` 不变。前端以 503 + reasonCode 判断。
 
 ## 1. Headers
@@ -232,11 +241,26 @@ cancelled`，已取消再取消返回原状态。**执行器认领之后（`clai
 | 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                          |
 | 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                                                              |
 | 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                         |
+| 状态 | code                             | 场景                                                                                                                                                                      |
+| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------                                         |
+| 400  | `INVALID_REQUEST`                | 结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                                         |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                         |
+| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                               |
+| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                          |
+| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                                                                 |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                           |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                          |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE` / `HOOKS_FACTORY_TEMPLATE_MISMATCH`（决策 0119，见 §0）                                                      |
+| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                         |
 
 ## 8. unavailable 行为
 
-开关关闭：所有页面块显示「Hooks 发射未开放」。开关开但无 Factory：可编辑/保存草稿，签名与
-提交按钮禁用并显示「测试网工厂未配置」。不得用本地数据伪造任务状态。
+开关关闭：所有页面块显示「Hooks 发射未开放」。开关开但无 Factory（或读链失败）：可编辑草稿
+表单，但**保存、签名与提交**均返回 `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，按钮显示「测试网工厂
+未配置」（决策 0119：发售期取自工厂，没有工厂就无法生成 `configHash`）。
+`HOOKS_FACTORY_TEMPLATE_MISMATCH`：提示「发射模板已更新，请重新保存配置并重新提交审批」。
+NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不要写死 7 天。
+不得用本地数据伪造任务状态。
 
 ## 9. 部署进度（S132 / 决策 0112）
 

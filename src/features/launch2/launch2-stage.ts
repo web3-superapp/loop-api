@@ -10,7 +10,9 @@ import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
  * - `Graduated` seen → `graduated` (the last buy graduates atomically, so a
  *   sold-out curve is always graduated — either round can jump here);
  * - before the NFT sale start → `upcoming` (next = sale start);
- * - sale start ≤ now < start + 604,800 s → `nft_sale` (next = sale end);
+ * - sale start ≤ now < sale end → `nft_sale` (next = sale end). The end is
+ *   the instance's verified `ProjectNFT.saleEnd()` (Decision 0119: 1 hour
+ *   on the testnet Factory, 7 days on mainnet), never a template constant;
  * - sale over, no `SnapshotPublished` → `snapshot_pending` (no clock: the
  *   2-of-3 publication decides);
  * - published ≤ now < published + 3,600 s → `priority` (next = round end);
@@ -22,6 +24,8 @@ import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
 export interface Launch2StageInput {
   readonly nowSeconds: bigint;
   readonly nftSaleStart: bigint;
+  /** The instance's `ProjectNFT.saleEnd()` (Unix seconds). */
+  readonly nftSaleEnd: bigint;
   readonly snapshotPublishedAt: bigint | null;
   readonly graduated: boolean;
   readonly holdReason: string | null;
@@ -31,10 +35,6 @@ export interface Launch2StageProjection {
   readonly stage: Launch2Stage;
   /** Unix seconds of the next clock-driven change; null when none. */
   readonly nextChangeAt: bigint | null;
-}
-
-export function launch2NftSaleEnd(nftSaleStart: bigint): bigint {
-  return nftSaleStart + BigInt(launch2Template.nftSaleSeconds);
 }
 
 export function launch2EarlyRoundEnd(publishedAt: bigint): bigint {
@@ -54,7 +54,7 @@ export function deriveLaunch2Stage(
   if (now < input.nftSaleStart) {
     return { stage: "upcoming", nextChangeAt: input.nftSaleStart };
   }
-  const saleEnd = launch2NftSaleEnd(input.nftSaleStart);
+  const saleEnd = input.nftSaleEnd;
   if (now < saleEnd) {
     return { stage: "nft_sale", nextChangeAt: saleEnd };
   }

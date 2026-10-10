@@ -76,11 +76,7 @@ import {
   type Launch2TradeRecord,
   type Launch2ViewerChainState,
 } from "./launch2-ports.js";
-import {
-  deriveLaunch2Stage,
-  launch2EarlyRoundEnd,
-  launch2NftSaleEnd,
-} from "./launch2-stage.js";
+import { deriveLaunch2Stage, launch2EarlyRoundEnd } from "./launch2-stage.js";
 
 /**
  * Decision 0114: the `/v2/launch2/*` service. Lists and details come from
@@ -226,6 +222,7 @@ function stageOf(record: Launch2InstanceRecord, nowSeconds: bigint) {
   return deriveLaunch2Stage({
     nowSeconds,
     nftSaleStart: seconds(record.nftSaleStart),
+    nftSaleEnd: seconds(record.nftSaleEnd),
     snapshotPublishedAt:
       record.snapshot === null ? null : seconds(record.snapshot.publishedAt),
     graduated: record.graduation !== null,
@@ -240,7 +237,6 @@ function summaryOf(
   const stage = stageOf(record, nowSeconds);
   const sold = BigInt(record.soldSupply);
   const reserve = BigInt(record.reserveUsd1);
-  const saleStart = seconds(record.nftSaleStart);
   return Object.freeze({
     instanceId: record.instanceId,
     projectId: record.projectId,
@@ -259,7 +255,7 @@ function summaryOf(
       priceUsd1: formatLaunch2Amount(launch2Template.nftPrice),
       soldCount: record.nftMintedCount,
       startAt: record.nftSaleStart,
-      endAt: isoOf(launch2NftSaleEnd(saleStart)),
+      endAt: record.nftSaleEnd,
     }),
     curve: Object.freeze({
       saleSupply: formatLaunch2Amount(launch2Template.curveSaleSupply),
@@ -665,7 +661,7 @@ export function createLaunch2Service(
     const at = state.curve.blockTimestamp;
     const saleStart = seconds(record.nftSaleStart);
     if (at < saleStart) return "upcoming";
-    if (at < launch2NftSaleEnd(saleStart)) return "nft_sale";
+    if (at < seconds(record.nftSaleEnd)) return "nft_sale";
     if (state.curve.earlyRoundEndsAt === 0n) return "snapshot_pending";
     return at < state.curve.earlyRoundEndsAt ? "priority" : "public";
   }
@@ -1181,7 +1177,9 @@ export function createLaunch2Service(
           configVersion: record.configVersion,
           configHash: record.configHash,
           buybackRecipient: record.buybackRecipient,
-          template: launch2TemplateProjection(),
+          template: launch2TemplateProjection(
+            Number(seconds(record.nftSaleEnd) - seconds(record.nftSaleStart)),
+          ),
           contracts: Object.freeze({
             factory: record.factoryAddress,
             ...record.addresses,
@@ -1570,7 +1568,7 @@ export function createLaunch2Service(
             tax: 0n,
             refund: 0n,
             valueUsd: price,
-            deadline: launch2NftSaleEnd(seconds(record.nftSaleStart)),
+            deadline: seconds(record.nftSaleEnd),
             gasHint: fallbackGas.nft_mint,
           });
         },

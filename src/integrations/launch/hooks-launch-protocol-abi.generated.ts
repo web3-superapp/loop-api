@@ -191,6 +191,13 @@ export const loopLaunchFactoryAbi = [
   },
   {
     type: "function",
+    name: "nftSaleDuration",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64", internalType: "uint64" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "nonces",
     inputs: [
       { name: "projectOwner", type: "address", internalType: "address" },

@@ -106,6 +106,7 @@ const draftInput = {
 const launchDraft = parseHooksLaunchDraft(draftInput, {
   nowUnixSeconds: "1800000000",
   minimumLeadSeconds: 86_400,
+  nftSaleDurationSeconds: 604_800,
 });
 
 describe("Decision 0111 console follow-ups on PostgreSQL", () => {

@@ -19,7 +19,6 @@ export const launch2Template = Object.freeze({
   taxDenominator: 10_000n,
   perAddressCap: 5_000_000n * launch2Wad,
   earlyRoundSeconds: 3_600,
-  nftSaleSeconds: 604_800,
   nftPrice: 100n * launch2Wad,
   officialPoolTaxBps: 200,
   lpFee: 2_500,
@@ -153,8 +152,14 @@ export function parseLaunch2Amount(value: unknown): bigint | null {
   );
 }
 
-/** The template card the App shows read-only (decimal strings). */
-export function launch2TemplateProjection(): Record<string, unknown> {
+/**
+ * The template card the App shows read-only (decimal strings).
+ * `nftSaleSeconds` is the instance's own sale period (Decision 0119:
+ * `saleEnd − saleStart` of its ProjectNFT, 3,600 on the testnet Factory).
+ */
+export function launch2TemplateProjection(
+  nftSaleSeconds: number,
+): Record<string, unknown> {
   const t = launch2Template;
   return Object.freeze({
     templateVersion: t.templateVersion,
@@ -170,7 +175,7 @@ export function launch2TemplateProjection(): Record<string, unknown> {
     perAddressCap: formatLaunch2Amount(t.perAddressCap),
     perAddressCapBps: 50,
     nftPriceUsd1: formatLaunch2Amount(t.nftPrice),
-    nftSaleSeconds: t.nftSaleSeconds,
+    nftSaleSeconds,
     earlyRoundSeconds: t.earlyRoundSeconds,
     buybackOrderUsd1: formatLaunch2Amount(t.buybackOrderUsd1),
     buybackMinIntervalSeconds: t.buybackMinIntervalSeconds,

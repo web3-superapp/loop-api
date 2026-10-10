@@ -12,6 +12,14 @@ export interface HooksLaunchFactoryReader {
   readonly factoryAddress: string;
   readonly chainId: number;
   nonce(projectOwner: string): Promise<bigint>;
+  /**
+   * Decision 0119: the Factory's immutable `nftSaleDuration()`; a pre-S141
+   * Factory without the function reads as 604,800 s with `legacy: true`.
+   */
+  nftSaleDuration(): Promise<{
+    readonly seconds: number;
+    readonly legacy: boolean;
+  }>;
   tokenDeployment(request: {
     readonly name: string;
     readonly ticker: string;
@@ -33,14 +41,37 @@ export interface HooksLaunchFactoryReader {
  * Decision 0108: typed preparation failures so the route never classifies
  * by message text. `unavailable` covers missing configuration, Factory/RPC
  * reads, and an exhausted salt search; `busy` is admission control.
+ * `template_mismatch` (Decision 0119): the saved config's
+ * `fixedEconomics.nftSaleDurationSeconds` is not the target Factory's
+ * `nftSaleDuration()`, so its configHash binds another template.
  */
 export class HooksLaunchDeploymentError extends Error {
   constructor(
-    readonly kind: "not_found" | "invalid" | "unavailable" | "busy",
+    readonly kind:
+      "not_found" | "invalid" | "unavailable" | "busy" | "template_mismatch",
     message: string,
   ) {
     super(message);
     this.name = "HooksLaunchDeploymentError";
+  }
+}
+
+/**
+ * Decision 0119: the project-signed configHash covers
+ * `fixedEconomics.nftSaleDurationSeconds`; it must be the target Factory's
+ * `nftSaleDuration()` or the signature would approve a sale period the
+ * chain does not run. A Factory read failure propagates (unavailable).
+ */
+export async function assertHooksLaunchFactoryTemplate(
+  reader: Pick<HooksLaunchFactoryReader, "nftSaleDuration">,
+  config: {
+    readonly fixedEconomics?: { readonly nftSaleDurationSeconds?: unknown };
+  },
+  mismatch: () => Error,
+): Promise<void> {
+  const factory = await reader.nftSaleDuration();
+  if (config.fixedEconomics?.nftSaleDurationSeconds !== factory.seconds) {
+    throw mismatch();
   }
 }
 
@@ -155,6 +186,15 @@ export function createHooksLaunchDeploymentService(input: {
         buybackRecipient: draft.config.buybackRecipient.toLowerCase(),
         deadline,
       };
+      await assertHooksLaunchFactoryTemplate(
+        reader,
+        draft.config,
+        () =>
+          new HooksLaunchDeploymentError(
+            "template_mismatch",
+            "Hooks launch config template differs from the Factory",
+          ),
+      );
       const nonce = await reader.nonce(projectOwner);
       if (nonce < 0n || nonce >= 1n << 256n) {
         throw new HooksLaunchDeploymentError(

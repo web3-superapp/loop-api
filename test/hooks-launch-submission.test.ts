@@ -26,6 +26,7 @@ const draft = {
     configHash: `0x${"cd".repeat(32)}`,
     nftSaleStartAt: String(now + 86400),
     buybackRecipient: "0x3333333333333333333333333333333333333333",
+    fixedEconomics: { nftSaleDurationSeconds: 604_800 },
   },
 };
 const configs = {
@@ -43,6 +44,7 @@ const reader: HooksLaunchFactoryReader = {
   chainId: 97,
   factoryAddress: "0x1111111111111111111111111111111111111111",
   nonce: () => Promise.resolve(7n),
+  nftSaleDuration: () => Promise.resolve({ seconds: 604_800, legacy: false }),
   tokenDeployment: () =>
     Promise.resolve({
       deployer: "0x5555555555555555555555555555555555555555",
@@ -245,6 +247,19 @@ describe("Hooks signed deployment submission", { timeout: 60_000 }, () => {
     await expect(
       service.submit({ ...command, body: await payload() }),
     ).rejects.toThrow();
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("refuses a config hashed for another Factory sale period (Decision 0119)", async () => {
+    const { service, save } = fixture({
+      reader: {
+        ...reader,
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 3_600, legacy: false }),
+      },
+    });
+    await expect(
+      service.submit({ ...command, body: await payload() }),
+    ).rejects.toMatchObject({ kind: "template_mismatch" });
     expect(save).not.toHaveBeenCalled();
   });
 });

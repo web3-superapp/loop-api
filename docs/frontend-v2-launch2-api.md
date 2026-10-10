@@ -24,12 +24,18 @@ with the read model matching the chain 40/40; NFT mint and later stages not yet 
 | `stage`            | Meaning                                 | `nextChangeAt` | App                            |
 | ------------------ | --------------------------------------- | -------------- | ------------------------------ |
 | `upcoming`         | Activated, NFT sale not open yet        | sale start     | 即将开售 · 倒计时              |
-| `nft_sale`         | NFT sale (604,800 s)                    | sale end       | NFT 发售中 · 剩余 d h m        |
+| `nft_sale`         | NFT sale until `nftSale.endAt`          | sale end       | NFT 发售中 · 剩余 d h m        |
 | `snapshot_pending` | Sale over, holder list not published    | `null`         | 名单生成中                     |
 | `priority`         | Snapshot holders only, 3,600 s          | round end      | 提前购 · 持有人优先 · 剩余 m s |
 | `public`           | Public curve until sold out             | `null`         | 公开内盘                       |
 | `graduated`        | Sold out → official pool (either round) | `null`         | 已毕业 · 官方池交易中          |
 | `paused`           | Integrity hold (`holdReason`)           | `null`         | 已暂停 + reason                |
+
+**NFT 发售期（S141 / 决策 0119）**：发售结束时刻由实例的 `nftSale.endAt` 决定（= 该实例
+`ProjectNFT.saleEnd()`，部署核验时读链得到），**不是**模板常量 7 天。BSC 测试网工厂为
+**1 小时**（`endAt − startAt = 3600 s`，`template.nftSaleSeconds = 3600`）；主网为 7 天
+（604800）。倒计时一律以 `nftSale.endAt` / `nextChangeAt` 为准，「剩余 d h m」在 1 小时期间
+应显示为「剩余 m s」；不要写死「7 天」文案，时长展示用 `template.nftSaleSeconds`。
 
 Poll the detail and count down to `nextChangeAt`; never advance the stage locally. `priority`
 and `public` can jump straight to `graduated`. `holdReason`:
@@ -55,14 +61,14 @@ and `public` can jump straight to `graduated`. `holdReason`:
       "logoUrl": "https://example.com/frog.png",
       "memeAddress": "0xaaaa…6666",
       "stage": "nft_sale",
-      "nextChangeAt": "2027-01-23T07:00:00.000Z",
+      "nextChangeAt": "2027-01-16T08:00:00.000Z",
       "holdReason": null,
       "activatedAt": "2027-01-15T07:00:00.000Z",
       "nftSale": {
         "priceUsd1": "100",
         "soldCount": "2",
         "startAt": "2027-01-16T07:00:00.000Z",
-        "endAt": "2027-01-23T07:00:00.000Z"
+        "endAt": "2027-01-16T08:00:00.000Z"
       },
       "curve": {
         "saleSupply": "800000000",
@@ -113,7 +119,7 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
       "perAddressCap": "5000000",
       "perAddressCapBps": 50,
       "nftPriceUsd1": "100",
-      "nftSaleSeconds": 604800,
+      "nftSaleSeconds": 3600,
       "earlyRoundSeconds": 3600,
       "buybackOrderUsd1": "100",
       "buybackMinIntervalSeconds": 10

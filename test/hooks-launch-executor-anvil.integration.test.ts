@@ -208,7 +208,11 @@ describe.skipIf(skipReason !== null)(
           nftSaleStartAt: String(nowSeconds + 2 * 86_400),
           buybackRecipient: "0x3333333333333333333333333333333333333333",
         },
-        { nowUnixSeconds: String(nowSeconds), minimumLeadSeconds: 86_400 },
+        {
+          nowUnixSeconds: String(nowSeconds),
+          minimumLeadSeconds: 86_400,
+          nftSaleDurationSeconds: 604_800,
+        },
       );
       const configs = createPostgresHooksLaunchProjectConfigRepository(pool);
       await configs.saveOwnedDraft({

@@ -9,6 +9,7 @@ import {
   hooksLaunchCommandPermission,
   type HooksLaunchOpsPermission,
   type HooksLaunchReviewCommand,
+  type HooksLaunchReviewExecuteContext,
   type HooksLaunchReviewPage,
   type HooksLaunchReviewRepository,
 } from "../features/launch/hooks-launch-review.js";
@@ -121,6 +122,7 @@ async function saveConfig(
   command: Extract<HooksLaunchReviewCommand, { action: "launch.config.save" }>,
   nowUnixSeconds: number,
   minimumLeadSeconds: number,
+  nftSaleDurationSeconds: number | undefined,
 ): Promise<unknown> {
   const projectId = command.target;
   const project = await lockApprovedProject(client, projectId, "update");
@@ -132,11 +134,16 @@ async function saveConfig(
   if (currentVersion !== command.payload.expectedVersion) {
     throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
   }
+  // Decision 0119: never hash a config without the Factory's sale period.
+  if (nftSaleDurationSeconds === undefined) {
+    throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+  }
   let config;
   try {
     config = parseHooksLaunchDraft(command.payload.config, {
       nowUnixSeconds: String(nowUnixSeconds),
       minimumLeadSeconds,
+      nftSaleDurationSeconds,
     });
   } catch {
     throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
@@ -376,7 +383,11 @@ export function createPostgresHooksLaunchReviewRepository(
         return page(result.rows, "acceptance_id");
       });
     },
-    async execute(actor: string, command: HooksLaunchReviewCommand) {
+    async execute(
+      actor: string,
+      command: HooksLaunchReviewCommand,
+      context?: HooksLaunchReviewExecuteContext,
+    ) {
       const hash = hooksLaunchCommandHash(command);
       const client = await pool.connect();
       try {
@@ -421,6 +432,7 @@ export function createPostgresHooksLaunchReviewRepository(
             command,
             now(),
             minimumLeadSeconds,
+            context?.nftSaleDurationSeconds,
           );
         } else if (command.action === "launch.config.approve") {
           result = await approveConfig(client, actor, command);

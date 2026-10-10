@@ -83,6 +83,7 @@ const draftInput = {
 const draft = parseHooksLaunchDraft(draftInput, {
   nowUnixSeconds: "1800000000",
   minimumLeadSeconds: 86_400,
+  nftSaleDurationSeconds: 604_800,
 });
 
 beforeAll(async () => {
@@ -560,6 +561,7 @@ describe("Decision 0109 separation of duties (Hooks review)", () => {
         reason: "Operator correction",
         payload: { expectedVersion: 1, config: draftInput },
       }),
+      { nftSaleDurationSeconds: 604_800 },
     );
     const editorReviewer = await activate({
       role: "reviewer",

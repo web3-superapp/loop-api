@@ -44,9 +44,22 @@ function address(fill: string): string {
   return `0x${fill.repeat(40)}`.slice(0, 42);
 }
 
+/** The ISO sale end `seconds` after an ISO sale start (Decision 0119). */
+export function launch2SaleEndAfter(startIso: string, seconds: bigint): string {
+  return new Date(Date.parse(startIso) + Number(seconds) * 1000).toISOString();
+}
+
+/**
+ * `nftSaleEnd` defaults to start + 604,800 s (the 7-day Factory); pass
+ * `saleSeconds` (e.g. 3_600n for the testnet Factory) or an explicit end.
+ */
 export function instanceFixture(
   overrides: Partial<Launch2InstanceRecord> = {},
+  saleSeconds = 604_800n,
 ): Launch2InstanceRecord {
+  const nftSaleStart =
+    overrides.nftSaleStart ??
+    new Date(Number(launch2NowSeconds - 3_600n) * 1000).toISOString();
   return {
     instanceId: randomUUID(),
     jobId: randomUUID(),
@@ -75,9 +88,8 @@ export function instanceFixture(
       buybackExecutor: address("6"),
     },
     buybackRecipient: "0x28816c4c4792467390c90e5b426f198570e29307",
-    nftSaleStart: new Date(
-      Number(launch2NowSeconds - 3_600n) * 1000,
-    ).toISOString(),
+    nftSaleStart,
+    nftSaleEnd: launch2SaleEndAfter(nftSaleStart, saleSeconds),
     deployBlockNumber: "100",
     activationBlockNumber: "102",
     deployedEventSeen: true,

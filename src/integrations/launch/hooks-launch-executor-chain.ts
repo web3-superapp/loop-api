@@ -2,6 +2,7 @@ import {
   BaseError,
   BlockNotFoundError,
   ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
   ExecutionRevertedError,
   HttpRequestError,
   TimeoutError,
@@ -28,9 +29,10 @@ import {
   type HooksLaunchReceipt,
   type HooksLaunchSendResult,
 } from "../../features/launch/hooks-launch-executor.js";
-import type {
-  HooksLaunchModules,
-  HooksLaunchOnChainFacts,
+import {
+  hooksLaunchTemplateConstants,
+  type HooksLaunchModules,
+  type HooksLaunchOnChainFacts,
 } from "../../features/launch/hooks-launch-verification.js";
 import {
   buybackExecutorAbi,
@@ -242,6 +244,39 @@ export function createHooksLaunchExecutorChain(input: {
       gasPrice: tx.gasPrice,
     });
     return { txHash: lower(keccak256(rawTx)), rawTx: lower(rawTx) };
+  }
+
+  /**
+   * Decision 0119: `nftSaleDuration()`; on a pre-S141 Factory the selector
+   * does not exist and the call reverts — that (and only a contract revert)
+   * reads as the legacy 604,800 s. RPC failures propagate.
+   */
+  async function nftSaleDuration(): Promise<{
+    readonly seconds: bigint;
+    readonly legacy: boolean;
+  }> {
+    try {
+      return {
+        seconds: await big(factory, loopLaunchFactoryAbi, "nftSaleDuration"),
+        legacy: false,
+      };
+    } catch (error) {
+      if (
+        revertReason(error) === null &&
+        !(
+          error instanceof BaseError &&
+          error.walk(
+            (cause) => cause instanceof ContractFunctionZeroDataError,
+          ) !== null
+        )
+      ) {
+        throw error;
+      }
+      return {
+        seconds: hooksLaunchTemplateConstants.legacyNftSaleDurationSeconds,
+        legacy: true,
+      };
+    }
   }
 
   async function readModules(
@@ -456,6 +491,7 @@ export function createHooksLaunchExecutorChain(input: {
         pauseAuthority,
         resumeAuthority,
         activationBufferSeconds,
+        saleDuration,
         deployerRows,
         modules,
       ] = await Promise.all([
@@ -469,6 +505,7 @@ export function createHooksLaunchExecutorChain(input: {
         address(factory, F, "pauseAuthority"),
         address(factory, F, "resumeAuthority"),
         big(factory, F, "activationBufferSeconds"),
+        nftSaleDuration(),
         Promise.all(
           (
             [
@@ -503,6 +540,8 @@ export function createHooksLaunchExecutorChain(input: {
         pauseAuthority,
         resumeAuthority,
         activationBufferSeconds,
+        nftSaleDuration: saleDuration.seconds,
+        nftSaleDurationLegacy: saleDuration.legacy,
         deployers: deployerRows,
       };
       if (modules === null) {

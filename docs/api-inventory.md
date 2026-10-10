@@ -343,14 +343,33 @@ owner `PUT` and the operator save share it). S137 ran the full deploy →
 gains read-only `deploymentChainId` (`LAUNCH_CHAIN_ID`); the template's
 `fixedEconomics.chainId` stays 56.
 
-| Route                                                              | Input                                                        | Output                                                                             | Contract      | Runtime                                                                                                 |
-| ------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| `GET /v2/launch/projects/{projectId}/hooks-config`                 | Bearer + headers; no payload                                 | `{draft \| null, contractVersion}`; owner-scoped                                   | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
-| `PUT /v2/launch/projects/{projectId}/hooks-config`                 | Headers, no `Idempotency-Key`; `{expectedVersion, config}`   | New immutable version with server-derived `fixedEconomics` and `configHash`        | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; CAS; sale lead `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS` (0117) |
-| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request` | Bearer + headers; `walletId`                                 | EIP-712 typed data, MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                             |
-| `POST /v2/launch/projects/{projectId}/hooks-deployments`           | Write headers incl. UUIDv4 `Idempotency-Key`; signed request | `awaiting_executor` task; the executor (Decision 0112) advances it                 | `implemented` | `blocked-provider`; needs the Factory and an operator approval (`403 POLICY_BLOCKED` otherwise)         |
-| `GET /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`    | Bearer + headers                                             | Owner-scoped task with executor progress, addresses, events (0112)                 | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; progress needs the executor lane                           |
-| `DELETE /v2/launch/projects/{projectId}/hooks-deployments/{jobId}` | Write headers incl. UUIDv4 `Idempotency-Key`                 | `cancelled` task; `409` once claimed                                               | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
+| Route                                                                         | Input                                                        | Output                                                                             | Contract      | Runtime                                                                                                 |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET /v2/launch/projects/{projectId}/hooks-config`                            | Bearer + headers; no payload                                 | `{draft \| null, contractVersion}`; owner-scoped                                   | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
+| `PUT /v2/launch/projects/{projectId}/hooks-config`                            | Headers, no `Idempotency-Key`; `{expectedVersion, config}`   | New immutable version with server-derived `fixedEconomics` and `configHash`        | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; CAS; sale lead `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS` (0117) |
+| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request`            | Bearer + headers; `walletId`                                 | EIP-712 typed data, MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                             |
+| `POST /v2/launch/projects/{projectId}/hooks-deployments`                      | Write headers incl. UUIDv4 `Idempotency-Key`; signed request | `awaiting_executor` task; the executor (Decision 0112) advances it                 | `implemented` | `blocked-provider`; needs the Factory and an operator approval (`403 POLICY_BLOCKED` otherwise)         |
+| `GET /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`               | Bearer + headers                                             | Owner-scoped task with executor progress, addresses, events (0112)                 | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; progress needs the executor lane                           |
+| `DELETE /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`            | Write headers incl. UUIDv4 `Idempotency-Key`                 | `cancelled` task; `409` once claimed                                               | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
+| S141 (Decision 0119, no migration): the NFT sale period is the target         |
+| Factory's `nftSaleDuration()` (3,600 s on the BSC Testnet one-hour Factory,   |
+| 604,800 s on mainnet / pre-S141 Factories). The draft save reads it into      |
+| `fixedEconomics.nftSaleDurationSeconds` (so `PUT hooks-config` now also needs |
+| the Factory pair, else `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`; at 604,800 s the   |
+| `configHash` is byte-for-byte the pre-S141 one); signing preparation and      |
+| submission refuse a config hashed for another period                          |
+| (`503 HOOKS_FACTORY_TEMPLATE_MISMATCH`); the executor verifies the NFT        |
+| period / `saleEnd` / registry cutoff against the Factory reading and records  |
+| the verified `saleEnd` (and `legacyFactory: true` for a pre-S141 Factory).    |
+
+| Route                                                              | Input                                                        | Output                                                                             | Contract      | Runtime                                                                                         |
+| ------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /v2/launch/projects/{projectId}/hooks-config`                 | Bearer + headers; no payload                                 | `{draft \| null, contractVersion}`; owner-scoped                                   | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                     |
+| `PUT /v2/launch/projects/{projectId}/hooks-config`                 | Headers, no `Idempotency-Key`; `{expectedVersion, config}`   | New immutable version with server-derived `fixedEconomics` and `configHash`        | `implemented` | `blocked-provider`; needs the Testnet Factory (sale period read, Decision 0119); CAS            |
+| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request` | Bearer + headers; `walletId`                                 | EIP-712 typed data, MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                     |
+| `POST /v2/launch/projects/{projectId}/hooks-deployments`           | Write headers incl. UUIDv4 `Idempotency-Key`; signed request | `awaiting_executor` task; the executor (Decision 0112) advances it                 | `implemented` | `blocked-provider`; needs the Factory and an operator approval (`403 POLICY_BLOCKED` otherwise) |
+| `GET /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`    | Bearer + headers                                             | Owner-scoped task with executor progress, addresses, events (0112)                 | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; progress needs the executor lane                   |
+| `DELETE /v2/launch/projects/{projectId}/hooks-deployments/{jobId}` | Write headers incl. UUIDv4 `Idempotency-Key`                 | `cancelled` task; `409` once claimed                                               | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                     |
 
 Dual-pool mining algorithms (Decision 0107) are library code only: no route.
 
@@ -444,6 +463,12 @@ still apply. Frontend contract: `docs/frontend-v2-launch2-api.md`.
 | Evidence: `test/launch2-snapshot-publisher-anvil.integration.test.ts` (anvil     |
 | chain 97); no BSC Testnet run (runtime `blocked-provider`: needs the signer keys |
 | in the worker env and a Testnet instance past its sale end).                     |
+| deploy); no BSC Testnet run. Frontend contract:                                  |
+| `docs/frontend-v2-launch2-api.md`. S141 (Decision 0119): `nft_sale` ends at      |
+| the instance's verified `ProjectNFT.saleEnd()` (`nftSale.endAt`,                 |
+| `template.nftSaleSeconds` per instance; one hour on the BSC Testnet Factory),    |
+| never a 7-day constant; anvil evidence with a 3,600 s Factory through            |
+| `snapshot_pending`: `test/launch2-sale-duration-anvil.integration.test.ts`.      |
 
 | Route                                                   | Input                                                       | Output                                                                                                                   | Contract      | Runtime                                              |
 | ------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------- | ---------------------------------------------------- |

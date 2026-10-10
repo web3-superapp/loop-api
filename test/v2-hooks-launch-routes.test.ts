@@ -103,6 +103,7 @@ const factoryReader: HooksLaunchFactoryReader = {
   factoryAddress: "0x1111111111111111111111111111111111111111",
   chainId: 97,
   nonce: () => Promise.resolve(9n),
+  nftSaleDuration: () => Promise.resolve({ seconds: 604_800, legacy: false }),
   tokenDeployment: () =>
     Promise.resolve({
       deployer: "0x5555555555555555555555555555555555555555",
@@ -361,7 +362,10 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
   });
 
   it("saves and reads an owner-scoped draft with server-derived economics", async () => {
-    const app = await createApp({ configs: configRepositoryFake() });
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+    });
     const empty = await app.inject({
       url: `/v2/launch/projects/${projectId}/hooks-config`,
       headers: s7CommonHeaders(),
@@ -404,7 +408,10 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
   });
 
   it("maps stale CAS, foreign projects, overrides and Idempotency-Key to the V2 error family", async () => {
-    const app = await createApp({ configs: configRepositoryFake() });
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+    });
     await saveDraft(app);
     const stale = await app.inject({
       method: "PUT",
@@ -541,8 +548,19 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
   }, 60_000);
 
   it("answers HOOKS_LAUNCH_FACTORY_UNAVAILABLE without a configured Factory or on a failed read", async () => {
+    // Decision 0119: without a Factory the configHash cannot bind the sale
+    // period, so the draft save is unavailable too (never a constant).
     const missing = await createApp({ configs: configRepositoryFake() });
-    await saveDraft(missing);
+    const unsaved = await missing.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: draftBody },
+    });
+    expect(unsaved.statusCode).toBe(503);
+    expect(unsaved.json()).toMatchObject({
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
+    });
     const response = await missing.inject({
       url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
       headers: s7CommonHeaders(),
@@ -567,6 +585,32 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     });
     expect(failed.statusCode).toBe(503);
     expect(failed.body).not.toContain("rpc");
+  });
+
+  it("binds the draft to the Factory sale period and refuses a config hashed for another Factory (Decision 0119)", async () => {
+    const configs = configRepositoryFake();
+    const hourly: HooksLaunchFactoryReader = {
+      ...factoryReader,
+      nftSaleDuration: () => Promise.resolve({ seconds: 3_600, legacy: false }),
+    };
+    // Saved against the 7-day Factory: the mainnet template, unchanged.
+    const weekly = await createApp({ configs, reader: factoryReader });
+    const saved = (await saveDraft(weekly)).json<{
+      config: { fixedEconomics: { nftSaleDurationSeconds: number } };
+    }>();
+    expect(saved.config.fixedEconomics.nftSaleDurationSeconds).toBe(604_800);
+
+    // The target Factory now runs a 1-hour sale: prepare fails closed.
+    const swapped = await createApp({ configs, reader: hourly });
+    const refused = await swapped.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(refused.statusCode).toBe(503);
+    expect(refused.json()).toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE",
+      detailsSafe: { reasonCode: "HOOKS_FACTORY_TEMPLATE_MISMATCH" },
+    });
   });
 
   it("records a verified project-signed task and requires an Idempotency-Key", async () => {

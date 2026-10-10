@@ -1763,7 +1763,12 @@ const hooksLaunchFixedEconomicsSchema = {
     initialLiquiditySupplyRaw: uintStringSchema,
     graduationReserveUsd1Raw: uintStringSchema,
     nftPriceUsd1Raw: uintStringSchema,
-    nftSaleDurationSeconds: { type: "integer", minimum: 0 },
+    nftSaleDurationSeconds: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Decision 0119: the target Factory's nftSaleDuration() when the config was saved (3600 on the BSC Testnet 1-hour Factory; 604800 on mainnet / pre-S141 Factories, whose configHash is unchanged). Part of fixedEconomicsHash.",
+    },
     earlyRoundDurationSeconds: { type: "integer", minimum: 0 },
     perAddressLifetimeBuyCapRaw: uintStringSchema,
     curveBuyTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },

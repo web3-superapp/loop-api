@@ -186,7 +186,11 @@ const nftSaleSchema = {
     priceUsd1: decimalSchema,
     soldCount: uintStringSchema,
     startAt: dateTimeSchema,
-    endAt: dateTimeSchema,
+    endAt: {
+      ...dateTimeSchema,
+      description:
+        "Decision 0119: the instance's ProjectNFT.saleEnd() verified at deployment (start + the Factory's nftSaleDuration(): 1 hour on the BSC Testnet Factory, 7 days on mainnet). Not a template constant.",
+    },
   },
 } as const;
 
@@ -413,7 +417,11 @@ const templateSchema = {
     perAddressCap: decimalSchema,
     perAddressCapBps: { type: "integer" },
     nftPriceUsd1: decimalSchema,
-    nftSaleSeconds: { type: "integer" },
+    nftSaleSeconds: {
+      type: "integer",
+      description:
+        "Decision 0119: this instance's NFT sale period (nftSale.endAt − startAt): 3600 on the BSC Testnet Factory, 604800 on mainnet.",
+    },
     earlyRoundSeconds: { type: "integer" },
     buybackOrderUsd1: decimalSchema,
     buybackMinIntervalSeconds: { type: "integer" },

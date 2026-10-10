@@ -1,5 +1,9 @@
 import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
   createPublicClient,
+  ExecutionRevertedError,
   fallback,
   http,
   keccak256,
@@ -7,6 +11,10 @@ import {
 } from "viem";
 import { bscTestnet } from "viem/chains";
 
+import {
+  hooksLaunchLegacyNftSaleDurationSeconds,
+  isHooksLaunchNftSaleDuration,
+} from "../../features/launch/hooks-launch-config.js";
 import type { HooksLaunchFactoryReader } from "../../features/launch/hooks-launch-deployment.js";
 
 const hooksLaunchFactoryAbi = [
@@ -23,6 +31,13 @@ const hooksLaunchFactoryAbi = [
     stateMutability: "view",
     inputs: [{ name: "projectOwner", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "nftSaleDuration",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64" }],
   },
   {
     type: "function",
@@ -70,6 +85,23 @@ const tokenDeployerAbi = [
   },
 ] as const;
 
+/**
+ * A contract-level revert (or empty return data) of a view: on a pre-S141
+ * Factory `nftSaleDuration()` has no selector and the call reverts. Network
+ * and RPC failures are not reverts and stay unavailable.
+ */
+function isContractRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  return (
+    error.walk(
+      (cause) =>
+        cause instanceof ContractFunctionRevertedError ||
+        cause instanceof ContractFunctionZeroDataError ||
+        cause instanceof ExecutionRevertedError,
+    ) !== null
+  );
+}
+
 export function createHooksLaunchFactoryReader(input: {
   readonly factoryAddress: string;
   readonly expectedRuntimeCodeHash: string;
@@ -110,9 +142,43 @@ export function createHooksLaunchFactoryReader(input: {
     }
   }
 
+  // Immutable for a code-hash-pinned Factory: read once, then reuse.
+  let saleDuration: {
+    readonly seconds: number;
+    readonly legacy: boolean;
+  } | null = null;
+
   return Object.freeze({
     factoryAddress,
     chainId: 97,
+    async nftSaleDuration() {
+      if (saleDuration !== null) return saleDuration;
+      await verifyNetworkAndCode();
+      let read: { readonly seconds: number; readonly legacy: boolean };
+      try {
+        const value = await client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchFactoryAbi,
+          functionName: "nftSaleDuration",
+        });
+        read = { seconds: Number(value), legacy: false };
+      } catch (error) {
+        if (!isContractRevert(error)) {
+          throw new Error("Hooks launch factory read unavailable", {
+            cause: error,
+          });
+        }
+        read = {
+          seconds: hooksLaunchLegacyNftSaleDurationSeconds,
+          legacy: true,
+        };
+      }
+      if (!isHooksLaunchNftSaleDuration(read.seconds)) {
+        throw new Error("Hooks launch factory sale duration out of range");
+      }
+      saleDuration = Object.freeze(read);
+      return saleDuration;
+    },
     async nonce(projectOwner: string) {
       await verifyNetworkAndCode();
       try {

@@ -10,7 +10,10 @@ import {
 } from "viem";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
-import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import {
+  assertHooksLaunchFactoryTemplate,
+  type HooksLaunchFactoryReader,
+} from "./hooks-launch-deployment.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
@@ -179,6 +182,7 @@ export class HooksLaunchSubmissionError extends Error {
       | "not_found"
       | "not_approved"
       | "not_cancellable"
+      | "template_mismatch"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
@@ -332,6 +336,11 @@ export function createHooksLaunchSubmissionService(input: {
       let memeAddress: string;
       let hookAddress: string;
       try {
+        await assertHooksLaunchFactoryTemplate(
+          reader,
+          draft.config,
+          () => new HooksLaunchSubmissionError("template_mismatch"),
+        );
         if ((await reader.nonce(wallet.address)) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({

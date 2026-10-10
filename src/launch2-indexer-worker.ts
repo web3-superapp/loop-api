@@ -15,10 +15,7 @@ import type {
   Launch2Repository,
   Launch2SnapshotMemberRecord,
 } from "./features/launch2/launch2-ports.js";
-import {
-  deriveLaunch2Stage,
-  launch2NftSaleEnd,
-} from "./features/launch2/launch2-stage.js";
+import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
 
 /**
  * Decision 0114: the `launch2_event` lane (default off,
@@ -167,8 +164,8 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       // The contract binds, but does not check, the cutoff: the last
       // canonical block whose timestamp is before the NFT sale end.
       if (verified && instance !== undefined) {
-        const saleEnd = launch2NftSaleEnd(
-          BigInt(Math.floor(Date.parse(instance.nftSaleStart) / 1000)),
+        const saleEnd = BigInt(
+          Math.floor(Date.parse(instance.nftSaleEnd) / 1000),
         );
         const cutoff = BigInt(snapshot.cutoffBlock);
         const [block, next] = await Promise.all([
@@ -234,6 +231,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         nftSaleStart: BigInt(
           Math.floor(Date.parse(instance.nftSaleStart) / 1000),
         ),
+        nftSaleEnd: BigInt(Math.floor(Date.parse(instance.nftSaleEnd) / 1000)),
         snapshotPublishedAt:
           instance.snapshotPublishedAt === null
             ? null

@@ -3,6 +3,7 @@ import {
   parseHooksLaunchDraft,
   type HooksLaunchDraft,
 } from "./hooks-launch-config.js";
+import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
 
 export interface HooksLaunchProjectConfigRecord {
   readonly projectId: string;
@@ -47,11 +48,32 @@ export class HooksLaunchProjectVersionConflictError extends Error {
   }
 }
 
-/** Decision 0108: no repository (database not configured) fails closed. */
+/**
+ * Decision 0108: no repository (database not configured) fails closed.
+ * Decision 0119: so does a missing / unreadable target Factory (`factory`),
+ * because the configHash binds the Factory's `nftSaleDuration()`.
+ */
 export class HooksLaunchProjectConfigUnavailableError extends Error {
-  constructor() {
+  constructor(readonly source: "repository" | "factory" = "repository") {
     super("Hooks config unavailable");
     this.name = "HooksLaunchProjectConfigUnavailableError";
+  }
+}
+
+/**
+ * Decision 0119: the target Factory's sale period for a new configHash;
+ * no Factory or a failed read is unavailable, never a constant fallback.
+ */
+export async function hooksLaunchFactorySaleDuration(
+  factory: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null,
+): Promise<number> {
+  if (factory === null) {
+    throw new HooksLaunchProjectConfigUnavailableError("factory");
+  }
+  try {
+    return (await factory.nftSaleDuration()).seconds;
+  } catch {
+    throw new HooksLaunchProjectConfigUnavailableError("factory");
   }
 }
 
@@ -70,6 +92,8 @@ export interface HooksLaunchProjectConfigService {
 
 export function createHooksLaunchProjectConfigService(input: {
   readonly repository: HooksLaunchProjectConfigRepository | null;
+  /** The target Factory (Decision 0119); null fails `saveDraft` closed. */
+  readonly factory: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
   readonly minimumLeadSeconds: number;
   readonly now?: () => number;
 }): HooksLaunchProjectConfigService {
@@ -117,6 +141,9 @@ export function createHooksLaunchProjectConfigService(input: {
         {
           nowUnixSeconds: String(now()),
           minimumLeadSeconds: input.minimumLeadSeconds,
+          nftSaleDurationSeconds: await hooksLaunchFactorySaleDuration(
+            input.factory,
+          ),
         },
       );
       return requireRepository().saveOwnedDraft({

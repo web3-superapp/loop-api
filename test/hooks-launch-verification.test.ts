@@ -198,4 +198,84 @@ describe("Hooks launch module verification (Decision 0112)", () => {
       template,
     );
   });
+
+  describe("Decision 0119: the sale period is the Factory's nftSaleDuration()", () => {
+    const run = (facts: HooksLaunchOnChainFacts) =>
+      verifyHooksLaunchDeployment({
+        expected: expectedDeployment(),
+        event: launchDeployedEvent(),
+        facts,
+      });
+    const withNft = (
+      facts: HooksLaunchOnChainFacts,
+      nft: Partial<NonNullable<HooksLaunchOnChainFacts["nft"]>>,
+      snapshotEnd?: bigint,
+    ): HooksLaunchOnChainFacts => ({
+      ...facts,
+      nft: { ...facts.nft!, ...nft },
+      snapshots:
+        snapshotEnd === undefined
+          ? facts.snapshots
+          : { ...facts.snapshots!, nftSaleEnd: snapshotEnd },
+    });
+    const start = expectedDeployment().nftSaleStart;
+
+    it.each([
+      ["a 1-hour testnet Factory", 3_600n],
+      ["the 7-day mainnet Factory", 604_800n],
+    ] as const)("passes %s whose NFT matches it", (_label, saleDuration) => {
+      const result = run(passingFacts({ saleDuration }));
+      expect(result.failedChecks).toEqual([]);
+      expect(result.passed).toBe(true);
+    });
+
+    it("fails a 7-day NFT under a 1-hour Factory (and the reverse)", () => {
+      const hourly = passingFacts({ saleDuration: 3_600n });
+      const sevenDayNft = run(
+        withNft(
+          hourly,
+          { saleDuration: 604_800n, saleEnd: start + 604_800n },
+          start + 604_800n,
+        ),
+      );
+      expect(sevenDayNft.failedChecks).toEqual([
+        "nft_params",
+        "snapshot_params",
+      ]);
+      const weekly = passingFacts({ saleDuration: 604_800n });
+      const hourNft = run(
+        withNft(weekly, { saleDuration: 3_600n, saleEnd: start + 3_600n }),
+      );
+      expect(hourNft.failedChecks).toEqual(["nft_params"]);
+    });
+
+    it("checks saleEnd and the registry cutoff against start + the Factory period", () => {
+      const hourly = passingFacts({ saleDuration: 3_600n });
+      expect(
+        run(withNft(hourly, { saleEnd: start + 3_601n })).failedChecks,
+      ).toEqual(["nft_params"]);
+      expect(run(withNft(hourly, {}, start + 604_800n)).failedChecks).toEqual([
+        "snapshot_params",
+      ]);
+    });
+
+    it("refuses a Factory period outside 3,600..604,800 s even if the NFT agrees", () => {
+      for (const saleDuration of [3_599n, 604_801n, 0n]) {
+        expect(run(passingFacts({ saleDuration })).failedChecks).toEqual([
+          "nft_params",
+          "snapshot_params",
+        ]);
+      }
+    });
+
+    it("treats a pre-S141 Factory (no nftSaleDuration()) as 7 days", () => {
+      expect(
+        run(passingFacts({ saleDuration: 604_800n, legacy: true })).passed,
+      ).toBe(true);
+      // A legacy flag with a non-7-day reading is incoherent: fail closed.
+      expect(
+        run(passingFacts({ saleDuration: 3_600n, legacy: true })).failedChecks,
+      ).toEqual(["nft_params", "snapshot_params"]);
+    });
+  });
 });

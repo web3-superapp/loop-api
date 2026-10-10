@@ -1964,6 +1964,7 @@ export async function buildApp(
   const hooksLaunchProjectConfigService = hooksLaunchEnabled
     ? createHooksLaunchProjectConfigService({
         repository: database.hooksLaunchProjectConfigs ?? null,
+        factory: hooksFactoryReader,
         // Decision 0117: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS (default 86,400).
         minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds,
       })
@@ -2496,6 +2497,7 @@ export async function buildApp(
         deploymentChainId: config.launchChain.chainReference,
         review: createHooksLaunchReviewService({
           repository: database.hooksLaunchReview ?? null,
+          factory: hooksFactoryReader,
         }),
         audit: adminRepository,
         sessionSecret: adminConfig.sessionSecret,

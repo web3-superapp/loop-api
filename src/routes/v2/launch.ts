@@ -131,6 +131,8 @@ interface HooksDeploymentParams {
 /** Decision 0108: reason codes carried by a hooks-route 503. */
 const hooksLaunchDisabledReason = "HOOKS_LAUNCH_DISABLED";
 const hooksLaunchFactoryReason = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE";
+/** Decision 0119: the saved config was hashed for another sale period. */
+const hooksFactoryTemplateMismatchReason = "HOOKS_FACTORY_TEMPLATE_MISMATCH";
 
 function hooksUnavailable(reasonCode: string): V2ApiError {
   return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
@@ -157,7 +159,11 @@ function projectConfigError(error: unknown): never {
     throw V2ApiError.invalidRequest();
   }
   if (error instanceof HooksLaunchProjectConfigUnavailableError) {
-    throw hooksUnavailable(hooksLaunchDisabledReason);
+    throw hooksUnavailable(
+      error.source === "factory"
+        ? hooksLaunchFactoryReason
+        : hooksLaunchDisabledReason,
+    );
   }
   throw error;
 }
@@ -167,6 +173,8 @@ function submissionError(error: unknown): never {
     switch (error.kind) {
       case "unavailable":
         throw hooksUnavailable(hooksLaunchFactoryReason);
+      case "template_mismatch":
+        throw hooksUnavailable(hooksFactoryTemplateMismatchReason);
       case "not_found":
         throw V2ApiError.notFound();
       case "conflict":
@@ -251,7 +259,7 @@ export function registerV2LaunchRoutes(
         operationId: "saveV2HooksLaunchProjectConfig",
         summary: "Save an owner-scoped fixed-template Hooks project draft",
         description:
-          "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
+          "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -298,7 +306,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchSigningRequest",
         summary: "Prepare the owner's BSC Testnet Hooks deployment signature",
         description:
-          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5).",
+          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again).",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -331,6 +339,9 @@ export function registerV2LaunchRoutes(
         if (error instanceof HooksLaunchDeploymentError) {
           if (error.kind === "not_found") throw V2ApiError.notFound();
           if (error.kind === "invalid") throw V2ApiError.invalidRequest();
+          if (error.kind === "template_mismatch") {
+            throw hooksUnavailable(hooksFactoryTemplateMismatchReason);
+          }
           if (error.kind === "busy") reply.header("retry-after", "5");
           throw hooksUnavailable(hooksLaunchFactoryReason);
         }
@@ -346,7 +357,7 @@ export function registerV2LaunchRoutes(
         operationId: "submitV2HooksLaunchDeployment",
         summary: "Verify and record a project-signed Testnet deployment task",
         description:
-          "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature.",
+          "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

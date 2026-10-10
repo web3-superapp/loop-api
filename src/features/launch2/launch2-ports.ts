@@ -170,6 +170,12 @@ export interface Launch2InstanceRecord {
   readonly addresses: Launch2InstanceAddresses;
   readonly buybackRecipient: string;
   readonly nftSaleStart: string;
+  /**
+   * Decision 0119: the deployed `ProjectNFT.saleEnd()` (ISO), verified at
+   * deployment; 1 hour after the start on the testnet Factory, 7 days on
+   * mainnet. Never derived from a constant.
+   */
+  readonly nftSaleEnd: string;
   readonly deployBlockNumber: string;
   readonly activationBlockNumber: string | null;
   readonly deployedEventSeen: boolean;
@@ -236,6 +242,12 @@ export interface Launch2LaneInstance {
   readonly addresses: Launch2InstanceAddresses;
   readonly deployBlockNumber: string;
   readonly nftSaleStart: string;
+  /**
+   * Decision 0119: the deployed `ProjectNFT.saleEnd()` (ISO), verified at
+   * deployment; 1 hour after the start on the testnet Factory, 7 days on
+   * mainnet. Never derived from a constant.
+   */
+  readonly nftSaleEnd: string;
   readonly holdReason: Launch2HoldReason | null;
   readonly graduated: boolean;
   readonly snapshotPublishedAt: string | null;

@@ -50,6 +50,7 @@ const draftInput = {
 const draft = parseHooksLaunchDraft(draftInput, {
   nowUnixSeconds: "1800000000",
   minimumLeadSeconds: 86_400,
+  nftSaleDurationSeconds: 604_800,
 });
 
 async function user(): Promise<string> {
@@ -274,6 +275,20 @@ describe("Hooks operator review (000052–000053)", () => {
   it("separates editor from approver and owner from approver", async () => {
     const { owner, projectId } = await ownerDraft();
     const both = await operator(["launch.edit", "launch.approve"]);
+    // Decision 0119: an operator save without the Factory's sale period
+    // is refused before anything is hashed or written.
+    await expect(
+      review.execute(
+        both,
+        command({
+          operationId: randomUUID(),
+          action: "launch.config.save",
+          target: projectId,
+          reason: "Operator correction",
+          payload: { expectedVersion: 1, config: draftInput },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "OPS_UNAVAILABLE" });
     const edited = await review.execute(
       both,
       command({
@@ -283,6 +298,7 @@ describe("Hooks operator review (000052–000053)", () => {
         reason: "Operator correction",
         payload: { expectedVersion: 1, config: draftInput },
       }),
+      { nftSaleDurationSeconds: 604_800 },
     );
     expect(edited.result).toMatchObject({
       config_version: 2,
@@ -324,6 +340,35 @@ describe("Hooks operator review (000052–000053)", () => {
         [projectId],
       ),
     ).rejects.toThrow(/append-only/);
+  });
+
+  it("hashes an operator save for the Factory's sale period (Decision 0119)", async () => {
+    const { projectId } = await ownerDraft();
+    const editor = await operator(["launch.edit"]);
+    const hourly = await review.execute(
+      editor,
+      command({
+        operationId: randomUUID(),
+        action: "launch.config.save",
+        target: projectId,
+        reason: "Testnet 1-hour Factory",
+        payload: { expectedVersion: 1, config: draftInput },
+      }),
+      { nftSaleDurationSeconds: 3_600 },
+    );
+    expect(hourly.result).toMatchObject({ config_version: 2 });
+    const stored = await pool.query<{
+      config_hash: string;
+      seconds: number;
+    }>(
+      `select config_hash, (config -> 'fixedEconomics' ->> 'nftSaleDurationSeconds')::integer as seconds
+       from public.hooks_launch_project_config_versions
+       where project_id = $1 order by config_version`,
+      [projectId],
+    );
+    expect(stored.rows.map((row) => row.seconds)).toEqual([604_800, 3_600]);
+    expect(stored.rows[0]?.config_hash).toBe(draft.configHash);
+    expect(stored.rows[1]?.config_hash).not.toBe(draft.configHash);
   });
 
   it("refuses operator edits before the project itself is approved", async () => {

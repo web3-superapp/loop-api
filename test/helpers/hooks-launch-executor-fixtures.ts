@@ -126,8 +126,15 @@ const roles = {
   resumeAuthority: a(0x207),
 };
 
-/** Facts that pass every check for `expectedDeployment()`. */
-export function passingFacts(): HooksLaunchOnChainFacts {
+/**
+ * Facts that pass every check for `expectedDeployment()`, for a Factory
+ * whose `nftSaleDuration()` is `saleDuration` (Decision 0119; default the
+ * 7-day mainnet period). `legacy` models a pre-S141 Factory (604,800 s).
+ */
+export function passingFacts(
+  options: { readonly saleDuration?: bigint; readonly legacy?: boolean } = {},
+): HooksLaunchOnChainFacts {
+  const saleDuration = options.saleDuration ?? 604_800n;
   const moduleList = [
     memeAddress,
     hookAddress,
@@ -143,6 +150,8 @@ export function passingFacts(): HooksLaunchOnChainFacts {
       ...roles,
       usd1,
       activationBufferSeconds: 3_600n,
+      nftSaleDuration: saleDuration,
+      nftSaleDurationLegacy: options.legacy ?? false,
       deployers: (["token", "v4", "sale", "buyback"] as const).map(
         (name, index) => ({
           name,
@@ -219,13 +228,13 @@ export function passingFacts(): HooksLaunchOnChainFacts {
     },
     nft: {
       price: c.nftPrice,
-      saleDuration: c.nftSaleDurationSeconds,
+      saleDuration,
       launchId,
       usd1,
       publicationGate: modules.gate,
       escrow: modules.escrow,
       saleStart: nftSaleStart,
-      saleEnd: nftSaleStart + c.nftSaleDurationSeconds,
+      saleEnd: nftSaleStart + saleDuration,
       totalMinted: 0n,
     },
     escrow: {
@@ -259,7 +268,7 @@ export function passingFacts(): HooksLaunchOnChainFacts {
     snapshots: {
       launchId,
       nft: modules.nft,
-      nftSaleEnd: nftSaleStart + c.nftSaleDurationSeconds,
+      nftSaleEnd: nftSaleStart + saleDuration,
     },
   };
 }
