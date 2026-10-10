@@ -150055,7 +150055,8 @@
                             "publishedAt",
                             "earlyRoundEndsAt",
                             "memberCount",
-                            "signers"
+                            "signers",
+                            "publication"
                           ],
                           "properties": {
                             "status": {
@@ -150133,6 +150134,51 @@
                                   "items": {
                                     "type": "string",
                                     "pattern": "^0x[0-9a-f]{40}$"
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "publication": {
+                              "description": "Decision 0118: the latest server-side 2-of-3 publication attempt (null until the publisher started one). `confirmed` = the publishing transaction is final; `verification` above stays the reproduction verdict.",
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "status",
+                                    "txHash",
+                                    "cutoffBlock",
+                                    "memberCount"
+                                  ],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "pending",
+                                        "broadcast",
+                                        "confirmed",
+                                        "failed",
+                                        "mismatch"
+                                      ]
+                                    },
+                                    "txHash": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "cutoffBlock": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "memberCount": {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    }
                                   }
                                 },
                                 { "type": "null" }

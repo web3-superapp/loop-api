@@ -134,8 +134,38 @@ const instanceColumns = `
   graduated_at, graduation_block::text, graduation_transaction_hash,
   official_pool_id, buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
-  coalesce(activated_at, registered_at) as sort_at
+  coalesce(activated_at, registered_at) as sort_at,
+  (select jsonb_build_object(
+      'status', p.status, 'txHash', p.tx_hash,
+      'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
+    from public.launch2_snapshot_publications p
+    where p.instance_id = launch2_instances.instance_id
+    order by p.attempt desc limit 1) as snapshot_publication
 `;
+
+/** Decision 0118: the latest snapshot publication attempt, if any. */
+function publicationOf(
+  value: unknown,
+): Launch2InstanceRecord["snapshotPublication"] {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const status = record["status"];
+  if (
+    status !== "pending" &&
+    status !== "broadcast" &&
+    status !== "confirmed" &&
+    status !== "failed" &&
+    status !== "mismatch"
+  ) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  return Object.freeze({
+    status,
+    txHash: typeof record["txHash"] === "string" ? record["txHash"] : null,
+    cutoffBlock: String(record["cutoffBlock"]),
+    memberCount: Number(record["memberCount"]),
+  });
+}
 
 function mapInstance(row: Row): Launch2InstanceRecord {
   const snapshotRoot = nullableText(row, "snapshot_root");
@@ -208,6 +238,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
               ? Object.freeze(signers.map(String))
               : null,
           }),
+    snapshotPublication: publicationOf(row["snapshot_publication"]),
     graduation:
       graduatedAt === null
         ? null

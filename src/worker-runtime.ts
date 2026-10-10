@@ -44,6 +44,16 @@ import { createLaunch2Lane } from "./launch2-indexer-worker.js";
 import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import {
+  launch2PublisherDefaults,
+  type Launch2PublicationRepository,
+} from "./features/launch2/launch2-snapshot-publisher.js";
+import {
+  Launch2PublisherChainRefusedError,
+  createLaunch2PublisherChain,
+  createLaunch2SnapshotSigners,
+} from "./integrations/launch2/launch2-snapshot-publisher-chain.js";
+import { createLaunch2SnapshotPublisherLane } from "./launch2-snapshot-publisher-worker.js";
+import {
   createAlertEvaluatorWorker,
   type AlertEvaluatorWorker,
   type CreateAlertEvaluatorWorkerOptions,
@@ -212,6 +222,8 @@ export interface ReconciliationWorkerDatabase {
   readonly meme?: MemeRepository;
   /** `launch2_event` lane (Decision 0114); absent keeps it off. */
   readonly launch2?: Launch2Repository;
+  /** Snapshot publisher (Decision 0118); absent keeps it off. */
+  readonly launch2Publications?: Launch2PublicationRepository;
   /** Hooks deployment executor (Decision 0112); absent keeps it off. */
   readonly hooksLaunchExecutor?: (
     leaseSeconds: number,
@@ -306,6 +318,9 @@ export interface RunReconciliationWorkerOptions {
   readonly createHooksLaunchExecutorLane?: typeof createHooksLaunchExecutorLane;
   /** Test seam for the launch2 lane's chain reader (Decision 0114). */
   readonly createLaunch2Chain?: typeof createLaunch2Chain;
+  /** Test seam for the snapshot publisher's chain client (Decision 0118). */
+  readonly createLaunch2PublisherChain?: typeof createLaunch2PublisherChain;
+  readonly createLaunch2SnapshotPublisherLane?: typeof createLaunch2SnapshotPublisherLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -797,6 +812,131 @@ export async function runReconciliationWorker(
             factoryAddress: launch2Config.factoryAddress as string,
           },
           "LOOP launch2_event lane enabled",
+        );
+      }
+    }
+    // MEME v2 snapshot publisher (Decision 0118), default off. Config load
+    // already refused boot for `true` without ≥ 2 signer keys, a submitter
+    // key, or chain 97; a missing RPC / store keeps it idle with the reason.
+    const publisherConfig = options.config.launch2SnapshotPublisher;
+    if (publisherConfig !== null) {
+      const reason =
+        database.launch2 === undefined ||
+        database.launch2Publications === undefined
+          ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
+          : launchChainConfig.chainId !== "eip155:97" ||
+              launchChainConfig.rpcUrls.length === 0
+            ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
+            : null;
+      let publisherChain: ReturnType<
+        typeof createLaunch2PublisherChain
+      > | null = null;
+      let refused: string | null = reason;
+      if (refused === null) {
+        try {
+          publisherChain = (
+            options.createLaunch2PublisherChain ?? createLaunch2PublisherChain
+          )({
+            privateKey: publisherConfig.submitterPrivateKey,
+            rpcUrls: launchChainConfig.rpcUrls,
+          });
+        } catch (error) {
+          refused =
+            error instanceof Launch2PublisherChainRefusedError
+              ? error.reasonCode
+              : "LAUNCH2_SNAPSHOT_CHAIN_UNAVAILABLE";
+        }
+      }
+      if (
+        refused !== null ||
+        publisherChain === null ||
+        database.launch2 === undefined ||
+        database.launch2Publications === undefined
+      ) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "launch2_snapshot_publisher",
+            reasonCode: refused ?? "LAUNCH2_REPOSITORY_UNAVAILABLE",
+          },
+          "LOOP launch2 snapshot publisher stays idle",
+        );
+      } else {
+        const signers = createLaunch2SnapshotSigners({
+          privateKeys: publisherConfig.signerPrivateKeys,
+          chainId: 97,
+        });
+        memeLanes.push(
+          (
+            options.createLaunch2SnapshotPublisherLane ??
+            createLaunch2SnapshotPublisherLane
+          )({
+            repository: database.launch2Publications,
+            launch2: database.launch2,
+            chain: publisherChain,
+            signers,
+            policy: {
+              chainId: launchChainConfig.chainId,
+              confirmations: publisherConfig.confirmations,
+              maxGasPriceWei:
+                BigInt(publisherConfig.maxGasPriceGwei) * 10n ** 9n,
+              gasLimitCap: launch2PublisherDefaults.gasLimitCap,
+              maxAttempts: launch2PublisherDefaults.maxAttempts,
+              retryDelaySeconds: launch2PublisherDefaults.retryDelaySeconds,
+            },
+            pollIntervalMs: publisherConfig.pollIntervalMs,
+            onStep: (step) => {
+              const log =
+                step.failureCode === null
+                  ? options.logger.info.bind(options.logger)
+                  : options.logger.warn.bind(options.logger);
+              log(
+                {
+                  ...logFields(),
+                  lane: "launch2_snapshot_publisher",
+                  instanceId: step.instanceId,
+                  ...(step.from === null ? {} : { fromStatus: step.from }),
+                  toStatus: step.to,
+                  ...(step.txHash === null
+                    ? {}
+                    : { transactionHash: step.txHash }),
+                  ...(step.failureCode === null
+                    ? {}
+                    : { reasonCode: step.failureCode }),
+                },
+                "LOOP launch2 snapshot publisher step",
+              );
+            },
+            onWaiting: (event) => {
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane: "launch2_snapshot_publisher",
+                  ...(event.instanceId === null
+                    ? {}
+                    : { instanceId: event.instanceId }),
+                  reasonCode: event.reasonCode,
+                },
+                "LOOP launch2 snapshot publisher is waiting",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "launch2_snapshot_publisher",
+            executorAddress: publisherChain.submitterAddress,
+            confirmations: publisherConfig.confirmations,
+            count: signers.length,
+          },
+          "LOOP launch2 snapshot publisher enabled",
         );
       }
     }

@@ -28,6 +28,6 @@ describe("000060 join notification preference", () => {
     const sql = captureSql(joinNotifications.down);
     expect(sql).toContain("drop column notifications_applied_at");
     expect(sql).toContain("drop column notifications;");
-    expect(latestMigrationName).toBe("000061_launch2_read_model");
+    expect(latestMigrationName).toBe("000063_launch2_snapshot_publisher");
   });
 });

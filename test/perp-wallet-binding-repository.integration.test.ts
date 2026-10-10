@@ -49,6 +49,7 @@ describe("PostgreSQL Perp wallet-binding repository", () => {
     await pool.query(`
       truncate table
     public.community_review_notes,
+    public.launch2_snapshot_publications,
     public.launch2_intents,
     public.launch2_positions,
     public.launch2_snapshot_members,

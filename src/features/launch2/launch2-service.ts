@@ -1201,6 +1201,10 @@ export function createLaunch2Service(
                 : isoOf(launch2EarlyRoundEnd(seconds(snapshot.publishedAt))),
             memberCount: snapshot?.memberCount ?? null,
             signers: snapshot?.signers ?? null,
+            publication:
+              record.snapshotPublication === null
+                ? null
+                : Object.freeze({ ...record.snapshotPublication }),
           }),
           graduation:
             graduation === null

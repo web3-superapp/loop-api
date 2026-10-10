@@ -1,3 +1,8 @@
+import type { Launch2Repository } from "../src/features/launch2/launch2-ports.js";
+import type {
+  Launch2PublicationRepository,
+  Launch2PublisherChain,
+} from "../src/features/launch2/launch2-snapshot-publisher.js";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1495,5 +1500,132 @@ describe("hooks_launch_executor lane (Decision 0112)", () => {
       createHooksLaunchExecutorChain,
     });
     expect(createHooksLaunchExecutorChain).not.toHaveBeenCalled();
+  });
+});
+
+describe("launch2_snapshot_publisher lane (Decision 0118)", () => {
+  const publisherEnvironment = {
+    NODE_ENV: "test",
+    LOG_LEVEL: "silent",
+    DATABASE_URL:
+      "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+    MARKET_SPARKLINE_WARM_ENABLED: "false",
+    VOICE_ROOM_REAPER_ENABLED: "false",
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED: "false",
+    LAUNCH_CHAIN_ID: "97",
+    LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: "true",
+    LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: `0x${"51".repeat(32)},0x${"52".repeat(32)}`,
+    HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: `0x${"42".repeat(32)}`,
+  };
+
+  it("refuses boot with a single signer key", () => {
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...publisherEnvironment,
+        LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: `0x${"51".repeat(32)}`,
+      }),
+    ).toThrow(/LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS/u);
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...publisherEnvironment,
+        LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: "",
+      }),
+    ).toThrow(/LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS/u);
+  });
+
+  it("builds the lane with the executor key as submitter and never logs a key", async () => {
+    const logger = fakeLogger();
+    const createLaunch2PublisherChain = vi.fn(
+      () =>
+        ({
+          submitterAddress: "0x2222222222222222222222222222222222222222",
+          chainId: () => Promise.resolve(56),
+        }) as unknown as Launch2PublisherChain,
+    );
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(publisherEnvironment),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase([]),
+        launch2: {} as Launch2Repository,
+        launch2Publications: {} as Launch2PublicationRepository,
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLaunch2PublisherChain,
+      createLaunch2SnapshotPublisherLane: (options) => {
+        expect(options.signers.map((signer) => signer.address)).toHaveLength(2);
+        expect(options.policy).toMatchObject({
+          chainId: "eip155:97",
+          confirmations: 12,
+          maxGasPriceWei: 20_000_000_000n,
+        });
+        return {
+          lane: "launch2_snapshot_publisher",
+          publisher: { runOnce: vi.fn() },
+          runOnce: vi.fn(),
+          run: vi.fn(() => Promise.resolve()),
+        };
+      },
+    });
+    expect(createLaunch2PublisherChain).toHaveBeenCalledWith({
+      privateKey: `0x${"42".repeat(32)}`,
+      rpcUrls: ["https://bsc-testnet.example/rpc"],
+    });
+    const enabled = vi
+      .mocked(logger.info)
+      .mock.calls.find(
+        ([, message]) => message === "LOOP launch2 snapshot publisher enabled",
+      );
+    expect(enabled?.[0]).toMatchObject({
+      lane: "launch2_snapshot_publisher",
+      executorAddress: "0x2222222222222222222222222222222222222222",
+      confirmations: 12,
+      count: 2,
+    });
+    const logged = JSON.stringify([
+      vi.mocked(logger.info).mock.calls,
+      vi.mocked(logger.warn).mock.calls,
+    ]);
+    for (const secret of ["42", "51", "52"]) {
+      expect(logged).not.toContain(secret.repeat(32));
+    }
+  });
+
+  it("stays idle with a reason without the repositories, and is absent while off", async () => {
+    const logger = fakeLogger();
+    const createLaunch2PublisherChain = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(publisherEnvironment),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => fakeDatabase([]),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLaunch2PublisherChain,
+    });
+    expect(createLaunch2PublisherChain).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "launch2_snapshot_publisher",
+        reasonCode: "LAUNCH2_REPOSITORY_UNAVAILABLE",
+      },
+      "LOOP launch2 snapshot publisher stays idle",
+    );
+    const off = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...publisherEnvironment,
+        LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: "false",
+      }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => fakeDatabase([]),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createLaunch2PublisherChain: off,
+    });
+    expect(off).not.toHaveBeenCalled();
   });
 });

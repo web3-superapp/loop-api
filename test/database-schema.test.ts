@@ -175,6 +175,7 @@ describe("database schema readiness contract", () => {
       "public.launch2_snapshot_members",
       "public.launch2_positions",
       "public.launch2_intents",
+      "public.launch2_snapshot_publications",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

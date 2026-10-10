@@ -1,4 +1,4 @@
-export const latestMigrationName = "000061_launch2_read_model";
+export const latestMigrationName = "000063_launch2_snapshot_publisher";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -151,4 +151,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_snapshot_members",
   "public.launch2_positions",
   "public.launch2_intents",
+  "public.launch2_snapshot_publications",
 ] as const);

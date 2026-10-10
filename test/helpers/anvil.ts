@@ -225,6 +225,8 @@ export interface DeployedProtocol {
 export function deployProtocol(
   tools: FoundryTools,
   rpcUrl: string,
+  /** S141: the Factory's NFT sale length (script default 604,800). */
+  options: { readonly nftSaleDurationSeconds?: number } = {},
 ): DeployedProtocol {
   const address = (index: number) =>
     anvilAccount(index).address.toLowerCase() as `0x${string}`;
@@ -260,6 +262,13 @@ export function deployProtocol(
       LOOP_TESTNET_POOL_MANAGER: poolManager,
       LOOP_TESTNET_USD1: usd1,
       ...roles,
+      ...(options.nftSaleDurationSeconds === undefined
+        ? {}
+        : {
+            LOOP_NFT_SALE_DURATION_SECONDS: String(
+              options.nftSaleDurationSeconds,
+            ),
+          }),
     },
   );
   return {

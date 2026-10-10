@@ -142,7 +142,13 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
       "publishedAt": "2027-01-23T07:05:00.000Z",
       "earlyRoundEndsAt": "2027-01-23T08:05:00.000Z",
       "memberCount": 160,
-      "signers": ["0x…", "0x…"]
+      "signers": ["0x…", "0x…"],
+      "publication": {
+        "status": "confirmed",
+        "txHash": "0x…",
+        "cutoffBlock": "1234",
+        "memberCount": 160
+      }
     },
     "graduation": null,
     "buyback": {
@@ -193,7 +199,21 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
 
 `snapshot.verification`: `null` (not published) | `pending` (lane not done) | `verified` |
 `mismatch` (the published root is not the cutoff holders' tree — priority buys are
-refused with 503 until an operator resolves it). `graduation` once graduated:
+refused with 503 until an operator resolves it).
+
+`snapshot.publication` (Decision 0118, added; no existing key changed): the latest
+server-side 2-of-3 publication attempt, or `null` until the publisher started one.
+`{status, txHash, cutoffBlock, memberCount}`; `status` is `pending` (attestation
+recorded, transaction not yet sent) | `broadcast` (sent, waiting for confirmations) |
+`confirmed` (the `publishSnapshot` transaction is final) | `failed` (refused by the
+contract or not sendable; an operator acts) | `mismatch` (another root is on chain, or
+the lane did not reproduce it). `txHash` is null while `pending` before signing and
+for a contract-refused attempt. Display rule for 名单生成中 (`stage =
+snapshot_pending`): `publication = null` → 等待截止块确认; `pending | broadcast` →
+名单发布中; `confirmed` with `snapshot.status = pending` → 名单已上链，同步中;
+`failed | mismatch` → 名单发布异常，平台处理中. The priority hour starts only from
+`snapshot.publishedAt` (unchanged); a `confirmed` publication alone does not open
+buying — wait for `stage = priority` and `snapshot.verification = verified`. `graduation` once graduated:
 `{graduatedAt, officialPoolId, hookAddress, lpFee: 2500, tickSpacing: 60,
 officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address).
 

@@ -185,6 +185,14 @@ export interface Launch2InstanceRecord {
   readonly buyVolumeUsd1: string;
   readonly taxUsd1: string;
   readonly snapshot: Launch2SnapshotRecord | null;
+  /** Decision 0118: the latest server-side publication attempt, if any. */
+  readonly snapshotPublication: {
+    readonly status:
+      "pending" | "broadcast" | "confirmed" | "failed" | "mismatch";
+    readonly txHash: string | null;
+    readonly cutoffBlock: string;
+    readonly memberCount: number;
+  } | null;
   readonly graduation: {
     readonly graduatedAt: string;
     readonly blockNumber: string | null;

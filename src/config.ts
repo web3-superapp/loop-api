@@ -890,6 +890,18 @@ const reconciliationWorkerEnvironmentSchema = z
       30_000_000,
     ),
     HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI: positiveIntegerString(1, 1_000),
+    LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: booleanString,
+    LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: optionalOpaqueSecret(1, 1_024),
+    LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS: positiveIntegerString(
+      1_000,
+      600_000,
+    ),
+    LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS: positiveIntegerString(1, 64),
+    LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI: positiveIntegerString(
+      1,
+      1_000,
+    ),
     DATABASE_URL: z.string().trim().min(1),
     DATABASE_POOL_MAX: positiveIntegerString(1, 50),
     DATABASE_CONNECTION_TIMEOUT_MS: positiveIntegerString(250, 30_000),
@@ -1471,6 +1483,13 @@ export interface ReconciliationWorkerConfig {
    * BSC Testnet refuses boot. The key is never logged.
    */
   readonly hooksLaunchExecutor: HooksLaunchExecutorConfig | null;
+  /**
+   * MEME v2 snapshot publisher (Decision 0118). Present only with
+   * `LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED=true`; enabling it with fewer than
+   * two distinct signer keys, without a submitter key (own or the Hooks
+   * executor's), or off BSC Testnet refuses boot. Keys are never logged.
+   */
+  readonly launch2SnapshotPublisher: Launch2SnapshotPublisherConfig | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -2151,6 +2170,86 @@ export function parseHooksLaunchExecutor(data: {
     retryDelaySeconds: data.HOOKS_LAUNCH_EXECUTOR_RETRY_DELAY_SECONDS,
     gasLimitCap: data.HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP,
     maxGasPriceGwei: data.HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI,
+  });
+}
+
+export interface Launch2SnapshotPublisherConfig {
+  /** 2 or 3 distinct snapshot signer keys, in configured order. */
+  readonly signerPrivateKeys: readonly `0x${string}`[];
+  readonly submitterPrivateKey: `0x${string}`;
+  /** `own` = LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY; `executor` = reused. */
+  readonly submitterSource: "own" | "executor";
+  readonly pollIntervalMs: number;
+  readonly confirmations: number;
+  readonly maxGasPriceGwei: number;
+}
+
+function normalizedKey(key: string): `0x${string}` {
+  return (
+    key.startsWith("0x") ? key.toLowerCase() : `0x${key.toLowerCase()}`
+  ) as `0x${string}`;
+}
+
+/**
+ * Decision 0118: the snapshot publisher signs EIP-712 `Snapshot` digests
+ * with 2 of the 3 registered signer keys and submits `publishSnapshot` from
+ * the submitter account (its own key, else the Hooks executor key).
+ * `false` (default) → null. `true` refuses boot without ≥ 2 distinct
+ * well-formed signer keys (at most 3), without a submitter key, or off
+ * `LAUNCH_CHAIN_ID=97`. No key enters a log line or an error message.
+ */
+export function parseLaunch2SnapshotPublisher(data: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: boolean;
+  readonly LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS?: string | undefined;
+  readonly LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY?: string | undefined;
+  readonly HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?: string | undefined;
+  readonly LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS: number;
+  readonly LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS: number;
+  readonly LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI: number;
+}): Launch2SnapshotPublisherConfig | null {
+  if (!data.LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED) {
+    return null;
+  }
+  const issues: string[] = [];
+  const signerKeys = (data.LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS ?? "")
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => key !== "");
+  if (signerKeys.some((key) => !privateKeyPattern.test(key))) {
+    issues.push(
+      "LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: every entry must be a 32-byte hex key",
+    );
+  }
+  const distinct = [...new Set(signerKeys.map(normalizedKey))];
+  if (distinct.length < 2 || distinct.length > 3) {
+    issues.push(
+      "LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: 2 or 3 distinct comma-separated keys are required when LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED=true",
+    );
+  }
+  const own = data.LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY?.trim();
+  const executor = data.HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?.trim();
+  const submitter = own !== undefined && own !== "" ? own : (executor ?? "");
+  if (submitter === "" || !privateKeyPattern.test(submitter)) {
+    issues.push(
+      "LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY: a 32-byte hex key (or HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY) is required when LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED=true",
+    );
+  }
+  if (data.LAUNCH_CHAIN_ID !== "97") {
+    issues.push(
+      "LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigurationError(issues);
+  }
+  return Object.freeze({
+    signerPrivateKeys: Object.freeze(distinct),
+    submitterPrivateKey: normalizedKey(submitter),
+    submitterSource: own !== undefined && own !== "" ? "own" : "executor",
+    pollIntervalMs: data.LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS,
+    confirmations: data.LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS,
+    maxGasPriceGwei: data.LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI,
   });
 }
 
@@ -3122,6 +3221,18 @@ export function loadReconciliationWorkerConfig(
       environment["HOOKS_LAUNCH_EXECUTOR_GAS_LIMIT_CAP"] ?? "16000000",
     HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI:
       environment["HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI"] ?? "20",
+    LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED:
+      environment["LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED"] ?? "false",
+    LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS:
+      environment["LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS"],
+    LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY:
+      environment["LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY"],
+    LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS:
+      environment["LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS"] ?? "5000",
+    LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS:
+      environment["LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS"] ?? "12",
+    LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI:
+      environment["LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI"] ?? "20",
     DATABASE_URL: environment["DATABASE_URL"],
     DATABASE_POOL_MAX: environment["DATABASE_POOL_MAX"] ?? "10",
     DATABASE_CONNECTION_TIMEOUT_MS:
@@ -3217,6 +3328,7 @@ export function loadReconciliationWorkerConfig(
       : null,
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
+    launch2SnapshotPublisher: parseLaunch2SnapshotPublisher(parsed.data),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
