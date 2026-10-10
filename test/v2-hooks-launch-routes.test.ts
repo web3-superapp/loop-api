@@ -482,7 +482,11 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
           },
         },
       });
-    const production = await createApp({ configs: configRepositoryFake() });
+    // S141: draft saves read the factory; the lead check still runs first.
+    const production = await createApp({
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+    });
     const refused = await put(production, 0, 5_000);
     expect(refused.statusCode).toBe(400);
     expect(refused.json()).toMatchObject({ code: "INVALID_REQUEST" });
@@ -490,6 +494,7 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     const testnet = await createApp({
       overrides: { ...enabled, HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: "4200" },
       configs: configRepositoryFake(),
+      reader: factoryReader,
     });
     expect((await put(testnet, 0, 5_000)).statusCode).toBe(200);
     expect((await put(testnet, 1, 4_100)).statusCode).toBe(400);
