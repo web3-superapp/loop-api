@@ -99,12 +99,15 @@ function sliceOf(
         parseMiningDecimal(entry.coefficient) ?? 0n,
       ]),
     ),
+    defaultCoefficient:
+      parseMiningDecimal(version.document.defaultCommunityCoefficient) ?? 0n,
     assetWeights: new Map(
       version.document.assetWeights.map((entry) => [
         entry.assetId,
         parseMiningDecimal(entry.weight) ?? 0n,
       ]),
     ),
+    assetPowerBasis: version.document.assetPowerBasis,
   });
 }
 
@@ -189,9 +192,25 @@ function stringifyBigints(value: unknown): unknown {
   return value;
 }
 
+/**
+ * SHA-256 of the canonical calculator input. Decision 0123 added
+ * `assetPowerBasis` and `defaultCoefficient` to the slices; a slice carrying
+ * the Decision 0116 values (`valuation`, 0) is digested without them, so an
+ * hour settled before 0123 replays to its stored digest.
+ */
 export function miningInputDigest(input: MiningHourlySettlementInput): string {
+  const slices = input.parameterSlices.map((slice) => {
+    const { assetPowerBasis, defaultCoefficient, ...rest } = slice;
+    return {
+      ...rest,
+      ...(assetPowerBasis === "valuation" ? {} : { assetPowerBasis }),
+      ...(defaultCoefficient === 0n ? {} : { defaultCoefficient }),
+    };
+  });
   return createHash("sha256")
-    .update(canonicalJson(stringifyBigints(input)))
+    .update(
+      canonicalJson(stringifyBigints({ ...input, parameterSlices: slices })),
+    )
     .digest("hex");
 }
 
@@ -307,7 +326,9 @@ export function prepareMiningHour(input: {
     }
   }
 
-  // Asset holdings and prices (curve net / curve price, until graduation).
+  // Asset holdings (curve net, until graduation). Prices only when a
+  // Decision 0116 `valuation` slice is in force inside the hour (replay).
+  const valued = slices.some((slice) => slice.assetPowerBasis === "valuation");
   const assetHoldings: MiningAssetHoldingSegment[] = [];
   const prices: MiningPriceSegment[] = [];
   const excludedAssets: Array<{
@@ -328,28 +349,30 @@ export function prepareMiningHour(input: {
       });
     }
     if (cutoff <= start) continue;
-    let price = asset.openingPriceE18;
-    let cursor = start;
-    for (const move of asset.moves) {
-      if (move.at >= cutoff) break;
-      const at = move.at < start ? start : move.at;
-      if (at > cursor) {
-        prices.push({
-          assetId: asset.assetId,
-          from: cursor,
-          to: at,
-          priceE18: price,
-        });
-        cursor = at;
+    if (valued) {
+      let price = asset.openingPriceE18;
+      let cursor = start;
+      for (const move of asset.moves) {
+        if (move.at >= cutoff) break;
+        const at = move.at < start ? start : move.at;
+        if (at > cursor) {
+          prices.push({
+            assetId: asset.assetId,
+            from: cursor,
+            to: at,
+            priceE18: price,
+          });
+          cursor = at;
+        }
+        price = move.priceAfterE18;
       }
-      price = move.priceAfterE18;
+      prices.push({
+        assetId: asset.assetId,
+        from: cursor,
+        to: cutoff,
+        priceE18: price,
+      });
     }
-    prices.push({
-      assetId: asset.assetId,
-      from: cursor,
-      to: cutoff,
-      priceE18: price,
-    });
     const byAddress = new Map<string, Timeline<string>>();
     for (const opening of asset.openingBalances) {
       byAddress.set(opening.address, {
@@ -425,6 +448,9 @@ export function prepareMiningHour(input: {
     version,
     summary: Object.freeze({
       versionIds: [...new Set(slices.map((slice) => slice.versionId))],
+      assetPowerBases: [
+        ...new Set(slices.map((slice) => slice.assetPowerBasis)),
+      ].sort(),
       nftHoldingSegments: nftHoldings.length,
       assetHoldingSegments: assetHoldings.length,
       priceSegments: prices.length,

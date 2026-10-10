@@ -564,16 +564,25 @@ read models under a reviewer-approved parameter version. Claims sign an EIP-712
 sends the transaction. Contract: `docs/frontend-v2-mining-rewards-api.md`;
 console: `docs/frontend-admin-role-separation.md` §12.
 
-| Method and path                 | Request                                             | Success projection                                                                                     | Interface     | Capability                                                                                       |
-| ------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------ |
-| `GET /v2/mining/rewards/epochs` | Bearer + headers; `cursor`                          | Caller's settled hours (both tracks' power, raw rewards), 24 per page                                  | `implemented` | `blocked-provider` until a parameter version is approved and the lane runs                       |
-| `GET /v2/mining/claims`         | Bearer + headers; `cursor`                          | Caller's claims (`claimable` / `submitting` / `confirming` / `succeeded` / `failed` / `expired`)       | `implemented` | same                                                                                             |
-| `POST /v2/mining/claim/prepare` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` voucher (`cumulativeAmount`, chain `nonce`, 10-min deadline) + unsigned `claim(...)`; gas branch | `implemented` | `blocked-provider`: needs the deployed `LoopRewardClaim` (S138-contracts), signer key, writes on |
-| `POST /v2/mining/claim/report`  | Write headers; `{claimId, transactionHash}`         | Receipt + `Claimed` log → `submitting` / `confirming` / `succeeded` (ledger once) / `failed`           | `implemented` | same                                                                                             |
+| Method and path                 | Request                                             | Success projection                                                                                                                                                        | Interface     | Capability                                                                                       |
+| ------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
+| `GET /v2/mining/rewards/epochs` | Bearer + headers; `cursor`                          | Caller's settled hours (both tracks' power, raw rewards), 24 per page                                                                                                     | `implemented` | `blocked-provider` until a parameter version is approved and the lane runs                       |
+| `GET /v2/mining/claims`         | Bearer + headers; `cursor`                          | Caller's claims (`claimable` / `submitting` / `confirming` / `succeeded` / `failed` / `expired`)                                                                          | `implemented` | same                                                                                             |
+| `POST /v2/mining/claim/prepare` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` voucher (`cumulativeAmount`, chain `nonce`, 10-min deadline) + unsigned `claim(...)` (eleven-key `unsignedTransaction`, `payloadDigest`, Decision 0123); gas branch | `implemented` | `blocked-provider`: needs the deployed `LoopRewardClaim` (S138-contracts), signer key, writes on |
+| `POST /v2/mining/claim/report`  | Write headers; `{claimId, transactionHash}`         | Receipt + `Claimed` log → `submitting` / `confirming` / `succeeded` (ledger once) / `failed`                                                                              | `implemented` | same                                                                                             |
 
 Console (`/admin/v1/mining/...`): `parameter-versions` (list / draft / approve /
 withdraw), `epochs` (list / detail / replay), `funding`, `epochs/settle`
 (test trigger only) — `implemented`.
+
+Decision 0123 (S147, migration 000067): the asset track is weighted by token
+quantity (balance TWAB × Mining Weight, no price) for every version drafted from
+now on (`document.assetPowerBasis = quantity`, enforced on insert / approval);
+pre-0123 versions replay under their valuation rule. Unlisted communities count
+`defaultCommunityCoefficient` (default 1.0). `GET /v2/mining/rewards`
+`hourly.claim.executable` is false while parameters are pending
+(`MINING_PARAMETERS_PENDING`), nothing is settled (`MINING_NOTHING_SETTLED`),
+claimable is 0 / under the minimum, or a claim is in flight.
 
 ### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
 

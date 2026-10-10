@@ -313,10 +313,11 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     // users[7] has no power and is not counted.
     expect(row(0)?.nftReferralPower ?? "0").toBe("0");
     expect(row(0)?.levels[0]?.effectiveMembers ?? 0).toBe(0);
-    // Asset: users[5] holds 1000 MEME at the curve price; users[0] is its
-    // fifth ancestor (1%).
-    const price = launch2PriceAt(1_000n * loop);
-    const assetPower = (1_000n * price) / 1n;
+    // Asset (Decision 0123, quantity): users[5] holds 1000 MEME, weight 1,
+    // so its power is 1000 whatever the curve price; users[0] is its fifth
+    // ancestor (1%).
+    expect(launch2PriceAt(1_000n * loop)).toBeGreaterThan(0n);
+    const assetPower = 1_000n * loop;
     const fixed = (value: string) => {
       const [whole, fraction = ""] = value.split(".");
       return BigInt(whole!) * loop + BigInt(fraction.padEnd(18, "0"));
@@ -478,6 +479,91 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
         audit: audit("mining.parameters.approve"),
       }),
     ).rejects.toBeInstanceOf(MiningSettlementConflictError);
+  });
+
+  it("Decision 0123 (000067): only quantity documents can be inserted or approved; a pre-0123 draft can be withdrawn, not approved", async () => {
+    const legacyDocument: Record<string, unknown> = {
+      ...miningDefaultParameterDocument,
+      releaseStartAt: "2026-10-09T00:00:00.000Z",
+      assetWeights: [],
+      communityCoefficients: [],
+    };
+    delete legacyDocument["assetPowerBasis"];
+    delete legacyDocument["defaultCommunityCoefficient"];
+    await expect(
+      pool.query(
+        `insert into public.mining_parameter_versions (version_id, config_version,
+           document, effective_from, draft_author_actor)
+         values ($1, 's147-legacy-new', $2::jsonb, '2099-01-01', 'operator')`,
+        [randomUUID(), JSON.stringify(legacyDocument)],
+      ),
+    ).rejects.toThrow(/assetPowerBasis quantity/u);
+    // A draft stored before 000067 (trigger bypassed to reproduce it).
+    const legacyId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("set session_replication_role = replica");
+      await client.query(
+        `insert into public.mining_parameter_versions (version_id, config_version,
+           document, effective_from, draft_author_actor)
+         values ($1, 's147-legacy-draft', $2::jsonb, '2099-02-01', 'operator')`,
+        [legacyId, JSON.stringify(legacyDocument)],
+      );
+    } finally {
+      await client.query("set session_replication_role = origin");
+      client.release();
+    }
+    const stored = await repository.getParameterVersion(legacyId);
+    expect(stored?.document).toMatchObject({
+      assetPowerBasis: "valuation",
+      defaultCommunityCoefficient: "0",
+    });
+    const hash = await hashAdminPassword("s147-password-0123");
+    const reviewerUser = await user(21);
+    await pool.query(
+      `insert into public.ops_operators (user_id, label, enabled) values ($1, 's147-reviewer', true)`,
+      [reviewerUser],
+    );
+    const reviewerId = randomUUID();
+    await pool.query(
+      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by)
+       values ($1, 's147-reviewer', $2, 'reviewer', $3, 'operator')`,
+      [reviewerId, hash, reviewerUser],
+    );
+    const audit = (action: string) => ({
+      actor: "s147-reviewer",
+      actorAccountId: reviewerId,
+      action,
+      targetType: "mining_parameter_version",
+      targetId: legacyId,
+      requestId: randomUUID(),
+    });
+    const requested = await repository.recordAudit(
+      audit("mining.parameters.approve.requested"),
+    );
+    await expect(
+      repository.approveParameterVersion({
+        versionId: legacyId,
+        approver: { actor: "s147-reviewer", accountId: reviewerId },
+        requestedAuditId: requested.auditId,
+        audit: audit("mining.parameters.approve"),
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: "ADMIN_MINING_PARAMETERS_BASIS_RETIRED",
+    });
+    // The database refuses the same approval if the service check is skipped.
+    await expect(
+      pool.query(
+        `update public.mining_parameter_versions set status = 'approved',
+           approved_by = 'x', approved_at = clock_timestamp() where version_id = $1`,
+        [legacyId],
+      ),
+    ).rejects.toThrow(/assetPowerBasis quantity/u);
+    const withdrawn = await repository.withdrawParameterVersion({
+      versionId: legacyId,
+      audit: { ...audit("mining.parameters.withdraw"), actor: "operator" },
+    });
+    expect(withdrawn.version.status).toBe("withdrawn");
   });
 
   describe("claims on the real ledger", () => {

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  miningClaimDailyCapRaw,
+  miningClaimTotalCapRaw,
+  miningDefaultParameterDocument,
+  parseMiningParameterDocument,
+} from "../src/features/mining/hourly-settlement-contract.js";
 import type { MiningSettlementFacts } from "../src/features/mining/hourly-settlement-ports.js";
 import {
   createMiningSettlementRunner,
@@ -35,15 +41,37 @@ const X = "0x00000000000000000000000000000000000000c3";
 function version(
   coefficient = "2",
   effectiveFrom = "2026-10-10T00:00:00.000Z",
+  basis: "quantity" | "valuation" = "quantity",
 ) {
   return parameterVersion({
-    versionId: `v-${coefficient}-${effectiveFrom}`,
+    versionId: `v-${coefficient}-${effectiveFrom}-${basis}`,
     effectiveFrom,
     document: {
       ...parameterVersion().document,
       assetWeights: [{ assetId: ASSET, weight: "1" }],
       communityCoefficients: [{ communityId: C, coefficient }],
+      assetPowerBasis: basis,
+      defaultCommunityCoefficient: basis === "valuation" ? "0" : "1",
     },
+  });
+}
+
+/** A document approved before Decision 0123, as it is stored (no new keys). */
+function legacyVersion() {
+  return parameterVersion({
+    versionId: "11111111-1111-4111-8111-111111111111",
+    configVersion: "legacy",
+    document: parseMiningParameterDocument({
+      referralRatiosBps: [1000, 500, 300, 200, 100],
+      dailyBudgetNftRaw: (500_000n * loop).toString(),
+      dailyBudgetAssetRaw: (500_000n * loop).toString(),
+      releaseStartAt: "2026-10-10T00:00:00.000Z",
+      releaseDays: 900,
+      timezone: "UTC",
+      minimumClaimRaw: loop.toString(),
+      assetWeights: [{ assetId: ASSET, weight: "1.5" }],
+      communityCoefficients: [{ communityId: C, coefficient: "2" }],
+    }),
   });
 }
 
@@ -132,11 +160,11 @@ describe("Decision 0116 runner — inputs", () => {
     });
   });
 
-  it("prices the asset track from the curve step function and excludes it from graduation on", () => {
+  it("Decision 0116 replay: prices the asset track from the curve step function (valuation basis) and excludes it from graduation on", () => {
     const graduation = S + 1_800n;
     const prepared = prepareMiningHour({
       hourStart: S,
-      versions: [version()],
+      versions: [version("2", "2026-10-10T00:00:00.000Z", "valuation")],
       facts: facts({
         nftOpenings: [],
         assets: [
@@ -177,6 +205,219 @@ describe("Decision 0116 runner — inputs", () => {
     expect(u1?.assetSelfPower).toBe(
       (1n * loop * 900n + 2n * loop * 900n) / 3_600n,
     );
+  });
+
+  it("Decision 0123: weighs the asset track by token quantity (TWAB × weight), reads no price, and still excludes it from graduation on", () => {
+    const graduation = S + 1_800n;
+    const prepared = prepareMiningHour({
+      hourStart: S,
+      versions: [version()],
+      facts: facts({
+        nftOpenings: [],
+        assets: [
+          {
+            assetId: ASSET,
+            source: "launch2",
+            graduatedAt: graduation,
+            openingPriceE18: loop / 100n,
+            openingBalances: [{ address: A, balanceRaw: 100n * loop }],
+            moves: [
+              {
+                address: A,
+                deltaRaw: 200n * loop,
+                at: S + 900n,
+                priceAfterE18: loop / 50n,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(prepared.input.prices).toEqual([]);
+    expect(prepared.summary["assetPowerBases"]).toEqual(["quantity"]);
+    expect(prepared.summary["priceSegments"]).toBe(0);
+    const result = settleMiningHour(prepared.input);
+    const u1 = result.users.find((row) => row.userId === U1);
+    // 100 tokens for 15 min, 300 tokens for 15 min, nothing after graduation;
+    // weight 1, the curve price plays no part.
+    expect(u1?.assetSelfPower).toBe(
+      (100n * loop * 900n + 300n * loop * 900n) / 3_600n,
+    );
+    expect(u1?.assetHoldings[0]).toMatchObject({ assetId: ASSET });
+  });
+
+  it("Decision 0123: an hour that switches from a valuation version to a quantity version mid-hour reads prices only for the first slice's rule", () => {
+    const versions = [
+      version("2", "2026-10-10T00:00:00.000Z", "valuation"),
+      version("2", "2026-10-10T10:30:00.000Z", "quantity"),
+    ];
+    const prepared = prepareMiningHour({
+      hourStart: S,
+      versions,
+      facts: facts({
+        nftOpenings: [],
+        assets: [
+          {
+            assetId: ASSET,
+            source: "launch2",
+            graduatedAt: null,
+            openingPriceE18: 2n * loop,
+            openingBalances: [{ address: A, balanceRaw: 10n * loop }],
+            moves: [],
+          },
+        ],
+      }),
+    });
+    expect(prepared.summary["assetPowerBases"]).toEqual([
+      "quantity",
+      "valuation",
+    ]);
+    const result = settleMiningHour(prepared.input);
+    const u1 = result.users.find((row) => row.userId === U1);
+    // 10 tokens × $2 for 30 min (valuation) then 10 tokens for 30 min.
+    expect(u1?.assetSelfPower).toBe(
+      (20n * loop * 1_800n + 10n * loop * 1_800n) / 3_600n,
+    );
+  });
+
+  it("Decision 0123: an hour settled under a document approved before 0123 replays to the digest and rewards the 0116 code produced", () => {
+    // Golden values computed with integration/v2 dbc2831 (pre-0123 code)
+    // from the same document and facts.
+    const prepared = prepareMiningHour({
+      hourStart: S,
+      versions: [legacyVersion()],
+      facts: facts({
+        nftInstances: [
+          { instanceId: INSTANCE, memeAssetId: ASSET, communityIds: [C] },
+          {
+            instanceId: "i0000000-0000-4000-8000-000000000002",
+            memeAssetId: ASSET,
+            communityIds: ["c0000000-0000-4000-8000-000000000009"],
+          },
+        ],
+        nftOpenings: [
+          { instanceId: INSTANCE, address: A, count: 2n },
+          {
+            instanceId: "i0000000-0000-4000-8000-000000000002",
+            address: B,
+            count: 3n,
+          },
+        ],
+        assets: [
+          {
+            assetId: ASSET,
+            source: "launch2",
+            graduatedAt: null,
+            openingPriceE18: loop / 100n,
+            openingBalances: [{ address: A, balanceRaw: 100n * loop }],
+            moves: [
+              {
+                address: B,
+                deltaRaw: 300n * loop,
+                at: S + 900n,
+                priceAfterE18: loop / 50n,
+              },
+            ],
+          },
+        ],
+        walletOwners: [
+          { address: A, userIds: [U1] },
+          { address: B, userIds: [U2] },
+        ],
+        referralEdges: [
+          {
+            inviterUserId: U1,
+            inviteeUserId: U2,
+            depth: 1,
+            from: 0n,
+            to: null,
+          },
+        ],
+      }),
+    });
+    expect(legacyVersion().document).toMatchObject({
+      assetPowerBasis: "valuation",
+      defaultCommunityCoefficient: "0",
+    });
+    expect(prepared.digest).toBe(
+      "aa63cd330d6fa1826bdcb0ac918975263996f6546a623575b066ec361fe3fb3b",
+    );
+    const result = settleMiningHour(prepared.input);
+    expect(
+      result.users.map((row) => [
+        row.userId,
+        row.nftRewardRaw,
+        row.assetRewardRaw,
+        row.assetSelfPower,
+        row.nftSelfPower,
+      ]),
+    ).toEqual([
+      [
+        U1,
+        20_833_333_333_333_333_333_333n,
+        6_840_796_019_900_497_512_437n,
+        2_625_000_000_000_000_000n,
+        4_000_000_000_000_000_000n,
+      ],
+      // The unlisted community stays 0 under the 0116 document.
+      [U2, 0n, 13_992_537_313_432_835_820_895n, 6_750_000_000_000_000_000n, 0n],
+    ]);
+  });
+
+  it("Decision 0123: an unlisted community counts 1.0 under a new document; an instance bound to no community stays 0", () => {
+    const prepared = prepareMiningHour({
+      hourStart: S,
+      versions: [version()],
+      facts: facts({
+        nftInstances: [
+          {
+            instanceId: INSTANCE,
+            memeAssetId: ASSET,
+            communityIds: ["c0000000-0000-4000-8000-000000000009"],
+          },
+          {
+            instanceId: "i0000000-0000-4000-8000-000000000002",
+            memeAssetId: ASSET,
+            communityIds: [],
+          },
+        ],
+        nftOpenings: [
+          { instanceId: INSTANCE, address: A, count: 3n },
+          {
+            instanceId: "i0000000-0000-4000-8000-000000000002",
+            address: B,
+            count: 4n,
+          },
+        ],
+      }),
+    });
+    const result = settleMiningHour(prepared.input);
+    expect(result.users.find((row) => row.userId === U1)?.nftSelfPower).toBe(
+      3n * loop,
+    );
+    expect(
+      result.users.find((row) => row.userId === U2)?.nftSelfPower ?? 0n,
+    ).toBe(0n);
+  });
+
+  it("requirer 2026-10-10 frozen defaults (docs/16 §7, docs/17 items 12–20)", () => {
+    const d = miningDefaultParameterDocument;
+    expect(d.referralRatiosBps).toEqual([1000, 500, 300, 200, 100]);
+    expect(BigInt(d.dailyBudgetNftRaw)).toBe(500_000n * loop);
+    expect(BigInt(d.dailyBudgetAssetRaw)).toBe(500_000n * loop);
+    // Two pools per day = the claim contract's daily cap; 900 days = total cap.
+    expect(BigInt(d.dailyBudgetNftRaw) + BigInt(d.dailyBudgetAssetRaw)).toBe(
+      miningClaimDailyCapRaw,
+    );
+    expect(
+      (BigInt(d.dailyBudgetNftRaw) + BigInt(d.dailyBudgetAssetRaw)) *
+        BigInt(d.releaseDays),
+    ).toBe(miningClaimTotalCapRaw);
+    expect(miningClaimDailyCapRaw).toBe(1_000_000n * loop);
+    expect(miningClaimTotalCapRaw).toBe(900_000_000n * loop);
+    expect(d.assetPowerBasis).toBe("quantity");
+    expect(d.defaultCommunityCoefficient).toBe("1");
+    expect(d.timezone).toBe("UTC");
   });
 
   it("refuses an admitted asset without a source", () => {

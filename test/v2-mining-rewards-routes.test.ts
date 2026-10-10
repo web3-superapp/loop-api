@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { decodeFunctionData, recoverTypedDataAddress } from "viem";
+import {
+  decodeFunctionData,
+  keccak256,
+  recoverTypedDataAddress,
+  stringToBytes,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -312,6 +317,85 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
     },
   );
 
+  describe("Decision 0123 claim.executable", () => {
+    const claimOf = async (app: FastifyInstance) =>
+      (await get(app, "/v2/mining/rewards")).json<{
+        hourly: { claim: Record<string, unknown> };
+      }>().hourly.claim;
+
+    it("is false with MINING_PARAMETERS_PENDING when no approved version is in force", async () => {
+      const repository = createInMemoryMiningSettlement();
+      repository.versions.push(
+        parameterVersion({ effectiveFrom: "2026-10-11T00:00:00.000Z" }),
+      );
+      const { app } = await createApp({ repository });
+      expect(await claimOf(app)).toEqual({
+        executable: false,
+        reasonCode: "MINING_PARAMETERS_PENDING",
+        latest: null,
+      });
+    });
+
+    it("is false with MINING_NOTHING_SETTLED before the first hour settles", async () => {
+      const repository = createInMemoryMiningSettlement();
+      repository.versions.push(parameterVersion());
+      const { app } = await createApp({ repository });
+      expect(await claimOf(app)).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_NOTHING_SETTLED",
+      });
+    });
+
+    it("is never true while claimable is 0 or under the minimum", async () => {
+      const none = await createApp({ repository: seededRepository(0n) });
+      expect(await claimOf(none.app)).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_CLAIM_NOTHING_TO_CLAIM",
+      });
+      const small = await createApp({
+        repository: seededRepository(loop / 2n),
+      });
+      expect(await claimOf(small.app)).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_CLAIM_BELOW_MINIMUM",
+      });
+    });
+
+    it("is false with MINING_CLAIM_IN_FLIGHT while the latest claim is submitting", async () => {
+      const { app } = await createApp();
+      const prepared = await prepare(app);
+      const claimId = prepared.json<{ claim: { claimId: string } }>().claim
+        .claimId;
+      const reported = await post(app, "/v2/mining/claim/report", {
+        claimId,
+        transactionHash: `0x${"ab".repeat(32)}`,
+      });
+      expect(reported.json<{ claim: { status: string } }>().claim.status).toBe(
+        "submitting",
+      );
+      expect(await claimOf(app)).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_CLAIM_IN_FLIGHT",
+        latest: { claimId, status: "submitting" },
+      });
+    });
+
+    it("reports the configuration reason only after the ledger allows a claim", async () => {
+      const { app } = await createApp({ deps: { signer: null } });
+      expect(await claimOf(app)).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_CLAIM_SIGNER_NOT_CONFIGURED",
+      });
+      const empty = await createApp({
+        repository: seededRepository(0n),
+        deps: { signer: null },
+      });
+      expect(await claimOf(empty.app)).toMatchObject({
+        reasonCode: "MINING_CLAIM_NOTHING_TO_CLAIM",
+      });
+    });
+  });
+
   it("lists the caller's settled hours and claims", async () => {
     const { app } = await createApp();
     const epochs = await get(app, "/v2/mining/rewards/epochs");
@@ -368,6 +452,57 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
       chainId: 97,
       value: "0x0",
     });
+    // Decision 0123: the intent carries exactly calldata, the eleven-key
+    // transaction, its payloadDigest, and signing.
+    expect(Object.keys(body.intent).sort()).toEqual([
+      "calldata",
+      "payloadDigest",
+      "signing",
+      "unsignedTransaction",
+    ]);
+    const transaction = body.intent.unsignedTransaction;
+    expect(Object.keys(transaction).sort()).toEqual([
+      "chainId",
+      "data",
+      "from",
+      "gas",
+      "gasPrice",
+      "maxFeePerGas",
+      "maxPriorityFeePerGas",
+      "nonce",
+      "to",
+      "type",
+      "value",
+    ]);
+    const unsignedSchema = (
+      miningClaimPrepareResourceSchema as unknown as {
+        properties: {
+          intent: {
+            properties: {
+              unsignedTransaction: {
+                additionalProperties: boolean;
+                required: string[];
+              };
+            };
+          };
+        };
+      }
+    ).properties.intent.properties.unsignedTransaction;
+    expect(unsignedSchema.additionalProperties).toBe(false);
+    expect([...unsignedSchema.required].sort()).toEqual(
+      Object.keys(transaction).sort(),
+    );
+    // keccak-256 of the canonical JSON (keys sorted, no whitespace).
+    const canonical = `{${Object.keys(transaction)
+      .sort()
+      .map(
+        (key) => `${JSON.stringify(key)}:${JSON.stringify(transaction[key])}`,
+      )
+      .join(",")}}`;
+    expect(canonical).not.toMatch(/\s/u);
+    expect(
+      (body.intent as unknown as { payloadDigest: string }).payloadDigest,
+    ).toBe(keccak256(stringToBytes(canonical)));
     const decoded = decodeFunctionData({
       abi: loopRewardClaimAbi,
       data: body.intent.calldata["data"] as `0x${string}`,

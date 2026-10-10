@@ -740,6 +740,13 @@ export function createPostgresMiningSettlementRepository(
               "ADMIN_MINING_PARAMETERS_STATE",
             );
           }
+          if (current.document.assetPowerBasis !== "quantity") {
+            // Decision 0123: a draft written under the 0116 valuation rule
+            // (no assetPowerBasis) can only be withdrawn and redrafted.
+            throw new MiningSettlementConflictError(
+              "ADMIN_MINING_PARAMETERS_BASIS_RETIRED",
+            );
+          }
           if (
             current.draftAuthor?.accountId !== null &&
             current.draftAuthor?.accountId === input.approver.accountId

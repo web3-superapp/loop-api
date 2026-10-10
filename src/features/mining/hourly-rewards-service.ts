@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, keccak256, stringToBytes } from "viem";
 
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import {
@@ -38,6 +38,7 @@ import {
   miningClaimDeadlineSeconds,
   miningClaimFallbackGas,
   miningClaimLogSearchBlocks,
+  miningFixedScale,
   miningSettlementReasonCodes as reasons,
 } from "./hourly-settlement-contract.js";
 import {
@@ -229,6 +230,50 @@ function unsignedTransactionFor(input: {
     gasPrice:
       input.fee.type === "legacy" ? toHexQuantity(input.fee.gasPrice) : null,
   };
+}
+
+/**
+ * Decision 0123: `intent.payloadDigest` = keccak-256 over the UTF-8 bytes of
+ * the canonical JSON of `intent.unsignedTransaction` (keys sorted by code
+ * unit, no whitespace, numbers as JSON numbers, `null` kept), `0x` + 64
+ * lowercase hex. This is the exact object the device passes to Privy
+ * `eth_sendTransaction`; the client recomputes it before showing the sheet.
+ */
+export function miningClaimPayloadDigest(
+  unsignedTransaction: Readonly<Record<string, unknown>>,
+): string {
+  return keccak256(stringToBytes(canonicalJson(unsignedTransaction)));
+}
+
+/**
+ * Decision 0123: whether `hourly.claim.executable` is true, and why not.
+ * Order: the ledger facts the user can see first (no parameters, nothing
+ * settled, nothing / too little to claim, a claim in flight), then the
+ * server configuration (`miningClaimUnavailableReason`). `claimable = 0`
+ * is never executable.
+ */
+export function miningClaimGate(input: {
+  readonly configReason: string | null;
+  /** An approved parameter version is in force now. */
+  readonly hasApprovedVersion: boolean;
+  readonly hasSettledHour: boolean;
+  readonly claimableRaw: bigint;
+  readonly minimumClaimRaw: bigint;
+  readonly latestClaimStatus: string | null;
+}): string | null {
+  if (!input.hasApprovedVersion) return reasons.parametersPending;
+  if (!input.hasSettledHour) return reasons.nothingSettled;
+  if (input.claimableRaw === 0n) return reasons.claimNothingToClaim;
+  if (input.claimableRaw < input.minimumClaimRaw) {
+    return reasons.claimBelowMinimum;
+  }
+  if (
+    input.latestClaimStatus === "submitting" ||
+    input.latestClaimStatus === "confirming"
+  ) {
+    return reasons.claimInFlight;
+  }
+  return input.configReason;
 }
 
 function parsePrepareBody(body: unknown): { readonly walletId: string } {
@@ -486,6 +531,16 @@ export function createMiningRewardsService(
                   totalRewardRaw: total,
                 },
         });
+        const gate = miningClaimGate({
+          configReason: claimReason,
+          hasApprovedVersion: version !== null,
+          hasSettledHour: latest !== null,
+          claimableRaw: BigInt(balance.unclaimedRaw),
+          minimumClaimRaw: BigInt(
+            version?.document.minimumClaimRaw ?? miningFixedScale.toString(),
+          ),
+          latestClaimStatus: claims[0]?.status ?? null,
+        });
         const excluded = (latest?.inputSummary["excludedAssets"] ?? []) as {
           assetId: string;
           reasonCode: string;
@@ -601,8 +656,8 @@ export function createMiningRewardsService(
                   minimumClaimRaw: version.document.minimumClaimRaw,
                 }),
           claim: Object.freeze({
-            executable: claimReason === null,
-            reasonCode: claimReason,
+            executable: gate === null,
+            reasonCode: gate,
             latest:
               claims[0] === undefined
                 ? null
@@ -624,7 +679,11 @@ export function createMiningRewardsService(
             tracks: null,
             referral: null,
             parameters: null,
-            claim: { executable: false, reasonCode: claimReason, latest: null },
+            claim: {
+              executable: false,
+              reasonCode: reasons.settlementUnavailable,
+              latest: null,
+            },
           });
         }
         throw error;
@@ -907,6 +966,7 @@ export function createMiningRewardsService(
               value: "0",
             }),
             unsignedTransaction: claim.unsignedTransaction,
+            payloadDigest: miningClaimPayloadDigest(claim.unsignedTransaction),
             signing: Object.freeze({
               mode: "device_eth_send_transaction",
               allowed: !expired,
