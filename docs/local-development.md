@@ -526,6 +526,33 @@ With no due work, the process only performs its bounded polling cycles until
 PostgreSQL cleanly. A real nonempty Testnet account and deployed worker remain
 unverified.
 
+## Development user reset (Decision 0113)
+
+Used once when LOOP moves to a new Privy app (docs/14 §8): every stored
+Privy user ID is void, so every user-rooted row goes and platform data
+(communities, market cache, MEME tokens and curves, Launch projects and
+sales, console accounts, audit logs, formula versions, settings) stays.
+
+```sh
+pnpm dev:reset-users            # plan: per-table row counts, READ ONLY
+pnpm dev:reset-users --yes      # execute in one transaction
+# dev stack (reads loop-api/.env.local + ops/api-dev.env + ops/api-dev.local.env):
+ops/dev-reset-users.sh          # plan, then type RESET to execute
+```
+
+- Refused with `NODE_ENV=production` and for any database whose name does
+  not start with `loop_api_dev` or `loop_api_test`.
+- Communities, community channels, MEME tokens, Launch projects, applicant
+  review events, and kept media (MEME images, community logos) are
+  re-owned by the sentinel user `loop:system:retired-owner` (cannot sign
+  in); bound console reviewer / acceptor accounts are disabled.
+- `ops_audit` / `admin_audit_log` are never touched; a user named by
+  `ops_audit.actor_id` stays as `loop:retired:<id>` with nothing else.
+- A new table must be classified in `scripts/dev-reset-users.ts` before the
+  script runs again.
+- Stream is not touched; see Decision 0113 for the community channel sync
+  caveat.
+
 ## iOS app identity for association files (Decision 0106)
 
 The API publishes exactly one iOS application identifier,

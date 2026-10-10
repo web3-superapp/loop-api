@@ -26,6 +26,7 @@
     "db:stop": "docker compose stop postgres",
     "db:up": "docker compose up -d --wait postgres",
     "dev": "node --env-file-if-exists=.env.local --import tsx --watch src/server.ts",
+    "dev:reset-users": "node --env-file-if-exists=.env.local --import tsx scripts/dev-reset-users.ts",
     "docker:build:migration": "docker build --target migration --tag loop-api:migration .",
     "docker:build:runtime": "docker build --target runtime --tag loop-api:runtime .",
     "docker:build:worker": "docker build --target worker --tag loop-api:worker .",
