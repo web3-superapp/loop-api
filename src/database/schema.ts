@@ -1,4 +1,4 @@
-export const latestMigrationName = "000058_admin_followups";
+export const latestMigrationName = "000059_hooks_deployment_executor";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -138,6 +138,8 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.hooks_launch_deployment_tasks",
   "public.hooks_launch_deployment_authorizations",
   "public.hooks_launch_submission_commands",
+  "public.hooks_launch_deployment_events",
+  "public.hooks_launch_executor_nonces",
   "public.admin_accounts",
   "public.admin_account_commands",
   "public.admin_login_attempts",

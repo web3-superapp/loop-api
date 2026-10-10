@@ -27,6 +27,8 @@ const databaseUrl = requireIntegrationDatabaseUrl();
 
 const truncateAll = `
   truncate table
+    public.hooks_launch_executor_nonces,
+    public.hooks_launch_deployment_events,
     public.hooks_launch_submission_commands,
     public.hooks_launch_deployment_authorizations,
     public.hooks_launch_deployment_tasks,

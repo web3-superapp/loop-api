@@ -54,6 +54,7 @@ describe("loadReconciliationWorkerConfig", () => {
       },
       memeIndexerEnabled: false,
       memeGraduationExecutor: null,
+      hooksLaunchExecutor: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

@@ -162,6 +162,8 @@ describe("database schema readiness contract", () => {
       "public.hooks_launch_deployment_tasks",
       "public.hooks_launch_deployment_authorizations",
       "public.hooks_launch_submission_commands",
+      "public.hooks_launch_deployment_events",
+      "public.hooks_launch_executor_nonces",
       "public.admin_accounts",
       "public.admin_account_commands",
       "public.admin_login_attempts",

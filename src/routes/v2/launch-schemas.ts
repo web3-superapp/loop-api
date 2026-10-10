@@ -1940,6 +1940,107 @@ export const hooksLaunchDeploymentParamsSchema = {
   },
 } as const;
 
+const hooksLaunchDeploymentStatusSchema = {
+  type: "string",
+  enum: [
+    "awaiting_executor",
+    "claimed",
+    "broadcast",
+    "confirmed",
+    "verified",
+    "activated",
+    "failed",
+    "reorged",
+    "cancelled",
+  ],
+} as const;
+
+const nullableTxHashSchema = {
+  anyOf: [bytes32Schema, { type: "null" }],
+} as const;
+
+const hooksLaunchDeployedAddressesSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "launchId",
+    "meme",
+    "hook",
+    "nft",
+    "curve",
+    "gate",
+    "escrow",
+    "snapshots",
+    "graduationAdapter",
+    "buybackAdapter",
+    "priceRecorder",
+    "buybackExecutor",
+  ],
+  properties: {
+    launchId: bytes32Schema,
+    meme: addressSchema,
+    hook: addressSchema,
+    nft: addressSchema,
+    curve: addressSchema,
+    gate: addressSchema,
+    escrow: addressSchema,
+    snapshots: addressSchema,
+    graduationAdapter: addressSchema,
+    buybackAdapter: addressSchema,
+    priceRecorder: addressSchema,
+    buybackExecutor: addressSchema,
+  },
+} as const;
+
+const hooksLaunchDeploymentEventSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "sequence",
+    "fromStatus",
+    "toStatus",
+    "kind",
+    "txHash",
+    "blockNumber",
+    "blockHash",
+    "confirmations",
+    "errorCode",
+    "createdAt",
+  ],
+  properties: {
+    sequence: { type: "integer", minimum: 1 },
+    fromStatus: {
+      anyOf: [hooksLaunchDeploymentStatusSchema, { type: "null" }],
+    },
+    toStatus: hooksLaunchDeploymentStatusSchema,
+    kind: {
+      type: "string",
+      pattern: "^[a-z_]{1,40}$",
+      description:
+        "Executor step: created, claimed, retry_claimed, broadcast, rebroadcast, receipt_found, included, confirmed, reorg_detected, reclaimed_after_reorg, verified, activation_broadcast, activation_included, activation_reorged, activation_reverted, activation_dropped, activation_rejected, activated, failed, lease_taken_over, cancelled. New kinds may be added; render unknown kinds generically.",
+    },
+    txHash: nullableTxHashSchema,
+    blockNumber: {
+      anyOf: [
+        { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
+        { type: "null" },
+      ],
+      description: "Decimal string.",
+    },
+    blockHash: nullableTxHashSchema,
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+    },
+    errorCode: {
+      anyOf: [
+        { type: "string", pattern: "^[A-Z0-9_]{1,64}$" },
+        { type: "null" },
+      ],
+    },
+    createdAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
 export const hooksLaunchDeploymentJobSchema = {
   type: "object",
   additionalProperties: false,
@@ -1952,7 +2053,15 @@ export const hooksLaunchDeploymentJobSchema = {
     "status",
     "memeAddress",
     "hookAddress",
+    "txHash",
+    "confirmations",
+    "activationTxHash",
+    "addresses",
+    "failure",
+    "attemptCount",
+    "events",
     "createdAt",
+    "updatedAt",
   ],
   properties: {
     jobId: { type: "string", pattern: opaqueIdPatternSource },
@@ -1961,14 +2070,71 @@ export const hooksLaunchDeploymentJobSchema = {
     chainId: { type: "integer", const: 97 },
     factoryAddress: addressSchema,
     status: {
-      type: "string",
-      enum: ["awaiting_executor", "cancelled"],
+      ...hooksLaunchDeploymentStatusSchema,
       description:
-        "awaiting_executor: verified and recorded, not broadcast. cancelled: withdrawn before any broadcast (does not revoke a signature already shared).",
+        "Decision 0112. awaiting_executor: verified and recorded, not claimed. claimed: an executor holds the task and re-checks config, approval, deadline and nonces. broadcast: the signed deployLaunch transaction is persisted (txHash) and sent; waiting for confirmations. confirmed: enough confirmations; module verification pending. verified: every module read back and matched; activation pending. activated: LaunchPublicationGate published (NFT sale / curve may accept funds from their own start times). failed: see failure (retryable → the executor retries automatically). reorged: the receipt left the canonical chain; the same transaction is re-sent. cancelled: withdrawn before any claim (does not revoke a signature already shared).",
     },
-    memeAddress: addressSchema,
-    hookAddress: addressSchema,
+    memeAddress: {
+      ...addressSchema,
+      description:
+        "Predicted (EIP-712-bound) MEME address; same as addresses.predicted.meme.",
+    },
+    hookAddress: {
+      ...addressSchema,
+      description:
+        "Predicted (EIP-712-bound) Hook address; same as addresses.predicted.hook.",
+    },
+    txHash: {
+      ...nullableTxHashSchema,
+      description:
+        "The deployLaunch transaction hash, persisted before it is sent.",
+    },
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+      description: "Confirmations of txHash last observed by the executor.",
+    },
+    activationTxHash: nullableTxHashSchema,
+    addresses: {
+      type: "object",
+      additionalProperties: false,
+      required: ["predicted", "deployed"],
+      properties: {
+        predicted: {
+          type: "object",
+          additionalProperties: false,
+          required: ["meme", "hook"],
+          properties: { meme: addressSchema, hook: addressSchema },
+        },
+        deployed: {
+          anyOf: [hooksLaunchDeployedAddressesSchema, { type: "null" }],
+          description:
+            "Read back from the Factory after verification; null before verified.",
+        },
+      },
+    },
+    failure: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "retryable"],
+          properties: {
+            code: { type: "string", pattern: "^[A-Z0-9_]{1,64}$" },
+            retryable: { type: "boolean" },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    attemptCount: { type: "integer", minimum: 0 },
+    events: {
+      type: "array",
+      maxItems: 100,
+      items: hooksLaunchDeploymentEventSchema,
+      description: "Most recent 100 executor events, oldest first.",
+    },
     createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
   },
 } as const;
 

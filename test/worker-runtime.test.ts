@@ -35,6 +35,13 @@ import type { CreateVoiceRoomReaperWorkerOptions } from "../src/voice-room-reape
 import { createUnavailableStreamCallGateway } from "../src/integrations/stream/call-gateway.js";
 import type { CreateMemberBuyFeedWorkerOptions } from "../src/community-member-buy-feed-worker.js";
 import { createUnavailableStreamCommunityChannelGateway } from "../src/integrations/stream/channel-gateway.js";
+import type {
+  HooksLaunchExecutor,
+  HooksLaunchExecutorChain,
+  HooksLaunchExecutorRepository,
+} from "../src/features/launch/hooks-launch-executor.js";
+import type { createHooksLaunchExecutorLane as createHooksLaunchExecutorLaneType } from "../src/hooks-launch-executor-worker.js";
+import { HooksLaunchExecutorChainRefusedError } from "../src/integrations/launch/hooks-launch-executor-chain.js";
 
 const workerId = "33b40904-4487-49cd-8481-7075d9025713";
 
@@ -1361,5 +1368,132 @@ describe("community_member_buy_feed lane composition (Decision 0097)", () => {
       expect.objectContaining({ lane: "community_member_buy_feed" }),
       expect.anything(),
     );
+  });
+});
+
+describe("hooks_launch_executor lane (Decision 0112)", () => {
+  const executorEnvironment = {
+    NODE_ENV: "test",
+    LOG_LEVEL: "silent",
+    DATABASE_URL:
+      "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+    MARKET_SPARKLINE_WARM_ENABLED: "false",
+    VOICE_ROOM_REAPER_ENABLED: "false",
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED: "false",
+    LAUNCH_CHAIN_ID: "97",
+    LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    HOOKS_LAUNCH_FACTORY_ADDRESS: "0x1111111111111111111111111111111111111111",
+    HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+    HOOKS_LAUNCH_EXECUTOR_ENABLED: "on",
+    HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: `0x${"42".repeat(32)}`,
+  };
+
+  it("builds the lane from the launch slot RPC, the Factory pair and the lease", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const repository = {} as HooksLaunchExecutorRepository;
+    const repositoryFactory = vi.fn(() => repository);
+    const chain = {
+      executorAddress: "0x2222222222222222222222222222222222222222",
+    } as HooksLaunchExecutorChain;
+    const createHooksLaunchExecutorChain = vi.fn(() => chain);
+    const createHooksLaunchExecutorLane = vi.fn(
+      (options: Parameters<typeof createHooksLaunchExecutorLaneType>[0]) => {
+        expect(options.repository).toBe(repository);
+        expect(options.chain).toBe(chain);
+        expect(options.executorId).toMatch(/^hooks-executor:/u);
+        return {
+          lane: "hooks_launch_executor",
+          executor: {} as HooksLaunchExecutor,
+          runOnce: vi.fn(),
+          run: vi.fn(() => {
+            events.push("run-hooks-executor");
+            return Promise.resolve();
+          }),
+        };
+      },
+    );
+
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(executorEnvironment),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        hooksLaunchExecutor: repositoryFactory,
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createHooksLaunchExecutorChain,
+      createHooksLaunchExecutorLane,
+    });
+
+    expect(createHooksLaunchExecutorChain).toHaveBeenCalledWith({
+      privateKey: `0x${"42".repeat(32)}`,
+      factoryAddress: "0x1111111111111111111111111111111111111111",
+      rpcUrls: ["https://bsc-testnet.example/rpc"],
+    });
+    expect(repositoryFactory).toHaveBeenCalledWith(120);
+    expect(events).toEqual(["ping", "run-hooks-executor", "close"]);
+    const enabled = vi
+      .mocked(logger.info)
+      .mock.calls.find(
+        ([, message]) => message === "LOOP hooks launch executor enabled",
+      );
+    expect(enabled?.[0]).toMatchObject({
+      lane: "hooks_launch_executor",
+      executorAddress: "0x2222222222222222222222222222222222222222",
+      confirmations: 3,
+    });
+    expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain(
+      "42".repeat(32),
+    );
+  });
+
+  it("stays idle with a reason when the chain client refuses", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createHooksLaunchExecutorLane = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(executorEnvironment),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        hooksLaunchExecutor: vi.fn(),
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createHooksLaunchExecutorChain: () => {
+        throw new HooksLaunchExecutorChainRefusedError(
+          "HOOKS_EXECUTOR_RPC_NOT_CONFIGURED",
+        );
+      },
+      createHooksLaunchExecutorLane,
+    });
+    expect(createHooksLaunchExecutorLane).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "hooks_launch_executor",
+        reasonCode: "HOOKS_EXECUTOR_RPC_NOT_CONFIGURED",
+      },
+      "LOOP hooks launch executor stays idle",
+    );
+  });
+
+  it("does not construct anything while the switch is off", async () => {
+    const createHooksLaunchExecutorChain = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...executorEnvironment,
+        HOOKS_LAUNCH_EXECUTOR_ENABLED: "off",
+      }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => fakeDatabase([]),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createHooksLaunchExecutorChain,
+    });
+    expect(createHooksLaunchExecutorChain).not.toHaveBeenCalled();
   });
 });

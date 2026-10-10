@@ -1,3 +1,4 @@
+import type { HooksLaunchDeploymentStatus } from "../launch/hooks-launch-deployment-status.js";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
@@ -37,6 +38,7 @@ export const adminLaunchStages = Object.freeze([
   "approved",
   "accepted",
   "deploying",
+  "activated",
 ] as const);
 export type AdminLaunchStage = (typeof adminLaunchStages)[number];
 
@@ -97,10 +99,26 @@ export interface AdminLaunchTestnetAcceptance {
   readonly createdAt: string;
 }
 
+export interface AdminLaunchDeploymentEvent {
+  readonly sequence: number;
+  readonly fromStatus: HooksLaunchDeploymentStatus | null;
+  readonly toStatus: HooksLaunchDeploymentStatus;
+  readonly kind: string;
+  readonly txHash: string | null;
+  readonly blockNumber: string | null;
+  readonly blockHash: string | null;
+  readonly confirmations: number | null;
+  readonly errorCode: string | null;
+  /** Safe step details (failed check names, nonce, retryable flag). */
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly actor: string | null;
+  readonly createdAt: string;
+}
+
 export interface AdminLaunchDeploymentTask {
   readonly jobId: string;
   readonly configVersion: number;
-  readonly status: "awaiting_executor" | "cancelled";
+  readonly status: HooksLaunchDeploymentStatus;
   readonly chainId: number;
   readonly factoryAddress: string;
   readonly projectOwner: string;
@@ -110,7 +128,28 @@ export interface AdminLaunchDeploymentTask {
   readonly predictedHookAddress: string;
   readonly authorizationCount: number;
   readonly latestAuthorizationAt: string | null;
+  /** Decision 0112 executor facts (null until the step happened). */
+  readonly executorAddress: string | null;
+  readonly claimedBy: string | null;
+  readonly attemptCount: number;
+  readonly txHash: string | null;
+  readonly txNonce: string | null;
+  readonly blockNumber: string | null;
+  readonly blockHash: string | null;
+  readonly confirmations: number | null;
+  readonly launchId: string | null;
+  readonly deployedAddresses: Readonly<Record<string, string>> | null;
+  readonly verifiedChecks: readonly string[];
+  readonly activationTxHash: string | null;
+  readonly activationBlockNumber: string | null;
+  readonly activatedAt: string | null;
+  readonly failure: {
+    readonly code: string;
+    readonly retryable: boolean;
+  } | null;
+  readonly events: readonly AdminLaunchDeploymentEvent[];
   readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface AdminLaunchProjectDetail {

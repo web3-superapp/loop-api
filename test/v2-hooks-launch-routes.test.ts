@@ -124,7 +124,34 @@ const job: HooksLaunchDeploymentJob = Object.freeze({
   status: "awaiting_executor",
   memeAddress: `0x${"ab".repeat(18)}6666`,
   hookAddress: `0x${"ab".repeat(18)}20cc`,
+  txHash: null,
+  confirmations: null,
+  activationTxHash: null,
+  addresses: {
+    predicted: {
+      meme: `0x${"ab".repeat(18)}6666`,
+      hook: `0x${"ab".repeat(18)}20cc`,
+    },
+    deployed: null,
+  },
+  failure: null,
+  attemptCount: 0,
+  events: [
+    {
+      sequence: 1,
+      fromStatus: null,
+      toStatus: "awaiting_executor" as const,
+      kind: "created",
+      txHash: null,
+      blockNumber: null,
+      blockHash: null,
+      confirmations: null,
+      errorCode: null,
+      createdAt,
+    },
+  ],
   createdAt,
+  updatedAt: createdAt,
 });
 
 function submissionsFake(
@@ -614,6 +641,94 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json()).toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
   }, 60_000);
+
+  it("returns executor progress and refuses to cancel a claimed task (Decision 0112)", async () => {
+    const txHash = `0x${"cd".repeat(32)}`;
+    const deployedJob: HooksLaunchDeploymentJob = {
+      ...job,
+      status: "activated",
+      txHash,
+      confirmations: 3,
+      activationTxHash: `0x${"ef".repeat(32)}`,
+      addresses: {
+        predicted: job.addresses.predicted,
+        deployed: {
+          launchId: `0x${"12".repeat(32)}`,
+          meme: job.memeAddress,
+          hook: job.hookAddress,
+          nft: `0x${"01".repeat(20)}`,
+          curve: `0x${"02".repeat(20)}`,
+          gate: `0x${"03".repeat(20)}`,
+          escrow: `0x${"04".repeat(20)}`,
+          snapshots: `0x${"05".repeat(20)}`,
+          graduationAdapter: `0x${"06".repeat(20)}`,
+          buybackAdapter: `0x${"07".repeat(20)}`,
+          priceRecorder: `0x${"08".repeat(20)}`,
+          buybackExecutor: `0x${"09".repeat(20)}`,
+        },
+      },
+      attemptCount: 1,
+      events: [
+        ...job.events,
+        {
+          sequence: 2,
+          fromStatus: "claimed",
+          toStatus: "broadcast",
+          kind: "broadcast",
+          txHash,
+          blockNumber: null,
+          blockHash: null,
+          confirmations: null,
+          errorCode: null,
+          createdAt,
+        },
+        {
+          sequence: 3,
+          fromStatus: "broadcast",
+          toStatus: "confirmed",
+          kind: "confirmed",
+          txHash,
+          blockNumber: "123456",
+          blockHash: `0x${"aa".repeat(32)}`,
+          confirmations: 3,
+          errorCode: null,
+          createdAt,
+        },
+      ],
+    };
+    const app = await createApp({
+      submissions: submissionsFake({
+        getOwned: () => Promise.resolve(deployedJob),
+        cancelOwned: () =>
+          Promise.reject(new HooksLaunchSubmissionError("not_cancellable")),
+      }),
+    });
+    const url = `/v2/launch/projects/${projectId}/hooks-deployments/${jobId}`;
+    const read = await app.inject({ url, headers: s7CommonHeaders() });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual(deployedJob);
+    expect(read.body).not.toMatch(/signature|raw/iu);
+
+    const cancel = await app.inject({
+      method: "DELETE",
+      url,
+      headers: s7CommandHeaders(),
+    });
+    expect(cancel.statusCode).toBe(409);
+    expect(Object.keys(cancel.json()).sort()).toEqual([
+      "category",
+      "code",
+      "correlationId",
+      "detailsSafe",
+      "providerReferenceSafe",
+      "retryable",
+      "userMessageKey",
+    ]);
+    expect(cancel.json()).toMatchObject({
+      code: "VERSION_CONFLICT",
+      detailsSafe: { reasonCode: "HOOKS_DEPLOYMENT_NOT_CANCELLABLE" },
+    });
+  });
 
   it("keeps task reads owner-scoped and cancellation distinct from broadcast", async () => {
     const app = await createApp({ submissions: submissionsFake() });

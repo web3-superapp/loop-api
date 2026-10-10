@@ -4,7 +4,9 @@
 `X-Request-ID`、错误体七字段、Bearer、`X-Loop-Contract-Version: 2.0`、
 `X-Loop-Client-Version`）沿用 `docs/frontend-v2-session-api.md` 与
 `docs/api-v2-conventions.md`。来源：需求方分支 `codex/integrated-dual-pool-20261008`
-（原决策 0090/0095/0097）。仅 BSC 测试网（chainId 97），**不广播、不激活**。
+（原决策 0090/0095/0097）。仅 BSC 测试网（chainId 97）。S132 / 决策 0112 起，后台执行器
+（worker，默认关闭）会认领任务、广播 `deployLaunch`、跟踪确认与重组、逐模块核验后激活；
+本文件 §5–§6、§9 描述任务进度字段（**只增字段，S125 字段含义不变**）。
 
 ## 0. 启用条件
 
@@ -147,7 +149,7 @@
 }
 ```
 
-200：
+200（任务资源，§6 GET/DELETE 同结构；决策 0112 起多出 `txHash` 之后的字段）：
 
 ```json
 {
@@ -159,7 +161,31 @@
   "status": "awaiting_executor",
   "memeAddress": "0x…6666",
   "hookAddress": "0x…",
-  "createdAt": "2026-10-09T00:00:00.000Z"
+  "txHash": null,
+  "confirmations": null,
+  "activationTxHash": null,
+  "addresses": {
+    "predicted": { "meme": "0x…6666", "hook": "0x…20cc" },
+    "deployed": null
+  },
+  "failure": null,
+  "attemptCount": 0,
+  "events": [
+    {
+      "sequence": 1,
+      "fromStatus": null,
+      "toStatus": "awaiting_executor",
+      "kind": "created",
+      "txHash": null,
+      "blockNumber": null,
+      "blockHash": null,
+      "confirmations": null,
+      "errorCode": null,
+      "createdAt": "2026-10-09T00:00:00.000Z"
+    }
+  ],
+  "createdAt": "2026-10-09T00:00:00.000Z",
+  "updatedAt": "2026-10-09T00:00:00.000Z"
 }
 ```
 
@@ -168,13 +194,17 @@
 - 同一 `Idempotency-Key` 重放同一请求返回同一任务（超时重试请复用 key 与签名）；同 key
   不同内容 `409 IDEMPOTENCY_CONFLICT`。
 - 签名或字段不匹配：`400 INVALID_REQUEST`；配置已变或与已有任务冲突：`409 VERSION_CONFLICT`。
-- `awaiting_executor` 只表示「已验签登记」，**不是**已上链；本批无执行器。
+- `awaiting_executor` 只表示「已验签登记」，**不是**已上链；之后由执行器推进（§9）。
 
 ## 6. `GET` / `DELETE …/hooks-deployments/{jobId}`
 
-- `GET`（`getV2HooksLaunchDeployment`）：返回 §5 结构；非本人 `404`。
+- `GET`（`getV2HooksLaunchDeployment`）：返回 §5 结构（含执行器进度，§9）；非本人 `404`。
+  部署页轮询本接口即可（建议 5 s，`activated` / `failed`（`retryable=false`）/ `cancelled`
+  后停止）。
 - `DELETE`（`cancelV2HooksLaunchDeployment`，需 `Idempotency-Key`）：`awaiting_executor →
-cancelled`，已取消再取消返回原状态。取消不撤销已给出的链上签名。
+cancelled`，已取消再取消返回原状态。**执行器认领之后（`claimed` 及以后）不可取消**：
+  `409 VERSION_CONFLICT`，`detailsSafe.reasonCode = "HOOKS_DEPLOYMENT_NOT_CANCELLABLE"`，
+  前端隐藏「取消」按钮即可（`status != awaiting_executor` 时）。取消不撤销已给出的链上签名。
 
 ## 7. 错误码汇总
 
@@ -184,7 +214,7 @@ cancelled`，已取消再取消返回原状态。取消不撤销已给出的链�
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                 |
 | 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                       |
 | 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                  |
-| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突                                                                                                      |
+| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                         |
 | 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                   |
 | 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                  |
 | 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                      |
@@ -194,3 +224,68 @@ cancelled`，已取消再取消返回原状态。取消不撤销已给出的链�
 
 开关关闭：所有页面块显示「Hooks 发射未开放」。开关开但无 Factory：可编辑/保存草稿，签名与
 提交按钮禁用并显示「测试网工厂未配置」。不得用本地数据伪造任务状态。
+
+## 9. 部署进度（S132 / 决策 0112）
+
+### 9.1 状态
+
+| `status`            | 含义（前端文案建议）                                                                 | 终态 |
+| ------------------- | ------------------------------------------------------------------------------------ | ---- |
+| `awaiting_executor` | 已验签登记，等待执行器（「排队中」）                                                 | 否   |
+| `claimed`           | 执行器已认领，正在复核配置/审批/签名期限/nonce（「准备部署」）                       | 否   |
+| `broadcast`         | 部署交易已签名入库并发出，`txHash` 可展示；等待确认（「已上链，等待确认 n/3」）      | 否   |
+| `confirmed`         | 达到确认数（默认 3），正在逐模块核验（「核验中」）                                   | 否   |
+| `verified`          | 全部模块核验一致，激活交易已发出或即将发出（「激活中」）                             | 否   |
+| `activated`         | 链上已激活（`LaunchPublicationGate.published = true`）；`addresses.deployed` 为准    | 是   |
+| `failed`            | 见 `failure.code`；`failure.retryable = true` 时执行器会自动重试，前端显示「重试中」 | 视情 |
+| `reorged`           | 回执所在区块被重组，执行器将重发同一笔交易（「链上重组，重新确认中」）               | 否   |
+| `cancelled`         | 认领前被项目方取消                                                                   | 是   |
+
+- 「部署」不等于「激活」：只有 `activated` 才可向用户展示「已发布」；`verified` 之前的实例
+  在链上也不能 mint、买入或卖出（合约层闸门）。
+- `confirmations` 是部署交易最近一次观测的确认数（整数，可能落后于链头几秒）。确认阈值是
+  后台配置（默认 3），不在接口中下发；前端显示「n 确认」即可，不要自行判断完成。
+- `txHash` / `activationTxHash` 可做区块浏览器链接（BscScan Testnet）。
+- 地址：`addresses.predicted` 是签名绑定的 CREATE2 预测（S125 的 `memeAddress` /
+  `hookAddress` 同值）；`addresses.deployed` 在 `verified` 后才有值，包含 `launchId`（bytes32
+  链上事实，不是 LOOP 主键）和 11 个模块地址。展示与交易一律用 `deployed`，且只在
+  `activated` 后开放交易入口。
+
+### 9.2 `failure.code`
+
+| code                                   | retryable | 文案建议                                           |
+| -------------------------------------- | --------- | -------------------------------------------------- |
+| `HOOKS_SIGNATURE_EXPIRED`              | 否        | 签名已过期，请重新签名提交（新 `Idempotency-Key`） |
+| `HOOKS_CONFIG_SUPERSEDED`              | 否        | 配置已更新，请重新签名                             |
+| `HOOKS_CONFIG_NOT_APPROVED`            | 否        | 配置审批已失效，等待平台审批后重新签名             |
+| `HOOKS_AUTHORIZATION_INVALID`          | 否        | 签名无效，请重新签名                               |
+| `HOOKS_OWNER_NONCE_CONSUMED`           | 否        | 钱包 nonce 已变化，请重新签名                      |
+| `HOOKS_LAUNCH_ALREADY_DEPLOYED`        | 否        | 该版本已在链上部署，联系平台                       |
+| `HOOKS_ACTIVATION_WINDOW_CLOSED`       | 否        | 距开售太近无法激活，修改开售时间后重新提交         |
+| `HOOKS_DEPLOY_SIMULATION_REVERTED`     | 否        | 链上预执行失败，联系平台                           |
+| `HOOKS_DEPLOY_GAS_ABOVE_CAP`           | 否        | 联系平台                                           |
+| `HOOKS_VERIFICATION_MISMATCH`          | 否        | 部署核验不一致，**未激活**，联系平台               |
+| `HOOKS_ACTIVATION_STATE_UNEXPECTED`    | 否        | 联系平台                                           |
+| `HOOKS_ACTIVATION_SIMULATION_REVERTED` | 否        | 联系平台                                           |
+| `HOOKS_ACTIVATION_REVERTED`            | 否        | 激活多次失败，联系平台                             |
+| `HOOKS_EXECUTOR_FUNDS_INSUFFICIENT`    | 是        | 平台处理中（执行账户余额不足）                     |
+| `HOOKS_BROADCAST_REJECTED`             | 是        | 平台处理中                                         |
+| `HOOKS_TX_DROPPED`                     | 是        | 平台处理中                                         |
+| `HOOKS_DEPLOY_REVERTED`                | 是        | 平台处理中                                         |
+
+`retryable = true` 且尝试次数用尽后会变为 `false`（`attemptCount` 达到后台上限，默认 3）。
+未列出的新 code 一律按「联系平台」处理。
+
+### 9.3 `events[]`
+
+最近 100 条，按 `sequence` 升序；`kind` 取值见 OpenAPI 描述（`created`、`claimed`、
+`broadcast`、`included`、`confirmed`、`reorg_detected`、`reclaimed_after_reorg`、
+`rebroadcast`、`verified`、`activation_broadcast`、`activation_included`、`activated`、
+`failed`、`cancelled` 等），未知 kind 按通用文案显示。`blockNumber` 为十进制字符串。事件中
+不含签名、原始交易或任何密钥。
+
+### 9.4 unavailable
+
+执行器默认关闭（`HOOKS_LAUNCH_EXECUTOR_ENABLED=off`）：任务停在 `awaiting_executor`，接口
+照常返回，不伪造进度。执行器打开但执行账户未被 Factory 授权、Factory code hash 不符或链不是
+97 时，执行器空转（任务不被认领），前端同样只看到 `awaiting_executor`。

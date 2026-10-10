@@ -112,7 +112,18 @@ function fixture(
         status: "awaiting_executor",
         memeAddress: input.memeAddress,
         hookAddress: input.hookAddress,
+        txHash: null,
+        confirmations: null,
+        activationTxHash: null,
+        addresses: {
+          predicted: { meme: input.memeAddress, hook: input.hookAddress },
+          deployed: null,
+        },
+        failure: null,
+        attemptCount: 0,
+        events: [],
         createdAt: "2026-10-09T00:00:00.000Z",
+        updatedAt: "2026-10-09T00:00:00.000Z",
       }),
   );
   const repository = {

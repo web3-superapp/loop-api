@@ -11,6 +11,7 @@ import {
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
 import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
   hooksLaunchId,
@@ -47,16 +48,96 @@ export const hooksLaunchSubmissionSchema = z
 export type HooksLaunchSignedSubmission = z.infer<
   typeof hooksLaunchSubmissionSchema
 >;
+/**
+ * Decision 0108 binding hash of a task: everything the project signed
+ * except the deadline (renewals keep the task), plus the Hook salt and both
+ * CREATE2 predictions. Decision 0112: the executor recomputes it to bind a
+ * stored authorization to its task before using it.
+ */
+export function hooksLaunchBindingHash(input: {
+  readonly factoryAddress: string;
+  readonly request: HooksLaunchTypedRequestInput;
+  readonly hookSalt: string;
+  readonly memeAddress: string;
+  readonly hookAddress: string;
+}): string {
+  const stableRequest = {
+    ...input.request,
+    deadline: undefined,
+    configHash: input.request.configHash.toLowerCase(),
+    projectOwner: input.request.projectOwner.toLowerCase(),
+    buybackRecipient: input.request.buybackRecipient.toLowerCase(),
+    memeSalt: input.request.memeSalt.toLowerCase(),
+  };
+  return keccak256(
+    toBytes(
+      JSON.stringify([
+        input.factoryAddress.toLowerCase(),
+        stableRequest,
+        input.hookSalt.toLowerCase(),
+        input.memeAddress.toLowerCase(),
+        input.hookAddress.toLowerCase(),
+      ]),
+    ),
+  );
+}
+
+export interface HooksLaunchDeploymentEventView {
+  readonly sequence: number;
+  readonly fromStatus: HooksLaunchDeploymentStatus | null;
+  readonly toStatus: HooksLaunchDeploymentStatus;
+  readonly kind: string;
+  readonly txHash: string | null;
+  /** Decimal string. */
+  readonly blockNumber: string | null;
+  readonly blockHash: string | null;
+  readonly confirmations: number | null;
+  readonly errorCode: string | null;
+  readonly createdAt: string;
+}
+export interface HooksLaunchDeployedAddresses {
+  readonly launchId: string;
+  readonly meme: string;
+  readonly hook: string;
+  readonly nft: string;
+  readonly curve: string;
+  readonly gate: string;
+  readonly escrow: string;
+  readonly snapshots: string;
+  readonly graduationAdapter: string;
+  readonly buybackAdapter: string;
+  readonly priceRecorder: string;
+  readonly buybackExecutor: string;
+}
 export interface HooksLaunchDeploymentJob {
   readonly jobId: string;
   readonly projectId: string;
   readonly configVersion: number;
   readonly chainId: 97;
   readonly factoryAddress: string;
-  readonly status: "awaiting_executor" | "cancelled";
+  readonly status: HooksLaunchDeploymentStatus;
+  /** Predicted (EIP-712-bound) MEME address; S125 meaning unchanged. */
   readonly memeAddress: string;
+  /** Predicted (EIP-712-bound) Hook address; S125 meaning unchanged. */
   readonly hookAddress: string;
+  /** Decision 0112: the persisted `deployLaunch` transaction hash. */
+  readonly txHash: string | null;
+  /** Confirmations of `txHash` last observed by the executor. */
+  readonly confirmations: number | null;
+  readonly activationTxHash: string | null;
+  readonly addresses: {
+    readonly predicted: { readonly meme: string; readonly hook: string };
+    /** Read back from the Factory after verification; null before. */
+    readonly deployed: HooksLaunchDeployedAddresses | null;
+  };
+  readonly failure: {
+    readonly code: string;
+    readonly retryable: boolean;
+  } | null;
+  readonly attemptCount: number;
+  readonly events: readonly HooksLaunchDeploymentEventView[];
   readonly createdAt: string;
+  readonly updatedAt: string;
 }
 export interface AcceptHooksLaunchSubmission {
   readonly ownerUserId: string;
@@ -97,6 +178,7 @@ export class HooksLaunchSubmissionError extends Error {
       | "idempotency_conflict"
       | "not_found"
       | "not_approved"
+      | "not_cancellable"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
