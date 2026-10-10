@@ -106,6 +106,15 @@ describe("loadReconciliationWorkerConfig", () => {
       miningSnapshotEnabled: false,
       push: null,
       miningMockHoldingsEnabled: false,
+      miningSettlement: {
+        enabled: false,
+        pollIntervalMs: 60_000,
+        catchupHours: 48,
+        claimContractAddress: null,
+        usdtAddress: null,
+        claimConfirmations: 3,
+        indexerGraceSeconds: 120,
+      },
       // Decision 0095: real identity in community chat by default.
       communityChatRealIdentity: true,
       publicBaseUrl: "http://127.0.0.1:3000/",

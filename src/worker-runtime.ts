@@ -143,6 +143,12 @@ import {
   type PostgresDatabaseLogger,
 } from "./database/database.js";
 import type { ControlPlaneRepository } from "./database/control-plane-repository.js";
+import { createMiningRewardsService } from "./features/mining/hourly-rewards-service.js";
+import { miningSettlementLane } from "./features/mining/hourly-settlement-contract.js";
+import type { MiningSettlementRepository } from "./features/mining/hourly-settlement-ports.js";
+import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
+import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
+import { createMiningSettlementLane } from "./mining-settlement-worker.js";
 import type { SpotAgentAuthorizationRepository } from "./database/spot-agent-authorization-repository.js";
 import type { PerpReconciliationRepository } from "./features/perp/perp-reconciliation-contract.js";
 import type { ReconciliationControlPlane } from "./features/reconciliation/reconciliation-service.js";
@@ -212,6 +218,8 @@ export interface ReconciliationWorkerDatabase {
   readonly meme?: MemeRepository;
   /** `launch2_event` lane (Decision 0114); absent keeps it off. */
   readonly launch2?: Launch2Repository;
+  /** `mining_hourly_settlement` lane (Decision 0116); absent keeps it idle. */
+  readonly miningSettlement?: MiningSettlementRepository;
   /** Hooks deployment executor (Decision 0112); absent keeps it off. */
   readonly hooksLaunchExecutor?: (
     leaseSeconds: number,
@@ -797,6 +805,109 @@ export async function runReconciliationWorker(
             factoryAddress: launch2Config.factoryAddress as string,
           },
           "LOOP launch2_event lane enabled",
+        );
+      }
+    }
+    // Decision 0116: hourly Mining settlement, default off. Without a
+    // repository the lane stays idle; claim reconciliation needs the
+    // LoopRewardClaim address and the launch slot endpoints.
+    const settlementConfig = options.config.miningSettlement;
+    if (settlementConfig.enabled) {
+      const repository = database.miningSettlement;
+      if (repository === undefined) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: miningSettlementLane,
+            reasonCode: "MINING_SETTLEMENT_UNAVAILABLE",
+          },
+          "LOOP mining_hourly_settlement lane stays idle",
+        );
+      } else {
+        const claimChain =
+          settlementConfig.claimContractAddress !== null &&
+          launchChainConfig.rpcUrls.length > 0
+            ? createMiningRewardClaimChain({
+                rpcUrls: launchChainConfig.rpcUrls,
+                chainReference: launchChainConfig.chainReference,
+              })
+            : null;
+        memeLanes.push(
+          createMiningSettlementLane({
+            runner: createMiningSettlementRunner({
+              repository,
+              chainId: launchChainConfig.chainId,
+              indexerGraceSeconds: settlementConfig.indexerGraceSeconds,
+            }),
+            repository,
+            rewards:
+              claimChain === null
+                ? null
+                : createMiningRewardsService({
+                    repository,
+                    chain: claimChain,
+                    callClient: null,
+                    wallets: null,
+                    signer: null,
+                    contractAddress: settlementConfig.claimContractAddress,
+                    chainId: launchChainConfig.chainId,
+                    writesEnabled: false,
+                    usdtAddress: null,
+                    confirmations: settlementConfig.claimConfirmations,
+                    cursorCodec: null,
+                  }),
+            pollIntervalMs: settlementConfig.pollIntervalMs,
+            catchupHours: settlementConfig.catchupHours,
+            maxHoursPerTick: 6,
+            onEvent: (event) => {
+              if (event.outcome === "settled") {
+                options.logger.info(
+                  {
+                    ...logFields(),
+                    lane: miningSettlementLane,
+                    hourStart: event.hourStart,
+                    outcome: event.outcome,
+                  },
+                  "LOOP mining hour settled",
+                );
+              } else if (
+                event.outcome === "failed" ||
+                event.reasonCode === "MINING_SETTLEMENT_INDEXER_BEHIND"
+              ) {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    lane: miningSettlementLane,
+                    hourStart: event.hourStart,
+                    outcome: event.outcome,
+                    ...(event.reasonCode === null
+                      ? {}
+                      : { reasonCode: event.reasonCode }),
+                  },
+                  "LOOP mining hour not settled",
+                );
+              }
+            },
+            onError: (error) => {
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane: miningSettlementLane,
+                  errorClass:
+                    error instanceof Error ? error.name : typeof error,
+                },
+                "LOOP mining_hourly_settlement tick failed",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: miningSettlementLane,
+            claimReconcile: claimChain !== null,
+          },
+          "LOOP mining_hourly_settlement lane enabled",
         );
       }
     }

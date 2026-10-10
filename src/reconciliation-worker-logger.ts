@@ -83,6 +83,11 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch2_event lane is idle"
   | "LOOP launch2_event lane enabled"
   | "LOOP launch2_event lane skipped facts"
+  | "LOOP mining_hourly_settlement lane stays idle"
+  | "LOOP mining_hourly_settlement lane enabled"
+  | "LOOP mining_hourly_settlement tick failed"
+  | "LOOP mining hour settled"
+  | "LOOP mining hour not settled"
   | "LOOP meme salt pool refilled"
   | "LOOP meme intent settled from its receipt"
   | "LOOP meme intent receipt read failed"
@@ -221,6 +226,9 @@ export interface ReconciliationWorkerLogFields {
   readonly inserted?: number;
   readonly free?: number;
   readonly count?: number;
+  /** Decision 0116 settlement lane: the UTC hour and claim reconciliation. */
+  readonly hourStart?: string;
+  readonly claimReconcile?: boolean;
 }
 
 export interface ReconciliationWorkerLogger {

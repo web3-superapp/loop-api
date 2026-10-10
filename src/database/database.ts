@@ -57,6 +57,8 @@ import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
+import { createPostgresMiningSettlementRepository } from "./mining-settlement-repository.js";
+import type { MiningSettlementRepository } from "../features/mining/hourly-settlement-ports.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
 import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
 import { createPostgresAdminLoginAttemptStore } from "./admin-login-attempt-repository.js";
@@ -245,6 +247,8 @@ export interface Database {
   readonly meme?: MemeRepository;
   /** MEME v2 read model: instances, lane facts, Intents (Decision 0114). */
   readonly launch2?: Launch2Repository;
+  /** Decision 0116: hourly settlement, ledger, and claims. */
+  readonly miningSettlement?: MiningSettlementRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -478,6 +482,7 @@ export function createPostgresDatabase(
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     launch2: createPostgresLaunch2Repository(pool),
+    miningSettlement: createPostgresMiningSettlementRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

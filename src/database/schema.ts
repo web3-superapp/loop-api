@@ -1,4 +1,4 @@
-export const latestMigrationName = "000061_launch2_read_model";
+export const latestMigrationName = "000062_mining_hourly_settlement";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -151,4 +151,10 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_snapshot_members",
   "public.launch2_positions",
   "public.launch2_intents",
+  "public.mining_parameter_versions",
+  "public.mining_epochs",
+  "public.mining_epoch_rewards",
+  "public.mining_claims",
+  "public.mining_reward_ledger_events",
+  "public.mining_reward_balances",
 ] as const);

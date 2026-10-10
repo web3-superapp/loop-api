@@ -145,6 +145,77 @@ function launchChainEnvironmentDefaults(
   };
 }
 
+/**
+ * Decision 0116: hourly Mining settlement keys shared by the API and worker
+ * processes. Every key has a default; a blank claim address keeps the
+ * claim routes 503 (MINING_CLAIM_CONTRACT_NOT_CONFIGURED).
+ */
+const miningSettlementEnvironmentShape = {
+  MINING_REWARD_CLAIM_ADDRESS: optionalCredential(64),
+  MINING_CLAIM_USDT_ADDRESS: optionalCredential(64),
+  MINING_CLAIM_CONFIRMATIONS: positiveIntegerString(1, 100),
+  MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: positiveIntegerString(0, 3_600),
+} as const;
+
+function miningSettlementEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<keyof typeof miningSettlementEnvironmentShape, string | undefined> {
+  return {
+    MINING_REWARD_CLAIM_ADDRESS: environment["MINING_REWARD_CLAIM_ADDRESS"],
+    MINING_CLAIM_USDT_ADDRESS: environment["MINING_CLAIM_USDT_ADDRESS"],
+    MINING_CLAIM_CONFIRMATIONS:
+      environment["MINING_CLAIM_CONFIRMATIONS"] ?? "3",
+    MINING_SETTLEMENT_INDEXER_GRACE_SECONDS:
+      environment["MINING_SETTLEMENT_INDEXER_GRACE_SECONDS"] ?? "120",
+  };
+}
+
+export interface MiningSettlementSharedConfig {
+  readonly claimContractAddress: string | null;
+  readonly usdtAddress: string | null;
+  readonly claimConfirmations: number;
+  readonly indexerGraceSeconds: number;
+}
+
+function parseMiningSettlementShared(data: {
+  readonly MINING_REWARD_CLAIM_ADDRESS?: string | undefined;
+  readonly MINING_CLAIM_USDT_ADDRESS?: string | undefined;
+  readonly MINING_CLAIM_CONFIRMATIONS: number;
+  readonly MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: number;
+}): MiningSettlementSharedConfig {
+  const issues: string[] = [];
+  for (const key of [
+    "MINING_REWARD_CLAIM_ADDRESS",
+    "MINING_CLAIM_USDT_ADDRESS",
+  ] as const) {
+    const value = data[key];
+    if (value !== undefined && !/^0x[0-9a-fA-F]{40}$/u.test(value)) {
+      issues.push(`${key}: must be a 0x-prefixed 20-byte address`);
+    }
+  }
+  if (issues.length > 0) throw new ConfigurationError(issues);
+  return Object.freeze({
+    claimContractAddress:
+      data.MINING_REWARD_CLAIM_ADDRESS?.toLowerCase() ?? null,
+    usdtAddress: data.MINING_CLAIM_USDT_ADDRESS?.toLowerCase() ?? null,
+    claimConfirmations: data.MINING_CLAIM_CONFIRMATIONS,
+    indexerGraceSeconds: data.MINING_SETTLEMENT_INDEXER_GRACE_SECONDS,
+  });
+}
+
+export interface MiningSettlementApiConfig extends MiningSettlementSharedConfig {
+  /** EIP-712 voucher signer; null keeps claim/prepare 503. Never logged. */
+  readonly signerPrivateKey: `0x${string}` | null;
+  /** Manual settlement of a completed hour from the console (never in production). */
+  readonly testTrigger: boolean;
+}
+
+export interface MiningSettlementWorkerConfig extends MiningSettlementSharedConfig {
+  readonly enabled: boolean;
+  readonly pollIntervalMs: number;
+  readonly catchupHours: number;
+}
+
 const launchContractKeys = [
   "LAUNCH_CONTRACT_ADDRESS",
   "LAUNCH_CONTRACT_VERSION",
@@ -569,6 +640,10 @@ const environmentSchema = z
     // Decision 0105: the console's MEME pause/unpause signs with its own
     // operator key; the API process never loads the deployer key.
     MEME_OPERATOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    // Decision 0116: the claim voucher signer and the console test trigger.
+    MINING_REWARD_SIGNER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    MINING_SETTLEMENT_TEST_TRIGGER: booleanString,
+    ...miningSettlementEnvironmentShape,
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
     ...marketEnvironmentShape,
@@ -844,6 +919,11 @@ const reconciliationWorkerEnvironmentSchema = z
     BSC_USD1_VERIFIED: booleanString,
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
     MINING_SNAPSHOT_ENABLED: booleanString,
+    // Decision 0116: the mining_hourly_settlement lane, default off.
+    MINING_SETTLEMENT_ENABLED: booleanString,
+    MINING_SETTLEMENT_POLL_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
+    MINING_SETTLEMENT_CATCHUP_HOURS: positiveIntegerString(1, 720),
+    ...miningSettlementEnvironmentShape,
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
@@ -1338,6 +1418,8 @@ export interface AppConfig {
    * reads it out of this config; the API process never computes a snapshot.
    */
   readonly miningMockHoldingsEnabled: boolean;
+  /** Decision 0116: hourly settlement (claim signer, contract, test trigger). */
+  readonly miningSettlement: MiningSettlementApiConfig;
   readonly walletGasReserve: WalletGasReserveConfig;
   /** Passkey association files published at `/.well-known` (Decision 0063). */
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
@@ -1509,6 +1591,8 @@ export interface ReconciliationWorkerConfig {
    * the operator script can do outside production.
    */
   readonly miningSnapshotEnabled: boolean;
+  /** Decision 0116: `mining_hourly_settlement` lane (default off). */
+  readonly miningSettlement: MiningSettlementWorkerConfig;
   /**
    * Decision 0061: whether that lane counts the Development seed's
    * `mock_seed` balances. Default false; refused under
@@ -2007,6 +2091,41 @@ const privateKeyPattern = /^(0x)?[0-9a-fA-F]{64}$/u;
 
 /** Decision 0103: default wait before the fallback signs `graduate`. */
 export const MEME_GRADUATION_DEFAULT_DELAY_SECONDS = 15;
+
+/**
+ * Decision 0116: the API's settlement keys. A malformed signer key refuses
+ * boot; the test trigger is refused under NODE_ENV=production.
+ */
+export function parseMiningSettlementApi(data: {
+  readonly NODE_ENV: string;
+  readonly MINING_REWARD_SIGNER_PRIVATE_KEY?: string | undefined;
+  readonly MINING_SETTLEMENT_TEST_TRIGGER: boolean;
+  readonly MINING_REWARD_CLAIM_ADDRESS?: string | undefined;
+  readonly MINING_CLAIM_USDT_ADDRESS?: string | undefined;
+  readonly MINING_CLAIM_CONFIRMATIONS: number;
+  readonly MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: number;
+}): MiningSettlementApiConfig {
+  const shared = parseMiningSettlementShared(data);
+  const key = data.MINING_REWARD_SIGNER_PRIVATE_KEY?.trim();
+  if (key !== undefined && key !== "" && !privateKeyPattern.test(key)) {
+    throw new ConfigurationError([
+      "MINING_REWARD_SIGNER_PRIVATE_KEY: must be a 32-byte hex key",
+    ]);
+  }
+  if (data.MINING_SETTLEMENT_TEST_TRIGGER && data.NODE_ENV === "production") {
+    throw new ConfigurationError([
+      "MINING_SETTLEMENT_TEST_TRIGGER: must not be set under NODE_ENV=production",
+    ]);
+  }
+  return Object.freeze({
+    ...shared,
+    signerPrivateKey:
+      key === undefined || key === ""
+        ? null
+        : ((key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`),
+    testTrigger: data.MINING_SETTLEMENT_TEST_TRIGGER,
+  });
+}
 
 /**
  * Decision 0105: the operator console's pause/unpause key. Blank → null
@@ -2813,6 +2932,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ADMIN_LOGIN_IP_LOCK_SECONDS:
       environment["ADMIN_LOGIN_IP_LOCK_SECONDS"] ?? "900",
     MEME_OPERATOR_PRIVATE_KEY: environment["MEME_OPERATOR_PRIVATE_KEY"],
+    MINING_REWARD_SIGNER_PRIVATE_KEY:
+      environment["MINING_REWARD_SIGNER_PRIVATE_KEY"],
+    MINING_SETTLEMENT_TEST_TRIGGER:
+      environment["MINING_SETTLEMENT_TEST_TRIGGER"] ?? "false",
+    ...miningSettlementEnvironmentDefaults(environment),
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
     ...marketEnvironmentDefaults(environment),
@@ -2976,6 +3100,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
+    miningSettlement: parseMiningSettlementApi(parsed.data),
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty,
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
@@ -3069,6 +3194,13 @@ export function loadReconciliationWorkerConfig(
     WALLET_INTENT_RECONCILE_ENABLED:
       environment["WALLET_INTENT_RECONCILE_ENABLED"] ?? "false",
     MINING_SNAPSHOT_ENABLED: environment["MINING_SNAPSHOT_ENABLED"] ?? "false",
+    MINING_SETTLEMENT_ENABLED:
+      environment["MINING_SETTLEMENT_ENABLED"] ?? "false",
+    MINING_SETTLEMENT_POLL_INTERVAL_MS:
+      environment["MINING_SETTLEMENT_POLL_INTERVAL_MS"] ?? "60000",
+    MINING_SETTLEMENT_CATCHUP_HOURS:
+      environment["MINING_SETTLEMENT_CATCHUP_HOURS"] ?? "48",
+    ...miningSettlementEnvironmentDefaults(environment),
     MINING_MOCK_HOLDINGS_ENABLED:
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
@@ -3252,6 +3384,12 @@ export function loadReconciliationWorkerConfig(
         })
       : null,
     miningSnapshotEnabled: parsed.data.MINING_SNAPSHOT_ENABLED,
+    miningSettlement: Object.freeze({
+      ...parseMiningSettlementShared(parsed.data),
+      enabled: parsed.data.MINING_SETTLEMENT_ENABLED,
+      pollIntervalMs: parsed.data.MINING_SETTLEMENT_POLL_INTERVAL_MS,
+      catchupHours: parsed.data.MINING_SETTLEMENT_CATCHUP_HOURS,
+    }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     communityChatRealIdentity: parsed.data.COMMUNITY_CHAT_REAL_IDENTITY,
     publicBaseUrl: parseUrl(
