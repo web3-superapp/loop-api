@@ -51,6 +51,12 @@ export const launch2PublisherReasonCodes = Object.freeze({
   indexerBehind: "LAUNCH2_SNAPSHOT_INDEXER_BEHIND",
   indexerIncomplete: "LAUNCH2_SNAPSHOT_INDEXER_INCOMPLETE",
   noHolders: "LAUNCH2_SNAPSHOT_NO_HOLDERS",
+  /**
+   * Decision 0120: the sale ended with no holder (`totalMinted() = 0` at the
+   * confirmed cutoff); a closure is recorded and the instance is never a
+   * candidate again (stage `closed_no_holders`).
+   */
+  closedNoHolders: "LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS",
   digestMismatch: "LAUNCH2_SNAPSHOT_DIGEST_MISMATCH",
   retryWait: "LAUNCH2_SNAPSHOT_RETRY_WAIT",
   attemptsExhausted: "LAUNCH2_SNAPSHOT_ATTEMPTS_EXHAUSTED",
@@ -146,6 +152,19 @@ export interface Launch2PublicationRepository {
   listCandidates(
     chainId: string,
   ): Promise<readonly Launch2PublicationCandidate[]>;
+  /**
+   * Decision 0120: records that the instance's NFT sale ended with no
+   * holder (immutable, at most one per instance). False when a closure
+   * already existed.
+   */
+  recordNoHoldersClosure(input: {
+    readonly instanceId: string;
+    readonly chainId: string;
+    readonly snapshots: string;
+    readonly saleEndAt: string;
+    readonly cutoffBlock: string;
+    readonly cutoffBlockHash: string;
+  }): Promise<boolean>;
   /** Inserts a `pending` attestation; null when another row is active. */
   insertPending(input: {
     readonly instanceId: string;
@@ -677,7 +696,23 @@ export function createLaunch2SnapshotPublisher(options: {
       instanceId: candidate.instanceId,
       blockNumber: cutoff.toString(10),
     });
-    if (holders.length === 0) return launch2PublisherReasonCodes.noHolders;
+    if (holders.length === 0) {
+      // Decision 0120: an empty indexed holder set is only a closure when
+      // the chain agrees that nothing was minted by the cutoff block.
+      const mintedAtCutoff = await chain.totalMintedAt(candidate.nft, cutoff);
+      if (mintedAtCutoff !== 0n) {
+        return launch2PublisherReasonCodes.indexerIncomplete;
+      }
+      await repository.recordNoHoldersClosure({
+        instanceId: candidate.instanceId,
+        chainId: policy.chainId,
+        snapshots: candidate.snapshots,
+        saleEndAt: new Date(Number(registry.nftSaleEnd) * 1000).toISOString(),
+        cutoffBlock: cutoff.toString(10),
+        cutoffBlockHash: cutoffBlock.hash,
+      });
+      return launch2PublisherReasonCodes.closedNoHolders;
+    }
     const indexedSupply = holders.reduce(
       (sum, holder) => sum + BigInt(holder.balance),
       0n,

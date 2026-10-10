@@ -113,13 +113,14 @@ export function createPostgresLaunch2PublicationRepository(
               where p.instance_id = i.instance_id), 0) as last_attempt,
             (select count(*)::integer from public.launch2_snapshot_publications p
               where p.instance_id = i.instance_id and p.status = 'failed'
-                and p.failure_retryable) as retryable_failures,
+                and p.failure_retryable and p.attempt > r.released_through) as retryable_failures,
             (select p.failure_code from public.launch2_snapshot_publications p
-              where p.instance_id = i.instance_id
+              where p.instance_id = i.instance_id and p.attempt > r.released_through
                 and (p.status = 'mismatch' or (p.status = 'failed' and not p.failure_retryable))
               order by p.attempt desc limit 1) as blocking_code,
             (select max(p.updated_at) from public.launch2_snapshot_publications p
-              where p.instance_id = i.instance_id and p.status = 'failed') as last_failed_at,
+              where p.instance_id = i.instance_id and p.status = 'failed'
+                and p.attempt > r.released_through) as last_failed_at,
             (select row_to_json(a) from (
               select ${publicationColumns}
               from public.launch2_snapshot_publications p
@@ -127,7 +128,16 @@ export function createPostgresLaunch2PublicationRepository(
                 and p.status in ('pending', 'broadcast', 'confirmed')
             ) a) as active
           from public.launch2_instances i
+          -- Decision 0120: attempts up to the latest operator release no
+          -- longer block or count against the retry budget.
+          cross join lateral (
+            select coalesce(max(x.released_attempt), 0) as released_through
+            from public.launch2_snapshot_publication_releases x
+            where x.instance_id = i.instance_id
+          ) r
           where i.chain_id = $1 and i.activated_at is not null
+            and not exists (select 1 from public.launch2_snapshot_closures c
+              where c.instance_id = i.instance_id)
             and (
               exists (select 1 from public.launch2_snapshot_publications p
                 where p.instance_id = i.instance_id and p.status in ('pending', 'broadcast'))
@@ -163,6 +173,27 @@ export function createPostgresLaunch2PublicationRepository(
               : iso(row["last_failed_at"]),
         }),
       );
+    },
+
+    async recordNoHoldersClosure(input) {
+      const result = await pool.query(
+        `
+          insert into public.launch2_snapshot_closures (
+            instance_id, chain_id, reason, snapshots_address, sale_end_at,
+            cutoff_block, cutoff_block_hash, total_minted
+          ) values ($1, $2, 'no_holders', $3, $4::timestamptz, $5::bigint, $6, 0)
+          on conflict (instance_id) do nothing
+        `,
+        [
+          input.instanceId,
+          input.chainId,
+          input.snapshots.toLowerCase(),
+          input.saleEndAt,
+          input.cutoffBlock,
+          input.cutoffBlockHash.toLowerCase(),
+        ],
+      );
+      return result.rowCount === 1;
     },
 
     async insertPending(input) {

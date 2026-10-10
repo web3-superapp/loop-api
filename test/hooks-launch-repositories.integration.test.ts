@@ -585,6 +585,85 @@ describe("Hooks signed deployment tasks (000054)", () => {
     });
   });
 
+  it("reads approval and the newest task for a cold start, and marks the project launch2 (Decision 0120)", async () => {
+    const owner = await user();
+    const projectId = await project(owner);
+    const kind = async () =>
+      (
+        await pool.query<{ kind: string }>(
+          "select kind from public.launch_projects where project_id = $1",
+          [projectId],
+        )
+      ).rows[0]?.kind;
+    expect(await kind()).toBe("ido");
+    expect(
+      await configs.getOwnedProgress({
+        projectId,
+        ownerUserId: owner,
+        configVersion: 1,
+      }),
+    ).toEqual({ approvedAt: null, latestJobId: null });
+    await configs.saveOwnedDraft({
+      projectId,
+      ownerUserId: owner,
+      expectedVersion: 0,
+      templateVersion: draft.templateVersion,
+      configHash: draft.configHash,
+      config: draft,
+      updatedByUserId: owner,
+    });
+    // The first Hooks config version makes the catalog project MEME v2.
+    expect(await kind()).toBe("launch2");
+    expect(
+      await configs.getOwnedProgress({
+        projectId,
+        ownerUserId: owner,
+        configVersion: 1,
+      }),
+    ).toEqual({ approvedAt: null, latestJobId: null });
+
+    const input = await seed();
+    const approved = await configs.getOwnedProgress({
+      projectId: input.projectId,
+      ownerUserId: input.ownerUserId,
+      configVersion: 1,
+    });
+    expect(approved.approvedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(approved.latestJobId).toBeNull();
+    const job = await submissions.accept(input);
+    expect(
+      await configs.getOwnedProgress({
+        projectId: input.projectId,
+        ownerUserId: input.ownerUserId,
+        configVersion: 1,
+      }),
+    ).toEqual({ approvedAt: approved.approvedAt, latestJobId: job.jobId });
+    // Another account sees nothing; a newer draft version is not approved.
+    expect(
+      await configs.getOwnedProgress({
+        projectId: input.projectId,
+        ownerUserId: owner,
+        configVersion: 1,
+      }),
+    ).toEqual({ approvedAt: null, latestJobId: null });
+    await configs.saveOwnedDraft({
+      projectId: input.projectId,
+      ownerUserId: input.ownerUserId,
+      expectedVersion: 1,
+      templateVersion: draft.templateVersion,
+      configHash: draft.configHash,
+      config: draft,
+      updatedByUserId: input.ownerUserId,
+    });
+    expect(
+      await configs.getOwnedProgress({
+        projectId: input.projectId,
+        ownerUserId: input.ownerUserId,
+        configVersion: 2,
+      }),
+    ).toEqual({ approvedAt: null, latestJobId: job.jobId });
+  });
+
   it("ten simultaneous identical submissions create one durable task and authorization", async () => {
     const input = await seed();
     const jobs = await Promise.all(

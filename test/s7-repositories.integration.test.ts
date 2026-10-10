@@ -191,6 +191,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       );
       const created = await launch.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: key,
         requestSha256: digest,
         requestId: randomUUID(),
@@ -206,6 +207,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       // Same key + same digest replays; same key + other digest conflicts.
       const replay = await launch.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: key,
         requestSha256: digest,
         requestId: randomUUID(),
@@ -215,6 +217,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       await expect(
         launch.createProject({
           ownerUserId: owner,
+          kind: "ido",
           idempotencyKey: key,
           requestSha256: launchCommandDigest("createProject", ["other"]),
           requestId: randomUUID(),
@@ -376,6 +379,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const listed = await launch.listProjects({
         ownerUserId: owner,
         status: "approved",
+        kind: null,
         limit: 10,
         after: null,
       });
@@ -386,6 +390,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const owner = await createUser(true);
       const project = await launch.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: randomUUID(),
         requestSha256: launchCommandDigest("createProject", ["roundfk"]),
         requestId: randomUUID(),
@@ -435,6 +440,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const owner = await createUser(true);
       const created = await testnetRepository.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: randomUUID(),
         requestSha256: launchCommandDigest("createProject", ["testnet"]),
         requestId: randomUUID(),
@@ -473,6 +479,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       // A chain outside the seeded slots is refused by the foreign key.
       const other = await testnetRepository.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: randomUUID(),
         requestSha256: launchCommandDigest("createProject", ["other-chain"]),
         requestId: randomUUID(),
@@ -493,6 +500,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const owner = await createUser(true);
       const project = await launch.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: randomUUID(),
         requestSha256: launchCommandDigest("createProject", ["axis"]),
         requestId: randomUUID(),
@@ -513,6 +521,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       const owner = await createUser(true);
       const project = await launch.createProject({
         ownerUserId: owner,
+        kind: "ido",
         idempotencyKey: randomUUID(),
         requestSha256: launchCommandDigest("createProject", ["milestone"]),
         requestId: randomUUID(),

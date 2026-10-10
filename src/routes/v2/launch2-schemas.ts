@@ -467,6 +467,7 @@ const snapshotSchema = {
     "memberCount",
     "signers",
     "publication",
+    "closure",
   ],
   properties: {
     status: { type: "string", enum: ["pending", "published"] },
@@ -505,6 +506,23 @@ const snapshotSchema = {
             txHash: nullableTxHashSchema,
             cutoffBlock: uintStringSchema,
             memberCount: { type: "integer", minimum: 1 },
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    closure: {
+      description:
+        "Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block). Nothing can be published; stage is closed_no_holders (terminal).",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["reason", "cutoffBlock", "closedAt"],
+          properties: {
+            reason: { type: "string", const: "no_holders" },
+            cutoffBlock: uintStringSchema,
+            closedAt: dateTimeSchema,
           },
         },
         { type: "null" },

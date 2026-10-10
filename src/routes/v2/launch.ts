@@ -216,7 +216,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchProjectConfig",
         summary: "Read the caller's fixed-template Hooks project configuration",
         description:
-          "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
+          "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -237,13 +237,52 @@ export function registerV2LaunchRoutes(
       }
       const params = request.params as ProjectParams;
       try {
+        const ownerUserId = requireAuthenticatedLoopPrincipal(request).userId;
         const draft = await hooksConfigService.getDraft({
-          ownerUserId: requireAuthenticatedLoopPrincipal(request).userId,
+          ownerUserId,
           projectId: params.projectId,
         });
+        // Decision 0120: approval state, newest deployment task and the
+        // sale-start lead, so a cold-started app can resume the flow.
+        const progress =
+          draft === null
+            ? null
+            : await hooksConfigService.getProgress({
+                ownerUserId,
+                projectId: params.projectId,
+                configVersion: draft.version,
+              });
+        let latestDeployment = null;
+        if (progress !== null && progress.latestJobId !== null) {
+          if (hooksSubmissionService === undefined) {
+            throw hooksUnavailable(hooksLaunchDisabledReason);
+          }
+          try {
+            latestDeployment = await hooksSubmissionService.getOwned(
+              ownerUserId,
+              params.projectId,
+              progress.latestJobId,
+            );
+          } catch (error) {
+            return submissionError(error);
+          }
+        }
         reply.header("cache-control", "no-store");
         return reply.code(200).send({
           draft: draft === null ? null : projectConfigResource(draft),
+          approval:
+            draft === null || progress === null
+              ? null
+              : {
+                  configVersion: draft.version,
+                  status:
+                    progress.approvedAt === null
+                      ? "awaiting_approval"
+                      : "approved",
+                  approvedAt: progress.approvedAt,
+                },
+          latestDeployment,
+          minSaleLeadSeconds: hooksConfigService.minimumLeadSeconds,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -507,7 +546,7 @@ export function registerV2LaunchRoutes(
         operationId: "listV2LaunchProjects",
         summary: "List the caller's Launch applications",
         description:
-          "Owner-scoped, newest first, with an opaque cursor bound to the owner, route, and status filter. `limit` and `cursor` are mutually exclusive.",
+          "Owner-scoped, newest first, with an opaque cursor bound to the owner, route, and status filter. `limit` and `cursor` are mutually exclusive. Decision 0120: `kind` (all | ido | launch2) lists only one product; each item carries `kind`.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -521,12 +560,14 @@ export function registerV2LaunchRoutes(
     async (request, reply) => {
       const query = request.query as {
         readonly status?: unknown;
+        readonly kind?: unknown;
         readonly cursor?: unknown;
         readonly limit?: unknown;
       };
       const resource = await service.listProjects({
         principal: requireAuthenticatedLoopPrincipal(request),
         ...(query.status === undefined ? {} : { status: query.status }),
+        ...(query.kind === undefined ? {} : { kind: query.kind }),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         ...(query.limit === undefined ? {} : { limit: query.limit }),
       });
@@ -542,7 +583,7 @@ export function registerV2LaunchRoutes(
         operationId: "createV2LaunchProject",
         summary: "Create a Launch application draft",
         description:
-          "Creates a `draft` project owned by the caller: name, ticker, narrative, and official links. Attachments and KYB have no Provider and stay unavailable. Review is never self-served; only the Dev-only operator script `pnpm launch:review` advances it and writes the audit row.",
+          "Creates a `draft` project owned by the caller: name, ticker, narrative, and official links. Decision 0120: optional `kind` (ido default | launch2) marks a MEME v2 project from the start. Attachments and KYB have no Provider and stay unavailable. Review is never self-served; only the Dev-only operator script `pnpm launch:review` advances it and writes the audit row.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

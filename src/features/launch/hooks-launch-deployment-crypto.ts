@@ -31,6 +31,34 @@ export const hooksLaunchDeploymentTypes = {
   ],
 } as const;
 
+/**
+ * Decision 0120: the standard EIP-712 domain type for the four fields the
+ * `LOOP Launch Factory` domain uses, in the order EIP-712 fixes. The
+ * signing-request response lists it in `typedData.types` so a wallet that
+ * treats a missing `EIP712Domain` as an empty struct hashes the same domain
+ * separator; the digest is unchanged (it is what every EIP-712 library
+ * derives from the domain object anyway).
+ */
+export const hooksLaunchEip712DomainType = Object.freeze([
+  Object.freeze({ name: "name", type: "string" }),
+  Object.freeze({ name: "version", type: "string" }),
+  Object.freeze({ name: "chainId", type: "uint256" }),
+  Object.freeze({ name: "verifyingContract", type: "address" }),
+] as const);
+
+/** The typed data as handed to a wallet: `types` include `EIP712Domain`. */
+export function withHooksLaunchEip712Domain<
+  T extends { readonly types: Readonly<Record<string, unknown>> },
+>(typedData: T) {
+  return Object.freeze({
+    ...typedData,
+    types: Object.freeze({
+      EIP712Domain: hooksLaunchEip712DomainType,
+      ...typedData.types,
+    }),
+  });
+}
+
 export function hooksLaunchDeploymentDomain(
   chainId: number,
   verifyingContract: string,

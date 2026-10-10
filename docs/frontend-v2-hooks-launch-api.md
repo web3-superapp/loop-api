@@ -6,7 +6,9 @@
 `docs/api-v2-conventions.md`。来源：需求方分支 `codex/integrated-dual-pool-20261008`
 （原决策 0090/0095/0097）。仅 BSC 测试网（chainId 97）。S132 / 决策 0112 起，后台执行器
 （worker，默认关闭）会认领任务、广播 `deployLaunch`、跟踪确认与重组、逐模块核验后激活；
-本文件 §5–§6、§9 描述任务进度字段（**只增字段，S125 字段含义不变**）。
+本文件 §5–§6、§9 描述任务进度字段（**只增字段，S125 字段含义不变**）。S142 / 决策 0120 起 §2 的
+读响应多三个字段（`approval`、`latestDeployment`、`minSaleLeadSeconds`），§4 的 `typedData.types`
+多一项 `EIP712Domain`；目录项目多 `kind`（见 §10）。
 
 ## 0. 启用条件
 
@@ -79,15 +81,39 @@
     },
     "updatedAt": "2026-10-09T00:00:00.000Z"
   },
+  "approval": {
+    "configVersion": 1,
+    "status": "approved",
+    "approvedAt": "2026-10-10T01:00:00.000Z"
+  },
+  "latestDeployment": {
+    "jobId": "…",
+    "status": "confirming",
+    "…": "同 §6 GET hooks-deployments/{jobId}"
+  },
+  "minSaleLeadSeconds": 4200,
   "contractVersion": "2.0"
 }
 ```
 
-无草稿时 `{"draft": null, "contractVersion": "2.0"}`。所有 `*Raw` 为 18 位小数最小单位
-的十进制字符串（展示时自行除以 10^18）；bps/秒为小整数。`fixedEconomics` 由服务端给出，
-前端只展示不可编辑。`fixedEconomics.chainId` 是模板值（恒为 `"56"`，参与 configHash），**不是**
-部署链；部署链以服务端 `LAUNCH_CHAIN_ID` 为准（当前仅测试网 97，见 §4 `typedData.domain.chainId`），
-不要把它展示成「部署到 BSC 主网」（决策 0117）。
+无草稿时
+`{"draft": null, "approval": null, "latestDeployment": null, "minSaleLeadSeconds": 86400, "contractVersion": "2.0"}`。
+
+决策 0120（S142）新增的三个字段，供 App 冷启动后恢复项目方流程：
+
+- `approval`：无草稿为 `null`；否则 `configVersion` = 草稿版本，`status` 为
+  `awaiting_approval`（等审核）或 `approved`（平台审核人已按**同一版本、同一 configHash** 批准，
+  可去签名部署），`approvedAt` 为批准时间（未批准为 `null`）。保存新版本后回到
+  `awaiting_approval`。后台没有「拒绝」状态，审核意见文本不下发（见决策 0120 Open）。
+- `latestDeployment`：该项目最新的一条部署任务（任意版本、任意状态，含 `cancelled` / `failed`），
+  结构与 §6 `GET hooks-deployments/{jobId}` 完全相同；没有任务为 `null`。进度页拿它的 `jobId`
+  继续轮询。
+- `minSaleLeadSeconds`：服务端 `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS`（4,200–2,592,000）。资料页最早
+  可选开售时间 = 当前时间 + 该值（再留一两分钟余量）；最终以 §3 的 400 为准。所有 `*Raw` 为 18 位小数最小单位
+  的十进制字符串（展示时自行除以 10^18）；bps/秒为小整数。`fixedEconomics` 由服务端给出，
+  前端只展示不可编辑。`fixedEconomics.chainId` 是模板值（恒为 `"56"`，参与 configHash），**不是**
+  部署链；部署链以服务端 `LAUNCH_CHAIN_ID` 为准（当前仅测试网 97，见 §4 `typedData.domain.chainId`），
+  不要把它展示成「部署到 BSC 主网」（决策 0117）。
 
 ## 3. `PUT /v2/launch/projects/{projectId}/hooks-config`（`saveV2HooksLaunchProjectConfig`）
 
@@ -137,7 +163,15 @@
   },
   "typedData": {
     "domain": { "name": "LOOP Launch Factory", "version": "1", "chainId": 97, "verifyingContract": "0x…" },
-    "types": { "LaunchRequest": [ … 11 个字段 … ] },
+    "types": {
+      "EIP712Domain": [
+        { "name": "name", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "chainId", "type": "uint256" },
+        { "name": "verifyingContract", "type": "address" }
+      ],
+      "LaunchRequest": [ … 11 个字段 … ]
+    },
     "primaryType": "LaunchRequest",
     "message": { "…": "uint64/uint256 字段为十进制字符串" }
   },
@@ -148,7 +182,12 @@
 
 前端用该钱包对 `typedData` 做 EIP-712 签名（`message` 中 `nftSaleStart`、`deadline`、
 `nonce` 签名时按 uint 处理）。`deadline` 约 15 分钟；过期、配置版本变化、nonce 变化都要重新
-请求并重新签名。只支持 EOA 签名。可能需要数秒（服务端挖盐）；忙时 `503` + `Retry-After: 5`。
+请求并重新签名。只支持 EOA 签名。
+
+决策 0120（S142）：`typedData.types` 显式带标准 `EIP712Domain`（四个字段，顺序固定），可原样交给
+`eth_signTypedData_v4`（Privy `provider.request`），不必再自行补齐；摘要与之前完全相同（任何 EIP-712
+实现都由 domain 推出同一个类型）。用 viem / ethers 本地签名时，`EIP712Domain` 里 `chainId` 是
+`uint256`，domain 的 `chainId` 需要传 bigint（或删掉 `EIP712Domain` 交给库自己推导）。可能需要数秒（服务端挖盐）；忙时 `503` + `Retry-After: 5`。
 
 ## 5. `POST /v2/launch/projects/{projectId}/hooks-deployments`（`submitV2HooksLaunchDeployment`）
 
@@ -333,3 +372,16 @@ NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不�
 执行器默认关闭（`HOOKS_LAUNCH_EXECUTOR_ENABLED=off`）：任务停在 `awaiting_executor`，接口
 照常返回，不伪造进度。执行器打开但执行账户未被 Factory 授权、Factory code hash 不符或链不是
 97 时，执行器空转（任务不被认领），前端同样只看到 `awaiting_executor`。
+
+## 10. 目录项目的产品类型 `kind`（S142 / 决策 0120）
+
+`/v2/launch/projects*` 的 `project` 对象多一个必填字段 `kind`：`ido`（原 Launch 申请）或
+`launch2`（MEME v2）。
+
+- 创建：`POST /v2/launch/projects` 请求体可带 `"kind": "launch2"`（缺省 `ido`；其它值 400）。
+  `kind` 计入幂等摘要：同一 `Idempotency-Key` 换了 `kind` → `409`。
+- 自动标记：项目第一次保存 Hooks 草稿（App 的 `PUT hooks-config` 或后台编辑）时，数据库触发器把它
+  标成 `launch2`；不会再变回 `ido`。迁移时已有 Hooks 草稿的项目已回填为 `launch2`。
+- 列表：`GET /v2/launch/projects?kind=launch2`（`all` 默认 | `ido` | `launch2`）。`kind` 不为
+  `all` 时绑定进游标，翻页必须带同一个 `kind`，否则 `400`。
+- `PUT /v2/launch/projects/{projectId}` 不接受 `kind`（多余字段 400）。

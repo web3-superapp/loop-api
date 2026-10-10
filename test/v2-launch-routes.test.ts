@@ -41,6 +41,7 @@ const draft: LaunchProjectRecord = Object.freeze({
     discord: null,
   },
   materialVersion: 1,
+  kind: "ido",
   reviewStatus: "draft",
   kybStatus: "unavailable",
   reviewReasonCode: null,
@@ -588,6 +589,101 @@ describe("LOOP API V2 launch module", () => {
       headers: s7CommonHeaders(),
     });
     expect(next.statusCode).toBe(200);
+  });
+
+  it("creates and lists by product kind (Decision 0120)", async () => {
+    const launch2Draft = { ...draft, kind: "launch2" as const };
+    const many = Array.from({ length: 3 }, (_, index) => ({
+      ...launch2Draft,
+      projectId: `3fa85f64-5717-4562-b3fc-2c963f66afa${String(index)}`,
+    }));
+    const { app, repository } = await createApp(
+      repositoryFake({
+        createProject: vi.fn(() => Promise.resolve(launch2Draft)),
+        listProjects: vi.fn(() => Promise.resolve(many)),
+      }),
+    );
+    const payload = { name: "MoonCat", ticker: "MCAT", narrative: null };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, kind: "launch2" },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({ project: { kind: "launch2" } });
+    const plain = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload,
+    });
+    expect(plain.statusCode).toBe(201);
+    const createMock = calls(repository, "createProject") as unknown as {
+      readonly mock: {
+        readonly calls: [{ kind: string; requestSha256: string }][];
+      };
+    };
+    const createCalls = createMock.mock.calls;
+    expect(createCalls.map(([input]) => input.kind)).toEqual([
+      "launch2",
+      "ido",
+    ]);
+    // The kind is part of the idempotency digest.
+    expect(createCalls[0]?.[0].requestSha256).not.toBe(
+      createCalls[1]?.[0].requestSha256,
+    );
+    const badKind = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, kind: "perp" },
+    });
+    expect(badKind.statusCode).toBe(400);
+
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/launch/projects?kind=launch2&limit=2",
+      headers: s7CommonHeaders(),
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    const page = first.json<{
+      readonly items: { readonly kind: string }[];
+      readonly nextCursor: string | null;
+    }>();
+    expect(page.items.map((item) => item.kind)).toEqual(["launch2", "launch2"]);
+    expect(calls(repository, "listProjects")).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "launch2", status: null }),
+    );
+    const cursor = encodeURIComponent(page.nextCursor ?? "");
+    // The cursor is bound to the kind filter.
+    const otherKind = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects?cursor=${cursor}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(otherKind.statusCode).toBe(400);
+    const next = await app.inject({
+      method: "GET",
+      url: `/v2/launch/projects?kind=launch2&cursor=${cursor}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(next.statusCode).toBe(200);
+    const all = await app.inject({
+      method: "GET",
+      url: "/v2/launch/projects",
+      headers: s7CommonHeaders(),
+    });
+    expect(all.statusCode).toBe(200);
+    expect(calls(repository, "listProjects")).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: null }),
+    );
+    const badFilter = await app.inject({
+      method: "GET",
+      url: "/v2/launch/projects?kind=perp",
+      headers: s7CommonHeaders(),
+    });
+    expect(badFilter.statusCode).toBe(400);
   });
 
   it("projects a launch with pending configuration slots, rounds, and pending graduation steps", async () => {

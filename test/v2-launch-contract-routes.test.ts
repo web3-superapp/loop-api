@@ -64,6 +64,7 @@ const project = Object.freeze({
     discord: null,
   },
   materialVersion: 1,
+  kind: "ido",
   reviewStatus: "approved" as const,
   kybStatus: "unavailable" as const,
   reviewReasonCode: null,

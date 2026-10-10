@@ -300,6 +300,11 @@ describe("Operator console role separation (Decision 0109)", () => {
         url: `/admin/v1/launch/projects/${harness.projectId}/testnet-acceptance`,
         allowed: ["testnet_acceptor"],
       },
+      {
+        method: "POST",
+        url: `/admin/v1/launch/projects/${harness.projectId}/snapshot/retry`,
+        allowed: ["platform_admin"],
+      },
     ];
     for (const entry of cases) {
       for (const [role, cookie] of Object.entries(cookies) as [
@@ -391,6 +396,132 @@ describe("Operator console role separation (Decision 0109)", () => {
     expect(actions).toContain("launch.config.approve.requested");
     expect(actions).toContain("launch.config.approve.decided");
     expect(actions).toContain("testnet.acceptance.record.decided");
+  });
+
+  it("lets only the platform administrator release a blocked snapshot publication, audited (Decision 0120)", async () => {
+    const harness = await createHarness();
+    const admin = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    const url = `/admin/v1/launch/projects/${harness.projectId}/snapshot/retry`;
+    // The Idempotency-Key is mandatory.
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin },
+        payload: { reason: "Signer key rotated" },
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+    // A blank reason after trimming is refused before anything runs.
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reason: "   " },
+      }),
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_REASON_TEXT_INVALID",
+    );
+    const key = randomUUID();
+    const first = await harness.app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: admin, "idempotency-key": key },
+      payload: { reason: "Signer key rotated" },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.headers["cache-control"]).toBe("no-store");
+    expect(first.json()).toMatchObject({
+      operationId: key,
+      replayed: false,
+      release: {
+        releaseId: key,
+        projectId: harness.projectId,
+        releasedAttempt: 1,
+        releasedStatus: "failed",
+        nextAttempt: 2,
+        actor: "operator",
+        reason: "Signer key rotated",
+      },
+    });
+    const requested = harness.admin.audit.find(
+      (row) => row.action === "launch.snapshot.retry.requested",
+    );
+    expect(requested).toMatchObject({
+      targetType: "launch_project",
+      targetId: harness.projectId,
+    });
+    const decided = harness.admin.audit.find(
+      (row) => row.action === "launch.snapshot.retry.decided",
+    );
+    expect(decided?.after).toMatchObject({
+      releaseId: key,
+      nextAttempt: 2,
+      replayed: false,
+    });
+    const replay = await harness.app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: admin, "idempotency-key": key },
+      payload: { reason: "Signer key rotated" },
+    });
+    expect(replay.json()).toMatchObject({ replayed: true });
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": key },
+        payload: { reason: "Another reason" },
+      }),
+      409,
+      "ADMIN_CONFLICT",
+      "ADMIN_IDEMPOTENCY_CONFLICT",
+    );
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reason: "Again" },
+      }),
+      409,
+      "ADMIN_CONFLICT",
+      "LAUNCH2_SNAPSHOT_ALREADY_RELEASED",
+    );
+    const failed = harness.admin.audit.filter(
+      (row) => row.action === "launch.snapshot.retry.failed",
+    );
+    expect(failed.map((row) => row.after)).toEqual([
+      expect.objectContaining({ errorCode: "ADMIN_IDEMPOTENCY_CONFLICT" }),
+      expect.objectContaining({
+        errorCode: "LAUNCH2_SNAPSHOT_ALREADY_RELEASED",
+      }),
+    ]);
+    expectError(
+      await harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/launch/projects/${randomUUID()}/snapshot/retry`,
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { reason: "Unknown" },
+      }),
+      404,
+      "NOT_FOUND",
+      "ADMIN_LAUNCH_PROJECT_NOT_FOUND",
+    );
+    // The detail lists the release (and no closure).
+    const detail = await harness.app.inject({
+      method: "GET",
+      url: `/admin/v1/launch/projects/${harness.projectId}`,
+      headers: { cookie: admin },
+    });
+    expect(detail.json()).toMatchObject({
+      snapshotReleases: [{ releaseId: key, releasedAttempt: 1 }],
+      snapshotClosure: null,
+    });
   });
 
   it("passes the service's separation-of-duties refusals through as 403", async () => {

@@ -41,6 +41,7 @@ function laneInstance(
     holdReason: null,
     graduated: false,
     snapshotPublishedAt: null,
+    closedNoHolders: false,
     activatedAt: record.activatedAt,
     stage: "upcoming",
     nextChangeAt: null,

@@ -58,6 +58,45 @@ export function createPostgresHooksLaunchProjectConfigRepository(
       const row: unknown = result.rows[0];
       return row === undefined ? null : parseRow(row);
     },
+    async getOwnedProgress(input: {
+      readonly projectId: string;
+      readonly ownerUserId: string;
+      readonly configVersion: number;
+    }) {
+      // Decision 0120: the approval counts only for the same version and
+      // configHash (the submission gate's rule); the newest task is
+      // owner-scoped like `GET hooks-deployments/{jobId}`.
+      const result = await pool.query<{
+        approved_at: Date | null;
+        latest_job_id: string | null;
+      }>({
+        text: `
+          select
+            (select a.approved_at
+               from public.hooks_launch_project_config_versions c
+               inner join public.hooks_launch_config_approvals a
+                 on a.project_id = c.project_id
+                and a.config_version = c.config_version
+                and a.config_hash = c.config_hash
+               where c.project_id = $1 and c.owner_user_id = $2
+                 and c.config_version = $3) as approved_at,
+            (select t.job_id::text
+               from public.hooks_launch_deployment_tasks t
+               where t.project_id = $1 and t.owner_user_id = $2
+               order by t.created_at desc, t.job_id desc
+               limit 1) as latest_job_id
+        `,
+        values: [input.projectId, input.ownerUserId, input.configVersion],
+      });
+      const row = result.rows[0];
+      return Object.freeze({
+        approvedAt:
+          row?.approved_at === null || row?.approved_at === undefined
+            ? null
+            : row.approved_at.toISOString(),
+        latestJobId: row?.latest_job_id ?? null,
+      });
+    },
     async saveOwnedDraft(input: SaveHooksLaunchProjectConfigInput) {
       const client = await pool.connect();
       try {

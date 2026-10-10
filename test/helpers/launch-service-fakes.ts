@@ -60,6 +60,7 @@ export function registeredDetail(tierModeV1 = "whitelist"): LaunchDetailRecord {
       narrative: null,
       officialLinks: { website: null, x: null, telegram: null, discord: null },
       materialVersion: 1,
+      kind: "ido",
       reviewStatus: "approved",
       kybStatus: "unavailable",
       reviewReasonCode: null,

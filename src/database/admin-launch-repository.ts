@@ -2,7 +2,11 @@ import type { Pool } from "pg";
 import { z } from "zod";
 
 import {
+  AdminLaunchSnapshotRetryError,
+  adminLaunchSnapshotRetryReasonCodes,
   adminLaunchStages,
+  type AdminLaunchSnapshotClosure,
+  type AdminLaunchSnapshotRelease,
   type AdminLaunchConfigVersion,
   type AdminLaunchDeploymentTask,
   type AdminLaunchSnapshotPublication,
@@ -408,6 +412,36 @@ function mapPublication(
   });
 }
 
+function mapRelease(row: Record<string, unknown>): AdminLaunchSnapshotRelease {
+  return Object.freeze({
+    releaseId: String(row["release_id"]),
+    projectId: String(row["project_id"]),
+    instanceId: String(row["instance_id"]),
+    publicationId: String(row["released_publication_id"]),
+    releasedAttempt: Number(row["released_attempt"]),
+    releasedStatus: row["released_status"] as "failed" | "mismatch",
+    releasedFailureCode: String(row["released_failure_code"]),
+    actor: String(row["actor"]),
+    reason: String(row["reason"]),
+    createdAt: new Date(row["created_at"] as Date | string).toISOString(),
+  });
+}
+
+function mapClosure(row: Record<string, unknown>): AdminLaunchSnapshotClosure {
+  return Object.freeze({
+    instanceId: String(row["instance_id"]),
+    reason: "no_holders" as const,
+    cutoffBlock: String(row["cutoff_block"]),
+    cutoffBlockHash: String(row["cutoff_block_hash"]),
+    saleEndAt: new Date(row["sale_end_at"] as Date | string).toISOString(),
+    createdAt: new Date(row["created_at"] as Date | string).toISOString(),
+  });
+}
+
+const releaseColumns = `release_id::text, project_id::text, instance_id::text,
+  released_publication_id::text, released_attempt, released_status,
+  released_failure_code, actor, reason, created_at`;
+
 export function createPostgresAdminLaunchReviewRepository(
   pool: Pool,
 ): AdminLaunchReviewRepository {
@@ -468,9 +502,10 @@ export function createPostgresAdminLaunchReviewRepository(
         if (summary.rows[0] === undefined) {
           return null;
         }
-        const [versions, acceptances, tasks, publications] = await Promise.all([
-          pool.query(
-            `select c.config_version, c.template_version, c.config_hash, c.config,
+        const [versions, acceptances, tasks, publications, releases, closures] =
+          await Promise.all([
+            pool.query(
+              `select c.config_version, c.template_version, c.config_hash, c.config,
                c.owner_user_id, c.edited_by_operator_id, c.created_at,
                a.approver_id, a.config_hash as approval_hash,
                a.reason as approval_reason, a.approved_at
@@ -480,20 +515,20 @@ export function createPostgresAdminLaunchReviewRepository(
              where c.project_id = $1
              order by c.config_version desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select acceptance_id, config_version, chain_id, config_hash,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select acceptance_id, config_version, chain_id, config_hash,
                contract_manifest_hash, checklist_version, outcome, evidence,
                actor_id, reason, created_at
              from public.hooks_testnet_acceptances
              where project_id = $1
              order by created_at desc, acceptance_id desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select t.job_id, t.config_version, t.status, t.chain_id,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select t.job_id, t.config_version, t.status, t.chain_id,
                t.factory_address, t.project_owner, t.owner_nonce,
                t.binding_hash, t.meme_address, t.hook_address,
                (select count(*)::integer from public.hooks_launch_deployment_authorizations z
@@ -524,10 +559,10 @@ export function createPostgresAdminLaunchReviewRepository(
              where t.project_id = $1
              order by t.created_at desc, t.job_id desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-          pool.query(
-            `select p.publication_id::text, p.instance_id::text, i.job_id::text,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select p.publication_id::text, p.instance_id::text, i.job_id::text,
                p.attempt, p.status, p.cutoff_block::text as cutoff_block,
                p.cutoff_block_hash, p.member_count, p.root, p.data_hash,
                p.signer_addresses, p.submitter_address, p.tx_hash,
@@ -541,9 +576,27 @@ export function createPostgresAdminLaunchReviewRepository(
              where i.project_id = $1
              order by p.created_at desc, p.attempt desc
              limit $2`,
-            [input.projectId, adminLaunchDetailMaximumRows],
-          ),
-        ]);
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select ${releaseColumns}
+             from public.launch2_snapshot_publication_releases
+             where project_id = $1
+             order by created_at desc, released_attempt desc
+             limit $2`,
+              [input.projectId, adminLaunchDetailMaximumRows],
+            ),
+            pool.query(
+              `select c.instance_id::text, c.cutoff_block::text as cutoff_block,
+               c.cutoff_block_hash, c.sale_end_at, c.created_at
+             from public.launch2_snapshot_closures c
+             join public.launch2_instances i using (instance_id)
+             where i.project_id = $1
+             order by i.registered_at desc, i.instance_id desc
+             limit 1`,
+              [input.projectId],
+            ),
+          ]);
         return Object.freeze({
           project: mapSummary(summary.rows[0]),
           versions: Object.freeze(versions.rows.map(mapVersion)),
@@ -554,8 +607,178 @@ export function createPostgresAdminLaunchReviewRepository(
           snapshotPublications: Object.freeze(
             publications.rows.map(mapPublication),
           ),
+          snapshotReleases: Object.freeze(releases.rows.map(mapRelease)),
+          snapshotClosure:
+            closures.rows[0] === undefined
+              ? null
+              : mapClosure(closures.rows[0] as Record<string, unknown>),
         });
       });
+    },
+
+    async releaseSnapshotPublication(input) {
+      const codes = adminLaunchSnapshotRetryReasonCodes;
+      let client;
+      try {
+        client = await pool.connect();
+      } catch (error) {
+        throw new AdminRepositoryUnavailableError({ cause: error });
+      }
+      try {
+        await client.query("begin");
+        const replay = await client.query(
+          `select ${releaseColumns} from public.launch2_snapshot_publication_releases
+           where release_id = $1`,
+          [input.releaseId],
+        );
+        if (replay.rows[0] !== undefined) {
+          const existing = mapRelease(
+            replay.rows[0] as Record<string, unknown>,
+          );
+          await client.query("rollback");
+          if (
+            existing.projectId !== input.projectId ||
+            existing.reason !== input.reason ||
+            existing.actor !== input.actor
+          ) {
+            throw new AdminLaunchSnapshotRetryError(
+              "idempotency",
+              codes.idempotencyConflict,
+            );
+          }
+          return Object.freeze({ release: existing, replayed: true });
+        }
+        const project = await client.query(
+          "select 1 from public.launch_projects where project_id = $1",
+          [input.projectId],
+        );
+        if (project.rowCount !== 1) {
+          throw new AdminLaunchSnapshotRetryError(
+            "not_found",
+            codes.projectNotFound,
+          );
+        }
+        const instance = await client.query<{
+          instance_id: string;
+          snapshot_root: string | null;
+          closed: boolean;
+        }>(
+          `select i.instance_id::text, i.snapshot_root,
+             exists (select 1 from public.launch2_snapshot_closures c
+               where c.instance_id = i.instance_id) as closed
+           from public.launch2_instances i
+           where i.project_id = $1
+           order by i.registered_at desc, i.instance_id desc
+           limit 1
+           for update of i`,
+          [input.projectId],
+        );
+        const target = instance.rows[0];
+        if (target === undefined) {
+          throw new AdminLaunchSnapshotRetryError(
+            "not_found",
+            codes.instanceNotFound,
+          );
+        }
+        if (target.closed) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.closedNoHolders,
+          );
+        }
+        if (target.snapshot_root !== null) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.alreadyOnChain,
+          );
+        }
+        const latest = await client.query<{
+          publication_id: string;
+          attempt: number;
+          status: string;
+          failure_code: string | null;
+        }>(
+          `select publication_id::text, attempt, status, failure_code
+           from public.launch2_snapshot_publications
+           where instance_id = $1
+           order by attempt desc
+           limit 1
+           for update`,
+          [target.instance_id],
+        );
+        const publication = latest.rows[0];
+        if (publication === undefined) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.nothingToRetry,
+          );
+        }
+        if (
+          (publication.status !== "failed" &&
+            publication.status !== "mismatch") ||
+          publication.failure_code === null
+        ) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.notRetryable,
+            { status: publication.status },
+          );
+        }
+        const released = await client.query(
+          `select 1 from public.launch2_snapshot_publication_releases
+           where instance_id = $1 and released_attempt >= $2`,
+          [target.instance_id, publication.attempt],
+        );
+        if ((released.rowCount ?? 0) > 0) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.alreadyReleased,
+          );
+        }
+        const inserted = await client.query(
+          `insert into public.launch2_snapshot_publication_releases (
+             release_id, instance_id, project_id, released_publication_id,
+             released_attempt, released_status, released_failure_code,
+             actor, actor_account_id, reason, request_id
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           returning ${releaseColumns}`,
+          [
+            input.releaseId,
+            target.instance_id,
+            input.projectId,
+            publication.publication_id,
+            publication.attempt,
+            publication.status,
+            publication.failure_code,
+            input.actor,
+            input.actorAccountId,
+            input.reason,
+            input.requestId,
+          ],
+        );
+        await client.query("commit");
+        return Object.freeze({
+          release: mapRelease(inserted.rows[0] as Record<string, unknown>),
+          replayed: false,
+        });
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        if (error instanceof AdminLaunchSnapshotRetryError) throw error;
+        // A concurrent grant for the same attempt or key loses the race.
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          (error as { code?: unknown }).code === "23505"
+        ) {
+          throw new AdminLaunchSnapshotRetryError(
+            "conflict",
+            codes.alreadyReleased,
+          );
+        }
+        throw new AdminRepositoryUnavailableError({ cause: error });
+      } finally {
+        client.release();
+      }
     },
   } satisfies AdminLaunchReviewRepository);
 }
