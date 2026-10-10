@@ -14,8 +14,10 @@ import {
   communityIdParamsSchema,
   communityListQuerySchema,
   communityListResourceSchema,
+  communityMembershipResourceSchema,
   communityResourceSchema,
   createCommunityRequestSchema,
+  joinCommunityRequestSchema,
   memberListErrors,
   memberListQuerySchema,
   memberListResourceSchema,
@@ -232,16 +234,17 @@ export function registerV2CommunityRoutes(
         operationId: "joinV2Community",
         summary: "Join a community",
         description:
-          "Idempotent join. `member_count` is maintained inside the same transaction, so concurrent joins can neither lose nor double count. A banned account is PERMISSION_DENIED.",
+          'Idempotent join. `member_count` is maintained inside the same transaction, so concurrent joins can neither lose nor double count. A banned account is PERMISSION_DENIED. The body is optional (Decision 0115): `{ "notifications": "muted" }` asks the channel sync lane to mute the official channel for this member server-side once it has added the member to Stream; no body, `{}`, or `null` is `default`. A muted join binds the preference into the idempotency digest, so the same key with a different preference is IDEMPOTENCY_CONFLICT. Poll GET /v2/communities/{communityId}/membership for `channelSynced`.',
         tags: ["community"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
         params: communityIdParamsSchema,
         querystring: emptyQueryStringSchema,
+        body: joinCommunityRequestSchema,
         response: { 200: communityResourceSchema, ...commandErrors },
       },
       onRequest: validateCommandHeaders,
-      preValidation: assertNoBodyOrQueryV2,
+      preValidation: assertNoQuery,
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
@@ -249,7 +252,38 @@ export function registerV2CommunityRoutes(
       const resource = await service.joinCommunity({
         principal: requireAuthenticatedLoopPrincipal(request),
         communityId: params.communityId,
+        body: request.body,
         ...commandContext(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/communities/:communityId/membership",
+    {
+      schema: {
+        operationId: "getV2CommunityMembership",
+        summary: "Read the viewer's membership sync state",
+        description:
+          "Decision 0115. The viewer's own membership row in a community it can see, the notification preference recorded at join, and `channelSynced`: whether the Stream channel add (and, for `muted`, the server-side channel mute) has completed. One PostgreSQL read, no Stream call, so it is cheap to poll for a few seconds after a join. A community the viewer cannot see is NOT_FOUND; no membership reads `membership: null`.",
+        tags: ["community"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: communityIdParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: communityMembershipResourceSchema, ...readErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as CommunityParams;
+      const resource = await service.getMembership({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        communityId: params.communityId,
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

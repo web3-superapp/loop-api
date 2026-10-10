@@ -584,11 +584,60 @@ fixture 顶替。写接口（create / patch / join / leave）返回的同一字�
 
 ### 4.5 `POST /v2/communities/{id}/join` / `DELETE /v2/communities/{id}/membership`
 
-都是写接口（带 `Idempotency-Key`，无 body），返回同 4.4 的社区资源。
+都是写接口（带 `Idempotency-Key`），返回同 4.4 的社区资源。leave 无 body；join 的
+body 可选（S135，决策 0115，见 4.5a）。
 
 - 重复 join 幂等成功；被封禁账号 join 返回 `403 PERMISSION_DENIED`。
 - owner 退出返回 `403 PERMISSION_DENIED`（必须先转让）；本来就不是成员返回
   `409 DATA_STALE`。
+
+### 4.5a 加入即免打扰：join body 与 `GET /v2/communities/{id}/membership`（S135，决策 0115）
+
+**join body（可选）**
+
+```json
+{ "notifications": "muted" }
+```
+
+| 取值                          | 含义                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| 不带 body / `{}` / `null`     | 同 `"default"`：与旧版完全一样（幂等摘要也不变）                           |
+| `"default"`                   | 正常接收频道通知                                                           |
+| `"muted"`                     | 后端在把成员加进 Stream 官方频道**之后**，以该用户身份在服务端静音这个频道 |
+| 其它值 / 多余字段 / `null` 值 | `400 INVALID_REQUEST`，不落库                                              |
+
+- 偏好只在这次 join **新建**成员行时写入；已经是成员时再 join（哪怕带 `muted`）幂等成功、
+  偏好不变。退出后重新加入是新行，按新请求的偏好。
+- `muted` 绑进幂等摘要：同一个 `Idempotency-Key` 先 default 再 muted（或反之）→
+  `409 IDEMPOTENCY_CONFLICT`。
+- **客户端不要再在 join 成功后立刻调 Stream `channel.mute()`**：此时后端还没把你加进
+  频道成员，Stream 会拒绝（2026-10-10 模拟器 5 个里 4 个失败的原因）。会话页里用户
+  手动「免打扰 / 取消免打扰」照旧走 Stream SDK。
+- 后端只静音一次：之后角色变化引起的重新同步不会再静音，用户在 App 里取消的免打扰不会
+  被覆盖。
+
+**`GET /v2/communities/{id}/membership`**（读接口，`no-store`，不带 body/query/
+`Idempotency-Key`；只读 PostgreSQL，不调 Stream，可以短轮询）
+
+```json
+{
+  "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "membership": { "role": "member", "status": "active", "joinedAt": "…" },
+  "notifications": "muted",
+  "channelSynced": false,
+  "contractVersion": "2.0"
+}
+```
+
+| 字段            | 说明                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `membership`    | 同 4.4 `viewer.membership`；未加入为 `null`                                                                                                                                       |
+| `notifications` | join 时记录的偏好 `default` \| `muted`；未加入为 `null`                                                                                                                           |
+| `channelSynced` | `true` = 已加进 Stream 频道成员，且（`muted` 时）服务端静音已确认。未加入、社区还没有频道、同步排队中、频道满员（`capacityPending`）、或静音被 Stream 拒绝/重试耗尽时都是 `false` |
+
+建议文案：join(muted) 成功即显示「已加入 · 免打扰生效中」；轮询本接口（约 1 s 一次，
+最多 10 s）到 `channelSynced === true` 改为「已免打扰」；10 s 内没等到就保持「生效中」，
+下次进入会话时再读一次。错误：`400`、`401`、`404 NOT_FOUND`（看不到的社区）、`503`。
 
 ### 4.6 `GET /v2/communities/{id}/members` — `community-members` 页
 
@@ -1247,7 +1296,8 @@ CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机�
 - 未配置 → `items: []`、`defaultSelectedIds: []`（不是错误）：页面直接接
   `GET /v2/communities` 全目录或显示空态 +「进入 LOOP」。
 - 「进入 LOOP」= 对勾选的每个社区 `POST /v2/communities/{id}/join`（逐条处理失败，
-  不阻塞），频道免打扰在客户端对 Stream channel 调 `mute()`。
+  不阻塞）。要免打扰时 body 带 `{"notifications":"muted"}`，由后端在频道同步后静音
+  （S135，决策 0115，见 4.5a）；客户端不再自己调 Stream `mute()`。
 - 错误：`400`、`401`、`409 ACCOUNT_BOOTSTRAP_REQUIRED`、`503`。
 
 ### 社区链接 `/c/{communityId}`

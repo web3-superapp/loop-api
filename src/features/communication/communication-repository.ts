@@ -548,6 +548,12 @@ export interface CommunityChannelSyncJobRecord {
    * enqueued before a later role change still applies the latest role.
    */
   readonly memberChannelRole: "channel_moderator" | "channel_member";
+  /**
+   * Decision 0115: true when an `add` must also mute the official channel
+   * for this member server-side — the membership asked for `muted` at join
+   * and no mute has been confirmed yet. Read at claim time, like the role.
+   */
+  readonly memberMuteRequired: boolean;
   readonly attempts: number;
   readonly channelProvisioned: boolean;
   readonly channelName: string;
@@ -597,6 +603,12 @@ export interface CommunityChannelSyncRepository {
     readonly workerId: string;
     readonly memberState: CommunityChannelMemberState;
     readonly channelState: CommunityChannelState;
+    /**
+     * Decision 0115: Stream confirmed the server-side channel mute in this
+     * attempt. Recorded on a `muted` membership only, and only when the
+     * member ends `synced`.
+     */
+    readonly notificationsApplied?: boolean;
   }): Promise<void>;
   retryJob(input: {
     readonly communityId: string;

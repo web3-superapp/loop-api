@@ -2068,3 +2068,143 @@ describe("group channel rename (Decision 0098)", () => {
     ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
   });
 });
+
+describe("server-side member channel mute (Decision 0115)", () => {
+  function muted(cid: string, userId: string): Record<string, unknown> {
+    return {
+      duration: "1ms",
+      channel_mutes: [
+        {
+          created_at: "2026-10-10T00:00:00Z",
+          updated_at: "2026-10-10T00:00:00Z",
+          channel: { cid, id: cid.split(":")[1], type: "messaging" },
+          user: { id: userId },
+        },
+      ],
+    };
+  }
+
+  it("mutes the community channel as the member with one muteChannel call", async () => {
+    const cid = `messaging:${communityChannelId}`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(muted(cid, hostUserId)));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.muteCommunityChannelForMember({
+        channelId: communityChannelId,
+        memberStreamUserId: hostUserId,
+        signal: signal(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requestedUrl(fetchMock).pathname).toBe(
+      "/api/v2/chat/moderation/mute/channel",
+    );
+    expect(requestBody(fetchMock, 0)).toEqual({
+      user_id: hostUserId,
+      channel_cids: [cid],
+    });
+  });
+
+  it("accepts the single channel_mute echo and refuses an echo for another channel or member", async () => {
+    const cid = `messaging:${communityChannelId}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            duration: "1ms",
+            channel_mute: { channel: { cid }, user: { id: hostUserId } },
+          }),
+        ),
+      ),
+    );
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    await expect(
+      gateway.muteCommunityChannelForMember({
+        channelId: communityChannelId,
+        memberStreamUserId: hostUserId,
+        signal: signal(),
+      }),
+    ).resolves.toBeUndefined();
+
+    for (const body of [
+      muted(
+        "messaging:loop_community_ffffffffffffffffffffffffffffffff",
+        hostUserId,
+      ),
+      muted(cid, "loop_someoneelse0000"),
+      { duration: "1ms" },
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(jsonResponse(body))),
+      );
+      const next = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+      await expect(
+        next.muteCommunityChannelForMember({
+          channelId: communityChannelId,
+          memberStreamUserId: hostUserId,
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
+    }
+  });
+
+  it("classifies a deterministic 4xx as rejected and a 5xx or 429 as unavailable", async () => {
+    for (const [status, expected] of [
+      [400, StreamChannelRequestRejectedError],
+      [429, StreamChannelGatewayUnavailableError],
+      [500, StreamChannelGatewayUnavailableError],
+    ] as const) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            jsonResponse(
+              { code: 4, message: "nope", StatusCode: status },
+              status,
+            ),
+          ),
+        ),
+      );
+      const gateway = createStreamCommunityChannelGateway({
+        apiKey,
+        apiSecret,
+      });
+      await expect(
+        gateway.muteCommunityChannelForMember({
+          channelId: communityChannelId,
+          memberStreamUserId: hostUserId,
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(expected);
+    }
+  });
+
+  it("refuses non-community channels, bad users, and the unavailable adapter without a provider call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = createStreamCommunityChannelGateway({ apiKey, apiSecret });
+    for (const input of [
+      { channelId: groupChannelId, memberStreamUserId: hostUserId },
+      { channelId: communityChannelId, memberStreamUserId: "not-a-loop-user" },
+    ]) {
+      await expect(
+        gateway.muteCommunityChannelForMember({ ...input, signal: signal() }),
+      ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(
+      createUnavailableStreamCommunityChannelGateway().muteCommunityChannelForMember(
+        {
+          channelId: communityChannelId,
+          memberStreamUserId: hostUserId,
+          signal: signal(),
+        },
+      ),
+    ).rejects.toBeInstanceOf(StreamChannelGatewayUnavailableError);
+  });
+});

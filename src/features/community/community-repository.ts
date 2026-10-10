@@ -217,6 +217,30 @@ export interface CommunityMembershipCommandInput {
   readonly idempotencyKey: string;
   readonly requestSha256: string;
   readonly requestId: string;
+  /**
+   * Decision 0115: the join-time notification preference. Only
+   * `joinCommunity` reads it; absent means `default`. It is written only
+   * when the join creates the membership row.
+   */
+  readonly notifications?: CommunityNotificationPreference;
+}
+
+/** Decision 0115: what the joiner asked the official channel to do. */
+export type CommunityNotificationPreference = "default" | "muted";
+
+export const communityNotificationPreferences: readonly CommunityNotificationPreference[] =
+  Object.freeze(["default", "muted"]);
+
+/**
+ * Decision 0115: the viewer's membership and whether its Stream channel
+ * projection has caught up. `channelSynced` is true only when the channel
+ * member row is `synced` and, for a `muted` preference, the server-side
+ * mute was confirmed. Without a membership row everything reads absent.
+ */
+export interface CommunityMembershipSyncRecord {
+  readonly membership: MembershipRecord | null;
+  readonly notifications: CommunityNotificationPreference | null;
+  readonly channelSynced: boolean;
 }
 
 export interface MemberListCursor {
@@ -440,6 +464,15 @@ export interface CommunityRepository {
     input: CommunityMembershipCommandInput,
   ): Promise<CommunityDetailRecord>;
   /**
+   * Decision 0115: the viewer's own membership in a community it can see,
+   * with the notification preference and the channel sync fact. A
+   * community the viewer cannot see is not found.
+   */
+  readMembershipSync(input: {
+    readonly viewerUserId: string;
+    readonly communityId: string;
+  }): Promise<CommunityMembershipSyncRecord>;
+  /**
    * Owner-only `rejected -> pending` transition (Decision 0073). Clears the
    * reason and the review time, stamps the submission time, and appends a
    * `community_resubmitted` audit row. Any other state is stale.
@@ -640,6 +673,7 @@ export function createUnavailableCommunityRepository(): CommunityRepository {
     updateCommunity: unavailable,
     joinCommunity: unavailable,
     leaveCommunity: unavailable,
+    readMembershipSync: unavailable,
     resubmitCommunity: unavailable,
     listMembers: unavailable,
     governMember: unavailable,
