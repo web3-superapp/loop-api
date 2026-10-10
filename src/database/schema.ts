@@ -152,6 +152,8 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_positions",
   "public.launch2_intents",
   "public.launch2_snapshot_publications",
+  "public.launch2_snapshot_closures",
+  "public.launch2_snapshot_publication_releases",
   "public.launch2_buyback_attempts",
   "public.mining_parameter_versions",
   "public.mining_epochs",

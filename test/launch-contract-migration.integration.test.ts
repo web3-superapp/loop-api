@@ -59,6 +59,7 @@ describe("PostgreSQL Launch contract registry (migration 000041, Decision 0076)"
     const ownerUserId = user.rows[0]?.id as string;
     const created = await launch.createProject({
       ownerUserId,
+      kind: "ido",
       idempotencyKey: randomUUID(),
       requestSha256: launchCommandDigest("createProject", [ticker]),
       requestId: randomUUID(),

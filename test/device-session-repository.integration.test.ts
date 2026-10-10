@@ -89,6 +89,8 @@ describe("PostgreSQL V2 device-session migration and repository", () => {
     await pool.query(`
       truncate table
     public.community_review_notes,
+    public.launch2_snapshot_publication_releases,
+    public.launch2_snapshot_closures,
     public.launch2_buyback_attempts,
     public.launch2_snapshot_publications,
     public.launch2_intents,

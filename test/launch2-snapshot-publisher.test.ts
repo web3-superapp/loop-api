@@ -118,28 +118,44 @@ function fakeChain(options: {
 
 function memoryRepository(initial: Launch2PublicationCandidate) {
   const rows: Launch2PublicationRecord[] = [];
+  const closures: Parameters<
+    Launch2PublicationRepository["recordNoHoldersClosure"]
+  >[0][] = [];
   let base = initial;
   const repository: Launch2PublicationRepository = {
+    recordNoHoldersClosure: (input) => {
+      if (closures.some((entry) => entry.instanceId === input.instanceId)) {
+        return Promise.resolve(false);
+      }
+      closures.push(input);
+      return Promise.resolve(true);
+    },
     listCandidates: () =>
-      Promise.resolve([
-        {
-          ...base,
-          active:
-            rows.find((row) =>
-              ["pending", "broadcast", "confirmed"].includes(row.status),
-            ) ?? null,
-          lastAttempt: rows.length,
-          blockingCode:
-            rows.find(
-              (row) =>
-                row.status === "mismatch" ||
-                (row.status === "failed" && row.failureRetryable === false),
-            )?.failureCode ?? null,
-          retryableFailures: rows.filter(
-            (row) => row.status === "failed" && row.failureRetryable === true,
-          ).length,
-        },
-      ]),
+      Promise.resolve(
+        closures.some((entry) => entry.instanceId === base.instanceId)
+          ? []
+          : [
+              {
+                ...base,
+                active:
+                  rows.find((row) =>
+                    ["pending", "broadcast", "confirmed"].includes(row.status),
+                  ) ?? null,
+                lastAttempt: rows.length,
+                blockingCode:
+                  rows.find(
+                    (row) =>
+                      row.status === "mismatch" ||
+                      (row.status === "failed" &&
+                        row.failureRetryable === false),
+                  )?.failureCode ?? null,
+                retryableFailures: rows.filter(
+                  (row) =>
+                    row.status === "failed" && row.failureRetryable === true,
+                ).length,
+              },
+            ],
+      ),
     insertPending: (input) => {
       if (
         rows.some((row) =>
@@ -220,6 +236,7 @@ function memoryRepository(initial: Launch2PublicationCandidate) {
   return {
     repository,
     rows,
+    closures,
     setBase: (next: Partial<Launch2PublicationCandidate>) => {
       base = { ...base, ...next };
     },
@@ -297,16 +314,53 @@ describe("Decision 0118 snapshot publisher", () => {
     expect(behind.rows).toEqual([]);
   });
 
-  it("refuses an indexed holder set that does not add up to totalMinted, or is empty", async () => {
+  it("refuses an indexed holder set that does not add up to totalMinted", async () => {
     const incomplete = setup({ head: 400n, minted: 3n });
     expect((await incomplete.publisher.runOnce()).waiting[id]).toBe(
       "LAUNCH2_SNAPSHOT_INDEXER_INCOMPLETE",
     );
-    const empty = setup({ head: 400n, minted: 0n }, "1000", []);
-    expect((await empty.publisher.runOnce()).waiting[id]).toBe(
-      "LAUNCH2_SNAPSHOT_NO_HOLDERS",
+    // No indexed holder while the chain says something was minted: the
+    // indexer is incomplete, never a closure.
+    const lagging = setup({ head: 400n, minted: 1n }, "1000", []);
+    expect((await lagging.publisher.runOnce()).waiting[id]).toBe(
+      "LAUNCH2_SNAPSHOT_INDEXER_INCOMPLETE",
     );
-    expect([...incomplete.rows, ...empty.rows]).toEqual([]);
+    expect([...incomplete.rows, ...lagging.rows]).toEqual([]);
+    expect([...incomplete.closures, ...lagging.closures]).toEqual([]);
+  });
+
+  it("closes a sale with no holder once (Decision 0120) and stops waiting", async () => {
+    const empty = setup({ head: 400n, minted: 0n }, "1000", []);
+    const first = await empty.publisher.runOnce();
+    expect(first.waiting[id]).toBe("LAUNCH2_SNAPSHOT_CLOSED_NO_HOLDERS");
+    expect(empty.closures).toEqual([
+      {
+        instanceId: id,
+        chainId: "eip155:97",
+        snapshots: addr("b"),
+        saleEndAt: new Date(Number(saleEnd) * 1000).toISOString(),
+        cutoffBlock: cutoffBlock.toString(10),
+        cutoffBlockHash: `0x${cutoffBlock.toString(16).padStart(64, "0")}`,
+      },
+    ]);
+    expect(empty.rows).toEqual([]);
+    expect(empty.sent).toEqual([]);
+    // The closed instance is no longer a candidate.
+    const second = await empty.publisher.runOnce();
+    expect(second.candidates).toBe(0);
+    expect(second.waiting).toEqual({});
+  });
+
+  it("does not close before the cutoff is confirmed or the indexer caught up", async () => {
+    const shallow = setup({ head: cutoffBlock + 2n, minted: 0n }, "1000", []);
+    expect((await shallow.publisher.runOnce()).waiting[id]).toBe(
+      "LAUNCH2_SNAPSHOT_CUTOFF_UNCONFIRMED",
+    );
+    const behind = setup({ head: 400n, minted: 0n }, "371", []);
+    expect((await behind.publisher.runOnce()).waiting[id]).toBe(
+      "LAUNCH2_SNAPSHOT_INDEXER_BEHIND",
+    );
+    expect([...shallow.closures, ...behind.closures]).toEqual([]);
   });
 
   it("refuses when an on-chain root already exists", async () => {

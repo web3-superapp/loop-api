@@ -901,6 +901,66 @@ const buybackAttemptSchema = {
   },
 } as const;
 
+/** Decision 0120: a platform-administrator retry grant (append-only). */
+const snapshotReleaseSchema = {
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Decision 0120: a retry grant. Attempts up to releasedAttempt no longer block the publisher or count against its retry budget; the publisher's next attempt is releasedAttempt + 1. The released publication row is unchanged.",
+  required: [
+    "releaseId",
+    "projectId",
+    "instanceId",
+    "publicationId",
+    "releasedAttempt",
+    "releasedStatus",
+    "releasedFailureCode",
+    "actor",
+    "reason",
+    "createdAt",
+  ],
+  properties: {
+    releaseId: uuidSchema,
+    projectId: uuidSchema,
+    instanceId: uuidSchema,
+    publicationId: uuidSchema,
+    releasedAttempt: { type: "integer", minimum: 1 },
+    releasedStatus: { type: "string", enum: ["failed", "mismatch"] },
+    releasedFailureCode: { type: "string" },
+    actor: { type: "string" },
+    reason: { type: "string" },
+    createdAt: dateTimeSchema,
+  },
+} as const;
+
+const snapshotClosureSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      description:
+        "Decision 0120: the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block); nothing can be published and the instance stage is closed_no_holders.",
+      required: [
+        "instanceId",
+        "reason",
+        "cutoffBlock",
+        "cutoffBlockHash",
+        "saleEndAt",
+        "createdAt",
+      ],
+      properties: {
+        instanceId: uuidSchema,
+        reason: { type: "string", const: "no_holders" },
+        cutoffBlock: { type: "string", pattern: "^(0|[1-9][0-9]*)$" },
+        cutoffBlockHash: hash32Schema,
+        saleEndAt: dateTimeSchema,
+        createdAt: dateTimeSchema,
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
 export const launchProjectDetailResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -913,6 +973,8 @@ export const launchProjectDetailResourceSchema = {
     "deploymentChainId",
     "snapshotPublications",
     "buybackAttempts",
+    "snapshotReleases",
+    "snapshotClosure",
   ],
   properties: {
     project: projectSummarySchema,
@@ -970,6 +1032,55 @@ export const launchProjectDetailResourceSchema = {
         "Decision 0121: the newest 20 buyback keeper attempts of the project's MEME v2 instance (simulation refusals included; the ledger stays launch2_buybacks).",
       items: buybackAttemptSchema,
     },
+    snapshotReleases: {
+      type: "array",
+      maxItems: 200,
+      items: snapshotReleaseSchema,
+      description: "Decision 0120: retry grants, newest first.",
+    },
+    snapshotClosure: snapshotClosureSchema,
+  },
+} as const;
+
+export const launchSnapshotRetryRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["reason"],
+  properties: {
+    reason: {
+      type: "string",
+      minLength: 1,
+      maxLength: 2000,
+      description: "Operator note (1–500 characters after trimming).",
+    },
+  },
+} as const;
+
+export const launchSnapshotRetryResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["operationId", "replayed", "release", "audit"],
+  properties: {
+    operationId: {
+      ...uuidSchema,
+      description: "= the Idempotency-Key (= release.releaseId).",
+    },
+    replayed: { type: "boolean" },
+    release: {
+      ...snapshotReleaseSchema,
+      required: [...snapshotReleaseSchema.required, "nextAttempt"],
+      properties: {
+        ...snapshotReleaseSchema.properties,
+        nextAttempt: {
+          type: "integer",
+          minimum: 2,
+          description:
+            "The attempt number the publisher uses on its next tick (releasedAttempt + 1).",
+        },
+      },
+    },
+    audit: nullableAuditReferenceSchema,
   },
 } as const;
 

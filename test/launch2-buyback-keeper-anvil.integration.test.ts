@@ -343,7 +343,11 @@ describe.skipIf(skipReason !== null)(
       }).prepareSigningRequest({ ownerUserId, projectId, walletId });
       const message = prepared.typedData.message;
       const signature = await privateKeyToAccount(ownerKey).signTypedData({
-        domain: prepared.typedData.domain,
+        // Decision 0120: types carry EIP712Domain (uint256 chainId).
+        domain: {
+          ...prepared.typedData.domain,
+          chainId: BigInt(prepared.typedData.domain.chainId),
+        },
         types: prepared.typedData.types,
         primaryType: prepared.typedData.primaryType,
         message: {

@@ -14,13 +14,14 @@ import {
   launchEligibilityModes,
   launchGraduationSteps,
   launchProjectDigestParts,
+  launchProjectKindFilters,
   launchProjectListFilters,
   launchReasonCodes,
   launchReviewReasonText,
   parseLaunchEnum,
   parseLaunchListLimit,
   parseLaunchOpaqueId,
-  parseLaunchProjectValues,
+  parseLaunchProjectCreate,
   parseReplaceLaunchProjectRequest,
   launchContractReasonCodes,
   unavailable,
@@ -33,6 +34,7 @@ import {
   type LaunchGraduationStep,
   type LaunchOnChainStateAvailable,
   type LaunchOnChainStateProjection,
+  type LaunchProjectKindFilter,
   type LaunchProjectListFilter,
   type LaunchProjectProjection,
   type LaunchReviewStatus,
@@ -403,6 +405,8 @@ export interface LaunchService {
   listProjects(
     input: PrincipalInput & {
       readonly status?: unknown;
+      /** Decision 0120: `all` (default) | `ido` | `launch2`. */
+      readonly kind?: unknown;
       readonly cursor?: unknown;
       readonly limit?: unknown;
     },
@@ -517,6 +521,7 @@ function projectProjection(
     narrative: record.narrative,
     officialLinks: record.officialLinks,
     materialVersion: record.materialVersion,
+    kind: record.kind,
     reviewStatus: record.reviewStatus,
     reviewReasonCode: owner ? record.reviewReasonCode : null,
     reviewReasonText: owner
@@ -1408,7 +1413,16 @@ export function createLaunchService(
           launchProjectListFilters,
           "all",
         );
-        const filter = canonicalLaunchFilter({ status });
+        const kind = parseLaunchEnum<LaunchProjectKindFilter>(
+          input.kind,
+          launchProjectKindFilters,
+          "all",
+        );
+        // Decision 0120: `kind` joins the cursor binding only when set, so
+        // cursors issued before the filter existed stay valid.
+        const filter = canonicalLaunchFilter(
+          kind === "all" ? { status } : { status, kind },
+        );
         let limit: number;
         let after: {
           readonly createdAt: string;
@@ -1442,6 +1456,7 @@ export function createLaunchService(
         const rows = await repository.listProjects({
           ownerUserId: input.principal.userId,
           status: status === "all" ? null : status,
+          kind: kind === "all" ? null : kind,
           limit: limit + 1,
           after,
         });
@@ -1472,16 +1487,18 @@ export function createLaunchService(
 
     async createProject(input: Parameters<LaunchService["createProject"]>[0]) {
       try {
-        const values = parseLaunchProjectValues(input.body);
+        const { kind, values } = parseLaunchProjectCreate(input.body);
         const record = await repository.createProject({
           ownerUserId: input.principal.userId,
           idempotencyKey: input.idempotencyKey,
-          requestSha256: launchCommandDigest(
-            "createProject",
-            launchProjectDigestParts(values),
-          ),
+          // Decision 0120: an `ido` create keeps its pre-0120 digest.
+          requestSha256: launchCommandDigest("createProject", [
+            ...launchProjectDigestParts(values),
+            ...(kind === "ido" ? [] : ["kind", kind]),
+          ]),
           requestId: input.requestId,
           values,
+          kind,
         });
         return Object.freeze({
           project: projectProjection(record),

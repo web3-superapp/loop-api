@@ -227,6 +227,7 @@ function stageOf(record: Launch2InstanceRecord, nowSeconds: bigint) {
       record.snapshot === null ? null : seconds(record.snapshot.publishedAt),
     graduated: record.graduation !== null,
     holdReason: record.holdReason,
+    closedNoHolders: record.noHoldersClosure !== null,
   });
 }
 
@@ -693,7 +694,12 @@ export function createLaunch2Service(
     const saleStart = seconds(record.nftSaleStart);
     if (at < saleStart) return "upcoming";
     if (at < seconds(record.nftSaleEnd)) return "nft_sale";
-    if (state.curve.earlyRoundEndsAt === 0n) return "snapshot_pending";
+    if (state.curve.earlyRoundEndsAt === 0n) {
+      // Decision 0120: no holder at the cutoff — nothing can be published.
+      return record.noHoldersClosure === null
+        ? "snapshot_pending"
+        : "closed_no_holders";
+    }
     return at < state.curve.earlyRoundEndsAt ? "priority" : "public";
   }
 
@@ -1245,6 +1251,14 @@ export function createLaunch2Service(
               record.snapshotPublication === null
                 ? null
                 : Object.freeze({ ...record.snapshotPublication }),
+            closure:
+              record.noHoldersClosure === null
+                ? null
+                : Object.freeze({
+                    reason: "no_holders" as const,
+                    cutoffBlock: record.noHoldersClosure.cutoffBlock,
+                    closedAt: record.noHoldersClosure.closedAt,
+                  }),
           }),
           graduation:
             graduation === null

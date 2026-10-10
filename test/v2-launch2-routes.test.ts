@@ -430,6 +430,54 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     ).toBeNull();
   });
 
+  it("ends a no-holder sale at closed_no_holders and never quotes it (Decision 0120)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const closed = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 604_800n - 60n),
+      stage: "closed_no_holders",
+      noHoldersClosure: {
+        cutoffBlock: "123",
+        closedAt: iso(launch2NowSeconds - 30n),
+      },
+    });
+    repository.instances.set(closed.instanceId, closed);
+    const chain = defaultChainState();
+    const { app } = await createApp({ repository, chain });
+    // No snapshot on chain: the early round never started.
+    chain.viewer.curve = { earlyRoundEndsAt: 0n };
+    const response = await get(
+      app,
+      `/v2/launch2/instances/${closed.instanceId}`,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const instance = response.json<{
+      instance: { stage: string; snapshot: Record<string, unknown> };
+    }>().instance;
+    expect(instance.stage).toBe("closed_no_holders");
+    expect(instance.snapshot).toEqual(
+      expect.objectContaining({
+        status: "pending",
+        closure: {
+          reason: "no_holders",
+          cutoffBlock: "123",
+          closedAt: iso(launch2NowSeconds - 30n),
+        },
+      }),
+    );
+    const quote = await get(
+      app,
+      `/v2/launch2/instances/${closed.instanceId}/quote?side=buy&amount=1000000&walletId=${walletId}`,
+    );
+    expect(quote.statusCode).toBe(409);
+    expect(quote.json()).toMatchObject({
+      code: "DATA_STALE",
+      detailsSafe: {
+        reasonCode: "LAUNCH2_STAGE_MISMATCH",
+        stage: "closed_no_holders",
+      },
+    });
+  });
+
   it("quotes a priority buy with the executable MAX and flags an over-MAX amount", async () => {
     const repository = createInMemoryLaunch2Repository();
     const instance = priorityInstance();
@@ -975,6 +1023,45 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(graduated.json()).toMatchObject({
       detailsSafe: { reasonCode: "LAUNCH2_STAGE_MISMATCH", stage: "priority" },
     });
+    // closed_no_holders (Decision 0120) is a read-model stage too: even a
+    // chain that reports an open round gets the 409 with that stage.
+    const closed = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 604_800n - 3_600n),
+      stage: "closed_no_holders",
+      noHoldersClosure: {
+        cutoffBlock: "123",
+        closedAt: iso(launch2NowSeconds - 30n),
+      },
+    });
+    repository.instances.set(closed.instanceId, closed);
+    chain.viewer.curve = {};
+    for (const response of [
+      await get(
+        app,
+        `/v2/launch2/instances/${closed.instanceId}/quote?side=buy&amount=10&walletId=${walletId}`,
+      ),
+      await post(
+        app,
+        `/v2/launch2/instances/${closed.instanceId}/trade/prepare`,
+        {
+          walletId,
+          side: "buy",
+          amount: "10",
+          minOut: "1",
+          deadline: iso(launch2NowSeconds + 60n),
+        },
+        globalThis.crypto.randomUUID(),
+      ),
+    ]) {
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "DATA_STALE",
+        detailsSafe: {
+          reasonCode: "LAUNCH2_STAGE_MISMATCH",
+          stage: "closed_no_holders",
+        },
+      });
+    }
     // Agreement: the quote answers with MAX from the chain block.
     chain.viewer.curve = {};
     const agreed = await get(

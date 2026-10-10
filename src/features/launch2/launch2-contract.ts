@@ -31,11 +31,15 @@ export const launch2Template = Object.freeze({
  * Instance stages (Decision 0114 §2). `upcoming` (activated, before the NFT
  * sale opens) is added to the design's six; `paused` is an integrity hold
  * (the contracts have no curve / NFT pause), never the buyback pause.
+ * Decision 0120: `closed_no_holders` — the NFT sale ended with no holder,
+ * so no snapshot can be published (the registry needs a non-zero root) and
+ * the launch ends there (terminal, no next change).
  */
 export const launch2Stages = Object.freeze([
   "upcoming",
   "nft_sale",
   "snapshot_pending",
+  "closed_no_holders",
   "priority",
   "public",
   "graduated",

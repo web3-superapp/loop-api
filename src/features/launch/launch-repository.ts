@@ -3,6 +3,7 @@ import type {
   LaunchEligibilityTier,
   LaunchKybStatus,
   LaunchOfficialLinks,
+  LaunchProjectKind,
   LaunchProjectValues,
   LaunchReviewDecision,
   LaunchReviewStatus,
@@ -27,6 +28,8 @@ export interface LaunchProjectRecord {
   readonly narrative: string | null;
   readonly officialLinks: LaunchOfficialLinks;
   readonly materialVersion: number;
+  /** Decision 0120. */
+  readonly kind: LaunchProjectKind;
   readonly reviewStatus: LaunchReviewStatus;
   readonly kybStatus: LaunchKybStatus;
   readonly reviewReasonCode: string | null;
@@ -128,6 +131,8 @@ export interface LaunchEconomyCountsRecord {
 export interface LaunchProjectPageInput {
   readonly ownerUserId: string;
   readonly status: LaunchReviewStatus | null;
+  /** Decision 0120: null = every kind. */
+  readonly kind: LaunchProjectKind | null;
   readonly limit: number;
   readonly after: {
     readonly createdAt: string;
@@ -141,6 +146,8 @@ export interface CreateLaunchProjectInput {
   readonly requestSha256: string;
   readonly requestId: string;
   readonly values: LaunchProjectValues;
+  /** Decision 0120. */
+  readonly kind: LaunchProjectKind;
 }
 
 export interface ReplaceLaunchProjectInput {

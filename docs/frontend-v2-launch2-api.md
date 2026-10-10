@@ -21,21 +21,29 @@ with the read model matching the chain 40/40; NFT mint and later stages not yet 
 
 ## 2. Stages (服务端唯一真相)
 
-| `stage`            | Meaning                                 | `nextChangeAt` | App                            |
-| ------------------ | --------------------------------------- | -------------- | ------------------------------ |
-| `upcoming`         | Activated, NFT sale not open yet        | sale start     | 即将开售 · 倒计时              |
-| `nft_sale`         | NFT sale until `nftSale.endAt`          | sale end       | NFT 发售中 · 剩余 d h m        |
-| `snapshot_pending` | Sale over, holder list not published    | `null`         | 名单生成中                     |
-| `priority`         | Snapshot holders only, 3,600 s          | round end      | 提前购 · 持有人优先 · 剩余 m s |
-| `public`           | Public curve until sold out             | `null`         | 公开内盘                       |
-| `graduated`        | Sold out → official pool (either round) | `null`         | 已毕业 · 官方池交易中          |
-| `paused`           | Integrity hold (`holdReason`)           | `null`         | 已暂停 + reason                |
+| `stage`             | Meaning                                 | `nextChangeAt` | App                            |
+| ------------------- | --------------------------------------- | -------------- | ------------------------------ |
+| `upcoming`          | Activated, NFT sale not open yet        | sale start     | 即将开售 · 倒计时              |
+| `nft_sale`          | NFT sale until `nftSale.endAt`          | sale end       | NFT 发售中 · 剩余 d h m        |
+| `snapshot_pending`  | Sale over, holder list not published    | `null`         | 名单生成中                     |
+| `closed_no_holders` | Sale over with **no** NFT holder (0120) | `null`         | 已结束 · 无人参与 NFT 发售     |
+| `priority`          | Snapshot holders only, 3,600 s          | round end      | 提前购 · 持有人优先 · 剩余 m s |
+| `public`            | Public curve until sold out             | `null`         | 公开内盘                       |
+| `graduated`         | Sold out → official pool (either round) | `null`         | 已毕业 · 官方池交易中          |
+| `paused`            | Integrity hold (`holdReason`)           | `null`         | 已暂停 + reason                |
 
 **NFT 发售期（S141 / 决策 0119）**：发售结束时刻由实例的 `nftSale.endAt` 决定（= 该实例
 `ProjectNFT.saleEnd()`，部署核验时读链得到），**不是**模板常量 7 天。BSC 测试网工厂为
 **1 小时**（`endAt − startAt = 3600 s`，`template.nftSaleSeconds = 3600`）；主网为 7 天
 （604800）。倒计时一律以 `nftSale.endAt` / `nextChangeAt` 为准，「剩余 d h m」在 1 小时期间
 应显示为「剩余 m s」；不要写死「7 天」文案，时长展示用 `template.nftSaleSeconds`。
+
+**`closed_no_holders`（S142 / 决策 0120，终态）**：NFT 发售结束时一个 NFT 都没卖出（发布器在已确认的
+截止块上读到 `ProjectNFT.totalMinted() = 0`，且索引器已追上）。合约要求名单根非零，所以名单永远无法
+发布、提前购和公开内盘都不会开始；`snapshot.closure` 非 null（见 §3.2），报价 / 交易准备一律
+`409 LAUNCH2_STAGE_MISMATCH`（`detailsSafe.stage = "closed_no_holders"`）。旧 App 不认识该值时应按
+未知阶段降级（灰态 + 「已结束」），不要当成 `snapshot_pending` 一直显示「名单生成中」。列表
+`?stage=closed_no_holders` 可筛选。
 
 Poll the detail and count down to `nextChangeAt`; never advance the stage locally. `priority`
 and `public` can jump straight to `graduated`. `holdReason`:
@@ -154,7 +162,8 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
         "txHash": "0x…",
         "cutoffBlock": "1234",
         "memberCount": 160
-      }
+      },
+      "closure": null
     },
     "graduation": null,
     "buyback": {
@@ -220,7 +229,12 @@ snapshot_pending`): `publication = null` → 等待截止块确认; `pending | b
 名单发布中; `confirmed` with `snapshot.status = pending` → 名单已上链，同步中;
 `failed | mismatch` → 名单发布异常，平台处理中. The priority hour starts only from
 `snapshot.publishedAt` (unchanged); a `confirmed` publication alone does not open
-buying — wait for `stage = priority` and `snapshot.verification = verified`. `graduation` once graduated:
+buying — wait for `stage = priority` and `snapshot.verification = verified`.
+
+`snapshot.closure` (Decision 0120, required key, added): `null`, or
+`{"reason": "no_holders", "cutoffBlock": "1234", "closedAt": "…"}` when the sale ended with no
+NFT holder (stage `closed_no_holders`, terminal). With a closure, `snapshot.status` stays
+`pending` and `publication` stays `null`; show 已结束 · 无人参与 NFT 发售, no spinner. `graduation` once graduated:
 `{graduatedAt, officialPoolId, hookAddress, lpFee: 2500, tickSpacing: 60,
 officialPoolTaxBps: 200, transactionHash}` (v4 pools have an id, not an address).
 
@@ -271,12 +285,12 @@ doubles from 15 s up to 10 min. `nextEligibleAt` after `confirmed` = the last le
 exists in `priority` and `public`; a sell quote only in `public`. Every other stage is a 409,
 never a 200 with `limitedBy: "closed"`:
 
-| stage                                      | quote answer                                                                 |
-| ------------------------------------------ | ---------------------------------------------------------------------------- |
-| `upcoming`, `nft_sale`, `snapshot_pending` | `409 DATA_STALE` / `LAUNCH2_STAGE_MISMATCH`, `detailsSafe.stage` = the stage |
-| `priority` (sell)                          | `409 DATA_STALE` / `LAUNCH2_SELL_NOT_OPEN`, `detailsSafe.stage: "priority"`  |
-| `graduated`                                | `409 DATA_STALE` / `LAUNCH2_SOLD_OUT`                                        |
-| `paused`                                   | `409 DATA_STALE` / `LAUNCH2_INSTANCE_PAUSED` (`holdReason`)                  |
+| stage                                                                  | quote answer                                                                 |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `upcoming`, `nft_sale`, `snapshot_pending`, `closed_no_holders` (0120) | `409 DATA_STALE` / `LAUNCH2_STAGE_MISMATCH`, `detailsSafe.stage` = the stage |
+| `priority` (sell)                                                      | `409 DATA_STALE` / `LAUNCH2_SELL_NOT_OPEN`, `detailsSafe.stage: "priority"`  |
+| `graduated`                                                            | `409 DATA_STALE` / `LAUNCH2_SOLD_OUT`                                        |
+| `paused`                                                               | `409 DATA_STALE` / `LAUNCH2_INSTANCE_PAUSED` (`holdReason`)                  |
 
 The App does not call quote outside `priority` / `public` (hide the trade panel, show the
 stage countdown); if it does, treat the 409 as "not open yet" and keep polling the detail.

@@ -1328,6 +1328,7 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/accounts/{accountId}/reset-password",
       "POST /admin/v1/accounts/{accountId}/unlock",
       "POST /admin/v1/communities/{communityId}/review",
+      "POST /admin/v1/launch/projects/{projectId}/snapshot/retry",
       "POST /admin/v1/launch/projects/{projectId}/testnet-acceptance",
       "POST /admin/v1/launch/projects/{projectId}/versions/{version}/approve",
       "POST /admin/v1/meme/tokens/{memeTokenId}/listing",

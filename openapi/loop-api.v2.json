@@ -94076,7 +94076,7 @@
         "operationId": "getV2HooksLaunchProjectConfig",
         "summary": "Read the caller's fixed-template Hooks project configuration",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
+        "description": "Decision 0108. Owner-scoped latest off-chain draft (null when none). A project the caller does not own is NOT_FOUND. Reading never publishes or activates a contract. Decision 0120: also returns approval (null without a draft; status approved only when the operator approved this draft version with the same configHash, otherwise awaiting_approval — saving a new version goes back to awaiting_approval), latestDeployment (the newest deployment task of the project, any version and status, same shape as GET hooks-deployments/{jobId}; null when none) and minSaleLeadSeconds (HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS: the earliest accepted nftSaleStartAt is now + this). 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_DISABLED) while HOOKS_LAUNCH_ENABLED is off or no database is configured.",
         "parameters": [
           {
             "schema": {
@@ -94114,7 +94114,13 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["draft", "contractVersion"],
+                  "required": [
+                    "draft",
+                    "approval",
+                    "latestDeployment",
+                    "minSaleLeadSeconds",
+                    "contractVersion"
+                  ],
                   "properties": {
                     "draft": {
                       "anyOf": [
@@ -94297,6 +94303,373 @@
                         },
                         { "type": "null" }
                       ]
+                    },
+                    "approval": {
+                      "description": "Decision 0120: null without a draft. approved only when the operator approved this draft version with the same configHash; a newer save is awaiting_approval again.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["configVersion", "status", "approvedAt"],
+                          "properties": {
+                            "configVersion": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 2147483647
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["awaiting_approval", "approved"]
+                            },
+                            "approvedAt": {
+                              "anyOf": [
+                                { "type": "string", "format": "date-time" },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "latestDeployment": {
+                      "description": "Decision 0120: the newest deployment task of the project (any config version, any status), as GET hooks-deployments/{jobId}; null when none.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "jobId",
+                            "projectId",
+                            "configVersion",
+                            "chainId",
+                            "factoryAddress",
+                            "status",
+                            "memeAddress",
+                            "hookAddress",
+                            "txHash",
+                            "confirmations",
+                            "activationTxHash",
+                            "addresses",
+                            "failure",
+                            "attemptCount",
+                            "events",
+                            "createdAt",
+                            "updatedAt"
+                          ],
+                          "properties": {
+                            "jobId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "configVersion": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "chainId": { "type": "integer", "enum": [97] },
+                            "factoryAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "awaiting_executor",
+                                "claimed",
+                                "broadcast",
+                                "confirmed",
+                                "verified",
+                                "activated",
+                                "failed",
+                                "reorged",
+                                "cancelled"
+                              ],
+                              "description": "Decision 0112. awaiting_executor: verified and recorded, not claimed. claimed: an executor holds the task and re-checks config, approval, deadline and nonces. broadcast: the signed deployLaunch transaction is persisted (txHash) and sent; waiting for confirmations. confirmed: enough confirmations; module verification pending. verified: every module read back and matched; activation pending. activated: LaunchPublicationGate published (NFT sale / curve may accept funds from their own start times). failed: see failure (retryable → the executor retries automatically). reorged: the receipt left the canonical chain; the same transaction is re-sent. cancelled: withdrawn before any claim (does not revoke a signature already shared)."
+                            },
+                            "memeAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "description": "Predicted (EIP-712-bound) MEME address; same as addresses.predicted.meme."
+                            },
+                            "hookAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$",
+                              "description": "Predicted (EIP-712-bound) Hook address; same as addresses.predicted.hook."
+                            },
+                            "txHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "The deployLaunch transaction hash, persisted before it is sent."
+                            },
+                            "confirmations": {
+                              "anyOf": [
+                                { "type": "integer", "minimum": 0 },
+                                { "type": "null" }
+                              ],
+                              "description": "Confirmations of txHash last observed by the executor."
+                            },
+                            "activationTxHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "addresses": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["predicted", "deployed"],
+                              "properties": {
+                                "predicted": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["meme", "hook"],
+                                  "properties": {
+                                    "meme": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{40}$"
+                                    },
+                                    "hook": {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{40}$"
+                                    }
+                                  }
+                                },
+                                "deployed": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "launchId",
+                                        "meme",
+                                        "hook",
+                                        "nft",
+                                        "curve",
+                                        "gate",
+                                        "escrow",
+                                        "snapshots",
+                                        "graduationAdapter",
+                                        "buybackAdapter",
+                                        "priceRecorder",
+                                        "buybackExecutor"
+                                      ],
+                                      "properties": {
+                                        "launchId": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{64}$"
+                                        },
+                                        "meme": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "hook": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "nft": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "curve": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "gate": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "escrow": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "snapshots": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "graduationAdapter": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "buybackAdapter": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "priceRecorder": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "buybackExecutor": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        }
+                                      }
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Read back from the Factory after verification; null before verified."
+                                }
+                              }
+                            },
+                            "failure": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["code", "retryable"],
+                                  "properties": {
+                                    "code": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z0-9_]{1,64}$"
+                                    },
+                                    "retryable": { "type": "boolean" }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "attemptCount": { "type": "integer", "minimum": 0 },
+                            "events": {
+                              "type": "array",
+                              "maxItems": 100,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "sequence",
+                                  "fromStatus",
+                                  "toStatus",
+                                  "kind",
+                                  "txHash",
+                                  "blockNumber",
+                                  "blockHash",
+                                  "confirmations",
+                                  "errorCode",
+                                  "createdAt"
+                                ],
+                                "properties": {
+                                  "sequence": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                  },
+                                  "fromStatus": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "awaiting_executor",
+                                          "claimed",
+                                          "broadcast",
+                                          "confirmed",
+                                          "verified",
+                                          "activated",
+                                          "failed",
+                                          "reorged",
+                                          "cancelled"
+                                        ]
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "toStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "awaiting_executor",
+                                      "claimed",
+                                      "broadcast",
+                                      "confirmed",
+                                      "verified",
+                                      "activated",
+                                      "failed",
+                                      "reorged",
+                                      "cancelled"
+                                    ]
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "pattern": "^[a-z_]{1,40}$",
+                                    "description": "Executor step: created, claimed, retry_claimed, broadcast, rebroadcast, receipt_found, included, confirmed, reorg_detected, reclaimed_after_reorg, verified, activation_broadcast, activation_included, activation_reorged, activation_reverted, activation_dropped, activation_rejected, activated, failed, lease_taken_over, cancelled. New kinds may be added; render unknown kinds generically."
+                                  },
+                                  "txHash": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "blockNumber": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "Decimal string."
+                                  },
+                                  "blockHash": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{64}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "confirmations": {
+                                    "anyOf": [
+                                      { "type": "integer", "minimum": 0 },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "errorCode": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^[A-Z0-9_]{1,64}$"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "createdAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              "description": "Most recent 100 executor events, oldest first."
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "minSaleLeadSeconds": {
+                      "type": "integer",
+                      "minimum": 4200,
+                      "maximum": 2592000,
+                      "description": "Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS. A save accepts nftSaleStartAt ≥ server now + this value (400 otherwise)."
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -100806,7 +101179,7 @@
         "operationId": "listV2LaunchProjects",
         "summary": "List the caller's Launch applications",
         "tags": ["launch"],
-        "description": "Owner-scoped, newest first, with an opaque cursor bound to the owner, route, and status filter. `limit` and `cursor` are mutually exclusive.",
+        "description": "Owner-scoped, newest first, with an opaque cursor bound to the owner, route, and status filter. `limit` and `cursor` are mutually exclusive. Decision 0120: `kind` (all | ido | launch2) lists only one product; each item carries `kind`.",
         "parameters": [
           {
             "schema": {
@@ -100824,6 +101197,13 @@
             "in": "query",
             "name": "status",
             "required": false
+          },
+          {
+            "schema": { "type": "string", "enum": ["all", "ido", "launch2"] },
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "description": "Decision 0120: all (default) | ido | launch2. Bound into the cursor when not all."
           },
           {
             "schema": {
@@ -100895,6 +101275,7 @@
                           "narrative",
                           "officialLinks",
                           "materialVersion",
+                          "kind",
                           "reviewStatus",
                           "reviewReasonCode",
                           "reviewReasonText",
@@ -100986,6 +101367,11 @@
                           "materialVersion": {
                             "type": "integer",
                             "minimum": 1
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["ido", "launch2"],
+                            "description": "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft)."
                           },
                           "reviewStatus": {
                             "type": "string",
@@ -101560,7 +101946,7 @@
         "operationId": "createV2LaunchProject",
         "summary": "Create a Launch application draft",
         "tags": ["launch"],
-        "description": "Creates a `draft` project owned by the caller: name, ticker, narrative, and official links. Attachments and KYB have no Provider and stay unavailable. Review is never self-served; only the Dev-only operator script `pnpm launch:review` advances it and writes the audit row.",
+        "description": "Creates a `draft` project owned by the caller: name, ticker, narrative, and official links. Decision 0120: optional `kind` (ido default | launch2) marks a MEME v2 project from the start. Attachments and KYB have no Provider and stay unavailable. Review is never self-served; only the Dev-only operator script `pnpm launch:review` advances it and writes the audit row.",
         "requestBody": {
           "required": true,
           "content": {
@@ -101631,6 +102017,11 @@
                         ]
                       }
                     }
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["ido", "launch2"],
+                    "description": "Decision 0120: ido (default when absent) or launch2 (MEME v2). A first Hooks config save also makes a project launch2; it never goes back. Part of the idempotency digest."
                   }
                 }
               }
@@ -101696,6 +102087,7 @@
                         "narrative",
                         "officialLinks",
                         "materialVersion",
+                        "kind",
                         "reviewStatus",
                         "reviewReasonCode",
                         "reviewReasonText",
@@ -101785,6 +102177,11 @@
                           }
                         },
                         "materialVersion": { "type": "integer", "minimum": 1 },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["ido", "launch2"],
+                          "description": "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft)."
+                        },
                         "reviewStatus": {
                           "type": "string",
                           "enum": [
@@ -102555,6 +102952,7 @@
                         "narrative",
                         "officialLinks",
                         "materialVersion",
+                        "kind",
                         "reviewStatus",
                         "reviewReasonCode",
                         "reviewReasonText",
@@ -102644,6 +103042,11 @@
                           }
                         },
                         "materialVersion": { "type": "integer", "minimum": 1 },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["ido", "launch2"],
+                          "description": "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft)."
+                        },
                         "reviewStatus": {
                           "type": "string",
                           "enum": [
@@ -103359,6 +103762,7 @@
                         "narrative",
                         "officialLinks",
                         "materialVersion",
+                        "kind",
                         "reviewStatus",
                         "reviewReasonCode",
                         "reviewReasonText",
@@ -103448,6 +103852,11 @@
                           }
                         },
                         "materialVersion": { "type": "integer", "minimum": 1 },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["ido", "launch2"],
+                          "description": "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft)."
+                        },
                         "reviewStatus": {
                           "type": "string",
                           "enum": [
@@ -104227,6 +104636,7 @@
                         "narrative",
                         "officialLinks",
                         "materialVersion",
+                        "kind",
                         "reviewStatus",
                         "reviewReasonCode",
                         "reviewReasonText",
@@ -104316,6 +104726,11 @@
                           }
                         },
                         "materialVersion": { "type": "integer", "minimum": 1 },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["ido", "launch2"],
+                          "description": "Decision 0120: ido = original Launch application; launch2 = MEME v2 (created with kind launch2, or has a Hooks config draft)."
+                        },
                         "reviewStatus": {
                           "type": "string",
                           "enum": [
@@ -152338,6 +152753,7 @@
                 "upcoming",
                 "nft_sale",
                 "snapshot_pending",
+                "closed_no_holders",
                 "priority",
                 "public",
                 "graduated",
@@ -152460,6 +152876,7 @@
                               "upcoming",
                               "nft_sale",
                               "snapshot_pending",
+                              "closed_no_holders",
                               "priority",
                               "public",
                               "graduated",
@@ -153237,6 +153654,7 @@
                             "upcoming",
                             "nft_sale",
                             "snapshot_pending",
+                            "closed_no_holders",
                             "priority",
                             "public",
                             "graduated",
@@ -153512,7 +153930,8 @@
                             "earlyRoundEndsAt",
                             "memberCount",
                             "signers",
-                            "publication"
+                            "publication",
+                            "closure"
                           ],
                           "properties": {
                             "status": {
@@ -153634,6 +154053,35 @@
                                     "memberCount": {
                                       "type": "integer",
                                       "minimum": 1
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "closure": {
+                              "description": "Decision 0120: non-null when the NFT sale ended with no holder (ProjectNFT.totalMinted() = 0 at the confirmed cutoff block). Nothing can be published; stage is closed_no_holders (terminal).",
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "reason",
+                                    "cutoffBlock",
+                                    "closedAt"
+                                  ],
+                                  "properties": {
+                                    "reason": {
+                                      "type": "string",
+                                      "enum": ["no_holders"]
+                                    },
+                                    "cutoffBlock": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "closedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
                                     }
                                   }
                                 },
@@ -154548,7 +154996,7 @@
         "operationId": "getV2Launch2Quote",
         "summary": "Quote a MEME v2 curve buy or sell with the executable MAX",
         "tags": ["launch2"],
-        "description": "Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining 0.5% quota, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale and snapshot_pending are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED; 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining 0.5% quota, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale, snapshot_pending and closed_no_holders are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED; 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["buy", "sell"] },
@@ -154662,6 +155110,7 @@
                             "upcoming",
                             "nft_sale",
                             "snapshot_pending",
+                            "closed_no_holders",
                             "priority",
                             "public",
                             "graduated",
@@ -158223,6 +158672,7 @@
                               "upcoming",
                               "nft_sale",
                               "snapshot_pending",
+                              "closed_no_holders",
                               "priority",
                               "public",
                               "graduated",

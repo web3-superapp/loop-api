@@ -3,6 +3,7 @@ import { getCreate2Address } from "viem";
 import type { HooksLaunchProjectConfigRepository } from "./hooks-launch-project-config.js";
 import {
   createHooksLaunchDeploymentTypedData,
+  withHooksLaunchEip712Domain,
   hooksLaunchId,
   mineMemeAddressSaltAsync,
   mineHooksLaunchSaltAsync,
@@ -93,7 +94,12 @@ export interface HooksLaunchDeploymentService {
       readonly memeSalt: string;
       readonly nonce: string;
     };
-    readonly typedData: ReturnType<typeof createHooksLaunchDeploymentTypedData>;
+    /** Decision 0120: `types` also carry the standard `EIP712Domain`. */
+    readonly typedData: ReturnType<
+      typeof withHooksLaunchEip712Domain<
+        ReturnType<typeof createHooksLaunchDeploymentTypedData>
+      >
+    >;
     readonly hookDeployer: string;
     readonly hookInitCodeHash: string;
     readonly hookSalt: string;
@@ -249,7 +255,7 @@ export function createHooksLaunchDeploymentService(input: {
           deadline,
           nonce: nonce.toString(),
         }),
-        typedData,
+        typedData: withHooksLaunchEip712Domain(typedData),
         hookDeployer: hook.deployer.toLowerCase(),
         hookInitCodeHash: hook.initCodeHash.toLowerCase(),
         hookSalt,

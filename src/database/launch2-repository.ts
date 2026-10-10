@@ -166,6 +166,10 @@ const instanceColumns = `
     from public.launch2_buyback_attempts k
     where k.instance_id = launch2_instances.instance_id
     order by k.attempt desc limit 1) as buyback_keeper,
+  (select jsonb_build_object('cutoffBlock', c.cutoff_block::text,
+      'closedAt', c.created_at)
+    from public.launch2_snapshot_closures c
+    where c.instance_id = launch2_instances.instance_id) as snapshot_closure,
   ${nftSaleEndColumn}
 `;
 
@@ -220,6 +224,26 @@ function publicationOf(
     txHash: typeof record["txHash"] === "string" ? record["txHash"] : null,
     cutoffBlock: String(record["cutoffBlock"]),
     memberCount: Number(record["memberCount"]),
+  });
+}
+
+/** Decision 0120: the no-holder closure, if the publisher recorded one. */
+function closureOf(value: unknown): Launch2InstanceRecord["noHoldersClosure"] {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const cutoffBlock = record["cutoffBlock"];
+  const closedAt = record["closedAt"];
+  if (
+    typeof cutoffBlock !== "string" ||
+    !/^(0|[1-9][0-9]{0,19})$/u.test(cutoffBlock) ||
+    typeof closedAt !== "string" ||
+    !Number.isFinite(Date.parse(closedAt))
+  ) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  return Object.freeze({
+    cutoffBlock,
+    closedAt: new Date(closedAt).toISOString(),
   });
 }
 
@@ -309,6 +333,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
               : null,
           }),
     snapshotPublication: publicationOf(row["snapshot_publication"]),
+    noHoldersClosure: closureOf(row["snapshot_closure"]),
     graduation:
       graduatedAt === null
         ? null
@@ -751,6 +776,7 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     holdReason: instance.holdReason,
     graduated: instance.graduation !== null,
     snapshotPublishedAt: instance.snapshot?.publishedAt ?? null,
+    closedNoHolders: instance.noHoldersClosure !== null,
     activatedAt: instance.activatedAt,
     stage: instance.stage,
     nextChangeAt: instance.nextChangeAt,
