@@ -116,6 +116,23 @@ function stageOf(value: unknown): Launch2Stage {
   return value;
 }
 
+/**
+ * Decision 0119: the NFT sale end is the deployed `ProjectNFT.saleEnd()`
+ * the S132 executor read back and verified (= start + the Factory's
+ * `nftSaleDuration()`), kept in the task's `verification.nftSaleEnd`.
+ * Tasks verified before S141 lack the key; that code only passed an NFT
+ * whose period was exactly 604,800 s, so start + 604,800 is their fact.
+ */
+const nftSaleEndColumn = `
+  coalesce(
+    (select (t.verification ->> 'nftSaleEnd')::numeric
+       from public.hooks_launch_deployment_tasks t
+       where t.job_id = launch2_instances.job_id
+         and t.verification ->> 'nftSaleEnd' ~ '^[1-9][0-9]{0,19}$'),
+    extract(epoch from launch2_instances.nft_sale_start)::numeric(20, 0)
+      + 604800
+  )::text as nft_sale_end_seconds`;
+
 const instanceColumns = `
   instance_id::text, job_id::text, project_id::text, config_version,
   owner_user_id::text, chain_id, factory_address, launch_id, config_hash,
@@ -134,8 +151,22 @@ const instanceColumns = `
   graduated_at, graduation_block::text, graduation_transaction_hash,
   official_pool_id, buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
-  coalesce(activated_at, registered_at) as sort_at
+  coalesce(activated_at, registered_at) as sort_at,
+  ${nftSaleEndColumn}
 `;
+
+function saleEndOf(row: Row): string {
+  const seconds = row["nft_sale_end_seconds"];
+  const start = Date.parse(iso(row, "nft_sale_start"));
+  if (typeof seconds !== "string" || !/^[1-9][0-9]{0,11}$/.test(seconds)) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  const end = Number(seconds) * 1000;
+  if (!Number.isFinite(start) || end <= start) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  return new Date(end).toISOString();
+}
 
 function mapInstance(row: Row): Launch2InstanceRecord {
   const snapshotRoot = nullableText(row, "snapshot_root");
@@ -171,6 +202,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     }),
     buybackRecipient: text(row, "buyback_recipient"),
     nftSaleStart: iso(row, "nft_sale_start"),
+    nftSaleEnd: saleEndOf(row),
     deployBlockNumber: text(row, "deploy_block_number"),
     activationBlockNumber: nullableText(row, "activation_block_number"),
     deployedEventSeen: row["deployed_event_seen"] === true,
@@ -645,6 +677,7 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     addresses: instance.addresses,
     deployBlockNumber: instance.deployBlockNumber,
     nftSaleStart: instance.nftSaleStart,
+    nftSaleEnd: instance.nftSaleEnd,
     holdReason: instance.holdReason,
     graduated: instance.graduation !== null,
     snapshotPublishedAt: instance.snapshot?.publishedAt ?? null,

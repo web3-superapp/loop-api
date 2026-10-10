@@ -14,6 +14,7 @@ import {
   createHooksLaunchDeploymentService,
   type HooksLaunchFactoryReader,
 } from "../src/features/launch/hooks-launch-deployment.js";
+import { hooksLaunchFixedEconomics } from "../src/features/launch/hooks-launch-config.js";
 import type { AccountWalletRepository } from "../src/database/account-wallet-repository.js";
 import type {
   HooksLaunchProjectConfigRepository,
@@ -139,8 +140,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
         links: [],
         nftSaleStartAt: "1800000000",
         buybackRecipient: "0x3333333333333333333333333333333333333333",
-        fixedEconomics:
-          {} as HooksLaunchProjectConfigRecord["config"]["fixedEconomics"],
+        fixedEconomics: hooksLaunchFixedEconomics,
         configHash: `0x${"cd".repeat(32)}`,
       },
       updatedAt: "2026-10-09T00:00:00.000Z",
@@ -170,6 +170,8 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
       factoryAddress: "0x1111111111111111111111111111111111111111",
       chainId: 97,
       nonce: () => Promise.resolve(7n),
+      nftSaleDuration: () =>
+        Promise.resolve({ seconds: 604_800, legacy: false }),
       tokenDeployment: () =>
         Promise.resolve({
           deployer: "0x5555555555555555555555555555555555555555",
@@ -223,6 +225,8 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
         factoryAddress: "0x1111111111111111111111111111111111111111",
         chainId: 97,
         nonce: () => Promise.resolve(0n),
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
         tokenDeployment: () => Promise.reject(new Error("unused")),
         hookDeployment: () =>
           Promise.resolve({

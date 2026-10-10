@@ -77,7 +77,11 @@ const launchDraft = parseHooksLaunchDraft(
     nftSaleStartAt: "1900000000",
     buybackRecipient: "0x3333333333333333333333333333333333333333",
   },
-  { nowUnixSeconds: "1800000000", minimumLeadSeconds: 86_400 },
+  {
+    nowUnixSeconds: "1800000000",
+    minimumLeadSeconds: 86_400,
+    nftSaleDurationSeconds: 604_800,
+  },
 );
 
 describe("Decision 0113 dev user reset on PostgreSQL", () => {

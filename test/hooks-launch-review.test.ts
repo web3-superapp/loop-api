@@ -139,6 +139,55 @@ describe("Hooks launch approval separation of duties", () => {
 });
 
 describe("Hooks launch review service", () => {
+  it("reads the Factory sale period for config saves only and fails closed without it (Decision 0119)", async () => {
+    const save = {
+      operationId: "0b6f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4",
+      action: "launch.config.save",
+      target: project,
+      reason: "Operator correction",
+      payload: {
+        expectedVersion: 1,
+        config: {
+          name: "Project",
+          ticker: "MEME",
+          logoAssetUrl: "https://example.com/logo.png",
+          description: "Test",
+          links: [],
+          nftSaleStartAt: "1900000000",
+          buybackRecipient: "0x3333333333333333333333333333333333333333",
+        },
+      },
+    };
+    const execute = vi.fn(() => Promise.resolve({}));
+    const repository = { execute } as unknown as HooksLaunchReviewRepository;
+    const hourly = createHooksLaunchReviewService({
+      repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 3_600, legacy: false }),
+      },
+    });
+    await hourly.execute(actor, save);
+    expect(execute).toHaveBeenLastCalledWith(
+      actor,
+      expect.objectContaining({ action: "launch.config.save" }),
+      { nftSaleDurationSeconds: 3_600 },
+    );
+    for (const factory of [
+      null,
+      { nftSaleDuration: () => Promise.reject(new Error("rpc down")) },
+    ]) {
+      execute.mockClear();
+      await expect(
+        createHooksLaunchReviewService({ repository, factory }).execute(
+          actor,
+          save,
+        ),
+      ).rejects.toMatchObject({ code: "OPS_UNAVAILABLE" });
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
+
   it("fails closed without a repository", async () => {
     const service = createHooksLaunchReviewService({ repository: null });
     await expect(service.execute(actor, approval)).rejects.toMatchObject({

@@ -13,6 +13,7 @@ export const hooksLaunchAbiSelection = {
     "nonces",
     "deploymentExecutor",
     "activationBufferSeconds",
+    "nftSaleDuration",
     "targetChainId",
     "poolManager",
     "usd1",

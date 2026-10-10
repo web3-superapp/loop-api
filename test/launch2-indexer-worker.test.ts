@@ -10,7 +10,11 @@ import type {
   Launch2SnapshotMemberRecord,
 } from "../src/features/launch2/launch2-ports.js";
 import { createLaunch2Lane } from "../src/launch2-indexer-worker.js";
-import { instanceFixture, launch2Factory } from "./helpers/launch2-fakes.js";
+import {
+  instanceFixture,
+  launch2Factory,
+  launch2SaleEndAfter,
+} from "./helpers/launch2-fakes.js";
 
 /**
  * Decision 0114: the `launch2_event` lane against a scripted chain and a
@@ -23,14 +27,17 @@ const hash = (n: bigint) => `0x${n.toString(16).padStart(64, "0")}`;
 
 function laneInstance(
   overrides: Partial<Launch2LaneInstance> = {},
+  saleSeconds = 604_800n,
 ): Launch2LaneInstance {
   const record = instanceFixture();
+  const nftSaleStart = overrides.nftSaleStart ?? record.nftSaleStart;
   return {
     instanceId: record.instanceId,
     launchId: record.launchId,
     addresses: record.addresses,
     deployBlockNumber: "100",
-    nftSaleStart: record.nftSaleStart,
+    nftSaleStart,
+    nftSaleEnd: launch2SaleEndAfter(nftSaleStart, saleSeconds),
     holdReason: null,
     graduated: false,
     snapshotPublishedAt: null,
@@ -329,5 +336,83 @@ describe("launch2_event lane (Decision 0114)", () => {
         },
       ],
     ]);
+  });
+
+  it("uses the instance's 1-hour saleEnd for the stage and the snapshot cutoff (Decision 0119)", async () => {
+    const now = 1_800_000_000n;
+    const ended = laneInstance(
+      {
+        nftSaleStart: new Date(Number(now - 3_600n) * 1000).toISOString(),
+        stage: "nft_sale",
+      },
+      3_600n,
+    );
+    const selling = laneInstance(
+      {
+        nftSaleStart: new Date(Number(now - 10n) * 1000).toISOString(),
+        stage: "upcoming",
+      },
+      3_600n,
+    );
+    const stages = harness({ instances: [ended, selling], head: 50n });
+    await stages.lane.runOnce();
+    expect(stages.stageUpdates).toEqual([
+      [
+        {
+          instanceId: ended.instanceId,
+          stage: "snapshot_pending",
+          nextChangeAt: null,
+        },
+        {
+          instanceId: selling.instanceId,
+          stage: "nft_sale",
+          nextChangeAt: new Date(
+            Number(now - 10n + 3_600n) * 1000,
+          ).toISOString(),
+        },
+      ],
+    ]);
+
+    // getBlock(n).timestamp = 1000 + n; sale end = 2000 + 3600.
+    const saleStartSeconds = 2_000n;
+    const hourly = laneInstance(
+      {
+        nftSaleStart: new Date(Number(saleStartSeconds) * 1000).toISOString(),
+      },
+      3_600n,
+    );
+    const cutoff = saleStartSeconds + 3_600n - 1_000n - 1n;
+    const holders = [{ address: "0x" + "1".repeat(40), balance: 1 }];
+    const tree = buildLaunchMerkleTree(holders.map((holder) => holder.address));
+    const snapshot = {
+      instanceId: hourly.instanceId,
+      launchId: hourly.launchId,
+      nft: hourly.addresses.nft,
+      snapshots: hourly.addresses.snapshots,
+      root: tree.root,
+      dataHash: hash(5n),
+      cutoffBlock: cutoff.toString(10),
+      cutoffBlockHash: hash(cutoff),
+      transactionHash: hash(6n),
+    };
+    const run = harness({ instances: [hourly], head: 50n });
+    run.setSnapshot([snapshot], holders);
+    await run.lane.runOnce();
+    expect(run.verifications[0]?.verification).toBe("verified");
+    // The 7-day cutoff for the same start is not this instance's cutoff.
+    const weeklyCutoff = saleStartSeconds + 604_800n - 1_000n - 1n;
+    const wrong = harness({ instances: [hourly], head: 50n });
+    wrong.setSnapshot(
+      [
+        {
+          ...snapshot,
+          cutoffBlock: weeklyCutoff.toString(10),
+          cutoffBlockHash: hash(weeklyCutoff),
+        },
+      ],
+      holders,
+    );
+    await wrong.lane.runOnce();
+    expect(wrong.verifications[0]?.verification).toBe("mismatch");
   });
 });

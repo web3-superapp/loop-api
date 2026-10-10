@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+
 /**
  * Decision 0108: platform-side Hooks launch review (ported from the requirer
  * branch `codex/integrated-dual-pool-20261008` ops control plane, original
@@ -207,7 +209,17 @@ export interface HooksLaunchReviewRepository {
   execute(
     actor: string,
     command: HooksLaunchReviewCommand,
+    context?: HooksLaunchReviewExecuteContext,
   ): Promise<HooksLaunchReviewCommandResult>;
+}
+
+/**
+ * Decision 0119: `launch.config.save` hashes the config for the target
+ * Factory's `nftSaleDuration()`; the service reads it before the
+ * transaction and the repository refuses a save without it.
+ */
+export interface HooksLaunchReviewExecuteContext {
+  readonly nftSaleDurationSeconds?: number;
 }
 
 export interface HooksLaunchReviewService {
@@ -230,6 +242,8 @@ export interface HooksLaunchReviewService {
  */
 export function createHooksLaunchReviewService(input: {
   readonly repository: HooksLaunchReviewRepository | null;
+  /** The target Factory (Decision 0119); null fails config saves closed. */
+  readonly factory?: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
 }): HooksLaunchReviewService {
   function requireRepository(): HooksLaunchReviewRepository {
     if (input.repository === null) {
@@ -271,7 +285,21 @@ export function createHooksLaunchReviewService(input: {
       if (!parsed.success) {
         throw new HooksLaunchReviewError("OPS_INVALID_COMMAND");
       }
-      return repository.execute(requireActor(actor), parsed.data);
+      const operator = requireActor(actor);
+      if (parsed.data.action !== "launch.config.save") {
+        return repository.execute(operator, parsed.data);
+      }
+      const factory = input.factory ?? null;
+      let nftSaleDurationSeconds: number;
+      try {
+        if (factory === null) throw new Error("no Factory");
+        nftSaleDurationSeconds = (await factory.nftSaleDuration()).seconds;
+      } catch {
+        throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+      }
+      return repository.execute(operator, parsed.data, {
+        nftSaleDurationSeconds,
+      });
     },
   } satisfies HooksLaunchReviewService);
 }

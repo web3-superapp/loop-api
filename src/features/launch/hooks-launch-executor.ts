@@ -899,12 +899,25 @@ export function createHooksLaunchExecutor(options: {
           checks: result.passedChecks,
           codeHashes,
           factoryCodeHash: facts.factoryCodeHash,
+          // Decision 0119: the verified sale window (decimal Unix seconds)
+          // the launch2 read model derives `nft_sale` / its end from.
+          nftSaleDurationSeconds: facts.factory.nftSaleDuration.toString(10),
+          nftSaleEnd: (facts.nft?.saleEnd ?? 0n).toString(10),
+          ...(facts.factory.nftSaleDurationLegacy
+            ? { legacyFactory: true }
+            : {}),
         },
       },
       {
         kind: "verified",
         txHash: task.txHash,
-        details: { checks: result.passedChecks.length },
+        details: {
+          checks: result.passedChecks.length,
+          nftSaleDurationSeconds: Number(facts.factory.nftSaleDuration),
+          ...(facts.factory.nftSaleDurationLegacy
+            ? { legacyFactory: true }
+            : {}),
+        },
       },
     );
     return next === null ? "lost" : "advanced";

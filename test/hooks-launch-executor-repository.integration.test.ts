@@ -45,7 +45,11 @@ const draft = parseHooksLaunchDraft(
     nftSaleStartAt: "1900000000",
     buybackRecipient: "0x3333333333333333333333333333333333333333",
   },
-  { nowUnixSeconds: "1800000000", minimumLeadSeconds: 86_400 },
+  {
+    nowUnixSeconds: "1800000000",
+    minimumLeadSeconds: 86_400,
+    nftSaleDurationSeconds: 604_800,
+  },
 );
 
 const hex = (bytes: number) =>

@@ -94232,7 +94232,8 @@
                                     },
                                     "nftSaleDurationSeconds": {
                                       "type": "integer",
-                                      "minimum": 0
+                                      "minimum": 0,
+                                      "description": "Decision 0119: the target Factory's nftSaleDuration() when the config was saved (3600 on the BSC Testnet 1-hour Factory; 604800 on mainnet / pre-S141 Factories, whose configHash is unchanged). Part of fixedEconomicsHash."
                                     },
                                     "earlyRoundDurationSeconds": {
                                       "type": "integer",
@@ -94749,7 +94750,7 @@
         "operationId": "saveV2HooksLaunchProjectConfig",
         "summary": "Save an owner-scoped fixed-template Hooks project draft",
         "tags": ["launch"],
-        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
+        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Never publishes, deploys, or activates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -94964,7 +94965,8 @@
                             },
                             "nftSaleDurationSeconds": {
                               "type": "integer",
-                              "minimum": 0
+                              "minimum": 0,
+                              "description": "Decision 0119: the target Factory's nftSaleDuration() when the config was saved (3600 on the BSC Testnet 1-hour Factory; 604800 on mainnet / pre-S141 Factories, whose configHash is unchanged). Part of fixedEconomicsHash."
                             },
                             "earlyRoundDurationSeconds": {
                               "type": "integer",
@@ -95622,7 +95624,7 @@
         "operationId": "getV2HooksLaunchSigningRequest",
         "summary": "Prepare the owner's BSC Testnet Hooks deployment signature",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5).",
+        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again).",
         "parameters": [
           {
             "schema": {
@@ -96227,7 +96229,7 @@
         "operationId": "submitV2HooksLaunchDeployment",
         "summary": "Verify and record a project-signed Testnet deployment task",
         "tags": ["launch"],
-        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature.",
+        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded.",
         "requestBody": {
           "required": true,
           "content": {
@@ -149066,7 +149068,8 @@
                               },
                               "endAt": {
                                 "type": "string",
-                                "format": "date-time"
+                                "format": "date-time",
+                                "description": "Decision 0119: the instance's ProjectNFT.saleEnd() verified at deployment (start + the Factory's nftSaleDuration(): 1 hour on the BSC Testnet Factory, 7 days on mainnet). Not a template constant."
                               }
                             }
                           },
@@ -149840,7 +149843,11 @@
                               "type": "string",
                               "format": "date-time"
                             },
-                            "endAt": { "type": "string", "format": "date-time" }
+                            "endAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Decision 0119: the instance's ProjectNFT.saleEnd() verified at deployment (start + the Factory's nftSaleDuration(): 1 hour on the BSC Testnet Factory, 7 days on mainnet). Not a template constant."
+                            }
                           }
                         },
                         "curve": {
@@ -149965,7 +149972,10 @@
                               "type": "string",
                               "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
                             },
-                            "nftSaleSeconds": { "type": "integer" },
+                            "nftSaleSeconds": {
+                              "type": "integer",
+                              "description": "Decision 0119: this instance's NFT sale period (nftSale.endAt − startAt): 3600 on the BSC Testnet Factory, 604800 on mainnet."
+                            },
                             "earlyRoundSeconds": { "type": "integer" },
                             "buybackOrderUsd1": {
                               "type": "string",

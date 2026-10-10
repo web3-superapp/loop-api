@@ -1964,6 +1964,7 @@ export async function buildApp(
   const hooksLaunchProjectConfigService = hooksLaunchEnabled
     ? createHooksLaunchProjectConfigService({
         repository: database.hooksLaunchProjectConfigs ?? null,
+        factory: hooksFactoryReader,
         minimumLeadSeconds: 86_400,
       })
     : undefined;
@@ -2494,6 +2495,7 @@ export async function buildApp(
         repository: database.adminLaunchReview ?? null,
         review: createHooksLaunchReviewService({
           repository: database.hooksLaunchReview ?? null,
+          factory: hooksFactoryReader,
         }),
         audit: adminRepository,
         sessionSecret: adminConfig.sessionSecret,

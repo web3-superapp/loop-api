@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   deriveLaunch2Stage,
   launch2EarlyRoundEnd,
-  launch2NftSaleEnd,
 } from "../src/features/launch2/launch2-stage.js";
 
 /** Decision 0114 §2: the instance stage is derived from facts + the clock. */
@@ -12,6 +11,7 @@ const saleStart = 1_800_000_000n;
 const saleEnd = saleStart + 604_800n;
 const base = {
   nftSaleStart: saleStart,
+  nftSaleEnd: saleEnd,
   snapshotPublishedAt: null,
   graduated: false,
   holdReason: null,
@@ -27,8 +27,7 @@ describe("launch2 stage derivation (Decision 0114)", () => {
     );
   });
 
-  it("sells NFTs for exactly 604,800 s from the signed start", () => {
-    expect(launch2NftSaleEnd(saleStart)).toBe(saleEnd);
+  it("sells NFTs until the instance's saleEnd (7-day Factory: start + 604,800 s)", () => {
     expect(deriveLaunch2Stage({ ...base, nowSeconds: saleStart })).toEqual({
       stage: "nft_sale",
       nextChangeAt: saleEnd,
@@ -105,5 +104,48 @@ describe("launch2 stage derivation (Decision 0114)", () => {
         }),
       ).toEqual({ stage: "paused", nextChangeAt: null });
     }
+  });
+
+  describe("Decision 0119: the sale end is the instance's, not a constant", () => {
+    const hourlyEnd = saleStart + 3_600n;
+    const hourly = { ...base, nftSaleEnd: hourlyEnd } as const;
+
+    it("ends a 1-hour testnet sale after 3,600 s and waits for the snapshot", () => {
+      expect(deriveLaunch2Stage({ ...hourly, nowSeconds: saleStart })).toEqual({
+        stage: "nft_sale",
+        nextChangeAt: hourlyEnd,
+      });
+      expect(
+        deriveLaunch2Stage({ ...hourly, nowSeconds: hourlyEnd - 1n }),
+      ).toEqual({ stage: "nft_sale", nextChangeAt: hourlyEnd });
+      expect(deriveLaunch2Stage({ ...hourly, nowSeconds: hourlyEnd })).toEqual({
+        stage: "snapshot_pending",
+        nextChangeAt: null,
+      });
+      // Long before the 7-day mark the 1-hour instance is already pending.
+      expect(
+        deriveLaunch2Stage({ ...hourly, nowSeconds: saleStart + 86_400n }),
+      ).toEqual({ stage: "snapshot_pending", nextChangeAt: null });
+    });
+
+    it("keeps a 7-day instance on sale at the same instants", () => {
+      for (const nowSeconds of [hourlyEnd, saleStart + 86_400n]) {
+        expect(deriveLaunch2Stage({ ...base, nowSeconds })).toEqual({
+          stage: "nft_sale",
+          nextChangeAt: saleEnd,
+        });
+      }
+    });
+
+    it("runs the priority hour from the publication after a 1-hour sale", () => {
+      const published = hourlyEnd + 30n;
+      expect(
+        deriveLaunch2Stage({
+          ...hourly,
+          snapshotPublishedAt: published,
+          nowSeconds: published + 1n,
+        }),
+      ).toEqual({ stage: "priority", nextChangeAt: published + 3_600n });
+    });
   });
 });

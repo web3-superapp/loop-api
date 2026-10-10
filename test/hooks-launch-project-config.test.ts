@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createHooksLaunchProjectConfigService,
+  HooksLaunchProjectConfigUnavailableError,
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
   type HooksLaunchProjectConfigRecord,
@@ -52,6 +53,10 @@ describe("Hooks project config service", () => {
     const harness = makeHarness();
     const service = createHooksLaunchProjectConfigService({
       repository: harness.repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
+      },
       minimumLeadSeconds: 86_400,
       now: () => 1_790_000_000,
     });
@@ -75,6 +80,10 @@ describe("Hooks project config service", () => {
     const harness = makeHarness();
     const service = createHooksLaunchProjectConfigService({
       repository: harness.repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
+      },
       minimumLeadSeconds: 86_400,
       now: () => 1_790_000_000,
     });
@@ -100,6 +109,10 @@ describe("Hooks project config service", () => {
   it("does not disclose another owner's project", async () => {
     const service = createHooksLaunchProjectConfigService({
       repository: makeHarness().repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
+      },
       minimumLeadSeconds: 86_400,
       now: () => 1_790_000_000,
     });
@@ -117,6 +130,10 @@ describe("Hooks project config service", () => {
   it("rejects economic overrides even when submitted as extra config keys", async () => {
     const service = createHooksLaunchProjectConfigService({
       repository: makeHarness().repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
+      },
       minimumLeadSeconds: 86_400,
       now: () => 1_790_000_000,
     });
@@ -129,5 +146,45 @@ describe("Hooks project config service", () => {
         body: { ...body, officialPoolBuyTaxBps: 0 },
       }),
     ).rejects.toThrow("Invalid Hooks launch draft");
+  });
+
+  describe("Decision 0119: the draft hashes the target Factory's sale period", () => {
+    const save = (
+      factory: Parameters<
+        typeof createHooksLaunchProjectConfigService
+      >[0]["factory"],
+    ) =>
+      createHooksLaunchProjectConfigService({
+        repository: makeHarness().repository,
+        factory,
+        minimumLeadSeconds: 86_400,
+        now: () => 1_790_000_000,
+      }).saveDraft({
+        ownerUserId: "user-1",
+        projectId,
+        expectedVersion: 0,
+        body,
+      });
+
+    it("binds 3,600 s for a 1-hour Factory and 604,800 s for a 7-day one", async () => {
+      const hourly = await save({
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 3_600, legacy: false }),
+      });
+      const weekly = await save({
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: true }),
+      });
+      expect(hourly.config.fixedEconomics.nftSaleDurationSeconds).toBe(3_600);
+      expect(weekly.config.fixedEconomics.nftSaleDurationSeconds).toBe(604_800);
+      expect(hourly.config.configHash).not.toBe(weekly.config.configHash);
+    });
+
+    it("fails closed without a Factory or on a failed read (no constant fallback)", async () => {
+      await expect(save(null)).rejects.toMatchObject({ source: "factory" });
+      await expect(
+        save({ nftSaleDuration: () => Promise.reject(new Error("rpc down")) }),
+      ).rejects.toBeInstanceOf(HooksLaunchProjectConfigUnavailableError);
+    });
   });
 });

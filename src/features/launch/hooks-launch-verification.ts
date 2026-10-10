@@ -21,7 +21,14 @@ export const hooksLaunchTemplateConstants = Object.freeze({
   lpFee: 2_500,
   tickSpacing: 60,
   nftPrice: 100n * wad,
-  nftSaleDurationSeconds: 604_800n,
+  /**
+   * Decision 0119: the sale period is the Factory's immutable
+   * `nftSaleDuration()` (loop-contracts Decision 0004), bounded here; a
+   * pre-S141 Factory has no such function and its NFTs run 604,800 s.
+   */
+  minNftSaleDurationSeconds: 3_600n,
+  maxNftSaleDurationSeconds: 604_800n,
+  legacyNftSaleDurationSeconds: 604_800n,
   hookPermissionMask: 0x3fffn,
   hookPermissionBits: 0x20ccn,
 });
@@ -91,6 +98,10 @@ export interface HooksLaunchOnChainFacts {
     readonly pauseAuthority: string;
     readonly resumeAuthority: string;
     readonly activationBufferSeconds: bigint;
+    /** `nftSaleDuration()`; 604,800 s when `nftSaleDurationLegacy`. */
+    readonly nftSaleDuration: bigint;
+    /** The Factory predates S141 (`nftSaleDuration()` reverted). */
+    readonly nftSaleDurationLegacy: boolean;
     readonly deployers: readonly {
       readonly name: "token" | "v4" | "sale" | "buyback";
       readonly address: string;
@@ -510,20 +521,28 @@ export function verifyHooksLaunchDeployment(input: {
       same(gate.deployExecutor, expected.factoryAddress),
   );
   check("gate_unpublished", () => gate !== null && !gate.published);
+  // Decision 0119: the period the Factory deploys with, never a constant.
+  const saleDuration = factory.nftSaleDuration;
+  const saleDurationValid =
+    saleDuration >= c.minNftSaleDurationSeconds &&
+    saleDuration <= c.maxNftSaleDurationSeconds &&
+    (!factory.nftSaleDurationLegacy ||
+      saleDuration === c.legacyNftSaleDurationSeconds);
   const nft = facts.nft;
   check(
     "nft_params",
     () =>
       nft !== null &&
       modules !== null &&
+      saleDurationValid &&
       nft.price === c.nftPrice &&
-      nft.saleDuration === c.nftSaleDurationSeconds &&
+      nft.saleDuration === saleDuration &&
       same(nft.launchId, expected.launchId) &&
       same(nft.usd1, factory.usd1) &&
       same(nft.publicationGate, modules.gate) &&
       same(nft.escrow, modules.escrow) &&
       nft.saleStart === expected.nftSaleStart &&
-      nft.saleEnd === expected.nftSaleStart + c.nftSaleDurationSeconds &&
+      nft.saleEnd === expected.nftSaleStart + saleDuration &&
       nft.totalMinted === 0n,
   );
   const escrow = facts.escrow;
@@ -580,7 +599,8 @@ export function verifyHooksLaunchDeployment(input: {
       modules !== null &&
       same(snapshots.launchId, expected.launchId) &&
       same(snapshots.nft, modules.nft) &&
-      snapshots.nftSaleEnd === expected.nftSaleStart + c.nftSaleDurationSeconds,
+      saleDurationValid &&
+      snapshots.nftSaleEnd === expected.nftSaleStart + saleDuration,
   );
 
   const failedChecks = hooksLaunchVerificationChecks.filter(

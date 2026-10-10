@@ -6,6 +6,19 @@ export const hooksLaunchTemplateHash = keccak256(
   new TextEncoder().encode(hooksLaunchTemplateVersion),
 );
 
+/**
+ * Decision 0119: the NFT sale period is a property of the target Factory
+ * (`LoopLaunchFactory.nftSaleDuration()`, immutable, 3,600..604,800 s;
+ * loop-contracts Decision 0004). Mainnet stays 7 days, so this object — the
+ * 604,800 s template — is byte-for-byte the `fixedEconomics` it always was
+ * and its configHash is unchanged; a 1-hour testnet Factory yields a
+ * different `fixedEconomicsHash`, i.e. a different template.
+ */
+export const hooksLaunchMinNftSaleDurationSeconds = 3_600;
+export const hooksLaunchMaxNftSaleDurationSeconds = 604_800;
+/** The 7-day period of the mainnet template and of pre-S141 Factories. */
+export const hooksLaunchLegacyNftSaleDurationSeconds = 604_800;
+
 export const hooksLaunchFixedEconomics = Object.freeze({
   chainId: "56",
   memeTotalSupplyRaw: "1000000000000000000000000000",
@@ -25,6 +38,40 @@ export const hooksLaunchFixedEconomics = Object.freeze({
   buybackOrderUsd1Raw: "100000000000000000000",
   buybackMinIntervalSeconds: 10,
 });
+
+export type HooksLaunchFixedEconomics = typeof hooksLaunchFixedEconomics;
+
+export function isHooksLaunchNftSaleDuration(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= hooksLaunchMinNftSaleDurationSeconds &&
+    value <= hooksLaunchMaxNftSaleDurationSeconds
+  );
+}
+
+/**
+ * The template economics for a Factory whose `nftSaleDuration()` is
+ * `nftSaleDurationSeconds`. Overwriting the existing key keeps its
+ * position, so the canonical JSON (and the hash) differs from the 7-day
+ * template only in that one number.
+ */
+export function hooksLaunchFixedEconomicsFor(
+  nftSaleDurationSeconds: number,
+): HooksLaunchFixedEconomics {
+  if (!isHooksLaunchNftSaleDuration(nftSaleDurationSeconds)) {
+    throw new InvalidHooksLaunchDraftError();
+  }
+  if (
+    nftSaleDurationSeconds === hooksLaunchFixedEconomics.nftSaleDurationSeconds
+  ) {
+    return hooksLaunchFixedEconomics;
+  }
+  return Object.freeze({
+    ...hooksLaunchFixedEconomics,
+    nftSaleDurationSeconds,
+  }) as HooksLaunchFixedEconomics;
+}
 
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const unsignedDecimalPattern = /^(0|[1-9][0-9]{0,19})$/;
@@ -80,7 +127,7 @@ export interface HooksLaunchDraft {
   readonly links: readonly string[];
   readonly nftSaleStartAt: string;
   readonly buybackRecipient: string;
-  readonly fixedEconomics: typeof hooksLaunchFixedEconomics;
+  readonly fixedEconomics: HooksLaunchFixedEconomics;
   readonly configHash: string;
 }
 
@@ -100,8 +147,13 @@ export function parseHooksLaunchDraft(
   policy: {
     readonly nowUnixSeconds: string;
     readonly minimumLeadSeconds: number;
+    /** The target Factory's `nftSaleDuration()` (Decision 0119). */
+    readonly nftSaleDurationSeconds: number;
   },
 ): HooksLaunchDraft {
+  const fixedEconomics = hooksLaunchFixedEconomicsFor(
+    policy.nftSaleDurationSeconds,
+  );
   if (!Array.isArray(input.links)) throw new InvalidHooksLaunchDraftError();
   const linkValues: readonly unknown[] = input.links;
   if (
@@ -181,7 +233,7 @@ export function parseHooksLaunchDraft(
     links: [...new Set(links)].sort(),
     nftSaleStartAt: startAt.toString(),
     buybackRecipient: input.buybackRecipient.toLowerCase(),
-    fixedEconomics: hooksLaunchFixedEconomics,
+    fixedEconomics,
   } as const;
 
   const encoded = encodeAbiParameters(
@@ -197,9 +249,7 @@ export function parseHooksLaunchDraft(
       keccak256(new TextEncoder().encode(JSON.stringify(normalized.links))),
       startAt,
       normalized.buybackRecipient as `0x${string}`,
-      keccak256(
-        new TextEncoder().encode(JSON.stringify(hooksLaunchFixedEconomics)),
-      ),
+      keccak256(new TextEncoder().encode(JSON.stringify(fixedEconomics))),
     ],
   );
 

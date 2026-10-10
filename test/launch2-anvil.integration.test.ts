@@ -350,6 +350,7 @@ describe.skipIf(skipReason !== null)(
         {
           nowUnixSeconds: nowSeconds.toString(10),
           minimumLeadSeconds: 86_400,
+          nftSaleDurationSeconds: 604_800,
         },
       );
       const configs = createPostgresHooksLaunchProjectConfigRepository(pool);

@@ -259,6 +259,59 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     ).toBe(400);
   });
 
+  it("ends the NFT sale at the instance's own saleEnd: 1 hour on the testnet Factory (Decision 0119)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const selling = instanceFixture(
+      { nftSaleStart: iso(launch2NowSeconds - 1_800n), stage: "upcoming" },
+      3_600n,
+    );
+    const ended = instanceFixture(
+      { nftSaleStart: iso(launch2NowSeconds - 3_600n), stage: "nft_sale" },
+      3_600n,
+    );
+    const weekly = instanceFixture({
+      nftSaleStart: iso(launch2NowSeconds - 3_600n),
+      stage: "upcoming",
+    });
+    for (const instance of [selling, ended, weekly]) {
+      repository.instances.set(instance.instanceId, instance);
+    }
+    const { app } = await createApp({ repository });
+    const rows = (await get(app, "/v2/launch2/instances"))
+      .json<{ instances: Record<string, unknown>[] }>()
+      .instances.reduce<Record<string, Record<string, unknown>>>(
+        (byId, row) => ({ ...byId, [row["instanceId"] as string]: row }),
+        {},
+      );
+    expect(rows[selling.instanceId]).toMatchObject({
+      stage: "nft_sale",
+      nextChangeAt: iso(launch2NowSeconds + 1_800n),
+      nftSale: {
+        startAt: iso(launch2NowSeconds - 1_800n),
+        endAt: iso(launch2NowSeconds + 1_800n),
+      },
+    });
+    // Same start, same clock: the 1-hour instance waits for the snapshot,
+    // the 7-day one is still selling.
+    expect(rows[ended.instanceId]).toMatchObject({
+      stage: "snapshot_pending",
+      nextChangeAt: null,
+      nftSale: { endAt: iso(launch2NowSeconds) },
+    });
+    expect(rows[weekly.instanceId]).toMatchObject({
+      stage: "nft_sale",
+      nftSale: { endAt: iso(launch2NowSeconds - 3_600n + 604_800n) },
+    });
+    const detail = (
+      await get(app, `/v2/launch2/instances/${selling.instanceId}`)
+    ).json<{ instance: { template: Record<string, unknown> } }>();
+    expect(detail.instance.template["nftSaleSeconds"]).toBe(3_600);
+    const weeklyDetail = (
+      await get(app, `/v2/launch2/instances/${weekly.instanceId}`)
+    ).json<{ instance: { template: Record<string, unknown> } }>();
+    expect(weeklyDetail.instance.template["nftSaleSeconds"]).toBe(604_800);
+  });
+
   it("details an instance with template, contracts, snapshot, viewer, and 404s the rest", async () => {
     const repository = createInMemoryLaunch2Repository();
     const instance = priorityInstance();
