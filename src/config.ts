@@ -393,6 +393,58 @@ function refineHooksLaunchFactoryEnvironment(
 }
 
 /**
+ * Decision 0124: `LAUNCH2_POOL_ROUTER_ADDRESS` and
+ * `LAUNCH2_POOL_ROUTER_CODE_HASH` are one unit, BSC Testnet only
+ * (`LAUNCH_CHAIN_ID=97`). A partial or malformed pair refuses boot; neither
+ * keeps the official-pool routes unavailable.
+ */
+function refineLaunch2PoolRouterEnvironment(
+  value: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH2_POOL_ROUTER_ADDRESS?: string | undefined;
+    readonly LAUNCH2_POOL_ROUTER_CODE_HASH?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const address = value.LAUNCH2_POOL_ROUTER_ADDRESS;
+  const codeHash = value.LAUNCH2_POOL_ROUTER_CODE_HASH;
+  if (address === undefined && codeHash === undefined) return;
+  if (address === undefined || codeHash === undefined) {
+    context.addIssue({
+      code: "custom",
+      message:
+        "LAUNCH2_POOL_ROUTER_ADDRESS and LAUNCH2_POOL_ROUTER_CODE_HASH must be configured together",
+      path: [
+        address === undefined
+          ? "LAUNCH2_POOL_ROUTER_ADDRESS"
+          : "LAUNCH2_POOL_ROUTER_CODE_HASH",
+      ],
+    });
+  }
+  if (value.LAUNCH_CHAIN_ID !== "97") {
+    context.addIssue({
+      code: "custom",
+      message: "is permitted only when LAUNCH_CHAIN_ID=97",
+      path: ["LAUNCH2_POOL_ROUTER_ADDRESS"],
+    });
+  }
+  if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 20-byte contract address",
+      path: ["LAUNCH2_POOL_ROUTER_ADDRESS"],
+    });
+  }
+  if (codeHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(codeHash)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 32-byte runtime code hash",
+      path: ["LAUNCH2_POOL_ROUTER_CODE_HASH"],
+    });
+  }
+}
+
+/**
  * MEME curve launchpad keys shared by the API and worker processes
  * (Decision 0101). Every key is optional: while any of the four contract
  * keys is blank the `meme` capability is unavailable
@@ -738,12 +790,18 @@ const environmentSchema = z
     // slippage. The routes exist only with `launch2` in V2_MODULES_ENABLED.
     LAUNCH2_QUOTE_TTL_SECONDS: positiveIntegerString(10, 600),
     LAUNCH2_DEFAULT_SLIPPAGE_BPS: positiveIntegerString(0, 5_000),
+    // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
+    // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
+    // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
+    LAUNCH2_POOL_ROUTER_ADDRESS: optionalCredential(64),
+    LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
   })
   .superRefine((value, context) => {
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
     refineHooksLaunchFactoryEnvironment(value, context);
+    refineLaunch2PoolRouterEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1496,6 +1554,14 @@ export interface AppConfig {
   readonly launch2: {
     readonly quoteTtlSeconds: number;
     readonly defaultSlippageBps: number;
+    /**
+     * Decision 0124: LAUNCH2_POOL_ROUTER_ADDRESS / _CODE_HASH (lower-case);
+     * null keeps the official-pool quote / prepare unavailable.
+     */
+    readonly poolRouter: {
+      readonly address: string;
+      readonly codeHash: string;
+    } | null;
   };
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
@@ -3217,6 +3283,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
+    LAUNCH2_POOL_ROUTER_ADDRESS:
+      environment["LAUNCH2_POOL_ROUTER_ADDRESS"]?.trim() === ""
+        ? undefined
+        : environment["LAUNCH2_POOL_ROUTER_ADDRESS"],
+    LAUNCH2_POOL_ROUTER_CODE_HASH:
+      environment["LAUNCH2_POOL_ROUTER_CODE_HASH"]?.trim() === ""
+        ? undefined
+        : environment["LAUNCH2_POOL_ROUTER_CODE_HASH"],
   });
 
   if (!parsed.success) {
@@ -3361,6 +3435,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launch2: Object.freeze({
       quoteTtlSeconds: parsed.data.LAUNCH2_QUOTE_TTL_SECONDS,
       defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
+      poolRouter:
+        parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
+        parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined
+          ? null
+          : Object.freeze({
+              address: parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS.toLowerCase(),
+              codeHash: parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH.toLowerCase(),
+            }),
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     miningSettlement: parseMiningSettlementApi(parsed.data),

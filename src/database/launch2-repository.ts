@@ -14,6 +14,10 @@ import {
   launch2ReserveAt,
 } from "../features/launch2/launch2-curve-math.js";
 import {
+  launch2PoolPriceE18,
+  launch2PoolSwapFacts,
+} from "../features/launch2/launch2-pool.js";
+import {
   Launch2IdempotencyConflictError,
   Launch2RepositoryUnavailableError,
   type CreateLaunch2IntentRecord,
@@ -158,6 +162,15 @@ const instanceColumns = `
   opened_without_holders_block::text, opened_without_holders_tx,
   buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
+  pool_trade_count::text, pool_buy_count::text, pool_sell_count::text,
+  pool_buy_volume_usd1::text, pool_sell_volume_usd1::text,
+  pool_tax_usd1::text, pool_tax_meme::text, pool_last_price_e18::text,
+  pool_last_trade_at,
+  (select coalesce(sum(s.usd1_amount), 0)::text
+    from public.launch2_pool_swaps s
+    where s.instance_id = launch2_instances.instance_id and not s.removed
+      and s.swapped_at > clock_timestamp() - interval '24 hours')
+    as pool_volume_24h_usd1,
   coalesce(activated_at, registered_at) as sort_at,
   (select jsonb_build_object(
       'status', p.status, 'txHash', p.tx_hash,
@@ -378,6 +391,18 @@ function mapInstance(row: Row): Launch2InstanceRecord {
       meme: text(row, "buyback_meme"),
       lastAt: nullableIso(row, "last_buyback_at"),
     }),
+    pool: Object.freeze({
+      tradeCount: text(row, "pool_trade_count"),
+      buyCount: text(row, "pool_buy_count"),
+      sellCount: text(row, "pool_sell_count"),
+      buyVolumeUsd1: text(row, "pool_buy_volume_usd1"),
+      sellVolumeUsd1: text(row, "pool_sell_volume_usd1"),
+      volume24hUsd1: text(row, "pool_volume_24h_usd1"),
+      taxUsd1: text(row, "pool_tax_usd1"),
+      taxMeme: text(row, "pool_tax_meme"),
+      lastPriceE18: nullableText(row, "pool_last_price_e18"),
+      lastTradeAt: nullableIso(row, "pool_last_trade_at"),
+    }),
     buybackKeeper: keeperOf(row["buyback_keeper"]),
     registeredAt: iso(row, "registered_at"),
     projectedAt: iso(row, "projected_at"),
@@ -504,6 +529,50 @@ async function insertFact(
         at,
       ],
     });
+  } else if (event.eventName === "Swap") {
+    // Decision 0124: the lane adds memeIsCurrency0 from the hook's
+    // currency0(); a log that is not one-in-one-out stays raw only.
+    const facts = launch2PoolSwapFacts({
+      amount0: BigInt(a["amount0"] ?? "0"),
+      amount1: BigInt(a["amount1"] ?? "0"),
+      memeIsCurrency0: a["memeIsCurrency0"] === "true",
+    });
+    if (
+      facts !== null &&
+      (a["memeIsCurrency0"] === "true" || a["memeIsCurrency0"] === "false")
+    ) {
+      const sqrtPrice = BigInt(a["sqrtPriceX96"] ?? "0");
+      await client.query({
+        text: `
+          insert into public.launch2_pool_swaps (
+            chain_id, transaction_hash, log_index, block_number, block_hash,
+            instance_id, pool_id, caller_address, side, usd1_amount,
+            meme_amount, tax_amount, tax_token, sqrt_price_x96, price_e18,
+            swapped_at
+          )
+          values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10::numeric,
+            $11::numeric, $12::numeric, $13, $14::numeric, $15::numeric,
+            $16::timestamptz)
+          ${upsertTail}
+        `,
+        values: [
+          ...base,
+          a["id"],
+          a["sender"],
+          facts.side,
+          facts.usd1Amount.toString(10),
+          facts.memeAmount.toString(10),
+          facts.taxAmount.toString(10),
+          facts.taxToken,
+          sqrtPrice.toString(10),
+          launch2PoolPriceE18(
+            sqrtPrice,
+            a["memeIsCurrency0"] === "true",
+          ).toString(10),
+          at,
+        ],
+      });
+    }
   } else if (event.eventName === "BuybackCompleted") {
     await client.query({
       text: `
@@ -590,6 +659,19 @@ async function reproject(
             'last', max(executed_at))
           from public.launch2_buybacks
           where instance_id = $1 and not removed and outcome = 'executed') as buybacks,
+        (select jsonb_build_object('count', count(*)::text,
+            'buys', count(*) filter (where side = 'buy')::text,
+            'sells', count(*) filter (where side = 'sell')::text,
+            'buyUsd1', coalesce(sum(usd1_amount) filter (where side = 'buy'), 0)::text,
+            'sellUsd1', coalesce(sum(usd1_amount) filter (where side = 'sell'), 0)::text,
+            'taxUsd1', coalesce(sum(tax_amount) filter (where tax_token = 'usd1'), 0)::text,
+            'taxMeme', coalesce(sum(tax_amount) filter (where tax_token = 'meme'), 0)::text,
+            'lastPrice', (select p.price_e18::text from public.launch2_pool_swaps p
+              where p.instance_id = $1 and not p.removed
+              order by p.block_number desc, p.log_index desc limit 1),
+            'lastAt', max(swapped_at))
+          from public.launch2_pool_swaps
+          where instance_id = $1 and not removed) as pool_swaps,
         i.meme_address, i.nft_address, i.curve_address, i.hook_address,
         i.project_owner, i.activation_block_number::text as activation_block,
         i.snapshot_root, i.factory_generation
@@ -636,6 +718,20 @@ async function reproject(
     meme: string;
     last: string | null;
   };
+  const poolSwaps = row["pool_swaps"] as {
+    count: string;
+    buys: string;
+    sells: string;
+    buyUsd1: string;
+    sellUsd1: string;
+    taxUsd1: string;
+    taxMeme: string;
+    lastPrice: string | null;
+    lastAt: string | null;
+  };
+  // Decision 0124: swaps count only while the graduation is indexed (a
+  // rewound graduation leaves its pool facts out of the projection).
+  const poolCounted = graduated !== null && poolSwaps.count !== "0";
   let hold: Launch2HoldReason | null = null;
   if (
     deployed !== null &&
@@ -702,6 +798,15 @@ async function reproject(
         opened_without_holders_at = $29::timestamptz,
         opened_without_holders_block = $30::numeric,
         opened_without_holders_tx = $31,
+        pool_trade_count = $32::numeric,
+        pool_buy_count = $33::numeric,
+        pool_sell_count = $34::numeric,
+        pool_buy_volume_usd1 = $35::numeric,
+        pool_sell_volume_usd1 = $36::numeric,
+        pool_tax_usd1 = $37::numeric,
+        pool_tax_meme = $38::numeric,
+        pool_last_price_e18 = $39::numeric,
+        pool_last_trade_at = $40::timestamptz,
         projected_at = clock_timestamp()
       where instance_id = $1
     `,
@@ -743,6 +848,15 @@ async function reproject(
         : secondsToTimestamp(opened.payload["openedAt"] ?? "0"),
       opened === null ? null : (opened.payload["openedBlock"] ?? opened.block),
       opened?.tx ?? null,
+      poolCounted ? poolSwaps.count : "0",
+      poolCounted ? poolSwaps.buys : "0",
+      poolCounted ? poolSwaps.sells : "0",
+      poolCounted ? poolSwaps.buyUsd1 : "0",
+      poolCounted ? poolSwaps.sellUsd1 : "0",
+      poolCounted ? poolSwaps.taxUsd1 : "0",
+      poolCounted ? poolSwaps.taxMeme : "0",
+      poolCounted ? poolSwaps.lastPrice : null,
+      poolCounted ? poolSwaps.lastAt : null,
     ],
   });
   await reprojectPositions(client, instanceId);
@@ -832,6 +946,7 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     nftSaleEnd: instance.nftSaleEnd,
     holdReason: instance.holdReason,
     graduated: instance.graduation !== null,
+    officialPoolId: instance.graduation?.poolId ?? null,
     snapshotPublishedAt: instance.snapshot?.publishedAt ?? null,
     closedNoHolders: instance.noHoldersClosure !== null,
     openedWithoutHoldersAt: instance.openedWithoutHolders?.openedAt ?? null,
@@ -1007,6 +1122,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               "launch2_nft_mints",
               "launch2_trades",
               "launch2_buybacks",
+              "launch2_pool_swaps",
             ]) {
               const rewound = await client.query<{ instance_id: string }>({
                 text: `

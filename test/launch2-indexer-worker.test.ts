@@ -41,6 +41,7 @@ function laneInstance(
     nftSaleEnd: launch2SaleEndAfter(nftSaleStart, saleSeconds),
     holdReason: null,
     graduated: false,
+    officialPoolId: null,
     snapshotPublishedAt: null,
     closedNoHolders: false,
     openedWithoutHoldersAt: null,
@@ -58,13 +59,22 @@ function harness(options: {
   readonly checkpoint?: Launch2Checkpoint | null;
   readonly registered?: string[];
   readonly hashes?: Map<bigint, string>;
+  readonly hookPool?: {
+    readonly poolManager: string;
+    readonly currency0: string;
+  };
 }) {
   const commits: Parameters<Launch2Repository["commitSegment"]>[0][] = [];
   const verifications: Parameters<
     Launch2Repository["recordSnapshotVerification"]
   >[0][] = [];
   const stageUpdates: Parameters<Launch2Repository["updateStages"]>[0][] = [];
-  const logQueries: { fromBlock: bigint; toBlock: bigint }[] = [];
+  const logQueries: {
+    fromBlock: bigint;
+    toBlock: bigint;
+    roles?: number;
+    poolSwaps?: ReadonlyMap<string, readonly string[]>;
+  }[] = [];
   let checkpoint = options.checkpoint ?? null;
   let snapshotsToVerify: Awaited<
     ReturnType<Launch2Repository["listSnapshotsToVerify"]>
@@ -112,12 +122,24 @@ function harness(options: {
     getBlock: (n) =>
       Promise.resolve({ hash: blockHash(n), timestamp: 1_000n + n }),
     getLogs: (input) => {
-      logQueries.push({ fromBlock: input.fromBlock, toBlock: input.toBlock });
+      logQueries.push({
+        fromBlock: input.fromBlock,
+        toBlock: input.toBlock,
+        roles: input.roles.size,
+        ...(input.poolSwaps === undefined
+          ? {}
+          : { poolSwaps: input.poolSwaps }),
+      });
       return Promise.resolve({
         logs: (options.logs ?? []).filter(
           (log) =>
             log.blockNumber >= input.fromBlock &&
-            log.blockNumber <= input.toBlock,
+            log.blockNumber <= input.toBlock &&
+            (log.eventName === "Swap"
+              ? (input.poolSwaps
+                  ?.get(log.contractAddress)
+                  ?.includes(log.args["id"] ?? "") ?? false)
+              : input.roles.size > 0),
         ),
         ignored: 0,
       });
@@ -126,6 +148,10 @@ function harness(options: {
     recoverSnapshotSigners: () => Promise.resolve([]),
     readViewerState: () => Promise.reject(new Error("unused")),
     readBuybackState: () => Promise.reject(new Error("unused")),
+    readHookPool: () =>
+      options.hookPool === undefined
+        ? Promise.reject(new Error("unused"))
+        : Promise.resolve(options.hookPool),
   };
   const lane = createLaunch2Lane({
     repository,
@@ -417,5 +443,97 @@ describe("launch2_event lane (Decision 0114)", () => {
     );
     await wrong.lane.runOnce();
     expect(wrong.verifications[0]?.verification).toBe("mismatch");
+  });
+});
+
+describe("launch2_event lane: official-pool swaps (Decision 0124)", () => {
+  const poolManager = "0x" + "9".repeat(40);
+  const poolId = hash(4242n);
+
+  function swapLog(
+    block: bigint,
+    index: number,
+    id = poolId,
+  ): Launch2DecodedLog {
+    return {
+      contractAddress: poolManager,
+      eventName: "Swap",
+      args: {
+        id,
+        sender: "0x" + "5".repeat(40),
+        amount0: "-1000",
+        amount1: "1500",
+        sqrtPriceX96: "79228162514264337593543950336",
+        liquidity: "1",
+        tick: "0",
+        fee: "2500",
+      },
+      transactionHash: hash(block * 10n + BigInt(index)),
+      logIndex: index,
+      blockNumber: block,
+      blockHash: hash(block),
+    };
+  }
+
+  it("asks for the Swap logs of a graduated instance's pool id only and tags which side is MEME", async () => {
+    const graduated = laneInstance({
+      deployBlockNumber: "100",
+      graduated: true,
+      officialPoolId: poolId,
+    });
+    const other = laneInstance({
+      deployBlockNumber: "100",
+      launchId: hash(5n),
+    });
+    const { lane, commits, logQueries } = harness({
+      instances: [graduated, other],
+      head: 200n,
+      logs: [swapLog(150n, 0), swapLog(151n, 0, hash(1n))],
+      hookPool: { poolManager, currency0: graduated.addresses.meme },
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("seeded");
+    expect(logQueries).toHaveLength(1);
+    expect(logQueries[0]?.poolSwaps).toEqual(
+      new Map([[poolManager, [poolId]]]),
+    );
+    const events = commits[0]?.events ?? [];
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      instanceId: graduated.instanceId,
+      eventName: "Swap",
+      args: { id: poolId, memeIsCurrency0: "true", amount0: "-1000" },
+    });
+  });
+
+  it("reads the pool of a graduation inside the same segment in a second, pool-only pass", async () => {
+    const instance = laneInstance({ deployBlockNumber: "100" });
+    const graduatedLog: Launch2DecodedLog = {
+      contractAddress: instance.addresses.curve,
+      eventName: "Graduated",
+      args: { officialPoolId: poolId, soldSupply: "1", usd1Reserve: "1" },
+      transactionHash: hash(9n),
+      logIndex: 3,
+      blockNumber: 140n,
+      blockHash: hash(140n),
+    };
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 200n,
+      logs: [graduatedLog, swapLog(150n, 0)],
+      hookPool: { poolManager, currency0: "0x" + "0".repeat(39) + "1" },
+    });
+    await lane.runOnce();
+    expect(logQueries).toHaveLength(2);
+    expect(logQueries[0]?.poolSwaps).toBeUndefined();
+    expect(logQueries[1]).toMatchObject({ roles: 0, fromBlock: 100n });
+    expect(logQueries[1]?.poolSwaps).toEqual(
+      new Map([[poolManager, [poolId]]]),
+    );
+    expect(commits[0]?.events.map((event) => event.eventName)).toEqual([
+      "Graduated",
+      "Swap",
+    ]);
+    expect(commits[0]?.events[1]?.args["memeIsCurrency0"]).toBe("false");
   });
 });

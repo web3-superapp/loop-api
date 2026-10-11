@@ -784,6 +784,40 @@ describe("launch chain slot (Decision 0038)", () => {
     ).toThrow(/HOOKS_LAUNCH_FACTORY_CODE_HASH/);
   });
 
+  it("parses the Decision 0124 official-pool router pair (BSC Testnet only, one unit)", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    };
+    expect(loadConfig(environment).launch2.poolRouter).toBeNull();
+    const configured = {
+      ...environment,
+      LAUNCH2_POOL_ROUTER_ADDRESS: "0xcb022501A427154501aDcE5b6dC8f16674aE8f5D",
+      LAUNCH2_POOL_ROUTER_CODE_HASH: `0x${"9A".repeat(32)}`,
+    };
+    expect(loadConfig(configured).launch2.poolRouter).toEqual({
+      address: "0xcb022501a427154501adce5b6dc8f16674ae8f5d",
+      codeHash: `0x${"9a".repeat(32)}`,
+    });
+    expect(() =>
+      loadConfig({ ...configured, LAUNCH2_POOL_ROUTER_CODE_HASH: "" }),
+    ).toThrow(/LAUNCH2_POOL_ROUTER_CODE_HASH/);
+    expect(() =>
+      loadConfig({ ...configured, LAUNCH2_POOL_ROUTER_ADDRESS: "0x12" }),
+    ).toThrow(/LAUNCH2_POOL_ROUTER_ADDRESS/);
+    expect(() =>
+      loadConfig({ ...configured, LAUNCH2_POOL_ROUTER_CODE_HASH: "0x12" }),
+    ).toThrow(/LAUNCH2_POOL_ROUTER_CODE_HASH/);
+    expect(() =>
+      loadConfig({
+        ...configured,
+        LAUNCH_CHAIN_ID: "56",
+        LAUNCH_BSC_RPC_URLS: "",
+      }),
+    ).toThrow(/LAUNCH2_POOL_ROUTER_ADDRESS/);
+  });
+
   it("keeps the shared slot without endpoints when the primary chain has none", () => {
     const config = loadConfig(validEnvironment());
     expect(config.launchChain).toEqual({
