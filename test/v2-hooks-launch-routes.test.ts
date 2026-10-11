@@ -123,6 +123,7 @@ const factoryReader: HooksLaunchFactoryReader = {
   factoryAddress: "0x1111111111111111111111111111111111111111",
   chainId: 97,
   nonce: () => Promise.resolve(9n),
+  ownerVersionLaunchId: () => Promise.resolve(`0x${"0".repeat(64)}`),
   nftSaleDuration: () => Promise.resolve({ seconds: 604_800, legacy: false }),
   tokenDeployment: () =>
     Promise.resolve({
@@ -722,6 +723,46 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(refused.json()).toMatchObject({
       code: "CAPABILITY_UNAVAILABLE",
       detailsSafe: { reasonCode: "HOOKS_FACTORY_TEMPLATE_MISMATCH" },
+    });
+  });
+
+  it("refuses a version the wallet already deployed and asks for a re-save (Decision 0127)", async () => {
+    const used: HooksLaunchFactoryReader = {
+      ...factoryReader,
+      ownerVersionLaunchId: () => Promise.resolve(`0x${"ab".repeat(32)}`),
+    };
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: used,
+    });
+    await saveDraft(app);
+    const refused = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json()).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "HOOKS_CONFIG_VERSION_USED" },
+    });
+
+    const unreadable = await createApp({
+      configs: configRepositoryFake(),
+      reader: {
+        ...factoryReader,
+        ownerVersionLaunchId: () =>
+          Promise.reject(new Error("Hooks launch factory read unavailable")),
+      },
+    });
+    await saveDraft(unreadable);
+    const failed = await unreadable.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.json()).toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE",
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
     });
   });
 

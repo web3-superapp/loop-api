@@ -797,11 +797,24 @@ describe.skipIf(skipReason !== null)(
       });
       const detail = (
         await service.getInstance({ principal: principal(viewer), instanceId })
-      )["instance"] as { buyback: Record<string, unknown> };
+      )["instance"] as {
+        buyback: Record<string, unknown>;
+        pool: Record<string, unknown> | null;
+      };
       expect(detail.buyback).toMatchObject({
         executedCount: "3",
         totalUsd1: "300",
         keeper: { lastResult: "confirmed", reasonCode: null },
+      });
+      // Decision 0127: the three buybacks are pool swaps (buy side) of the
+      // buyback adapter — counted in tradeCount, not in the market totals.
+      expect(detail.pool).toMatchObject({
+        tradeCount: "3",
+        buyCount: "3",
+        buyVolumeUsd1: "300",
+        userTradeCount: "0",
+        userBuyVolumeUsd1: "0",
+        userSellVolumeUsd1: "0",
       });
       expect(
         (detail.buyback["keeper"] as Record<string, unknown>)["nextEligibleAt"],

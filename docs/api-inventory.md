@@ -347,7 +347,7 @@ gains read-only `deploymentChainId` (`LAUNCH_CHAIN_ID`); the template's
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------- |
 | `GET /v2/launch/projects/{projectId}/hooks-config`                            | Bearer + headers; no payload                                 | `{draft \| null, approval, latestDeployment, minSaleLeadSeconds, contractVersion}` (0120); owner-scoped; 0122: `approval.status` `rejected` + `approval.rejection`, `buybackRecipientFixed`, `fixedBuybackRecipient`                                                     | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
 | `PUT /v2/launch/projects/{projectId}/hooks-config`                            | Headers, no `Idempotency-Key`; `{expectedVersion, config}`   | New immutable version with server-derived `fixedEconomics` and `configHash`; 0122: `buybackRecipient` must be `LAUNCH2_BUYBACK_RECIPIENT` (422 `HOOKS_BUYBACK_RECIPIENT_FIXED`, unset → 503 `HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE`; also on signing-request / submission) | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; CAS; sale lead `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS` (0117) |
-| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request`            | Bearer + headers; `walletId`                                 | EIP-712 typed data (`types` include `EIP712Domain`, 0120), MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses                                                                                                                                                | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                             |
+| `GET /v2/launch/projects/{projectId}/hooks-config/signing-request`            | Bearer + headers; `walletId`                                 | EIP-712 typed data (`types` include `EIP712Domain`, 0120), MEME salt (`…6666`), Hook salt (`0x20CC`), predicted addresses; 0127: `configVersion` is owner-unique across projects, 422 `HOOKS_CONFIG_VERSION_USED` when the Factory already recorded (wallet, version)    | `implemented` | `blocked-provider`; needs the Testnet Factory configuration                                             |
 | `POST /v2/launch/projects/{projectId}/hooks-deployments`                      | Write headers incl. UUIDv4 `Idempotency-Key`; signed request | `awaiting_executor` task; the executor (Decision 0112) advances it                                                                                                                                                                                                       | `implemented` | `blocked-provider`; needs the Factory and an operator approval (`403 POLICY_BLOCKED` otherwise)         |
 | `GET /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`               | Bearer + headers                                             | Owner-scoped task with executor progress, addresses, events (0112)                                                                                                                                                                                                       | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`; progress needs the executor lane                           |
 | `DELETE /v2/launch/projects/{projectId}/hooks-deployments/{jobId}`            | Write headers incl. UUIDv4 `Idempotency-Key`                 | `cancelled` task; `409` once claimed                                                                                                                                                                                                                                     | `implemented` | `implemented` behind `HOOKS_LAUNCH_ENABLED`                                                             |
@@ -459,6 +459,14 @@ routed PoolManager swap to its payer (one-time re-scan from the graduation block
 `viewer` and positions carry live MEME / USD1 balances and the wallet's `poolTradeCount`; new
 `GET …/pool/trades`. Evidence: `test/launch2-pool-anvil.integration.test.ts` (unattributed →
 re-scan → attributed, balances, positions), `test/v2-launch2-wallet-pool-routes.test.ts`.
+
+S151 (Decision 0127): `instance.pool` adds the required `userTradeCount` /
+`userBuyVolumeUsd1` / `userSellVolumeUsd1` — the same totals without the swaps the instance's
+buyback adapter / executor sent (projection columns `pool_user_*`, migration 000072 with a
+facts-only backfill); the existing pool fields keep counting every swap. Evidence:
+`test/launch2-buyback-keeper-anvil.integration.test.ts` (three buybacks: `tradeCount` 3,
+`userTradeCount` 0), `test/launch2-pool-anvil.integration.test.ts` (router trades count in both),
+`test/v2-launch2-pool-routes.test.ts`.
 
 S143 (Decision 0121): the worker lane `launch2_buyback_keeper`
 (`LAUNCH2_BUYBACK_KEEPER_ENABLED`, default off; migration 000065
@@ -1183,6 +1191,23 @@ resolve the same internal account created by V2 bootstrap. Decision 0032 adds
 the camelCase `POST /v2/chat/token` and `POST /v2/video/token` projections of
 the same issuance policy and quota; neither creates a second message API nor
 claims a connected Stream client.
+
+### Read-only database behaviour of GET routes (Decision 0127, S151)
+
+Checked with a `default_transaction_read_only=on` connection
+(`test/v2-read-only-get-routes.integration.test.ts`):
+
+| Route                                                                             | Write it attempts                                 | Read-only answer                                                                                           |
+| --------------------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `GET /v2/market/overview`, `/new-pairs`, `/assets/{id}` (+ `candles`, `holders`)  | `market_fact_cache` upserts after a Provider read | `200` with the fresh Provider facts; the failed write is logged (`onCacheWriteFailure`)                    |
+| `GET /v2/wallets`                                                                 | `account_wallets` sync of the Privy inventory     | `200` from the stored inventory when it equals what Privy reported; otherwise `503 CAPABILITY_UNAVAILABLE` |
+| `GET /v2/referral`                                                                | first-read issuance of the account's invite code  | `200` once a code exists; first issuance `503 CAPABILITY_UNAVAILABLE` (a code is never invented)           |
+| `GET /v2/search?domain=users\|communities`, `GET /v2/communities/{id}/members?q=` | alias-search quota buckets (security meter)       | `503 CAPABILITY_UNAVAILABLE` (fail-closed, unchanged)                                                      |
+| `GET /v2/blocks?kind=contract\|domain`                                            | none — not storage-backed in any mode             | `503 CAPABILITY_UNAVAILABLE` (unchanged; the preflight counted it as a write)                              |
+
+Any other GET whose PostgreSQL work fails with SQLSTATE `25006` (read-only) answers
+`503 CAPABILITY_UNAVAILABLE` `reasonCode: DATABASE_READ_ONLY`; class `08`, `57P01`–`57P03`,
+`53300` answer `DATABASE_UNAVAILABLE`; never `500`.
 
 ## Implemented routes
 

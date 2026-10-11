@@ -1682,6 +1682,17 @@ export async function buildApp(
       securityProvider: securityFactsProvider,
       candlesProvider,
       tokenLookupProvider,
+      // Decision 0127: a GET never fails because a cache row was not stored.
+      onCacheWriteFailure: (error, record) => {
+        app.log.warn(
+          {
+            factKind: record.factKind,
+            source: record.source,
+            ...summarizeErrorForLog(error),
+          },
+          "Market fact cache write failed; serving the observed fact",
+        );
+      },
     });
   // Unregistered-address lookup quota (Decision 0058): the alias-search
   // secret keys the HMAC subjects; without it the lookup fails closed.
@@ -2725,7 +2736,9 @@ export async function buildApp(
     }
     if (isV2RequestPath(request.raw.url)) {
       const projection = projectV2Error(
-        chainReadUnavailableFor(request.method, error) ?? error,
+        chainReadUnavailableFor(request.method, error) ??
+          databaseUnavailableFor(request.method, error) ??
+          error,
         request.id,
       );
       const failure = classifyRequestError(error);
@@ -2900,6 +2913,50 @@ function composeAdminMemePause(
  * timeout/HTTP/socket failure — is the capability being unavailable, never
  * an internal error. Write routes keep their own classification.
  */
+/**
+ * Decision 0127: a GET whose PostgreSQL work failed because the database is
+ * read-only (SQLSTATE 25006, e.g. a hot standby or
+ * `default_transaction_read_only`) or unreachable / shutting down (class 08,
+ * 57P01–57P03, 53300) is an availability condition, never an internal
+ * error. Writes keep their own mapping.
+ */
+function databaseUnavailableFor(
+  method: string,
+  error: unknown,
+): V2ApiError | null {
+  if (method !== "GET" && method !== "HEAD") {
+    return null;
+  }
+  const code =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    /^[0-9A-Z]{5}$/.test(error.code)
+      ? error.code
+      : null;
+  if (code === null) {
+    return null;
+  }
+  if (code === "25006") {
+    return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: "DATABASE_READ_ONLY",
+    });
+  }
+  if (
+    code.startsWith("08") ||
+    code === "57P01" ||
+    code === "57P02" ||
+    code === "57P03" ||
+    code === "53300"
+  ) {
+    return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: "DATABASE_UNAVAILABLE",
+    });
+  }
+  return null;
+}
+
 function chainReadUnavailableFor(
   method: string,
   error: unknown,

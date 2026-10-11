@@ -143,6 +143,15 @@ const nftSaleEndColumn = `
       + 604800
   )::text as nft_sale_end_seconds`;
 
+/**
+ * Decision 0127: a pool swap that is not a buyback — its PoolManager caller
+ * is neither the instance's buyback adapter (the contract that swaps for
+ * the executor) nor the executor itself. Used inside a query over
+ * `launch2_pool_swaps` joined to its instance `i`.
+ */
+const userSwap = `caller_address is distinct from i.buyback_adapter_address
+  and caller_address is distinct from i.buyback_executor_address`;
+
 const instanceColumns = `
   instance_id::text, job_id::text, project_id::text, config_version,
   owner_user_id::text, chain_id, factory_address, factory_generation,
@@ -168,6 +177,8 @@ const instanceColumns = `
   pool_buy_volume_usd1::text, pool_sell_volume_usd1::text,
   pool_tax_usd1::text, pool_tax_meme::text, pool_last_price_e18::text,
   pool_last_trade_at,
+  pool_user_trade_count::text, pool_user_buy_volume_usd1::text,
+  pool_user_sell_volume_usd1::text,
   (select coalesce(sum(s.usd1_amount), 0)::text
     from public.launch2_pool_swaps s
     where s.instance_id = launch2_instances.instance_id and not s.removed
@@ -406,6 +417,9 @@ function mapInstance(row: Row): Launch2InstanceRecord {
       taxMeme: text(row, "pool_tax_meme"),
       lastPriceE18: nullableText(row, "pool_last_price_e18"),
       lastTradeAt: nullableIso(row, "pool_last_trade_at"),
+      userTradeCount: text(row, "pool_user_trade_count"),
+      userBuyVolumeUsd1: text(row, "pool_user_buy_volume_usd1"),
+      userSellVolumeUsd1: text(row, "pool_user_sell_volume_usd1"),
     }),
     buybackKeeper: keeperOf(row["buyback_keeper"]),
     registeredAt: iso(row, "registered_at"),
@@ -719,7 +733,13 @@ async function reproject(
             'lastPrice', (select p.price_e18::text from public.launch2_pool_swaps p
               where p.instance_id = $1 and not p.removed
               order by p.block_number desc, p.log_index desc limit 1),
-            'lastAt', max(swapped_at))
+            'lastAt', max(swapped_at),
+            -- Decision 0127: market trades only — swaps the instance's own
+            -- buyback adapter / executor sent to the PoolManager are
+            -- buybacks (ledger: launch2_buybacks), not outside trading.
+            'userCount', count(*) filter (where ${userSwap})::text,
+            'userBuyUsd1', coalesce(sum(usd1_amount) filter (where side = 'buy' and ${userSwap}), 0)::text,
+            'userSellUsd1', coalesce(sum(usd1_amount) filter (where side = 'sell' and ${userSwap}), 0)::text)
           from public.launch2_pool_swaps
           where instance_id = $1 and not removed) as pool_swaps,
         i.meme_address, i.nft_address, i.curve_address, i.hook_address,
@@ -778,6 +798,9 @@ async function reproject(
     taxMeme: string;
     lastPrice: string | null;
     lastAt: string | null;
+    userCount: string;
+    userBuyUsd1: string;
+    userSellUsd1: string;
   };
   // Decision 0124: swaps count only while the graduation is indexed (a
   // rewound graduation leaves its pool facts out of the projection).
@@ -857,6 +880,9 @@ async function reproject(
         pool_tax_meme = $38::numeric,
         pool_last_price_e18 = $39::numeric,
         pool_last_trade_at = $40::timestamptz,
+        pool_user_trade_count = $41::numeric,
+        pool_user_buy_volume_usd1 = $42::numeric,
+        pool_user_sell_volume_usd1 = $43::numeric,
         projected_at = clock_timestamp()
       where instance_id = $1
     `,
@@ -907,6 +933,9 @@ async function reproject(
       poolCounted ? poolSwaps.taxMeme : "0",
       poolCounted ? poolSwaps.lastPrice : null,
       poolCounted ? poolSwaps.lastAt : null,
+      poolCounted ? poolSwaps.userCount : "0",
+      poolCounted ? poolSwaps.userBuyUsd1 : "0",
+      poolCounted ? poolSwaps.userSellUsd1 : "0",
     ],
   });
   await reprojectPositions(client, instanceId);

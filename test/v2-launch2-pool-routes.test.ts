@@ -697,6 +697,10 @@ describe("V2 launch2 official-pool routes (Decision 0124)", () => {
         lastTradeAt: new Date(
           Number(launch2NowSeconds - 30n) * 1000,
         ).toISOString(),
+        // Decision 0127: one of the two buys was a buyback (100 USD1).
+        userTradeCount: "2",
+        userBuyVolumeUsd1: (50n * wad).toString(10),
+        userSellVolumeUsd1: (40n * wad).toString(10),
       },
     });
     const { repository } = seeded(record);
@@ -726,6 +730,9 @@ describe("V2 launch2 official-pool routes (Decision 0124)", () => {
       lastTradeAt: new Date(
         Number(launch2NowSeconds - 30n) * 1000,
       ).toISOString(),
+      userTradeCount: "2",
+      userBuyVolumeUsd1: "50",
+      userSellVolumeUsd1: "40",
     });
     const before = await get(
       app,

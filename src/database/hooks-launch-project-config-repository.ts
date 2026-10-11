@@ -1,6 +1,8 @@
 import type { Pool } from "pg";
 import { z } from "zod";
 
+import { allocateHooksLaunchConfigVersion } from "./hooks-launch-config-version-allocator.js";
+
 import type {
   HooksLaunchProjectConfigRecord,
   HooksLaunchProjectConfigRepository,
@@ -152,6 +154,12 @@ export function createPostgresHooksLaunchProjectConfigRepository(
         if (currentVersion !== input.expectedVersion) {
           throw new HooksLaunchProjectVersionConflictError();
         }
+        // Decision 0127: the new version is unique across the owner's
+        // projects (the Factory dedupes keccak(projectOwner, version)).
+        const nextVersion = await allocateHooksLaunchConfigVersion(
+          client,
+          input.ownerUserId,
+        );
 
         const inserted = await client.query({
           text: `
@@ -164,7 +172,7 @@ export function createPostgresHooksLaunchProjectConfigRepository(
           `,
           values: [
             input.projectId,
-            input.expectedVersion + 1,
+            nextVersion,
             input.ownerUserId,
             input.templateVersion,
             input.configHash,

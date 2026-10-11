@@ -2120,6 +2120,14 @@ export function createLaunch2Service(
                       ? null
                       : formatLaunch2Amount(BigInt(record.pool.lastPriceE18)),
                   lastTradeAt: record.pool.lastTradeAt,
+                  // Decision 0127: without the buyback executor's swaps.
+                  userTradeCount: record.pool.userTradeCount,
+                  userBuyVolumeUsd1: formatLaunch2Amount(
+                    BigInt(record.pool.userBuyVolumeUsd1),
+                  ),
+                  userSellVolumeUsd1: formatLaunch2Amount(
+                    BigInt(record.pool.userSellVolumeUsd1),
+                  ),
                 }),
           recentTrades: trades.map(tradeOf),
           viewer:

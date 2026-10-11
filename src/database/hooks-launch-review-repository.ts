@@ -13,6 +13,7 @@ import {
   type HooksLaunchReviewPage,
   type HooksLaunchReviewRepository,
 } from "../features/launch/hooks-launch-review.js";
+import { allocateHooksLaunchConfigVersion } from "./hooks-launch-config-version-allocator.js";
 
 /**
  * Decision 0108: PostgreSQL Hooks launch review (ported from the requirer
@@ -148,6 +149,11 @@ async function saveConfig(
   } catch {
     throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
   }
+  // Decision 0127: unique across the owner's projects, like an owner save.
+  const nextVersion = await allocateHooksLaunchConfigVersion(
+    client,
+    project.ownerUserId,
+  );
   const inserted = await client.query(
     `insert into public.hooks_launch_project_config_versions (
        project_id, config_version, owner_user_id, template_version,
@@ -157,7 +163,7 @@ async function saveConfig(
        edited_by_operator_id, created_at`,
     [
       projectId,
-      currentVersion + 1,
+      nextVersion,
       project.ownerUserId,
       config.templateVersion,
       config.configHash,

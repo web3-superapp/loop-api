@@ -18,6 +18,14 @@ export interface HooksLaunchFactoryReader {
   readonly chainId: number;
   nonce(projectOwner: string): Promise<bigint>;
   /**
+   * Decision 0127: the Factory's `launchIdByOwnerVersion(keccak(owner,
+   * version))` — the zero bytes32 while that pair is unused.
+   */
+  ownerVersionLaunchId(
+    projectOwner: string,
+    configVersion: number,
+  ): Promise<string>;
+  /**
    * Decision 0119: the Factory's immutable `nftSaleDuration()`; a pre-S141
    * Factory without the function reads as 604,800 s with `legacy: true`.
    */
@@ -61,7 +69,13 @@ export class HooksLaunchDeploymentError extends Error {
       /** Decision 0122: the draft names another buyback recipient. */
       | "recipient_fixed"
       /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
-      | "recipient_unavailable",
+      | "recipient_unavailable"
+      /**
+       * Decision 0127: this wallet already deployed this config version
+       * (another project of the owner, saved before versions were
+       * allocated per owner); saving the config again allocates a new one.
+       */
+      | "version_used",
     message: string,
   ) {
     super(message);
@@ -230,6 +244,24 @@ export function createHooksLaunchDeploymentService(input: {
             "Hooks launch config template differs from the Factory",
           ),
       );
+      // Decision 0127: never hand out a signature the Factory would reject
+      // with VersionAlreadyUsed.
+      const usedBy = await reader.ownerVersionLaunchId(
+        projectOwner,
+        draft.version,
+      );
+      if (!/^0x[0-9a-f]{64}$/.test(usedBy.toLowerCase())) {
+        throw new HooksLaunchDeploymentError(
+          "unavailable",
+          "Hooks launch factory owner version unreadable",
+        );
+      }
+      if (!/^0x0{64}$/.test(usedBy.toLowerCase())) {
+        throw new HooksLaunchDeploymentError(
+          "version_used",
+          "Hooks launch config version already deployed by this wallet",
+        );
+      }
       const nonce = await reader.nonce(projectOwner);
       if (nonce < 0n || nonce >= 1n << 256n) {
         throw new HooksLaunchDeploymentError(

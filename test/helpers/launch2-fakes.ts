@@ -136,6 +136,9 @@ export function instanceFixture(
       taxMeme: "0",
       lastPriceE18: null,
       lastTradeAt: null,
+      userTradeCount: "0",
+      userBuyVolumeUsd1: "0",
+      userSellVolumeUsd1: "0",
     },
     buybackKeeper: null,
     registeredAt: new Date(

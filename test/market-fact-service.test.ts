@@ -276,6 +276,59 @@ describe("market fact service", () => {
     );
   });
 
+  describe("Decision 0127: a failed cache write never fails a reader", () => {
+    const readOnly = Object.assign(
+      new Error("cannot execute INSERT in a read-only transaction"),
+      { code: "25006" },
+    );
+
+    it("serves the observed fact and reports the failure when the reader opted in", async () => {
+      const cache = cacheFake();
+      cache.put.mockImplementation(() => Promise.reject(readOnly));
+      const failures: unknown[] = [];
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: providerFake(() => snapshot("747.39")),
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+        onCacheWriteFailure: (error, record) => {
+          failures.push([error, record]);
+        },
+      });
+      const fact = await service.readTokenPairs(wbnb);
+      expect(fact.quality).toBe("fresh");
+      const batch = await service.readTokenPairsBatch([wbnb, usdt]);
+      expect(batch.get(wbnb)?.quality).toBe("fresh");
+      expect(failures.length).toBeGreaterThanOrEqual(2);
+      expect(failures[0]).toEqual([
+        readOnly,
+        { factKind: "token_pairs", source: "dexscreener" },
+      ]);
+    });
+
+    it("keeps propagating a database write failure to a worker that did not opt in", async () => {
+      const cache = cacheFake();
+      cache.put.mockImplementation(() => Promise.reject(readOnly));
+      const service = createMarketFactService({
+        config,
+        cache: cache.repository,
+        pairsProvider: providerFake(() => snapshot("747.39")),
+        securityProvider: null,
+        candlesProvider: null,
+        now: () => new Date("2026-09-08T00:00:10.000Z"),
+      });
+      await expect(service.readTokenPairs(wbnb)).rejects.toBe(readOnly);
+      cache.put.mockImplementation(() =>
+        Promise.reject(new MarketFactCacheUnavailableError()),
+      );
+      await expect(service.readTokenPairs(usdt)).resolves.toMatchObject({
+        quality: "fresh",
+      });
+    });
+  });
+
   it("publishes a disabled Provider as unavailable without touching the cache", async () => {
     const cache = cacheFake();
     const service = createMarketFactService({

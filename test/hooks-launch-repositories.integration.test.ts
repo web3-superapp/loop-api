@@ -755,3 +755,94 @@ describe("Hooks signed deployment tasks (000054)", () => {
     expect(next.jobId).not.toBe(first.jobId);
   });
 });
+
+describe("Owner-unique Hooks config versions (Decision 0127, 000071)", () => {
+  function save(projectId: string, owner: string, expectedVersion: number) {
+    return configs.saveOwnedDraft({
+      projectId,
+      ownerUserId: owner,
+      expectedVersion,
+      templateVersion: draft.templateVersion,
+      configHash: draft.configHash,
+      config: draft,
+      updatedByUserId: owner,
+    });
+  }
+
+  it("allocates versions across the owner's projects, for owner and operator saves alike", async () => {
+    const owner = await user();
+    const a = await project(owner);
+    const b = await project(owner);
+    expect((await save(a, owner, 0)).version).toBe(1);
+    expect((await save(a, owner, 1)).version).toBe(2);
+    // The second project starts above every version the owner used.
+    expect((await save(b, owner, 0)).version).toBe(3);
+    // Within a project the CAS token stays the project's latest version.
+    await expect(save(a, owner, 1)).rejects.toBeInstanceOf(
+      HooksLaunchProjectVersionConflictError,
+    );
+    expect((await save(a, owner, 2)).version).toBe(4);
+    const editor = await operator(["launch.edit"]);
+    const edited = await review.execute(
+      editor,
+      command({
+        operationId: randomUUID(),
+        action: "launch.config.save",
+        target: b,
+        reason: "Operator correction",
+        payload: { expectedVersion: 3, config: draftInput },
+      }),
+      { nftSaleDurationSeconds: 604_800 },
+    );
+    expect(edited.result).toMatchObject({ config_version: 5 });
+    expect(
+      (await configs.getOwnedDraft({ projectId: b, ownerUserId: owner }))
+        ?.version,
+    ).toBe(5);
+    // Another owner is independent.
+    const other = await user();
+    expect((await save(await project(other), other, 0)).version).toBe(1);
+    const counter = await pool.query<{ last: number }>(
+      "select last_config_version as last from public.hooks_launch_owner_config_versions where owner_user_id = $1",
+      [owner],
+    );
+    expect(counter.rows[0]?.last).toBe(5);
+  });
+
+  it("serialises concurrent first saves of one owner's projects", async () => {
+    const owner = await user();
+    const projects = await Promise.all(
+      Array.from({ length: 6 }, () => project(owner)),
+    );
+    const versions = await Promise.all(
+      projects.map(
+        async (projectId) => (await save(projectId, owner, 0)).version,
+      ),
+    );
+    expect([...versions].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("starts above a version a wallet of the owner already used in a deployment task", async () => {
+    const input = await seed();
+    const address = input.request.projectOwner;
+    await submissions.accept(input);
+    const owner = await user();
+    await pool.query(
+      "insert into public.account_wallets (owner_user_id, provider_wallet_id, address, kind) values ($1, $2, $3, 'external')",
+      [owner, null, address],
+    );
+    // The task used version 1 for this address under another account.
+    expect((await save(await project(owner), owner, 0)).version).toBe(2);
+  });
+
+  it("never lowers an owner's counter", async () => {
+    const owner = await user();
+    await save(await project(owner), owner, 0);
+    await expect(
+      pool.query(
+        "update public.hooks_launch_owner_config_versions set last_config_version = 1 where owner_user_id = $1",
+        [owner],
+      ),
+    ).rejects.toThrow(/only increase/u);
+  });
+});

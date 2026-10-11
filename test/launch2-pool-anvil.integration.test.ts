@@ -1045,7 +1045,13 @@ describe.skipIf(skipReason !== null)(
         sellCount: "1",
         buyVolumeUsd1: "50",
         volume24hUsd1: expect.any(String) as unknown,
+        // Decision 0127: both swaps came through the router (no buyback).
+        userTradeCount: "2",
+        userBuyVolumeUsd1: "50",
       });
+      expect(detail["pool"]?.["userSellVolumeUsd1"]).toBe(
+        detail["pool"]?.["sellVolumeUsd1"],
+      );
       expect(detail["pool"]?.["lastPriceUsd1"]).not.toBeNull();
       expect(detail["pool"]?.["lastTradeAt"]).not.toBeNull();
       expect(

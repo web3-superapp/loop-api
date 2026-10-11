@@ -133,6 +133,8 @@ interface HooksDeploymentParams {
 /** Decision 0108: reason codes carried by a hooks-route 503. */
 const hooksLaunchDisabledReason = "HOOKS_LAUNCH_DISABLED";
 const hooksLaunchFactoryReason = "HOOKS_LAUNCH_FACTORY_UNAVAILABLE";
+/** Decision 0127: re-save the config to get an owner-unique version. */
+const hooksConfigVersionUsedReason = "HOOKS_CONFIG_VERSION_USED";
 /** Decision 0119: the saved config was hashed for another sale period. */
 const hooksFactoryTemplateMismatchReason = "HOOKS_FACTORY_TEMPLATE_MISMATCH";
 /** Decision 0122: the buyback recipient is fixed by the platform. */
@@ -373,7 +375,7 @@ export function registerV2LaunchRoutes(
         operationId: "getV2HooksLaunchSigningRequest",
         summary: "Prepare the owner's BSC Testnet Hooks deployment signature",
         description:
-          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient).",
+          "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient). Decision 0127: 422 VALIDATION_FAILED HOOKS_CONFIG_VERSION_USED: the Factory already recorded a launch for (this wallet, this configVersion) — a draft saved before versions were allocated per owner; save the config again (a new owner-unique version) and get it approved. request.configVersion is unique across all projects of the owner, so it may skip numbers within one project.",
         tags: ["launch"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -412,6 +414,11 @@ export function registerV2LaunchRoutes(
           if (error.kind === "recipient_fixed") throw hooksRecipientFixed();
           if (error.kind === "recipient_unavailable") {
             throw hooksUnavailable(hooksBuybackRecipientUnavailableReason);
+          }
+          if (error.kind === "version_used") {
+            throw V2ApiError.fromCode("VALIDATION_FAILED", {
+              reasonCode: hooksConfigVersionUsedReason,
+            });
           }
           if (error.kind === "busy") reply.header("retry-after", "5");
           throw hooksUnavailable(hooksLaunchFactoryReason);

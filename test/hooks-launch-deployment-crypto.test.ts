@@ -234,6 +234,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
       factoryAddress: "0x1111111111111111111111111111111111111111",
       chainId: 97,
       nonce: () => Promise.resolve(7n),
+      ownerVersionLaunchId: () => Promise.resolve(`0x${"0".repeat(64)}`),
       nftSaleDuration: () =>
         Promise.resolve({ seconds: 604_800, legacy: false }),
       tokenDeployment: () =>
@@ -292,6 +293,7 @@ describe("Hooks launch deployment crypto", { timeout: 60_000 }, () => {
         factoryAddress: "0x1111111111111111111111111111111111111111",
         chainId: 97,
         nonce: () => Promise.resolve(0n),
+        ownerVersionLaunchId: () => Promise.resolve(`0x${"0".repeat(64)}`),
         nftSaleDuration: () =>
           Promise.resolve({ seconds: 604_800, legacy: false }),
         tokenDeployment: () => Promise.reject(new Error("unused")),

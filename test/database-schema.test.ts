@@ -184,6 +184,7 @@ describe("database schema readiness contract", () => {
       "public.launch_project_approvals",
       "public.launch2_meme_transfers",
       "public.hooks_launch_config_rejections",
+      "public.hooks_launch_owner_config_versions",
       "public.mining_parameter_versions",
       "public.mining_epochs",
       "public.mining_epoch_rewards",

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000070_launch2_pool_wallet_attribution";
+export const latestMigrationName = "000072_launch2_pool_user_trades";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -160,6 +160,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch_project_approvals",
   "public.launch2_meme_transfers",
   "public.hooks_launch_config_rejections",
+  "public.hooks_launch_owner_config_versions",
   "public.mining_parameter_versions",
   "public.mining_epochs",
   "public.mining_epoch_rewards",

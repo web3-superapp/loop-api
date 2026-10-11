@@ -695,7 +695,7 @@ const viewerSchema = {
 
 const poolSummarySchema = {
   description:
-    "Decision 0124 (optional in the schema, always present in answers): the official Uniswap v4 pool after graduation, from the PoolManager Swap logs of officialPoolId the launch2_event lane indexed (every swap of the pool: the in-App router, the buyback executor and any other caller). null before graduation. Volumes are the USD1 side (buy: USD1 in; sell: USD1 out before tax); taxUsd1 is the 2 % taken from sells, taxMeme from buys (exact-output swaps may be 1 wei off, see docs/frontend-v2-launch2-api.md §pool). lastPriceUsd1 = the pool price after the latest indexed swap (null until the first swap). router = LAUNCH2_POOL_ROUTER_ADDRESS (null when not configured: pool quote / prepare are then 503).",
+    "Decision 0124 (optional in the schema, always present in answers): the official Uniswap v4 pool after graduation, from the PoolManager Swap logs of officialPoolId the launch2_event lane indexed (every swap of the pool: the in-App router, the buyback executor and any other caller). null before graduation. Volumes are the USD1 side (buy: USD1 in; sell: USD1 out before tax); taxUsd1 is the 2 % taken from sells, taxMeme from buys (exact-output swaps may be 1 wei off, see docs/frontend-v2-launch2-api.md §pool). lastPriceUsd1 = the pool price after the latest indexed swap (null until the first swap). router = LAUNCH2_POOL_ROUTER_ADDRESS (null when not configured: pool quote / prepare are then 503). Decision 0127: tradeCount / buyCount / sellCount / buyVolumeUsd1 / sellVolumeUsd1 keep counting every swap (buybacks included); userTradeCount / userBuyVolumeUsd1 / userSellVolumeUsd1 are the same totals without the swaps the instance's buyback adapter / executor sent (market trades only; tradeCount - userTradeCount = buyback swaps indexed in the pool).",
   anyOf: [
     {
       type: "object",
@@ -713,6 +713,9 @@ const poolSummarySchema = {
         "taxMeme",
         "lastPriceUsd1",
         "lastTradeAt",
+        "userTradeCount",
+        "userBuyVolumeUsd1",
+        "userSellVolumeUsd1",
       ],
       properties: {
         poolId: bytes32Schema,
@@ -727,6 +730,9 @@ const poolSummarySchema = {
         taxMeme: decimalSchema,
         lastPriceUsd1: { anyOf: [decimalSchema, { type: "null" }] },
         lastTradeAt: nullableDateTimeSchema,
+        userTradeCount: uintStringSchema,
+        userBuyVolumeUsd1: decimalSchema,
+        userSellVolumeUsd1: decimalSchema,
       },
     },
     { type: "null" },

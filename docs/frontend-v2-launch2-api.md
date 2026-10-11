@@ -1,4 +1,10 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127)
+
+> **S151 / 决策 0127 变化（给 App）**：`instance.pool` 新增三个**必带**键 `userTradeCount` /
+> `userBuyVolumeUsd1` / `userSellVolumeUsd1`（§3.10）：与 `tradeCount` / `buyVolumeUsd1` / `sellVolumeUsd1`
+> 同口径，但**剔除本实例回购适配器 / 执行器发起的池内成交**（即外盘市场成交）。原字段含义不变（仍含回购）。
+> 「外盘成交 N 笔 / 外盘买入 / 卖出量」请改用 `user*`；`tradeCount - userTradeCount` = 已索引的回购成交笔数。
+> **部署顺序**：严格解码器会拒绝未知键的旧包，须先发能接受这三个键的包，再上这一版 API。
 
 > **S150 / 决策 0126 变化（给 App）**：① **签名有效期**：报价（`…/quote`、`…/pool/quote`）的 `deadline` /
 > `expiresAt` 仍是 60 s 新鲜度；prepare 返回的意图 `deadline` / `expiresAt`（以及编码进合约调用的 deadline）
@@ -787,10 +793,20 @@ Headers: §1 plus `Idempotency-Key`. Body:
   "taxUsd1": "0.8",
   "taxMeme": "4800",
   "lastPriceUsd1": "0.000625",
-  "lastTradeAt": "2027-01-15T07:59:30.000Z"
+  "lastTradeAt": "2027-01-15T07:59:30.000Z",
+  "userTradeCount": "2",
+  "userBuyVolumeUsd1": "50",
+  "userSellVolumeUsd1": "40"
 }
 ```
 
+- Decision 0127 (required keys): `userTradeCount` (uint string), `userBuyVolumeUsd1`,
+  `userSellVolumeUsd1` (decimal strings) = the same totals **without** the swaps whose PoolManager
+  caller is this instance's buyback adapter / executor (the keeper's buybacks). In the example one
+  of the two buys (100 USD1) was a buyback. Show 「外盘成交」 / market volume from `user*`; the buyback
+  card keeps using `buyback.*` (the buyback ledger). Before graduation `pool` is still `null`; after
+  graduation with no swap all three are `"0"`. Not configurable, never estimated: they come from the
+  same indexed facts as `tradeCount` (a rewound swap leaves both).
 - Counts every swap of the official pool (the App router, the buyback executor, any other
   router). Volumes are the USD1 side (sell volume = USD1 out before tax). `lastPriceUsd1` is
   the pool price after the latest indexed swap (`null` until the first one — then use the quote's

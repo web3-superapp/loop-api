@@ -63,6 +63,7 @@ const truncateAll = `
     public.launch_project_rejections,
     public.launch_project_approvals,
     public.hooks_launch_config_rejections,
+    public.hooks_launch_owner_config_versions,
     public.launch2_snapshot_closures,
     public.launch2_buyback_attempts,
     public.launch2_pool_swaps,

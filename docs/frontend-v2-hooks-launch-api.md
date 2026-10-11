@@ -9,7 +9,8 @@
 本文件 §5–§6、§9 描述任务进度字段（**只增字段，S125 字段含义不变**）。S142 / 决策 0120 起 §2 的
 读响应多三个字段（`approval`、`latestDeployment`、`minSaleLeadSeconds`），§4 的 `typedData.types`
 多一项 `EIP712Domain`；目录项目多 `kind`（见 §10）。S145 / 决策 0122 起：回购收币地址固定（§11）、
-配置审批可被拒绝（§12）。
+配置审批可被拒绝（§12）。S151 / 决策 0127 起：同一项目方可以发多个项目，配置版本号按项目方全局
+递增（§13），签名准备新增 `422 HOOKS_CONFIG_VERSION_USED`。
 
 ## 0. 启用条件
 
@@ -270,29 +271,29 @@ cancelled`，已取消再取消返回原状态。**执行器认领之后（`clai
 
 ## 7. 错误码汇总
 
-| 状态 | code                             | 场景                                                                                                                                                                                               |
-| ---- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | 请求体格式错误：结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                                                  |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                                                  |
-| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                                                        |
-| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                                                   |
-| 409  | `VERSION_CONFLICT`               | CAS 过期；提交字段与已批准的最新配置不一致（版本/hash/名称/ticker/开售时间/收币地址）或 nonce 已变；任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                          |
-| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                                                    |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                                                   |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                                                                                       |
-| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                                                  |
-| 状态 | code                             | 场景                                                                                                                                                                                               |
-| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------                                                                  |
-| 400  | `INVALID_REQUEST`                | 结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                                                                  |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                                                  |
-| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                                                        |
-| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                                                   |
-| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                                                                                          |
-| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                                                    |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                                                   |
-| 422  | `VALIDATION_FAILED`              | `HOOKS_BUYBACK_RECIPIENT_FIXED`（决策 0122：配置的收币地址不是平台固定地址；保存 / 签名准备 / 提交）                                                                                               |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE` / `HOOKS_FACTORY_TEMPLATE_MISMATCH`（决策 0119，见 §0）/ `HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE`（决策 0122：服务端未配置固定收币地址） |
-| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                                                  |
+| 状态 | code                             | 场景                                                                                                                                                                                                                 |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | 请求体格式错误：结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                                                                    |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                                                                    |
+| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                                                                          |
+| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                                                                     |
+| 409  | `VERSION_CONFLICT`               | CAS 过期；提交字段与已批准的最新配置不一致（版本/hash/名称/ticker/开售时间/收币地址）或 nonce 已变；任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                            |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                                                                      |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                                                                     |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                                                                                                                                                         |
+| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                                                                    |
+| 状态 | code                             | 场景                                                                                                                                                                                                                 |
+| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------                                                                                    |
+| 400  | `INVALID_REQUEST`                | 结构/字段非法、覆盖经济参数、开售过早、PUT 带 Idempotency-Key、POST/DELETE 缺 key、钱包非本人活跃钱包、签名/deadline/CREATE2 不符                                                                                    |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                                                                                                                                                    |
+| 403  | `POLICY_BLOCKED`                 | `HOOKS_CONFIG_NOT_APPROVED`                                                                                                                                                                                          |
+| 404  | `NOT_FOUND`                      | 非本人项目 / 无草稿 / 任务不存在                                                                                                                                                                                     |
+| 409  | `VERSION_CONFLICT`               | CAS 过期、配置已变、任务冲突；DELETE 已被执行器认领（`HOOKS_DEPLOYMENT_NOT_CANCELLABLE`）                                                                                                                            |
+| 409  | `IDEMPOTENCY_CONFLICT`           | 同 key 不同请求                                                                                                                                                                                                      |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 账号未 bootstrap                                                                                                                                                                                                     |
+| 422  | `VALIDATION_FAILED`              | `HOOKS_BUYBACK_RECIPIENT_FIXED`（决策 0122：配置的收币地址不是平台固定地址；保存 / 签名准备 / 提交）；`HOOKS_CONFIG_VERSION_USED`（决策 0127，仅签名准备：该钱包已用这个版本号在链上部署过，重新保存配置并等待审批） |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `HOOKS_LAUNCH_DISABLED` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE` / `HOOKS_FACTORY_TEMPLATE_MISMATCH`（决策 0119，见 §0）/ `HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE`（决策 0122：服务端未配置固定收币地址）                   |
+| 500  | `INTERNAL_ERROR`                 | —                                                                                                                                                                                                                    |
 
 ## 8. unavailable 行为
 
@@ -422,3 +423,22 @@ NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不�
   `buyback_recipient_invalid` | `community_binding_mismatch` | `other`），`note` 原样展示（`other` 必有）。
 - 重提：项目方改资料后 `PUT hooks-config`（`expectedVersion` = 被拒的版本号）→ 新版本 `awaiting_approval`。
   被拒的版本不会再被批准，签名准备 / 提交对它返回 `403 POLICY_BLOCKED / HOOKS_CONFIG_NOT_APPROVED`。
+
+## 13. 一个项目方钱包发多个项目（S151 / 决策 0127，用户 2026-10-11 裁决「可以」）
+
+合约 `LoopLaunchFactory.deployLaunch` 按 `keccak(projectOwner, configVersion)` 去重
+（`VersionAlreadyUsed`），launchId = `keccak(chainId, factory, projectOwner, configVersion, configHash)`，
+不含项目 ID。合约不改；后端把**配置版本号改为按项目方（LOOP 账号）全局分配**：
+
+- 新版本号 = max(该账号计数器 + 1，该账号任何项目已用的最大版本 + 1，该账号任一钱包地址在任何部署任务里
+  用过的最大版本 + 1)。同一项目内仍然只增不减，但**可能跳号**：项目 A 存到 2 后，项目 B 第一次保存得到 3，
+  A 再保存得到 4。项目方后台改配置（运营 `launch.config.save`）同样走这条规则。
+- `PUT hooks-config` 的 `expectedVersion` 含义不变：仍是**本项目**当前最新版本（无则 0），不要用 +1 推算下一版，
+  以 200 响应里的 `draft.version` 为准；`GET hooks-config` 的 `draft.version` / `approval.configVersion`、
+  签名准备的 `request.configVersion`、任务、读模型与后台投影都是这个号。
+- 已部署的实例、已存在的版本 / 审批 / 任务不改（迁移 `000071` 只按历史最大值初始化计数器）。
+- 签名准备在出签名前读工厂 `launchIdByOwnerVersion(keccak(钱包, 版本))`：非零（多为 0127 之前保存、与同钱包
+  另一个已部署项目撞号的旧草稿）→ `422 VALIDATION_FAILED` + `detailsSafe.reasonCode = HOOKS_CONFIG_VERSION_USED`。
+  文案：「该配置版本已被你的另一个项目使用，请重新保存配置并等待审批」，按钮引导到编辑页重新保存。
+  读不到（RPC 失败）→ `503 CAPABILITY_UNAVAILABLE / HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，不放行签名。
+- 执行器侧不变：若仍撞上（例如 0127 前已提交的任务），任务以 `HOOKS_LAUNCH_ALREADY_DEPLOYED` 失败、不上链（§9.2）。

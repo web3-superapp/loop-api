@@ -1225,6 +1225,51 @@ export function createWalletReadService(
     });
   }
 
+  async function storedInventoryMatching(
+    ownerUserId: string,
+    observed: readonly PrivyWalletAccount[],
+    syncError: unknown,
+  ): Promise<readonly AccountWalletRecord[]> {
+    let stored: readonly AccountWalletRecord[];
+    try {
+      stored = await input.repository.list(ownerUserId);
+    } catch {
+      stored = [];
+    }
+    const active = stored.filter((record) => record.status === "active");
+    const matches =
+      observed.length > 0 &&
+      active.length === observed.length &&
+      active.filter((record) => record.isActive).length === 1 &&
+      observed.every((wallet) =>
+        active.some(
+          (record) =>
+            record.address.toLowerCase() === wallet.address.toLowerCase() &&
+            record.kind === wallet.kind &&
+            (wallet.providerWalletId === null ||
+              record.providerWalletId === wallet.providerWalletId),
+        ),
+      );
+    input.logger?.warn?.(
+      {
+        servedStoredInventory: matches,
+        postgresCode:
+          typeof syncError === "object" &&
+          syncError !== null &&
+          "code" in syncError &&
+          typeof syncError.code === "string"
+            ? syncError.code
+            : null,
+        ...degradedLegContext("walletInventorySync", syncError),
+      },
+      "Wallet inventory sync failed",
+    );
+    if (!matches) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    return stored;
+  }
+
   return Object.freeze({
     async listWallets({
       principal,
@@ -1274,7 +1319,15 @@ export function createWalletReadService(
         if (error instanceof AccountWalletProviderIdConflictError) {
           throw V2ApiError.fromCode("RESOURCE_CONFLICT");
         }
-        throw error;
+        // Decision 0127: recording the observation is a write. When it
+        // fails (read-only database, lost connection) the stored inventory
+        // is served only if it already says exactly what Privy reported;
+        // otherwise the answer would hide a wallet, so it is unavailable.
+        records = await storedInventoryMatching(
+          principal.userId,
+          observation.wallets,
+          error,
+        );
       }
       return projectWalletList(records, observation.observedAt);
     },

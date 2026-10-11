@@ -402,6 +402,13 @@ export interface Launch2InstanceRecord {
     readonly taxMeme: string;
     readonly lastPriceE18: string | null;
     readonly lastTradeAt: string | null;
+    /**
+     * Decision 0127: the same counts without the swaps of the instance's
+     * buyback adapter / executor (market trades only).
+     */
+    readonly userTradeCount: string;
+    readonly userBuyVolumeUsd1: string;
+    readonly userSellVolumeUsd1: string;
   };
   /** Decision 0121: the buyback keeper's newest attempt, if any. */
   readonly buybackKeeper: {

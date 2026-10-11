@@ -719,6 +719,65 @@ describe("LOOP API V2 market module", () => {
     return { app, ...dependencies };
   }
 
+  describe("Decision 0127: a read-only or lost database", () => {
+    const pgError = (code: string) =>
+      Object.assign(new Error(`postgres ${code}`), { code });
+
+    it("serves the overview when the cache write is refused", async () => {
+      const dependencies = fakes();
+      const put = vi
+        .spyOn(dependencies.database.marketFacts, "put")
+        .mockRejectedValue(pgError("25006"));
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/market/overview",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(put).toHaveBeenCalled();
+    });
+
+    it("maps a read-only or unreachable database to 503 CAPABILITY_UNAVAILABLE, never 500", async () => {
+      for (const [code, reasonCode] of [
+        ["25006", "DATABASE_READ_ONLY"],
+        ["57P01", "DATABASE_UNAVAILABLE"],
+        ["08006", "DATABASE_UNAVAILABLE"],
+      ] as const) {
+        const dependencies = fakes();
+        vi.spyOn(
+          dependencies.database.marketFacts,
+          "getMany",
+        ).mockRejectedValue(pgError(code));
+        const { app } = await createApp(dependencies);
+        const response = await app.inject({
+          method: "GET",
+          url: "/v2/market/overview",
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          code: "CAPABILITY_UNAVAILABLE",
+          detailsSafe: { reasonCode },
+        });
+      }
+    });
+
+    it("keeps any other database failure an internal error", async () => {
+      const dependencies = fakes();
+      vi.spyOn(dependencies.database.marketFacts, "getMany").mockRejectedValue(
+        pgError("XX000"),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/market/overview",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(500);
+    });
+  });
+
   it("registers no market route when the module is disabled", async () => {
     const { app } = await createApp(fakes(), { V2_MODULES_ENABLED: "chain" });
     const response = await app.inject({

@@ -44,6 +44,7 @@ const reader: HooksLaunchFactoryReader = {
   chainId: 97,
   factoryAddress: "0x1111111111111111111111111111111111111111",
   nonce: () => Promise.resolve(7n),
+  ownerVersionLaunchId: () => Promise.resolve(`0x${"0".repeat(64)}`),
   nftSaleDuration: () => Promise.resolve({ seconds: 604_800, legacy: false }),
   tokenDeployment: () =>
     Promise.resolve({

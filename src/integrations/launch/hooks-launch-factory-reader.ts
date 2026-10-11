@@ -3,6 +3,7 @@ import {
   ContractFunctionRevertedError,
   ContractFunctionZeroDataError,
   createPublicClient,
+  encodeAbiParameters,
   ExecutionRevertedError,
   fallback,
   http,
@@ -31,6 +32,13 @@ const hooksLaunchFactoryAbi = [
     stateMutability: "view",
     inputs: [{ name: "projectOwner", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "launchIdByOwnerVersion",
+    stateMutability: "view",
+    inputs: [{ name: "ownerVersion", type: "bytes32" }],
+    outputs: [{ name: "launchId", type: "bytes32" }],
   },
   {
     type: "function",
@@ -188,6 +196,27 @@ export function createHooksLaunchFactoryReader(input: {
           functionName: "nonces",
           args: [projectOwner as Address],
         });
+      } catch {
+        throw new Error("Hooks launch factory read unavailable");
+      }
+    },
+    async ownerVersionLaunchId(projectOwner: string, configVersion: number) {
+      await verifyNetworkAndCode();
+      try {
+        const launchId = await client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchFactoryAbi,
+          functionName: "launchIdByOwnerVersion",
+          args: [
+            keccak256(
+              encodeAbiParameters(
+                [{ type: "address" }, { type: "uint32" }],
+                [projectOwner as Address, configVersion],
+              ),
+            ),
+          ],
+        });
+        return launchId.toLowerCase();
       } catch {
         throw new Error("Hooks launch factory read unavailable");
       }

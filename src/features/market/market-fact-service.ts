@@ -3,6 +3,7 @@ import {
   MarketFactCacheUnavailableError,
   type MarketFactCacheRecord,
   type MarketFactCacheRepository,
+  type PutMarketFactInput,
 } from "../../database/market-fact-cache-repository.js";
 import {
   marketPairsBatchLimit,
@@ -216,6 +217,18 @@ export interface CreateMarketFactServiceInput {
   /** Unregistered-address lookup Provider (Decision 0058); `null` when GeckoTerminal is disabled. */
   readonly tokenLookupProvider?: TokenLookupProvider | null;
   readonly now?: () => Date;
+  /**
+   * Decision 0127: request-path readers (the API) set this so a cache write
+   * that fails for any reason (read-only database, lost connection,
+   * constraint) is reported here and never changes the answer. Without it
+   * (the workers, whose job is the write) only
+   * `MarketFactCacheUnavailableError` is swallowed and any other failure
+   * propagates, as before.
+   */
+  readonly onCacheWriteFailure?: (
+    error: unknown,
+    record: Pick<PutMarketFactInput, "factKind" | "source">,
+  ) => void;
 }
 
 /**
@@ -358,6 +371,28 @@ export function createMarketFactService(
     return tracked;
   }
 
+  /**
+   * Decision 0127: the market cache is an optimisation for a reader; see
+   * `onCacheWriteFailure`. A cache-unavailable write never changes the fact
+   * just observed.
+   */
+  async function putCache(record: PutMarketFactInput): Promise<void> {
+    try {
+      await input.cache.put(record);
+    } catch (error) {
+      if (input.onCacheWriteFailure !== undefined) {
+        input.onCacheWriteFailure(error, {
+          factKind: record.factKind,
+          source: record.source,
+        });
+        return;
+      }
+      if (!(error instanceof MarketFactCacheUnavailableError)) {
+        throw error;
+      }
+    }
+  }
+
   async function read<T extends object>(request: {
     readonly subjectKey: string;
     readonly factKind: string;
@@ -435,22 +470,15 @@ export function createMarketFactService(
       }
       return unavailableFact(request.source, request.ttlSeconds, reasonCode);
     }
-    try {
-      await input.cache.put({
-        subjectKey: request.subjectKey,
-        factKind: request.factKind,
-        source: request.source,
-        value: observation.value as unknown as Record<string, unknown>,
-        rawDigest: observation.rawDigest,
-        fetchedAt: observation.fetchedAt,
-        ttlSeconds: request.ttlSeconds,
-      });
-    } catch (error) {
-      if (!(error instanceof MarketFactCacheUnavailableError)) {
-        throw error;
-      }
-      // A cache write failure does not invalidate the fact just observed.
-    }
+    await putCache({
+      subjectKey: request.subjectKey,
+      factKind: request.factKind,
+      source: request.source,
+      value: observation.value as unknown as Record<string, unknown>,
+      rawDigest: observation.rawDigest,
+      fetchedAt: observation.fetchedAt,
+      ttlSeconds: request.ttlSeconds,
+    });
     if (request.onFresh !== undefined) {
       await request.onFresh(observation);
     }
@@ -484,21 +512,15 @@ export function createMarketFactService(
       pairAddress: pair.pairAddress,
       priceChangeH24: pair.priceChangeH24,
     };
-    try {
-      await input.cache.put({
-        subjectKey: `token:${snapshot.tokenAddress}`,
-        factKind: marketFactKinds.pairPriceChangeH24,
-        source: "dexscreener",
-        value: { ...value },
-        rawDigest: observation.rawDigest,
-        fetchedAt: observation.fetchedAt,
-        ttlSeconds: input.config.priceTtlSeconds,
-      });
-    } catch (error) {
-      if (!(error instanceof MarketFactCacheUnavailableError)) {
-        throw error;
-      }
-    }
+    await putCache({
+      subjectKey: `token:${snapshot.tokenAddress}`,
+      factKind: marketFactKinds.pairPriceChangeH24,
+      source: "dexscreener",
+      value: { ...value },
+      rawDigest: observation.rawDigest,
+      fetchedAt: observation.fetchedAt,
+      ttlSeconds: input.config.priceTtlSeconds,
+    });
   }
 
   function pairsFact(
@@ -704,21 +726,15 @@ export function createMarketFactService(
             if (observation !== null && snapshot !== undefined) {
               const observed = observation;
               writes.push(async () => {
-                try {
-                  await input.cache.put({
-                    subjectKey: `${tokenPairsBatchSubjectPrefix}${miss.address}`,
-                    factKind: marketFactKinds.tokenPairs,
-                    source: "dexscreener",
-                    value: snapshot as unknown as Record<string, unknown>,
-                    rawDigest: observed.rawDigest,
-                    fetchedAt: observed.fetchedAt,
-                    ttlSeconds: input.config.priceTtlSeconds,
-                  });
-                } catch (error) {
-                  if (!(error instanceof MarketFactCacheUnavailableError)) {
-                    throw error;
-                  }
-                }
+                await putCache({
+                  subjectKey: `${tokenPairsBatchSubjectPrefix}${miss.address}`,
+                  factKind: marketFactKinds.tokenPairs,
+                  source: "dexscreener",
+                  value: snapshot as unknown as Record<string, unknown>,
+                  rawDigest: observed.rawDigest,
+                  fetchedAt: observed.fetchedAt,
+                  ttlSeconds: input.config.priceTtlSeconds,
+                });
                 await rememberPriceChange(snapshot, observed);
               });
               results.set(
@@ -903,21 +919,15 @@ export function createMarketFactService(
         rawDigest: string,
         fetchedAt: string,
       ): Promise<void> {
-        try {
-          await input.cache.put({
-            subjectKey,
-            factKind: marketFactKinds.tokenIdentity,
-            source,
-            value: identity as unknown as Record<string, unknown>,
-            rawDigest,
-            fetchedAt,
-            ttlSeconds: metadataTtl,
-          });
-        } catch (error) {
-          if (!(error instanceof MarketFactCacheUnavailableError)) {
-            throw error;
-          }
-        }
+        await putCache({
+          subjectKey,
+          factKind: marketFactKinds.tokenIdentity,
+          source,
+          value: identity as unknown as Record<string, unknown>,
+          rawDigest,
+          fetchedAt,
+          ttlSeconds: metadataTtl,
+        });
       }
 
       // GeckoTerminal first: one request carries identity, token-level

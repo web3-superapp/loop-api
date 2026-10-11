@@ -183,14 +183,19 @@ describe.skipIf(skipReason !== null)(
     }
 
     /** Owner draft → independent approval → EIP-712 signature → task. */
-    async function submittedTask(ticker: string): Promise<{
+    async function submittedTask(
+      ticker: string,
+      // Decision 0127: another project of an existing owner (same wallet).
+      existingOwnerUserId?: string,
+    ): Promise<{
       readonly ownerUserId: string;
       readonly projectId: string;
       readonly jobId: string;
       readonly deadline: bigint;
+      readonly configVersion: number;
     }> {
-      const ownerUserId = await user();
-      const ownerKey = generatePrivateKey();
+      const ownerUserId = existingOwnerUserId ?? (await user());
+      const ownerKey = owners.get(ownerUserId) ?? generatePrivateKey();
       owners.set(ownerUserId, ownerKey);
       const projectId = randomUUID();
       await pool.query(
@@ -215,7 +220,7 @@ describe.skipIf(skipReason !== null)(
         },
       );
       const configs = createPostgresHooksLaunchProjectConfigRepository(pool);
-      await configs.saveOwnedDraft({
+      const saved = await configs.saveOwnedDraft({
         projectId,
         ownerUserId,
         expectedVersion: 0,
@@ -242,7 +247,10 @@ describe.skipIf(skipReason !== null)(
           action: "launch.config.approve",
           target: projectId,
           reason: "Independent hash review",
-          payload: { configVersion: 1, configHash: draft.configHash },
+          payload: {
+            configVersion: saved.version,
+            configHash: draft.configHash,
+          },
         }),
       );
       const walletId = `wallet-${ownerUserId}`;
@@ -288,11 +296,13 @@ describe.skipIf(skipReason !== null)(
         },
       });
       expect(job.status).toBe("awaiting_executor");
+      expect(prepared.request.configVersion).toBe(saved.version);
       return {
         ownerUserId,
         projectId,
         jobId: job.jobId,
         deadline: BigInt(prepared.request.deadline),
+        configVersion: saved.version,
       };
     }
 
@@ -557,6 +567,88 @@ describe.skipIf(skipReason !== null)(
         args: [key],
       });
     }
+
+    it("deploys two projects of one owner wallet with owner-unique versions and distinct launchIds (Decision 0127)", async () => {
+      const first = await submittedTask("ONEA");
+      const run = executor();
+      await drive(
+        run,
+        () => job(first.ownerUserId, first.projectId, first.jobId),
+        "activated",
+      );
+      const second = await submittedTask("ONEB", first.ownerUserId);
+      expect(first.configVersion).toBe(1);
+      expect(second.configVersion).toBe(2);
+      await drive(
+        run,
+        () => job(second.ownerUserId, second.projectId, second.jobId),
+        "activated",
+      );
+      const owners_ = await pool.query<{ project_owner: string }>(
+        "select distinct project_owner from public.hooks_launch_deployment_tasks where job_id = any($1::uuid[])",
+        [[first.jobId, second.jobId]],
+      );
+      expect(owners_.rows).toHaveLength(1);
+      const [firstLaunch, secondLaunch] = await Promise.all([
+        launchIdOf(first.jobId),
+        launchIdOf(second.jobId),
+      ]);
+      expect(firstLaunch).toMatch(/^0x[0-9a-f]{64}$/u);
+      expect(firstLaunch).not.toBe(`0x${"0".repeat(64)}`);
+      expect(secondLaunch).not.toBe(`0x${"0".repeat(64)}`);
+      expect(secondLaunch).not.toBe(firstLaunch);
+      const tasks = await pool.query<{ job_id: string; launch_id: string }>(
+        "select job_id::text, launch_id from public.hooks_launch_deployment_tasks where job_id = any($1::uuid[])",
+        [[first.jobId, second.jobId]],
+      );
+      expect(
+        new Map(tasks.rows.map((row) => [row.job_id, row.launch_id])),
+      ).toEqual(
+        new Map([
+          [first.jobId, firstLaunch.toLowerCase()],
+          [second.jobId, secondLaunch.toLowerCase()],
+        ]),
+      );
+
+      // A draft saved before 0127 (version 1 again, for a third project of
+      // the same wallet) is refused at the signing request instead of
+      // failing on chain with VersionAlreadyUsed.
+      const legacyProject = randomUUID();
+      await pool.query(
+        "insert into public.launch_projects (project_id, owner_user_id, name, ticker, review_status, submitted_at, reviewed_at) values ($1, $2, 'Legacy', 'LEGA', 'approved', now(), now())",
+        [legacyProject, first.ownerUserId],
+      );
+      const firstConfig = await pool.query<{
+        config: Record<string, unknown>;
+        config_hash: string;
+      }>(
+        "select config, config_hash from public.hooks_launch_project_config_versions where project_id = $1",
+        [first.projectId],
+      );
+      await pool.query(
+        "insert into public.hooks_launch_project_config_versions (project_id, config_version, owner_user_id, template_version, config_hash, config) values ($1, 1, $2, 'hooks_launch_v1', $3, $4::jsonb)",
+        [
+          legacyProject,
+          first.ownerUserId,
+          firstConfig.rows[0]!.config_hash,
+          JSON.stringify(firstConfig.rows[0]!.config),
+        ],
+      );
+      await expect(
+        createHooksLaunchDeploymentService({
+          fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+          configs: createPostgresHooksLaunchProjectConfigRepository(pool),
+          wallets,
+          reader: reader(),
+          signatureLifetimeSeconds: 900,
+          maxSaltAttempts: 2_000_000,
+        }).prepareSigningRequest({
+          ownerUserId: first.ownerUserId,
+          projectId: legacyProject,
+          walletId: `wallet-${first.ownerUserId}`,
+        }),
+      ).rejects.toMatchObject({ kind: "version_used" });
+    }, 600_000);
 
     it("fails an expired signature without broadcasting anything", async () => {
       const task = await submittedTask("LATE");

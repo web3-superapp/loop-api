@@ -171,6 +171,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     hooks_launch_config_approvals: "user",
     // Decision 0122: reviewer rejections (catalog material / config version)
     hooks_launch_config_rejections: "user",
+    // Decision 0127: per-owner Hooks config version counter
+    hooks_launch_owner_config_versions: "user",
     launch_project_rejections: "user",
     // Decision 0125: console approvals of catalog material
     launch_project_approvals: "user",
@@ -415,6 +417,8 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "hooks_launch_project_config_versions",
     `(project_id, config_version) in ${doomedConfigVersions}`,
   ),
+  // Decision 0127: the counter goes with its owner's config versions
+  del("hooks_launch_owner_config_versions", ownedBy()),
   // Operators (their audit trail in ops_audit stays)
   del("ops_operations", ownedBy("actor_id")),
   del("ops_grants", ownedBy("user_id")),
