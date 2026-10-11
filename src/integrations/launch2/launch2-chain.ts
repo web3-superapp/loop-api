@@ -8,6 +8,7 @@ import {
   type Abi,
   type Address,
   type Hex,
+  type Log,
   type Transport,
 } from "viem";
 import { bscTestnet } from "viem/chains";
@@ -91,16 +92,33 @@ function stringify(value: unknown): string {
   throw new Launch2ChainRefusedError("LAUNCH2_LOG_DECODE_FAILED");
 }
 
+/**
+ * Public BSC Testnet endpoints refuse `eth_getLogs` once the address filter
+ * grows past a handful of contracts (publicnode answers HTTP 403 "Request
+ * blocked" from 10 addresses on; measured 2026-10-11). One lane poll covers
+ * every Factory plus five contracts per instance, so the reader splits the
+ * filter into batches of this size and merges the answers in log order.
+ */
+export const launch2DefaultMaxAddressesPerLogQuery = 8;
+
 export function createLaunch2Chain(input: {
   readonly rpcUrls: readonly string[];
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
   readonly expectedChainId?: number;
+  /** Address-filter batch size per `eth_getLogs`; default 8. */
+  readonly maxAddressesPerLogQuery?: number;
 }): Launch2Chain {
   if (input.rpcUrls.length === 0 && input.transport === undefined) {
     throw new Launch2ChainRefusedError("LAUNCH2_CHAIN_NOT_CONFIGURED");
   }
   const expectedChainId = input.expectedChainId ?? 97;
+  const maxAddresses = Math.max(
+    1,
+    Math.floor(
+      input.maxAddressesPerLogQuery ?? launch2DefaultMaxAddressesPerLogQuery,
+    ),
+  );
   const transport =
     input.transport ??
     fallback(
@@ -156,11 +174,26 @@ export function createLaunch2Chain(input: {
 
     async getLogs({ roles, fromBlock, toBlock }) {
       if (roles.size === 0) return { logs: [], ignored: 0 };
-      const raw = await client.getLogs({
-        address: [...roles.keys()] as Address[],
-        fromBlock,
-        toBlock,
-      });
+      const addresses = [...roles.keys()] as Address[];
+      const raw: Log<bigint, number, false>[] = [];
+      for (let i = 0; i < addresses.length; i += maxAddresses) {
+        raw.push(
+          ...(await client.getLogs({
+            address: addresses.slice(i, i + maxAddresses),
+            fromBlock,
+            toBlock,
+          })),
+        );
+      }
+      if (addresses.length > maxAddresses) {
+        raw.sort((a, b) =>
+          a.blockNumber === b.blockNumber
+            ? a.logIndex - b.logIndex
+            : a.blockNumber < b.blockNumber
+              ? -1
+              : 1,
+        );
+      }
       const logs: Launch2DecodedLog[] = [];
       let ignored = 0;
       for (const log of raw) {
