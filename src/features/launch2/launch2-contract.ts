@@ -55,10 +55,13 @@ export function isLaunch2Stage(value: unknown): value is Launch2Stage {
   );
 }
 
+/** Decision 0124: `pool_buy` / `pool_sell` are official-pool swaps. */
 export const launch2IntentKinds = Object.freeze([
   "nft_mint",
   "buy",
   "sell",
+  "pool_buy",
+  "pool_sell",
 ] as const);
 
 export type Launch2IntentKind = (typeof launch2IntentKinds)[number];

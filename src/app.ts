@@ -439,8 +439,12 @@ import {
   createUnavailableLaunch2Service,
   type Launch2Service,
 } from "./features/launch2/launch2-service.js";
-import type { Launch2Chain } from "./features/launch2/launch2-ports.js";
+import type {
+  Launch2Chain,
+  Launch2PoolChain,
+} from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
+import { createLaunch2PoolChain } from "./integrations/launch2/launch2-pool-chain.js";
 import {
   createMiningRewardsService,
   type MiningRewardsService,
@@ -599,6 +603,8 @@ export interface BuildAppOptions {
   /** Test seams for the MEME v2 read model (Decision 0114). */
   readonly launch2Service?: Launch2Service;
   readonly launch2Chain?: Launch2Chain | null;
+  /** Decision 0124: test seam for the official-pool router reader. */
+  readonly launch2PoolChain?: Launch2PoolChain | null;
   /** Decision 0116 seams: the LoopRewardClaim reader and the rewards service. */
   readonly miningClaimChain?: MiningClaimChain | null;
   readonly miningRewardsService?: MiningRewardsService;
@@ -2112,6 +2118,53 @@ export async function buildApp(
       : launch2Registered && launch2UnavailableReason === null
         ? createLaunch2Chain({ rpcUrls: config.launchChain.rpcUrls })
         : null;
+  // Decision 0124: the official-pool router reader exists only with the
+  // router address + code hash and the launch slot endpoints; its code hash
+  // is checked at startup (logged) and before every pool quote / prepare.
+  const launch2PoolChain: Launch2PoolChain | null =
+    options.launch2PoolChain !== undefined
+      ? options.launch2PoolChain
+      : launch2Registered &&
+          launch2UnavailableReason === null &&
+          config.launch2.poolRouter !== null &&
+          config.launchChain.chainId === bscTestnetChainId &&
+          config.launchChain.rpcUrls.length > 0
+        ? createLaunch2PoolChain({
+            rpcUrls: config.launchChain.rpcUrls,
+            router: config.launch2.poolRouter.address,
+            expectedRuntimeCodeHash: config.launch2.poolRouter.codeHash,
+          })
+        : null;
+  if (launch2PoolChain !== null && options.launch2PoolChain === undefined) {
+    void launch2PoolChain
+      .verifyRouter()
+      .then((check) => {
+        if (check.status === "ok") {
+          app.log.info(
+            { capabilityId: "launch2", router: launch2PoolChain.router },
+            "launch2 official-pool router code hash verified",
+          );
+        } else {
+          app.log.warn(
+            {
+              capabilityId: "launch2",
+              router: launch2PoolChain.router,
+              reasonCode: check.reasonCode,
+            },
+            "launch2 official-pool router is unavailable at startup",
+          );
+        }
+      })
+      .catch(() => {
+        app.log.warn(
+          {
+            capabilityId: "launch2",
+            reasonCode: "LAUNCH2_CHAIN_READ_FAILED",
+          },
+          "launch2 official-pool router check failed at startup",
+        );
+      });
+  }
   const launch2Service =
     options.launch2Service ??
     (launch2Registered
@@ -2126,6 +2179,7 @@ export async function buildApp(
           unavailableReason: launch2UnavailableReason,
           quoteTtlSeconds: config.launch2.quoteTtlSeconds,
           defaultSlippageBps: config.launch2.defaultSlippageBps,
+          poolChain: launch2PoolChain,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),
         })

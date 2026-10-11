@@ -187,3 +187,7 @@ zero-power epochs), `test/v2-launch-routes.test.ts` (`communityId`), `test/admin
    index pool swaps yet (S146-api scope).
 4. A material approval by the dev CLI (`pnpm launch:review`) writes no `launch_project_approvals`
    row, so `materialApproval` stays null for those projects.
+5. Main-agent ruling (2026-10-11): projects already approved — including the two dev instances —
+   get **no** after-the-fact way to set `communityId`. Their communities are bound by hand (the
+   community owner sets the bound asset through the existing community edit, which accepts the MEME
+   once this lane has registered it).

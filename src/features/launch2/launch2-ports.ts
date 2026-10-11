@@ -1,4 +1,8 @@
-import type { Launch2HoldReason, Launch2Stage } from "./launch2-contract.js";
+import type {
+  Launch2HoldReason,
+  Launch2IntentKind,
+  Launch2Stage,
+} from "./launch2-contract.js";
 import type { Launch2CurveState } from "./launch2-curve-math.js";
 import type { Launch2FactoryGeneration } from "./launch2-generation.js";
 
@@ -23,7 +27,9 @@ export type Launch2ContractRole =
   | "buybackExecutor"
   | "buybackExecutorV2"
   /** Decision 0125: the MEME ERC-20 itself (`Transfer` only). */
-  | "meme";
+  | "meme"
+  /** Decision 0124: the v4 PoolManager (official-pool `Swap` logs only). */
+  | "poolManager";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -38,6 +44,7 @@ export const launch2EventNames = Object.freeze([
   "BuybackCompleted",
   "BuybackPausedEvent",
   "BuybackResumed",
+  "Swap",
 ] as const);
 
 export type Launch2EventName = (typeof launch2EventNames)[number];
@@ -114,6 +121,12 @@ export interface Launch2Chain {
     readonly roles: ReadonlyMap<string, Launch2ContractRole>;
     readonly fromBlock: bigint;
     readonly toBlock: bigint;
+    /**
+     * Decision 0124: PoolManager `Swap` logs of these pool ids only
+     * (PoolManager address → pool ids; topic-filtered, batched like the
+     * address filter). Decoded with the `poolManager` role.
+     */
+    readonly poolSwaps?: ReadonlyMap<string, readonly string[]>;
   }): Promise<{
     readonly logs: readonly Launch2DecodedLog[];
     readonly ignored: number;
@@ -148,6 +161,90 @@ export interface Launch2Chain {
     /** Decision 0122: selects the executor ABI. */
     readonly generation: Launch2FactoryGeneration;
   }): Promise<Launch2BuybackChainState>;
+  /**
+   * Decision 0124 (lane): the hook's immutable `poolManager()` and
+   * `currency0()` — where the official pool's Swap logs come from and which
+   * side of them is MEME.
+   */
+  readHookPool(hook: string): Promise<{
+    readonly poolManager: string;
+    readonly currency0: string;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// Decision 0124: the official-pool router reader (route-facing)
+// ---------------------------------------------------------------------------
+
+export type Launch2PoolRouterCheck =
+  | { readonly status: "ok"; readonly poolManager: string }
+  | { readonly status: "unavailable"; readonly reasonCode: string };
+
+/** Pool, hook and wallet facts at one block of the launch slot. */
+export interface Launch2PoolChainState {
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly blockTimestamp: bigint;
+  /** `OfficialTaxHook.poolManager()` / `currency0()` / `currency1()`. */
+  readonly hookPoolManager: string;
+  readonly currency0: string;
+  readonly currency1: string;
+  /** `CurveEngine.usd1()` of the instance (Decision 0117 trust anchor). */
+  readonly curveUsd1: string;
+  /** PoolManager slot0 of the pool id asked about. */
+  readonly sqrtPriceX96: bigint;
+  readonly usd1Balance: bigint;
+  readonly memeBalance: bigint;
+  /** `allowance(wallet, router)` of each token. */
+  readonly usd1Allowance: bigint;
+  readonly memeAllowance: bigint;
+}
+
+export type Launch2PoolSimulation =
+  | { readonly status: "ok"; readonly returned: bigint }
+  | {
+      readonly status: "reverted";
+      /** Decoded custom error name (router / hook / PoolManager / ERC20). */
+      readonly errorName: string | null;
+    }
+  /** The node refused the state override or the token layout is unknown. */
+  | { readonly status: "override_unsupported" };
+
+export interface Launch2PoolCall {
+  readonly blockNumber: bigint;
+  readonly from: string;
+  readonly data: string;
+  /**
+   * In-call state override of the input token for `from`: `balance` (null =
+   * keep the real balance) and the allowance to the router.
+   */
+  readonly override: {
+    readonly token: string;
+    readonly balance: bigint | null;
+    readonly allowance: bigint;
+  } | null;
+}
+
+export interface Launch2PoolChain {
+  /** `LAUNCH2_POOL_ROUTER_ADDRESS` (lower-case). */
+  readonly router: string;
+  /**
+   * The router's runtime code hash equals `LAUNCH2_POOL_ROUTER_CODE_HASH`
+   * (and its `poolManager()`); cached once verified, re-read after a
+   * failure.
+   */
+  verifyRouter(): Promise<Launch2PoolRouterCheck>;
+  readPoolState(input: {
+    readonly hook: string;
+    readonly curve: string;
+    readonly meme: string;
+    readonly poolId: string;
+    readonly wallet: string;
+  }): Promise<Launch2PoolChainState>;
+  /** eth_call of a router call; returns the uint256 the function returns. */
+  simulate(call: Launch2PoolCall): Promise<Launch2PoolSimulation>;
+  /** eth_estimateGas of the same call (null when the node refuses). */
+  estimateGas(call: Launch2PoolCall): Promise<bigint | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +358,22 @@ export interface Launch2InstanceRecord {
     readonly meme: string;
     readonly lastAt: string | null;
   };
+  /**
+   * Decision 0124: the official pool's indexed swaps (all callers). Raw
+   * integer strings; `volume24hUsd1` is computed at read time.
+   */
+  readonly pool: {
+    readonly tradeCount: string;
+    readonly buyCount: string;
+    readonly sellCount: string;
+    readonly buyVolumeUsd1: string;
+    readonly sellVolumeUsd1: string;
+    readonly volume24hUsd1: string;
+    readonly taxUsd1: string;
+    readonly taxMeme: string;
+    readonly lastPriceE18: string | null;
+    readonly lastTradeAt: string | null;
+  };
   /** Decision 0121: the buyback keeper's newest attempt, if any. */
   readonly buybackKeeper: {
     readonly status:
@@ -312,6 +425,8 @@ export interface Launch2LaneInstance {
   readonly nftSaleEnd: string;
   readonly holdReason: Launch2HoldReason | null;
   readonly graduated: boolean;
+  /** Decision 0124: `Graduated.officialPoolId` once indexed. */
+  readonly officialPoolId: string | null;
   readonly snapshotPublishedAt: string | null;
   /** Decision 0120: a no-holder closure is recorded. */
   readonly closedNoHolders: boolean;
@@ -404,7 +519,7 @@ export interface CreateLaunch2IntentRecord {
   readonly instanceId: string;
   readonly walletId: string;
   readonly walletAddress: string;
-  readonly kind: "nft_mint" | "buy" | "sell";
+  readonly kind: Launch2IntentKind;
   readonly chainId: string;
   readonly contractAddress: string;
   readonly amountIn: string;

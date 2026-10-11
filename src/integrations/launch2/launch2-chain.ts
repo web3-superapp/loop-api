@@ -4,6 +4,7 @@ import {
   decodeFunctionData,
   erc20Abi,
   fallback,
+  getAbiItem,
   http,
   recoverTypedDataAddress,
   type Abi,
@@ -29,6 +30,8 @@ import {
   loopLaunchFactoryAbi,
   memeTokenAbi,
   nftEscrowAbi,
+  officialTaxHookAbi,
+  poolManagerAbi,
   projectNFTAbi,
   snapshotRegistryAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
@@ -81,7 +84,11 @@ const roleAbis: Readonly<
   },
   // Decision 0125: the MEME ERC-20 (generated ABI lists no events).
   meme: { abi: erc20Abi, events: ["Transfer"] },
+  // Decision 0124: only `Swap`, and only the pool ids the lane asks for.
+  poolManager: { abi: poolManagerAbi, events: ["Swap"] },
 };
+
+const poolManagerSwapEvent = getAbiItem({ abi: poolManagerAbi, name: "Swap" });
 
 function lower(value: string): string {
   return value.toLowerCase();
@@ -175,11 +182,16 @@ export function createLaunch2Chain(input: {
       }
     },
 
-    async getLogs({ roles, fromBlock, toBlock }) {
-      if (roles.size === 0) return { logs: [], ignored: 0 };
+    async getLogs({ roles, fromBlock, toBlock, poolSwaps }) {
+      const pools = [...(poolSwaps ?? new Map<string, readonly string[]>())];
+      if (roles.size === 0 && pools.every(([, ids]) => ids.length === 0)) {
+        return { logs: [], ignored: 0 };
+      }
       const addresses = [...roles.keys()] as Address[];
       const raw: Log<bigint, number, false>[] = [];
+      let queries = 0;
       for (let i = 0; i < addresses.length; i += maxAddresses) {
+        queries += 1;
         raw.push(
           ...(await client.getLogs({
             address: addresses.slice(i, i + maxAddresses),
@@ -188,7 +200,25 @@ export function createLaunch2Chain(input: {
           })),
         );
       }
-      if (addresses.length > maxAddresses) {
+      // Decision 0124: the PoolManager serves every v4 pool on the chain, so
+      // its Swap logs are asked for by pool id (topic1), never by address
+      // alone; the id list is split into batches of the same size.
+      const poolRoles = new Map(roles);
+      for (const [poolManager, ids] of pools) {
+        poolRoles.set(lower(poolManager), "poolManager");
+        for (let i = 0; i < ids.length; i += maxAddresses) {
+          queries += 1;
+          const logs = await client.getLogs({
+            address: poolManager as Address,
+            event: poolManagerSwapEvent,
+            args: { id: ids.slice(i, i + maxAddresses) as Hex[] },
+            fromBlock,
+            toBlock,
+          });
+          raw.push(...(logs as unknown as Log<bigint, number, false>[]));
+        }
+      }
+      if (queries > 1) {
         raw.sort((a, b) =>
           a.blockNumber === b.blockNumber
             ? a.logIndex - b.logIndex
@@ -200,7 +230,7 @@ export function createLaunch2Chain(input: {
       const logs: Launch2DecodedLog[] = [];
       let ignored = 0;
       for (const log of raw) {
-        const role = roles.get(lower(log.address));
+        const role = poolRoles.get(lower(log.address));
         if (role === undefined) {
           ignored += 1;
           continue;
@@ -392,6 +422,22 @@ export function createLaunch2Chain(input: {
         usd1Balance,
         memeBalance,
       };
+    },
+
+    async readHookPool(hook) {
+      const [poolManager, currency0] = await Promise.all([
+        client.readContract({
+          address: hook as Address,
+          abi: officialTaxHookAbi,
+          functionName: "poolManager",
+        }),
+        client.readContract({
+          address: hook as Address,
+          abi: officialTaxHookAbi,
+          functionName: "currency0",
+        }),
+      ]);
+      return { poolManager: lower(poolManager), currency0: lower(currency0) };
     },
 
     async readBuybackState(request): Promise<Launch2BuybackChainState> {

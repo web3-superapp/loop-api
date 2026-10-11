@@ -643,6 +643,46 @@ const viewerSchema = {
   ],
 } as const;
 
+const poolSummarySchema = {
+  description:
+    "Decision 0124 (optional in the schema, always present in answers): the official Uniswap v4 pool after graduation, from the PoolManager Swap logs of officialPoolId the launch2_event lane indexed (every swap of the pool: the in-App router, the buyback executor and any other caller). null before graduation. Volumes are the USD1 side (buy: USD1 in; sell: USD1 out before tax); taxUsd1 is the 2 % taken from sells, taxMeme from buys (exact-output swaps may be 1 wei off, see docs/frontend-v2-launch2-api.md §pool). lastPriceUsd1 = the pool price after the latest indexed swap (null until the first swap). router = LAUNCH2_POOL_ROUTER_ADDRESS (null when not configured: pool quote / prepare are then 503).",
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "poolId",
+        "router",
+        "tradeCount",
+        "buyCount",
+        "sellCount",
+        "buyVolumeUsd1",
+        "sellVolumeUsd1",
+        "volume24hUsd1",
+        "taxUsd1",
+        "taxMeme",
+        "lastPriceUsd1",
+        "lastTradeAt",
+      ],
+      properties: {
+        poolId: bytes32Schema,
+        router: { anyOf: [addressSchema, { type: "null" }] },
+        tradeCount: uintStringSchema,
+        buyCount: uintStringSchema,
+        sellCount: uintStringSchema,
+        buyVolumeUsd1: decimalSchema,
+        sellVolumeUsd1: decimalSchema,
+        volume24hUsd1: decimalSchema,
+        taxUsd1: decimalSchema,
+        taxMeme: decimalSchema,
+        lastPriceUsd1: { anyOf: [decimalSchema, { type: "null" }] },
+        lastTradeAt: nullableDateTimeSchema,
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
 const detailProperties = {
   ...summaryProperties,
   viewerIsProjectOwner: { type: "boolean" },
@@ -669,7 +709,7 @@ export const launch2InstanceDetailResourceSchema = {
       type: "object",
       additionalProperties: false,
       required: Object.keys(detailProperties),
-      properties: detailProperties,
+      properties: { ...detailProperties, pool: poolSummarySchema },
     },
     contractVersion: contractVersionSchema,
   },
@@ -1003,6 +1043,209 @@ export const launch2IntentResourceSchema = {
         },
       },
     },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Decision 0124: official-pool (Uniswap v4) trading after graduation.
+// ---------------------------------------------------------------------------
+
+const poolSideSchema = { type: "string", enum: ["buy", "sell"] } as const;
+const poolModeSchema = {
+  type: "string",
+  enum: ["exactIn", "exactOut"],
+  description:
+    "exactIn: amount = the input (buy: USD1 in, sell: MEME in); exactOut: amount = the net output after the 2 % pool tax (buy: MEME out, sell: USD1 out).",
+} as const;
+
+export const launch2PoolQuoteQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["side", "mode", "amount", "walletId"],
+  properties: {
+    side: poolSideSchema,
+    mode: poolModeSchema,
+    amount: decimalSchema,
+    walletId: opaqueIdSchema,
+    slippageBps: { type: "string", pattern: "^(0|[1-9][0-9]{0,3})$" },
+  },
+} as const;
+
+export const launch2PoolTradePrepareRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId", "side", "mode", "amount", "slippageBps"],
+  properties: {
+    walletId: opaqueIdSchema,
+    side: poolSideSchema,
+    mode: poolModeSchema,
+    amount: {
+      ...decimalSchema,
+      description:
+        "Same meaning as the quote's amount for the same side / mode.",
+    },
+    slippageBps: {
+      type: "integer",
+      minimum: 0,
+      maximum: 5_000,
+      description:
+        "exactIn: minOut = expectedOut × (1 − slippage); exactOut: maxIn = amountIn × (1 + slippage), rounded up.",
+    },
+  },
+} as const;
+
+const poolKeySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["currency0", "currency1", "fee", "tickSpacing", "hooks"],
+  properties: {
+    currency0: addressSchema,
+    currency1: addressSchema,
+    fee: { type: "integer", const: 2_500 },
+    tickSpacing: { type: "integer", const: 60 },
+    hooks: addressSchema,
+  },
+} as const;
+
+export const launch2PoolQuoteSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "instanceId",
+    "walletId",
+    "venue",
+    "side",
+    "mode",
+    "stage",
+    "requestedAmount",
+    "amountIn",
+    "maxIn",
+    "expectedOut",
+    "minOut",
+    "slippageBps",
+    "taxBps",
+    "taxAmount",
+    "taxToken",
+    "taxUsd1",
+    "priceBeforeUsd1",
+    "averagePriceUsd1",
+    "balance",
+    "exceedsBalance",
+    "router",
+    "poolId",
+    "poolKey",
+    "zeroForOne",
+    "deadline",
+    "expiresAt",
+    "quotedAt",
+    "quotedAtBlock",
+    "basis",
+  ],
+  properties: {
+    instanceId: opaqueIdSchema,
+    walletId: opaqueIdSchema,
+    venue: { type: "string", const: "official_pool" },
+    side: poolSideSchema,
+    mode: poolModeSchema,
+    stage: { type: "string", const: "graduated" },
+    requestedAmount: decimalSchema,
+    amountIn: {
+      ...decimalSchema,
+      description:
+        "exactIn: the requested input; exactOut: the simulated input the router spends for the requested net output.",
+    },
+    maxIn: {
+      ...decimalSchema,
+      description:
+        "exactIn: = amountIn; exactOut: amountIn × (1 + slippage), the maxAmountIn of swapExactOut (the router refunds the unused part).",
+    },
+    expectedOut: {
+      ...decimalSchema,
+      description:
+        "Net output after the 2 % pool tax (exactOut: = the requested amount).",
+    },
+    minOut: {
+      ...decimalSchema,
+      description:
+        "exactIn: expectedOut × (1 − slippage), the minAmountOut of swapExactIn; exactOut: = expectedOut.",
+    },
+    slippageBps: { type: "integer", minimum: 0, maximum: 5_000 },
+    taxBps: { type: "integer", const: 200 },
+    taxAmount: {
+      ...decimalSchema,
+      description:
+        "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding.",
+    },
+    taxToken: { type: "string", enum: ["meme", "usd1"] },
+    taxUsd1: {
+      ...decimalSchema,
+      description: "= taxAmount for a sell; 0 for a buy (taxed in MEME).",
+    },
+    priceBeforeUsd1: {
+      ...decimalSchema,
+      description:
+        "Pool spot price (USD1 per MEME) from PoolManager slot0 at the quote block.",
+    },
+    averagePriceUsd1: {
+      ...decimalSchema,
+      description:
+        "USD1 side ÷ MEME side of this quote (tax included on the output side).",
+    },
+    balance: {
+      type: "object",
+      additionalProperties: false,
+      required: ["usd1", "meme"],
+      properties: { usd1: decimalSchema, meme: decimalSchema },
+    },
+    exceedsBalance: {
+      type: "boolean",
+      description:
+        "maxIn is above the wallet's input-token balance at the quote block; the prepare would be 409 INSUFFICIENT_BALANCE.",
+    },
+    router: addressSchema,
+    poolId: bytes32Schema,
+    poolKey: poolKeySchema,
+    zeroForOne: {
+      type: "boolean",
+      description: "The input is currency0 (buy: USD1 < MEME).",
+    },
+    deadline: {
+      ...dateTimeSchema,
+      description: "The swap deadline the prepare encodes (quote + TTL).",
+    },
+    expiresAt: { ...dateTimeSchema, description: "= deadline." },
+    quotedAt: dateTimeSchema,
+    quotedAtBlock: uintStringSchema,
+    basis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["blockNumber", "blockHash"],
+      properties: {
+        blockNumber: uintStringSchema,
+        blockHash: bytes32Schema,
+      },
+    },
+  },
+} as const;
+
+export const launch2PoolQuoteResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["quote", "contractVersion"],
+  properties: {
+    quote: launch2PoolQuoteSchema,
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const launch2PoolIntentResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["launch2Intent", "quote", "contractVersion"],
+  properties: {
+    launch2Intent: launch2IntentResourceSchema.properties.launch2Intent,
+    quote: launch2PoolQuoteSchema,
     contractVersion: contractVersionSchema,
   },
 } as const;

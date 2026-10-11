@@ -171,6 +171,11 @@ export const hooksLaunchAbiSelection = {
     "openPublicWithoutSnapshot",
     "PublicRoundOpenedWithoutHolders",
   ],
+  // Decision 0124: the official-pool swap router the App trades through
+  // after graduation, and the PoolManager views / events around it (slot0
+  // through extsload, the Swap log the launch2_event lane indexes).
+  OfficialPoolRouter: ["poolManager", "swapExactIn", "swapExactOut", "Swap"],
+  PoolManager: ["extsload", "Swap"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type HooksLaunchAbiContract = keyof typeof hooksLaunchAbiSelection;

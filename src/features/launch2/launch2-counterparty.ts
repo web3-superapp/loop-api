@@ -66,8 +66,19 @@ export function requireLaunch2Counterparties(input: {
   readonly record: Launch2InstanceRecord;
   readonly usd1: string;
   readonly targets: readonly string[];
+  /**
+   * Decision 0124: the official-pool router (`LAUNCH2_POOL_ROUTER_ADDRESS`,
+   * runtime code hash verified against `LAUNCH2_POOL_ROUTER_CODE_HASH`
+   * before any pool prepare) is trusted beside the instance's contracts —
+   * still only for an activated, unheld instance.
+   */
+  readonly verifiedRouter?: string;
 }): void {
-  const trusted = launch2TrustedCounterparties(input.record, input.usd1);
+  const instance = launch2TrustedCounterparties(input.record, input.usd1);
+  const trusted =
+    instance === null || input.verifiedRouter === undefined
+      ? instance
+      : new Set([...instance, input.verifiedRouter.toLowerCase()]);
   if (
     trusted === null ||
     input.targets.length === 0 ||

@@ -34,7 +34,9 @@ import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
  *    Factory's generation recorded on the instance);
  * 2. reads the logs of the Factory and every instance's gate / NFT /
  *    snapshot registry / curve / buyback executor over ≤ `maxLogRange`
- *    blocks, with the Decision 0034 checkpoint discipline of the S116 lanes
+ *    blocks — Decision 0124: plus the PoolManager `Swap` logs of every
+ *    graduated instance's `officialPoolId` (topic-filtered by pool id; a
+ *    graduation in the same segment triggers a second, pool-only read), with the Decision 0034 checkpoint discipline of the S116 lanes
  *    (one `(launch2_event, chain)` checkpoint; a hash mismatch at the
  *    checkpoint rewinds by the slot's reorg depth and marks the facts above
  *    it `removed`; a newly registered instance older than the checkpoint
@@ -144,6 +146,25 @@ function rolesOf(
   return { roles, owners, byLaunchId };
 }
 
+interface PoolOwner {
+  readonly instanceId: string;
+  readonly poolManager: string;
+  readonly memeIsCurrency0: boolean;
+}
+
+/** PoolManager → the pool ids it serves (lane → chain filter). */
+function poolFilter(
+  pools: ReadonlyMap<string, PoolOwner>,
+): Map<string, string[]> {
+  const filter = new Map<string, string[]>();
+  for (const [poolId, owner] of pools) {
+    const ids = filter.get(owner.poolManager) ?? [];
+    ids.push(poolId);
+    filter.set(owner.poolManager, ids);
+  }
+  return filter;
+}
+
 function result(
   kind: Launch2LaneResult["kind"],
   reasonCode: string | null,
@@ -176,6 +197,34 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
   const factories = options.factories.map((factory) =>
     Object.freeze({ ...factory, address: factory.address.toLowerCase() }),
   );
+
+  /** Hook → (PoolManager, currency0): immutable, read once per hook. */
+  const hookPools = new Map<
+    string,
+    { readonly poolManager: string; readonly currency0: string }
+  >();
+
+  async function addPools(
+    into: Map<string, PoolOwner>,
+    entries: readonly {
+      readonly instance: Launch2LaneInstance;
+      readonly poolId: string;
+    }[],
+  ): Promise<void> {
+    for (const { instance, poolId } of entries) {
+      const hook = instance.addresses.hook;
+      let facts = hookPools.get(hook);
+      if (facts === undefined) {
+        facts = await options.chain.readHookPool(hook);
+        hookPools.set(hook, facts);
+      }
+      into.set(poolId.toLowerCase(), {
+        instanceId: instance.instanceId,
+        poolManager: facts.poolManager,
+        memeIsCurrency0: facts.currency0 === instance.addresses.meme,
+      });
+    }
+  }
 
   async function verifySnapshots(): Promise<number> {
     const pending = await options.repository.listSnapshotsToVerify(
@@ -376,21 +425,79 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const toBlock =
         maximumTo < head.blockNumber ? maximumTo : head.blockNumber;
       const { roles, owners, byLaunchId } = rolesOf(factories, instances);
-      const decoded = await options.chain.getLogs({
+      // Decision 0124: the official pools of graduated instances (Swap logs
+      // by pool id); a graduation inside this very segment is read in a
+      // second pass over the same range.
+      const pools = new Map<string, PoolOwner>();
+      const known = instances.flatMap((instance) =>
+        instance.officialPoolId === null
+          ? []
+          : [{ instance, poolId: instance.officialPoolId }],
+      );
+      await addPools(pools, known);
+      const first = await options.chain.getLogs({
         roles,
         fromBlock,
         toBlock,
+        ...(pools.size === 0 ? {} : { poolSwaps: poolFilter(pools) }),
       });
+      const byInstance = new Map(
+        instances.map((instance) => [instance.instanceId, instance]),
+      );
+      const fresh = new Map<string, PoolOwner>();
+      await addPools(
+        fresh,
+        first.logs.flatMap((log) => {
+          const owner = owners.get(log.contractAddress);
+          const instance =
+            owner === undefined ? undefined : byInstance.get(owner);
+          const poolId = log.args["officialPoolId"];
+          return log.eventName === "Graduated" &&
+            instance !== undefined &&
+            poolId !== undefined &&
+            !pools.has(poolId)
+            ? [{ instance, poolId }]
+            : [];
+        }),
+      );
+      const second =
+        fresh.size === 0
+          ? null
+          : await options.chain.getLogs({
+              roles: new Map(),
+              fromBlock,
+              toBlock,
+              poolSwaps: poolFilter(fresh),
+            });
+      for (const [poolId, owner] of fresh) pools.set(poolId, owner);
+      const decoded = {
+        logs: [...first.logs, ...(second?.logs ?? [])].sort((a, b) =>
+          a.blockNumber === b.blockNumber
+            ? a.logIndex - b.logIndex
+            : a.blockNumber < b.blockNumber
+              ? -1
+              : 1,
+        ),
+        ignored: first.ignored + (second?.ignored ?? 0),
+      };
       if (aborted(signal)) return result("aborted", null);
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
       const memeTransfers: Launch2MemeTransferRecord[] = [];
       let ignored = decoded.ignored;
       for (const log of decoded.logs) {
+        const swapPool =
+          log.eventName === "Swap"
+            ? pools.get(log.args["id"] ?? "")
+            : undefined;
         const instanceId =
           log.eventName === "LaunchDeployed"
             ? byLaunchId.get(log.args["launchId"] ?? "")
-            : owners.get(log.contractAddress);
+            : log.eventName === "Swap"
+              ? swapPool?.poolManager === log.contractAddress
+                ? swapPool.instanceId
+                : undefined
+              : owners.get(log.contractAddress);
         if (instanceId === undefined) {
           // Factory deployments that are not LOOP-registered instances.
           ignored += 1;
@@ -424,7 +531,14 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           instanceId,
           contractAddress: log.contractAddress,
           eventName: log.eventName,
-          args: log.args,
+          // Decision 0124: which side of a Swap is MEME (hook currency0).
+          args:
+            swapPool === undefined
+              ? log.args
+              : Object.freeze({
+                  ...log.args,
+                  memeIsCurrency0: swapPool.memeIsCurrency0 ? "true" : "false",
+                }),
           transactionHash: log.transactionHash,
           logIndex: log.logIndex,
           blockNumber: log.blockNumber.toString(10),

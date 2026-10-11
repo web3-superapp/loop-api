@@ -179,6 +179,7 @@ describe("database schema readiness contract", () => {
       "public.launch2_snapshot_closures",
       "public.launch2_snapshot_publication_releases",
       "public.launch2_buyback_attempts",
+      "public.launch2_pool_swaps",
       "public.launch_project_rejections",
       "public.launch_project_approvals",
       "public.launch2_meme_transfers",
