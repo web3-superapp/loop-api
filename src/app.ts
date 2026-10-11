@@ -2179,6 +2179,7 @@ export async function buildApp(
           unavailableReason: launch2UnavailableReason,
           quoteTtlSeconds: config.launch2.quoteTtlSeconds,
           defaultSlippageBps: config.launch2.defaultSlippageBps,
+          tradeDeadlineSeconds: config.launch2.tradeDeadlineSeconds,
           poolChain: launch2PoolChain,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),

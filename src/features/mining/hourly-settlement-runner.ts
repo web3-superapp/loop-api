@@ -355,7 +355,10 @@ export function prepareMiningHour(input: {
       if (post === null) {
         excludedAssets.push({
           assetId: asset.assetId,
-          reasonCode: miningSettlementReasonCodes.assetGraduatedUnreadable,
+          // Decision 0126: a quantity hour only lacks the balance coverage.
+          reasonCode: valued
+            ? miningSettlementReasonCodes.assetGraduatedUnreadable
+            : miningSettlementReasonCodes.assetGraduatedBalancePending,
           from: iso(cutoff),
         });
       }

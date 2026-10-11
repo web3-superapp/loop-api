@@ -109,6 +109,25 @@ const epochPageSize = 24;
 const claimPageSize = 20;
 const txHashPattern = /^0x[0-9a-f]{64}$/u;
 
+/**
+ * Decision 0126: hours settled before the runner distinguished the two
+ * cases stored MINING_ASSET_GRADUATED_UNREADABLE for every graduated
+ * exclusion. Under a quantity basis the only cause is the pending balance
+ * coverage, so the answer names that; a valuation (pre-0123) hour keeps the
+ * stored code. The stored summary is not rewritten (it is not digested).
+ */
+function excludedReasonOf(
+  reasonCode: string,
+  summary: Readonly<Record<string, unknown>>,
+): string {
+  if (reasonCode !== reasons.assetGraduatedUnreadable) {
+    return reasonCode;
+  }
+  const bases = summary["assetPowerBases"];
+  const valued = Array.isArray(bases) && bases.includes("valuation");
+  return valued ? reasonCode : reasons.assetGraduatedBalancePending;
+}
+
 function unavailableWith(reasonCode: string): never {
   throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
 }
@@ -649,7 +668,10 @@ export function createMiningRewardsService(
                   holdings: reward?.assetHoldings ?? [],
                   excludedAssets: excluded.map((entry) => ({
                     assetId: entry.assetId,
-                    reasonCode: entry.reasonCode,
+                    reasonCode: excludedReasonOf(
+                      entry.reasonCode,
+                      latest.inputSummary,
+                    ),
                   })),
                 }),
               }),

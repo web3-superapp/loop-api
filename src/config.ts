@@ -790,6 +790,10 @@ const environmentSchema = z
     // slippage. The routes exist only with `launch2` in V2_MODULES_ENABLED.
     LAUNCH2_QUOTE_TTL_SECONDS: positiveIntegerString(10, 600),
     LAUNCH2_DEFAULT_SLIPPAGE_BPS: positiveIntegerString(0, 5_000),
+    // Decision 0126: the on-chain deadline a curve / pool prepare encodes,
+    // counted from the prepare (the approve and the trade are two device
+    // signatures). The quote TTL above stays the quote's freshness.
+    LAUNCH2_POOL_TRADE_DEADLINE_SECONDS: positiveIntegerString(60, 600),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1013,6 +1017,10 @@ const reconciliationWorkerEnvironmentSchema = z
     // Decision 0122: read-only older Factories (`v2:0x…,…`) the
     // launch2_event lane keeps indexing beside HOOKS_LAUNCH_FACTORY_ADDRESS.
     LAUNCH2_LEGACY_FACTORIES: optionalCredential(2_048),
+    // Decision 0126: the lane attributes official-pool swaps to wallets
+    // through this router's Swap events (same unit as the API's pair).
+    LAUNCH2_POOL_ROUTER_ADDRESS: optionalCredential(64),
+    LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
     MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
     MEME_GRADUATION_DELAY_SECONDS: positiveIntegerString(0, 600),
     LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
@@ -1105,6 +1113,7 @@ const reconciliationWorkerEnvironmentSchema = z
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
     refineHooksLaunchFactoryEnvironment(value, context);
+    refineLaunch2PoolRouterEnvironment(value, context);
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1554,6 +1563,8 @@ export interface AppConfig {
   readonly launch2: {
     readonly quoteTtlSeconds: number;
     readonly defaultSlippageBps: number;
+    /** Decision 0126: LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (default 180). */
+    readonly tradeDeadlineSeconds: number;
     /**
      * Decision 0124: LAUNCH2_POOL_ROUTER_ADDRESS / _CODE_HASH (lower-case);
      * null keeps the official-pool quote / prepare unavailable.
@@ -1679,6 +1690,12 @@ export interface ReconciliationWorkerConfig {
       readonly generation: Launch2FactoryGeneration;
     }[];
     readonly pollIntervalMs: number;
+    /**
+     * Decision 0126: LAUNCH2_POOL_ROUTER_ADDRESS (lower-case) — the lane
+     * reads its Swap(payer, recipient) logs to attribute pool swaps; null
+     * leaves pool swaps unattributed.
+     */
+    readonly poolRouterAddress: string | null;
   } | null;
   /**
    * Present only while the executor is enabled; the key is never logged.
@@ -3281,6 +3298,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
         ? undefined
         : environment["LAUNCH2_BUYBACK_RECIPIENT"],
     LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
+    LAUNCH2_POOL_TRADE_DEADLINE_SECONDS:
+      environment["LAUNCH2_POOL_TRADE_DEADLINE_SECONDS"] ?? "180",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -3435,6 +3454,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launch2: Object.freeze({
       quoteTtlSeconds: parsed.data.LAUNCH2_QUOTE_TTL_SECONDS,
       defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
+      tradeDeadlineSeconds: parsed.data.LAUNCH2_POOL_TRADE_DEADLINE_SECONDS,
       poolRouter:
         parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
         parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined
@@ -3501,6 +3521,14 @@ export function loadReconciliationWorkerConfig(
     LAUNCH2_INDEXER_POLL_INTERVAL_MS:
       environment["LAUNCH2_INDEXER_POLL_INTERVAL_MS"] ?? "3000",
     LAUNCH2_LEGACY_FACTORIES: environment["LAUNCH2_LEGACY_FACTORIES"],
+    LAUNCH2_POOL_ROUTER_ADDRESS:
+      environment["LAUNCH2_POOL_ROUTER_ADDRESS"]?.trim() === ""
+        ? undefined
+        : environment["LAUNCH2_POOL_ROUTER_ADDRESS"],
+    LAUNCH2_POOL_ROUTER_CODE_HASH:
+      environment["LAUNCH2_POOL_ROUTER_CODE_HASH"]?.trim() === ""
+        ? undefined
+        : environment["LAUNCH2_POOL_ROUTER_CODE_HASH"],
     MEME_GRADUATION_EXECUTOR_ENABLED:
       environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
     MEME_GRADUATION_DELAY_SECONDS:
@@ -3694,6 +3722,11 @@ export function loadReconciliationWorkerConfig(
             parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS,
           ),
           pollIntervalMs: parsed.data.LAUNCH2_INDEXER_POLL_INTERVAL_MS,
+          poolRouterAddress:
+            parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
+            parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined
+              ? null
+              : parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS.toLowerCase(),
         })
       : null,
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),

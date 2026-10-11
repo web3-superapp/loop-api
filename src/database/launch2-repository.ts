@@ -26,6 +26,8 @@ import {
   type Launch2IntentRecord,
   type Launch2LaneEvent,
   type Launch2LaneInstance,
+  type Launch2PoolTradeRecord,
+  type Launch2PoolTradeStats,
   type Launch2PositionRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
@@ -173,6 +175,7 @@ const instanceColumns = `
     as pool_volume_24h_usd1,
   coalesce(activated_at, registered_at) as sort_at,
   meme_transfers_target_block::text,
+  pool_router_target_block::text,
   (select jsonb_build_object(
       'status', p.status, 'txHash', p.tx_hash,
       'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
@@ -414,6 +417,39 @@ function secondsToTimestamp(seconds: string): string {
   return new Date(Number(BigInt(seconds)) * 1000).toISOString();
 }
 
+/**
+ * Decision 0126: the router attribution the lane paired with a PoolManager
+ * swap (all five or none; anything malformed is left unattributed).
+ */
+function attributionValues(
+  a: Readonly<Record<string, string>>,
+  logIndex: number,
+): (string | number | null)[] {
+  const payer = a["routerPayer"];
+  const recipient = a["routerRecipient"];
+  const amountIn = a["routerAmountIn"];
+  const amountOut = a["routerAmountOut"];
+  const routerLog = a["routerLogIndex"];
+  const address = /^0x[0-9a-f]{40}$/u;
+  const positive = /^[1-9][0-9]{0,77}$/u;
+  if (
+    payer === undefined ||
+    recipient === undefined ||
+    amountIn === undefined ||
+    amountOut === undefined ||
+    routerLog === undefined ||
+    !address.test(payer) ||
+    !address.test(recipient) ||
+    !positive.test(amountIn) ||
+    !positive.test(amountOut) ||
+    !/^[0-9]{1,9}$/u.test(routerLog) ||
+    Number(routerLog) <= logIndex
+  ) {
+    return [null, null, null, null, null];
+  }
+  return [payer, recipient, amountIn, amountOut, Number(routerLog)];
+}
+
 async function insertFact(
   client: DatabaseClient,
   chainId: string,
@@ -549,12 +585,24 @@ async function insertFact(
             chain_id, transaction_hash, log_index, block_number, block_hash,
             instance_id, pool_id, caller_address, side, usd1_amount,
             meme_amount, tax_amount, tax_token, sqrt_price_x96, price_e18,
-            swapped_at
+            swapped_at, wallet_address, recipient_address, router_amount_in,
+            router_amount_out, router_log_index
           )
           values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10::numeric,
             $11::numeric, $12::numeric, $13, $14::numeric, $15::numeric,
-            $16::timestamptz)
-          ${upsertTail}
+            $16::timestamptz, $17, $18, $19::numeric, $20::numeric, $21::integer)
+          on conflict (chain_id, transaction_hash, log_index) do update set
+            block_number = excluded.block_number,
+            block_hash = excluded.block_hash,
+            removed = false,
+            observed_at = clock_timestamp(),
+            -- Decision 0126: a re-scan fills a missing attribution; one
+            -- already paired is kept (same transaction, same router log).
+            wallet_address = coalesce(public.launch2_pool_swaps.wallet_address, excluded.wallet_address),
+            recipient_address = coalesce(public.launch2_pool_swaps.recipient_address, excluded.recipient_address),
+            router_amount_in = coalesce(public.launch2_pool_swaps.router_amount_in, excluded.router_amount_in),
+            router_amount_out = coalesce(public.launch2_pool_swaps.router_amount_out, excluded.router_amount_out),
+            router_log_index = coalesce(public.launch2_pool_swaps.router_log_index, excluded.router_log_index)
         `,
         values: [
           ...base,
@@ -571,6 +619,7 @@ async function insertFact(
             a["memeIsCurrency0"] === "true",
           ).toString(10),
           at,
+          ...attributionValues(a, event.logIndex),
         ],
       });
     }
@@ -907,9 +956,16 @@ async function reprojectPositions(
         from public.launch2_trades
         where instance_id = $1 and not removed group by trader_address
       ),
+      pool_holders as (
+        -- Decision 0126: wallets whose pool swaps the router attributed.
+        select wallet_address as holder, max(swapped_at) as last
+        from public.launch2_pool_swaps
+        where instance_id = $1 and not removed and wallet_address is not null
+        group by wallet_address
+      ),
       holders as (
         select holder from held union select holder from mints
-        union select holder from trades
+        union select holder from trades union select holder from pool_holders
       )
       insert into public.launch2_positions (
         instance_id, holder_address, nft_minted_token_id, nft_held,
@@ -924,11 +980,12 @@ async function reprojectPositions(
         exists (select 1 from public.launch2_snapshot_members s
           where s.instance_id = $1 and s.member_address = h.holder
             and s.proof is not null),
-        greatest(held.last, m.last, t.last)
+        greatest(held.last, m.last, t.last, ph.last)
       from holders h
       left join held on held.holder = h.holder
       left join mints m on m.holder = h.holder
       left join trades t on t.holder = h.holder
+      left join pool_holders ph on ph.holder = h.holder
       where h.holder ~ '^0x[0-9a-f]{40}$'
     `,
     values: [instanceId, zeroAddress],
@@ -956,6 +1013,9 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     nextChangeAt: instance.nextChangeAt,
     // Decision 0125: null until the one MEME transfer re-scan started.
     memeTransfersTargetBlock: nullableText(row, "meme_transfers_target_block"),
+    // Decision 0126: the router-attribution re-scan.
+    graduationBlockNumber: instance.graduation?.blockNumber ?? null,
+    poolRouterTargetBlock: nullableText(row, "pool_router_target_block"),
   });
 }
 
@@ -1195,6 +1255,31 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               ],
             });
           }
+          if (input.poolRouterCoverage !== undefined) {
+            await client.query({
+              text: `
+                update public.launch2_instances
+                set pool_router_target_block = $3::numeric
+                where chain_id = $1 and instance_id = any($2::uuid[])
+                  and pool_router_target_block is null
+              `,
+              values: [
+                input.chainId,
+                input.poolRouterCoverage.instanceIds,
+                input.poolRouterCoverage.targetBlockNumber,
+              ],
+            });
+          }
+          await client.query({
+            text: `
+              update public.launch2_instances
+              set pool_router_complete_at = clock_timestamp()
+              where chain_id = $1 and pool_router_complete_at is null
+                and pool_router_target_block is not null
+                and pool_router_target_block <= $2::numeric
+            `,
+            values: [input.chainId, input.checkpoint.lastBlockNumber],
+          });
           await client.query({
             text: `
               update public.launch2_instances
@@ -1531,6 +1616,66 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           tradedAt: iso(row, "traded_at"),
           transactionHash: text(row, "transaction_hash"),
           blockNumber: text(row, "block_number"),
+        }),
+      );
+    },
+
+    async listPoolTrades(input) {
+      const rows = await query<Row>(
+        `
+          select pool_trade_id::text, side, router_amount_in::text,
+            router_amount_out::text, usd1_amount::text, meme_amount::text,
+            tax_amount::text, tax_token, price_e18::text, recipient_address,
+            swapped_at, transaction_hash, log_index, block_number::text
+          from public.launch2_pool_swaps
+          where instance_id = $1 and wallet_address = $2 and not removed
+          order by block_number desc, log_index desc
+          limit $3
+        `,
+        [input.instanceId, input.walletAddress.toLowerCase(), input.limit],
+      );
+      return rows.map((row): Launch2PoolTradeRecord =>
+        Object.freeze({
+          poolTradeId: text(row, "pool_trade_id"),
+          side: text(row, "side") === "sell" ? "sell" : "buy",
+          amountIn: text(row, "router_amount_in"),
+          amountOut: text(row, "router_amount_out"),
+          usd1Amount: text(row, "usd1_amount"),
+          memeAmount: text(row, "meme_amount"),
+          taxAmount: text(row, "tax_amount"),
+          taxToken: text(row, "tax_token") === "usd1" ? "usd1" : "meme",
+          priceE18: text(row, "price_e18"),
+          recipientAddress: text(row, "recipient_address"),
+          tradedAt: iso(row, "swapped_at"),
+          transactionHash: text(row, "transaction_hash"),
+          logIndex: Number(row["log_index"]),
+          blockNumber: text(row, "block_number"),
+        }),
+      );
+    },
+
+    async poolTradeStats(input) {
+      if (input.walletAddresses.length === 0) return [];
+      const rows = await query<Row>(
+        `
+          select instance_id::text, wallet_address, count(*)::text as n,
+            max(swapped_at) as last
+          from public.launch2_pool_swaps
+          where wallet_address = any($1::text[]) and not removed
+            and ($2::uuid is null or instance_id = $2::uuid)
+          group by instance_id, wallet_address
+        `,
+        [
+          input.walletAddresses.map((address) => address.toLowerCase()),
+          input.instanceId,
+        ],
+      );
+      return rows.map((row): Launch2PoolTradeStats =>
+        Object.freeze({
+          instanceId: text(row, "instance_id"),
+          walletAddress: text(row, "wallet_address"),
+          count: text(row, "n"),
+          lastAt: nullableIso(row, "last"),
         }),
       );
     },

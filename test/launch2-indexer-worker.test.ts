@@ -64,6 +64,7 @@ function harness(options: {
     readonly poolManager: string;
     readonly currency0: string;
   };
+  readonly poolRouter?: string;
 }) {
   const commits: Parameters<Launch2Repository["commitSegment"]>[0][] = [];
   const verifications: Parameters<
@@ -75,6 +76,7 @@ function harness(options: {
     toBlock: bigint;
     roles?: number;
     poolSwaps?: ReadonlyMap<string, readonly string[]>;
+    routerSwaps?: { router: string; poolIds: readonly string[] };
     roleMap: ReadonlyMap<string, string>;
   }[] = [];
   const warnings: { reasonCode: string; instanceId?: string }[] = [];
@@ -132,6 +134,9 @@ function harness(options: {
         ...(input.poolSwaps === undefined
           ? {}
           : { poolSwaps: input.poolSwaps }),
+        ...(input.routerSwaps === undefined
+          ? {}
+          : { routerSwaps: input.routerSwaps }),
         roleMap: input.roles,
       });
       return Promise.resolve({
@@ -143,7 +148,11 @@ function harness(options: {
               ? (input.poolSwaps
                   ?.get(log.contractAddress)
                   ?.includes(log.args["id"] ?? "") ?? false)
-              : input.roles.size > 0),
+              : log.eventName === "RouterSwap"
+                ? input.routerSwaps !== undefined &&
+                  input.routerSwaps.router === log.contractAddress &&
+                  input.routerSwaps.poolIds.includes(log.args["poolId"] ?? "")
+                : input.roles.size > 0),
         ),
         ignored: 0,
       });
@@ -151,6 +160,7 @@ function harness(options: {
     readSnapshotPublication: () => Promise.resolve(null),
     recoverSnapshotSigners: () => Promise.resolve([]),
     readViewerState: () => Promise.reject(new Error("unused")),
+    readWalletBalances: () => Promise.reject(new Error("unused")),
     readBuybackState: () => Promise.reject(new Error("unused")),
     readHookPool: () =>
       options.hookPool === undefined
@@ -170,6 +180,9 @@ function harness(options: {
     ...(options.memeAssets === undefined
       ? {}
       : { memeAssets: options.memeAssets }),
+    ...(options.poolRouter === undefined
+      ? {}
+      : { poolRouter: options.poolRouter }),
   });
   return {
     lane,

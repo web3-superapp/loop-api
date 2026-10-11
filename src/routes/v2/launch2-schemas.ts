@@ -173,7 +173,7 @@ export const launch2TradePrepareRequestSchema = {
     deadline: {
       ...dateTimeSchema,
       description:
-        "The quote's deadline; past it the prepare is 409 QUOTE_EXPIRED.",
+        "The quote's deadline (quote time + LAUNCH2_QUOTE_TTL_SECONDS, the freshness check): past it the prepare is 409 QUOTE_EXPIRED, more than 600 s ahead 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the encoded on-chain deadline (and the intent's deadline / expiresAt) is max(this, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s), so two device signatures (approve + trade) fit.",
     },
   },
 } as const;
@@ -618,13 +618,63 @@ const graduationSchema = {
   ],
 } as const;
 
+/**
+ * Decision 0126: the wallet's live ERC-20 balances of a graduated instance
+ * (MEME and the instance's USD1), read at one block of the launch slot and
+ * cached ≤ 15 s per (instance, wallet). Before graduation (curve phase)
+ * the balances are null with balanceStatus not_graduated — the curve block
+ * is the position there. A failed read is null with balanceStatus
+ * unavailable and balanceReasonCode (never a guessed 0).
+ */
+const walletHoldingProperties = {
+  memeBalance: {
+    anyOf: [decimalSchema, { type: "null" }],
+    description:
+      "Decision 0126: MEME ERC-20 balanceOf(wallet) at balanceBlockNumber (graduated instances only; null otherwise or when the read failed).",
+  },
+  usd1Balance: {
+    anyOf: [decimalSchema, { type: "null" }],
+    description:
+      "Decision 0126: the instance USD1 (CurveEngine.usd1()) balanceOf(wallet) at the same block; null like memeBalance.",
+  },
+  balanceStatus: {
+    type: "string",
+    enum: ["available", "not_graduated", "unavailable"],
+    description:
+      "available: both balances read at balanceBlockNumber; not_graduated: curve phase (balances null, use curve); unavailable: the chain read failed or the launch slot is not configured (balanceReasonCode).",
+  },
+  balanceReasonCode: {
+    ...nullableReasonCodeSchema,
+    description:
+      "unavailable only: LAUNCH2_CHAIN_READ_FAILED | LAUNCH2_CHAIN_NOT_CONFIGURED; else null.",
+  },
+  balanceBlockNumber: nullableUintStringSchema,
+  poolTradeCount: {
+    ...uintStringSchema,
+    description:
+      'Decision 0126: the wallet\'s own official-pool trades the launch2_event lane attributed through OfficialPoolRouter Swap(payer) ("0" before graduation). Use it — not pool.tradeCount — as the confirmation signal after a pool trade.',
+  },
+  lastPoolTradeAt: {
+    ...nullableDateTimeSchema,
+    description: "Block time of the wallet's newest attributed pool trade.",
+  },
+} as const;
+const walletHoldingRequired = Object.keys(walletHoldingProperties);
+
 const viewerSchema = {
   anyOf: [
     {
       type: "object",
       additionalProperties: false,
-      required: ["walletId", "nft", "snapshot", "curve"],
+      required: [
+        "walletId",
+        "nft",
+        "snapshot",
+        "curve",
+        ...walletHoldingRequired,
+      ],
       properties: {
+        ...walletHoldingProperties,
         walletId: opaqueIdSchema,
         nft: positionNftSchema,
         snapshot: {
@@ -911,8 +961,10 @@ export const launch2PositionsResourceSchema = {
           "snapshotMember",
           "curve",
           "lastActivityAt",
+          ...walletHoldingRequired,
         ],
         properties: {
+          ...walletHoldingProperties,
           instanceId: opaqueIdSchema,
           name: { type: "string" },
           ticker: { type: "string" },
@@ -1212,9 +1264,14 @@ export const launch2PoolQuoteSchema = {
     },
     deadline: {
       ...dateTimeSchema,
-      description: "The swap deadline the prepare encodes (quote + TTL).",
+      description:
+        "Decision 0126: GET …/pool/quote — quote time + LAUNCH2_QUOTE_TTL_SECONDS (default 60 s, the quote's freshness; re-quote after it). In the prepare response — the deadline the router call encodes: prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (default 180 s, ≥ the quote TTL), re-simulated at the prepare block (basis).",
     },
-    expiresAt: { ...dateTimeSchema, description: "= deadline." },
+    expiresAt: {
+      ...dateTimeSchema,
+      description:
+        "= deadline (quote: the freshness limit; prepare: the intent's signing limit).",
+    },
     quotedAt: dateTimeSchema,
     quotedAtBlock: uintStringSchema,
     basis: {
@@ -1246,6 +1303,104 @@ export const launch2PoolIntentResourceSchema = {
   properties: {
     launch2Intent: launch2IntentResourceSchema.properties.launch2Intent,
     quote: launch2PoolQuoteSchema,
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Decision 0126: the wallet's own official-pool trades.
+// ---------------------------------------------------------------------------
+
+export const launch2PoolTradesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId"],
+  properties: {
+    walletId: opaqueIdSchema,
+    limit: { type: "string", pattern: "^[1-9][0-9]?$" },
+  },
+} as const;
+
+const poolTradeItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "poolTradeId",
+    "side",
+    "inputToken",
+    "outputToken",
+    "amountIn",
+    "amountOut",
+    "usd1Amount",
+    "memeAmount",
+    "taxAmount",
+    "taxToken",
+    "priceUsd1",
+    "recipientAddress",
+    "tradedAt",
+    "transactionHash",
+    "logIndex",
+    "blockNumber",
+  ],
+  properties: {
+    poolTradeId: {
+      ...opaqueIdSchema,
+      description:
+        "Opaque id of the indexed PoolManager Swap fact (stable across re-scans).",
+    },
+    side: poolSideSchema,
+    inputToken: { type: "string", enum: ["usd1", "meme"] },
+    outputToken: { type: "string", enum: ["usd1", "meme"] },
+    amountIn: {
+      ...decimalSchema,
+      description: "OfficialPoolRouter Swap.amountIn (input actually spent).",
+    },
+    amountOut: {
+      ...decimalSchema,
+      description:
+        "OfficialPoolRouter Swap.amountOut (net output received after the 2 % pool tax).",
+    },
+    usd1Amount: {
+      ...decimalSchema,
+      description:
+        "PoolManager side: buy = USD1 in, sell = USD1 out before tax.",
+    },
+    memeAmount: {
+      ...decimalSchema,
+      description:
+        "PoolManager side: sell = MEME in, buy = MEME out before tax.",
+    },
+    taxAmount: decimalSchema,
+    taxToken: { type: "string", enum: ["meme", "usd1"] },
+    priceUsd1: {
+      ...decimalSchema,
+      description: "Pool price (USD1 per MEME) after the swap.",
+    },
+    recipientAddress: addressSchema,
+    tradedAt: dateTimeSchema,
+    transactionHash: txHashSchema,
+    logIndex: { type: "integer", minimum: 0 },
+    blockNumber: uintStringSchema,
+  },
+} as const;
+
+export const launch2PoolTradesResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "instanceId",
+    "walletId",
+    "poolTradeCount",
+    "lastPoolTradeAt",
+    "trades",
+    "contractVersion",
+  ],
+  properties: {
+    instanceId: opaqueIdSchema,
+    walletId: opaqueIdSchema,
+    poolTradeCount: uintStringSchema,
+    lastPoolTradeAt: nullableDateTimeSchema,
+    trades: { type: "array", maxItems: 50, items: poolTradeItemSchema },
     contractVersion: contractVersionSchema,
   },
 } as const;

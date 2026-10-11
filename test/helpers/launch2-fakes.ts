@@ -17,6 +17,7 @@ import {
   type Launch2PoolChain,
   type Launch2PoolRouterCheck,
   type Launch2PoolSimulation,
+  type Launch2PoolTradeRecord,
   type Launch2PositionRecord,
   type Launch2Repository,
   type Launch2SnapshotMemberRecord,
@@ -179,6 +180,8 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly trades: Map<string, Launch2TradeRecord[]>;
   readonly intents: Map<string, Launch2IntentRecord>;
   readonly builds: { count: number };
+  /** Decision 0126: attributed pool trades keyed `instanceId|wallet`. */
+  readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
 }
 
 export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
@@ -190,8 +193,10 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const intents = new Map<string, Launch2IntentRecord>();
   const keys = new Map<string, { sha: string; intentId: string | null }>();
   const builds = { count: 0 };
+  const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
   const unused = () => Promise.reject(new Error("not used in route tests"));
   return {
+    poolTrades,
     instances,
     positions,
     members,
@@ -259,6 +264,37 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
       Promise.resolve(
         (trades.get(input.instanceId) ?? []).slice(0, input.limit),
       ),
+    listPoolTrades: (input) =>
+      Promise.resolve(
+        (
+          poolTrades.get(
+            `${input.instanceId}|${input.walletAddress.toLowerCase()}`,
+          ) ?? []
+        ).slice(0, input.limit),
+      ),
+    poolTradeStats: (input) =>
+      Promise.resolve(
+        [...poolTrades.entries()].flatMap(([key, rows]) => {
+          const [instanceId, wallet] = key.split("|") as [string, string];
+          if (
+            rows.length === 0 ||
+            !input.walletAddresses
+              .map((address) => address.toLowerCase())
+              .includes(wallet) ||
+            (input.instanceId !== null && input.instanceId !== instanceId)
+          ) {
+            return [];
+          }
+          return [
+            {
+              instanceId,
+              walletAddress: wallet,
+              count: String(rows.length),
+              lastAt: rows[0]?.tradedAt ?? null,
+            },
+          ];
+        }),
+      ),
     createIntent: async (input) => {
       const key = `${input.ownerUserId}:${input.idempotencyKey}`;
       const claimed = keys.get(key);
@@ -294,6 +330,9 @@ export interface FakeLaunch2ChainState {
   };
   failViewer: boolean;
   viewerReads: number;
+  /** Decision 0126: wallet balance reads (and a switch to fail them). */
+  balanceReads: number;
+  failBalances: boolean;
 }
 
 export function defaultChainState(
@@ -315,6 +354,8 @@ export function defaultChainState(
     },
     failViewer: false,
     viewerReads: 0,
+    balanceReads: 0,
+    failBalances: false,
   };
 }
 
@@ -330,6 +371,15 @@ export function createFakeLaunch2Chain(
     readSnapshotPublication: unused,
     recoverSnapshotSigners: unused,
     readHookPool: unused,
+    readWalletBalances: () => {
+      state.balanceReads += 1;
+      if (state.failBalances) return Promise.reject(new Error("rpc down"));
+      return Promise.resolve({
+        blockNumber: state.viewer.blockNumber,
+        memeBalance: state.viewer.memeBalance ?? 0n,
+        usd1Balance: state.viewer.usd1Balance ?? 0n,
+      });
+    },
     readViewerState: () => {
       state.viewerReads += 1;
       if (state.failViewer) return Promise.reject(new Error("rpc down"));

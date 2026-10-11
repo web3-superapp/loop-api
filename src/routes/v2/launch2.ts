@@ -30,6 +30,8 @@ import {
   launch2PoolQuoteQuerySchema,
   launch2PoolQuoteResourceSchema,
   launch2PoolTradePrepareRequestSchema,
+  launch2PoolTradesQuerySchema,
+  launch2PoolTradesResourceSchema,
   launch2PositionsResourceSchema,
   launch2QuoteQuerySchema,
   launch2QuoteResourceSchema,
@@ -101,7 +103,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "getV2Launch2Instance",
         summary: "Get one MEME v2 launch instance",
-        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
+        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one; Decision 0126: graduated instances add the wallet's memeBalance / usd1Balance at one block with ≤ 15 s cache and balanceStatus, plus poolTradeCount / lastPoolTradeAt of its own attributed pool trades). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -205,7 +207,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "prepareV2Launch2Trade",
         summary: "Prepare a MEME v2 curve buy or sell",
-        description: `Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound; a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. ${unavailableNote}`,
+        description: `Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the deadline encoded in buy / sell (and the intent's deadline / expiresAt) is max(the quote's deadline, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s). Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound; a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -241,7 +243,7 @@ export function registerV2Launch2Routes(
         operationId: "getV2Launch2PoolQuote",
         summary:
           "Quote a graduated MEME v2 buy or sell on the official v4 pool",
-        description: `Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. ${unavailableNote}`,
+        description: `Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS (the quote's freshness; Decision 0126: the prepare re-simulates and encodes its own, longer deadline). 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -282,7 +284,7 @@ export function registerV2Launch2Routes(
         operationId: "prepareV2Launch2PoolTrade",
         summary:
           "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
-        description: `Decision 0124. Re-quotes like GET …/pool/quote at one block and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. ${unavailableNote}`,
+        description: `Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -308,6 +310,41 @@ export function registerV2Launch2Routes(
       });
       reply.header("cache-control", "no-store");
       return reply.code(201).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/pool/trades",
+    {
+      schema: {
+        operationId: "listV2Launch2MyPoolTrades",
+        summary: "List one wallet's official-pool trades of a MEME v2 instance",
+        description: `Decision 0126. The caller's wallet (walletId, required; 404 when it is not the caller's active wallet) — its official-pool swaps the launch2_event lane attributed: each OfficialPoolRouter Swap(poolId, payer, recipient, …) log is paired with the PoolManager Swap of the same pool in the same transaction (the PoolManager sender must be the router, the router log follows it, the input amounts agree); the payer is the trader. Swaps that did not go through the router (the buyback executor, other routers) are never attributed. Newest first; limit <= 50 (default 20). poolTradeCount / lastPoolTradeAt cover all of the wallet's attributed trades. Before graduation the list is empty. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2PoolTradesQuerySchema,
+        response: {
+          200: launch2PoolTradesResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.listPoolTrades({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        walletId: query["walletId"],
+        ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
     },
   );
 
@@ -349,7 +386,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "listV2Launch2MyPositions",
         summary: "List the caller's MEME v2 NFTs and curve positions",
-        description: `Per instance and per wallet of the account: the minted NFT token id and NFTs held (from the NFT transfers), snapshot membership, curve bought / sold / net, and the cumulative buy that both rounds share against the 5,000,000 MEME (0.5%) cap — selling does not restore it. Wallet-to-wallet MEME transfers after graduation are not tracked. ${unavailableNote}`,
+        description: `Per instance and per wallet of the account: the minted NFT token id and NFTs held (from the NFT transfers), snapshot membership, curve bought / sold / net, and the cumulative buy that both rounds share against the 5,000,000 MEME (0.5%) cap — selling does not restore it. Decision 0126: a wallet whose only activity is official-pool trades (attributed through the router) is listed too; graduated rows carry memeBalance / usd1Balance read at one block (≤ 15 s cache, balanceStatus available | unavailable), curve-phase rows null with balanceStatus not_graduated; poolTradeCount / lastPoolTradeAt = the wallet's attributed pool trades. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

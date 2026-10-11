@@ -29,7 +29,12 @@ export type Launch2ContractRole =
   /** Decision 0125: the MEME ERC-20 itself (`Transfer` only). */
   | "meme"
   /** Decision 0124: the v4 PoolManager (official-pool `Swap` logs only). */
-  | "poolManager";
+  | "poolManager"
+  /**
+   * Decision 0126: `OfficialPoolRouter` (its own `Swap(poolId, payer,
+   * recipient, …)`, decoded as `RouterSwap`).
+   */
+  | "poolRouter";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -45,6 +50,8 @@ export const launch2EventNames = Object.freeze([
   "BuybackPausedEvent",
   "BuybackResumed",
   "Swap",
+  /** Decision 0126: the router's `Swap` event (other topic0 than the PoolManager's). */
+  "RouterSwap",
 ] as const);
 
 export type Launch2EventName = (typeof launch2EventNames)[number];
@@ -127,6 +134,15 @@ export interface Launch2Chain {
      * address filter). Decoded with the `poolManager` role.
      */
     readonly poolSwaps?: ReadonlyMap<string, readonly string[]>;
+    /**
+     * Decision 0126: `OfficialPoolRouter.Swap` logs of these pool ids
+     * (topic1, batched like the address filter); decoded as `RouterSwap`
+     * with the `poolRouter` role.
+     */
+    readonly routerSwaps?: {
+      readonly router: string;
+      readonly poolIds: readonly string[];
+    };
   }): Promise<{
     readonly logs: readonly Launch2DecodedLog[];
     readonly ignored: number;
@@ -155,6 +171,19 @@ export interface Launch2Chain {
     readonly snapshots: string;
     readonly wallet: string | null;
   }): Promise<Launch2ViewerChainState>;
+  /**
+   * Decision 0126 (route-facing): the wallet's MEME and instance-USD1
+   * (`CurveEngine.usd1()`) balances at one block.
+   */
+  readWalletBalances(input: {
+    readonly curve: string;
+    readonly meme: string;
+    readonly wallet: string;
+  }): Promise<{
+    readonly blockNumber: bigint;
+    readonly memeBalance: bigint;
+    readonly usd1Balance: bigint;
+  }>;
   readBuybackState(input: {
     readonly buybackExecutor: string;
     readonly escrow: string;
@@ -442,6 +471,15 @@ export interface Launch2LaneInstance {
    * track the coverage (no re-scan is triggered).
    */
   readonly memeTransfersTargetBlock?: string | null;
+  /** Decision 0126: `Graduated` block (null before graduation). */
+  readonly graduationBlockNumber?: string | null;
+  /**
+   * Decision 0126: the block the one-time router-attribution re-scan of a
+   * graduated instance must reach (null: not started — the lane rewinds to
+   * the graduation block when the router is configured). Absent when the
+   * repository does not track it.
+   */
+  readonly poolRouterTargetBlock?: string | null;
 }
 
 /** Decision 0125: one MEME ERC-20 `Transfer` of a launch2 instance. */
@@ -473,6 +511,34 @@ export interface Launch2PositionRecord {
   readonly sellCount: number;
   readonly snapshotMember: boolean;
   readonly lastActivityAt: string | null;
+}
+
+/** Decision 0126: one official-pool swap attributed to a wallet. */
+export interface Launch2PoolTradeRecord {
+  readonly poolTradeId: string;
+  readonly side: "buy" | "sell";
+  /** OfficialPoolRouter Swap amounts (raw). */
+  readonly amountIn: string;
+  readonly amountOut: string;
+  /** PoolManager side (raw, output gross of the tax). */
+  readonly usd1Amount: string;
+  readonly memeAmount: string;
+  readonly taxAmount: string;
+  readonly taxToken: "usd1" | "meme";
+  readonly priceE18: string;
+  readonly recipientAddress: string;
+  readonly tradedAt: string;
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+}
+
+/** Decision 0126: a wallet's attributed pool trades of one instance. */
+export interface Launch2PoolTradeStats {
+  readonly instanceId: string;
+  readonly walletAddress: string;
+  readonly count: string;
+  readonly lastAt: string | null;
 }
 
 export interface Launch2BuybackRecord {
@@ -604,6 +670,14 @@ export interface Launch2Repository {
       readonly instanceIds: readonly string[];
       readonly targetBlockNumber: string;
     };
+    /**
+     * Decision 0126: instances whose router-attribution re-scan starts with
+     * this segment (from their graduation block).
+     */
+    readonly poolRouterCoverage?: {
+      readonly instanceIds: readonly string[];
+      readonly targetBlockNumber: string;
+    };
   }): Promise<{ readonly storedCount: number; readonly touched: number }>;
   listSnapshotsToVerify(chainId: string): Promise<
     readonly {
@@ -669,6 +743,21 @@ export interface Launch2Repository {
     readonly instanceId: string;
     readonly limit: number;
   }): Promise<readonly Launch2TradeRecord[]>;
+  /** Decision 0126: one wallet's attributed pool swaps, newest first. */
+  listPoolTrades(input: {
+    readonly instanceId: string;
+    readonly walletAddress: string;
+    readonly limit: number;
+  }): Promise<readonly Launch2PoolTradeRecord[]>;
+  /**
+   * Decision 0126: count / newest of the attributed pool swaps per
+   * (instance, wallet) — every instance when `instanceId` is null; only
+   * pairs with at least one trade are returned.
+   */
+  poolTradeStats(input: {
+    readonly instanceId: string | null;
+    readonly walletAddresses: readonly string[];
+  }): Promise<readonly Launch2PoolTradeStats[]>;
   // --- Intents ---
   createIntent(input: {
     readonly ownerUserId: string;

@@ -30,6 +30,7 @@ import {
   loopLaunchFactoryAbi,
   memeTokenAbi,
   nftEscrowAbi,
+  officialPoolRouterAbi,
   officialTaxHookAbi,
   poolManagerAbi,
   projectNFTAbi,
@@ -86,9 +87,16 @@ const roleAbis: Readonly<
   meme: { abi: erc20Abi, events: ["Transfer"] },
   // Decision 0124: only `Swap`, and only the pool ids the lane asks for.
   poolManager: { abi: poolManagerAbi, events: ["Swap"] },
+  // Decision 0126: the router's own Swap(poolId, payer, recipient, …),
+  // renamed RouterSwap after decoding.
+  poolRouter: { abi: officialPoolRouterAbi, events: ["Swap"] },
 };
 
 const poolManagerSwapEvent = getAbiItem({ abi: poolManagerAbi, name: "Swap" });
+const poolRouterSwapEvent = getAbiItem({
+  abi: officialPoolRouterAbi,
+  name: "Swap",
+});
 
 function lower(value: string): string {
   return value.toLowerCase();
@@ -182,9 +190,14 @@ export function createLaunch2Chain(input: {
       }
     },
 
-    async getLogs({ roles, fromBlock, toBlock, poolSwaps }) {
+    async getLogs({ roles, fromBlock, toBlock, poolSwaps, routerSwaps }) {
       const pools = [...(poolSwaps ?? new Map<string, readonly string[]>())];
-      if (roles.size === 0 && pools.every(([, ids]) => ids.length === 0)) {
+      const routerIds = routerSwaps?.poolIds ?? [];
+      if (
+        roles.size === 0 &&
+        pools.every(([, ids]) => ids.length === 0) &&
+        routerIds.length === 0
+      ) {
         return { logs: [], ignored: 0 };
       }
       const addresses = [...roles.keys()] as Address[];
@@ -212,6 +225,21 @@ export function createLaunch2Chain(input: {
             address: poolManager as Address,
             event: poolManagerSwapEvent,
             args: { id: ids.slice(i, i + maxAddresses) as Hex[] },
+            fromBlock,
+            toBlock,
+          });
+          raw.push(...(logs as unknown as Log<bigint, number, false>[]));
+        }
+      }
+      // Decision 0126: the router's Swap logs, by pool id (topic1) as well.
+      if (routerSwaps !== undefined && routerIds.length > 0) {
+        poolRoles.set(lower(routerSwaps.router), "poolRouter");
+        for (let i = 0; i < routerIds.length; i += maxAddresses) {
+          queries += 1;
+          const logs = await client.getLogs({
+            address: routerSwaps.router as Address,
+            event: poolRouterSwapEvent,
+            args: { poolId: routerIds.slice(i, i + maxAddresses) as Hex[] },
             fromBlock,
             toBlock,
           });
@@ -248,11 +276,13 @@ export function createLaunch2Chain(input: {
           ignored += 1;
           continue;
         }
-        const name = decoded.eventName as unknown as Launch2EventName;
-        if (!spec.events.includes(name)) {
+        const decodedName = decoded.eventName as unknown as Launch2EventName;
+        if (!spec.events.includes(decodedName)) {
           ignored += 1;
           continue;
         }
+        const name: Launch2EventName =
+          role === "poolRouter" ? "RouterSwap" : decodedName;
         const args: Record<string, string> = {};
         for (const [key, value] of Object.entries(
           (decoded.args ?? {}) as Record<string, unknown>,
@@ -422,6 +452,24 @@ export function createLaunch2Chain(input: {
         usd1Balance,
         memeBalance,
       };
+    },
+
+    async readWalletBalances(request) {
+      const block = await client.getBlock({ blockTag: "latest" });
+      const at = block.number;
+      const tokenAbi = memeTokenAbi as Abi;
+      const usd1 = await read<string>(
+        request.curve,
+        curveEngineAbi as Abi,
+        "usd1",
+        [],
+        at,
+      );
+      const [memeBalance, usd1Balance] = await Promise.all([
+        read<bigint>(request.meme, tokenAbi, "balanceOf", [request.wallet], at),
+        read<bigint>(usd1, tokenAbi, "balanceOf", [request.wallet], at),
+      ]);
+      return { blockNumber: at, memeBalance, usd1Balance };
     },
 
     async readHookPool(hook) {

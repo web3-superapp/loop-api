@@ -827,6 +827,9 @@ export async function runReconciliationWorker(
             }),
             reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
             pollIntervalMs: launch2Config.pollIntervalMs,
+            ...(launch2Config.poolRouterAddress === null
+              ? {}
+              : { poolRouter: launch2Config.poolRouterAddress }),
             ...(database.launch2MemeAssets === undefined
               ? {}
               : {

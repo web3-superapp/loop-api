@@ -153982,7 +153982,7 @@
         "operationId": "getV2Launch2Instance",
         "summary": "Get one MEME v2 launch instance",
         "tags": ["launch2"],
-        "description": "Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one; Decision 0126: graduated instances add the wallet's memeBalance / usd1Balance at one block with ≤ 15 s cache and balanceStatus, plus poolTradeCount / lastPoolTradeAt of its own attributed pool trades). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -154880,9 +154880,76 @@
                                 "walletId",
                                 "nft",
                                 "snapshot",
-                                "curve"
+                                "curve",
+                                "memeBalance",
+                                "usd1Balance",
+                                "balanceStatus",
+                                "balanceReasonCode",
+                                "balanceBlockNumber",
+                                "poolTradeCount",
+                                "lastPoolTradeAt"
                               ],
                               "properties": {
+                                "memeBalance": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Decision 0126: MEME ERC-20 balanceOf(wallet) at balanceBlockNumber (graduated instances only; null otherwise or when the read failed)."
+                                },
+                                "usd1Balance": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Decision 0126: the instance USD1 (CurveEngine.usd1()) balanceOf(wallet) at the same block; null like memeBalance."
+                                },
+                                "balanceStatus": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available",
+                                    "not_graduated",
+                                    "unavailable"
+                                  ],
+                                  "description": "available: both balances read at balanceBlockNumber; not_graduated: curve phase (balances null, use curve); unavailable: the chain read failed or the launch slot is not configured (balanceReasonCode)."
+                                },
+                                "balanceReasonCode": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "unavailable only: LAUNCH2_CHAIN_READ_FAILED | LAUNCH2_CHAIN_NOT_CONFIGURED; else null."
+                                },
+                                "balanceBlockNumber": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "poolTradeCount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                  "description": "Decision 0126: the wallet's own official-pool trades the launch2_event lane attributed through OfficialPoolRouter Swap(payer) (\"0\" before graduation). Use it — not pool.tradeCount — as the confirmation signal after a pool trade."
+                                },
+                                "lastPoolTradeAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Block time of the wallet's newest attributed pool trade."
+                                },
                                 "walletId": {
                                   "type": "string",
                                   "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -157323,7 +157390,7 @@
         "operationId": "prepareV2Launch2Trade",
         "summary": "Prepare a MEME v2 curve buy or sell",
         "tags": ["launch2"],
-        "description": "Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound; a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the deadline encoded in buy / sell (and the intent's deadline / expiresAt) is max(the quote's deadline, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s). Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound; a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -157357,7 +157424,7 @@
                   "deadline": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "The quote's deadline; past it the prepare is 409 QUOTE_EXPIRED."
+                    "description": "The quote's deadline (quote time + LAUNCH2_QUOTE_TTL_SECONDS, the freshness check): past it the prepare is 409 QUOTE_EXPIRED, more than 600 s ahead 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the encoded on-chain deadline (and the intent's deadline / expiresAt) is max(this, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s), so two device signatures (approve + trade) fit."
                   }
                 }
               }
@@ -158281,7 +158348,7 @@
         "operationId": "getV2Launch2PoolQuote",
         "summary": "Quote a graduated MEME v2 buy or sell on the official v4 pool",
         "tags": ["launch2"],
-        "description": "Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS (the quote's freshness; Decision 0126: the prepare re-simulates and encodes its own, longer deadline). 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["buy", "sell"] },
@@ -158527,12 +158594,12 @@
                         "deadline": {
                           "type": "string",
                           "format": "date-time",
-                          "description": "The swap deadline the prepare encodes (quote + TTL)."
+                          "description": "Decision 0126: GET …/pool/quote — quote time + LAUNCH2_QUOTE_TTL_SECONDS (default 60 s, the quote's freshness; re-quote after it). In the prepare response — the deadline the router call encodes: prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (default 180 s, ≥ the quote TTL), re-simulated at the prepare block (basis)."
                         },
                         "expiresAt": {
                           "type": "string",
                           "format": "date-time",
-                          "description": "= deadline."
+                          "description": "= deadline (quote: the freshness limit; prepare: the intent's signing limit)."
                         },
                         "quotedAt": { "type": "string", "format": "date-time" },
                         "quotedAtBlock": {
@@ -159084,7 +159151,7 @@
         "operationId": "prepareV2Launch2PoolTrade",
         "summary": "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
         "tags": ["launch2"],
-        "description": "Decision 0124. Re-quotes like GET …/pool/quote at one block and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -159538,12 +159605,12 @@
                         "deadline": {
                           "type": "string",
                           "format": "date-time",
-                          "description": "The swap deadline the prepare encodes (quote + TTL)."
+                          "description": "Decision 0126: GET …/pool/quote — quote time + LAUNCH2_QUOTE_TTL_SECONDS (default 60 s, the quote's freshness; re-quote after it). In the prepare response — the deadline the router call encodes: prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (default 180 s, ≥ the quote TTL), re-simulated at the prepare block (basis)."
                         },
                         "expiresAt": {
                           "type": "string",
                           "format": "date-time",
-                          "description": "= deadline."
+                          "description": "= deadline (quote: the freshness limit; prepare: the intent's signing limit)."
                         },
                         "quotedAt": { "type": "string", "format": "date-time" },
                         "quotedAtBlock": {
@@ -160044,6 +160111,706 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["RATE_LIMITED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch2/instances/{instanceId}/pool/trades": {
+      "get": {
+        "operationId": "listV2Launch2MyPoolTrades",
+        "summary": "List one wallet's official-pool trades of a MEME v2 instance",
+        "tags": ["launch2"],
+        "description": "Decision 0126. The caller's wallet (walletId, required; 404 when it is not the caller's active wallet) — its official-pool swaps the launch2_event lane attributed: each OfficialPoolRouter Swap(poolId, payer, recipient, …) log is paired with the PoolManager Swap of the same pool in the same transaction (the PoolManager sender must be the router, the router log follows it, the input amounts agree); the payer is the trader. Swaps that did not go through the router (the buyback executor, other routers) are never attributed. Newest first; limit <= 50 (default 20). poolTradeCount / lastPoolTradeAt cover all of the wallet's attributed trades. Before graduation the list is empty. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "query",
+            "name": "walletId",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "pattern": "^[1-9][0-9]?$" },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "instanceId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "instanceId",
+                    "walletId",
+                    "poolTradeCount",
+                    "lastPoolTradeAt",
+                    "trades",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "walletId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "poolTradeCount": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                    },
+                    "lastPoolTradeAt": {
+                      "anyOf": [
+                        { "type": "string", "format": "date-time" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "trades": {
+                      "type": "array",
+                      "maxItems": 50,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "poolTradeId",
+                          "side",
+                          "inputToken",
+                          "outputToken",
+                          "amountIn",
+                          "amountOut",
+                          "usd1Amount",
+                          "memeAmount",
+                          "taxAmount",
+                          "taxToken",
+                          "priceUsd1",
+                          "recipientAddress",
+                          "tradedAt",
+                          "transactionHash",
+                          "logIndex",
+                          "blockNumber"
+                        ],
+                        "properties": {
+                          "poolTradeId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "description": "Opaque id of the indexed PoolManager Swap fact (stable across re-scans)."
+                          },
+                          "side": { "type": "string", "enum": ["buy", "sell"] },
+                          "inputToken": {
+                            "type": "string",
+                            "enum": ["usd1", "meme"]
+                          },
+                          "outputToken": {
+                            "type": "string",
+                            "enum": ["usd1", "meme"]
+                          },
+                          "amountIn": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "OfficialPoolRouter Swap.amountIn (input actually spent)."
+                          },
+                          "amountOut": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "OfficialPoolRouter Swap.amountOut (net output received after the 2 % pool tax)."
+                          },
+                          "usd1Amount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "PoolManager side: buy = USD1 in, sell = USD1 out before tax."
+                          },
+                          "memeAmount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "PoolManager side: sell = MEME in, buy = MEME out before tax."
+                          },
+                          "taxAmount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "taxToken": {
+                            "type": "string",
+                            "enum": ["meme", "usd1"]
+                          },
+                          "priceUsd1": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "Pool price (USD1 per MEME) after the swap."
+                          },
+                          "recipientAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$"
+                          },
+                          "tradedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "transactionHash": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$"
+                          },
+                          "logIndex": { "type": "integer", "minimum": 0 },
+                          "blockNumber": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$"
+                          }
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
                     "category": {
                       "type": "string",
                       "enum": [
@@ -161201,7 +161968,7 @@
         "operationId": "listV2Launch2MyPositions",
         "summary": "List the caller's MEME v2 NFTs and curve positions",
         "tags": ["launch2"],
-        "description": "Per instance and per wallet of the account: the minted NFT token id and NFTs held (from the NFT transfers), snapshot membership, curve bought / sold / net, and the cumulative buy that both rounds share against the 5,000,000 MEME (0.5%) cap — selling does not restore it. Wallet-to-wallet MEME transfers after graduation are not tracked. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Per instance and per wallet of the account: the minted NFT token id and NFTs held (from the NFT transfers), snapshot membership, curve bought / sold / net, and the cumulative buy that both rounds share against the 5,000,000 MEME (0.5%) cap — selling does not restore it. Decision 0126: a wallet whose only activity is official-pool trades (attributed through the router) is listed too; graduated rows carry memeBalance / usd1Balance read at one block (≤ 15 s cache, balanceStatus available | unavailable), curve-phase rows null with balanceStatus not_graduated; poolTradeCount / lastPoolTradeAt = the wallet's attributed pool trades. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -161249,9 +162016,76 @@
                           "nft",
                           "snapshotMember",
                           "curve",
-                          "lastActivityAt"
+                          "lastActivityAt",
+                          "memeBalance",
+                          "usd1Balance",
+                          "balanceStatus",
+                          "balanceReasonCode",
+                          "balanceBlockNumber",
+                          "poolTradeCount",
+                          "lastPoolTradeAt"
                         ],
                         "properties": {
+                          "memeBalance": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Decision 0126: MEME ERC-20 balanceOf(wallet) at balanceBlockNumber (graduated instances only; null otherwise or when the read failed)."
+                          },
+                          "usd1Balance": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Decision 0126: the instance USD1 (CurveEngine.usd1()) balanceOf(wallet) at the same block; null like memeBalance."
+                          },
+                          "balanceStatus": {
+                            "type": "string",
+                            "enum": [
+                              "available",
+                              "not_graduated",
+                              "unavailable"
+                            ],
+                            "description": "available: both balances read at balanceBlockNumber; not_graduated: curve phase (balances null, use curve); unavailable: the chain read failed or the launch slot is not configured (balanceReasonCode)."
+                          },
+                          "balanceReasonCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "unavailable only: LAUNCH2_CHAIN_READ_FAILED | LAUNCH2_CHAIN_NOT_CONFIGURED; else null."
+                          },
+                          "balanceBlockNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "poolTradeCount": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$",
+                            "description": "Decision 0126: the wallet's own official-pool trades the launch2_event lane attributed through OfficialPoolRouter Swap(payer) (\"0\" before graduation). Use it — not pool.tradeCount — as the confirmation signal after a pool trade."
+                          },
+                          "lastPoolTradeAt": {
+                            "anyOf": [
+                              { "type": "string", "format": "date-time" },
+                              { "type": "null" }
+                            ],
+                            "description": "Block time of the wallet's newest attributed pool trade."
+                          },
                           "instanceId": {
                             "type": "string",
                             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"

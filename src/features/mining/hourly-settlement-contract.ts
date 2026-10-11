@@ -58,7 +58,18 @@ export const miningSettlementReasonCodes = Object.freeze({
   assetSourceUnknown: "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
   priceMissing: "MINING_SETTLEMENT_PRICE_MISSING",
   testTriggerDisabled: "MINING_SETTLEMENT_TEST_TRIGGER_DISABLED",
+  /**
+   * Decision 0123 / 0126: a graduated launch2 asset excluded from a
+   * valuation-basis (pre-0123) hour — no post-graduation price existed.
+   * Kept only for those replayed hours.
+   */
   assetGraduatedUnreadable: "MINING_ASSET_GRADUATED_UNREADABLE",
+  /**
+   * Decision 0126: a graduated launch2 asset excluded from a quantity-basis
+   * hour because the post-graduation MEME Transfer coverage (Decision 0125)
+   * had not completed for that hour. No price is involved.
+   */
+  assetGraduatedBalancePending: "MINING_ASSET_GRADUATED_BALANCE_PENDING",
   // Claim (prepare / report).
   claimSignerNotConfigured: "MINING_CLAIM_SIGNER_NOT_CONFIGURED",
   claimContractNotConfigured: "MINING_CLAIM_CONTRACT_NOT_CONFIGURED",

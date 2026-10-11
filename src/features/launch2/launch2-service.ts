@@ -75,6 +75,8 @@ import {
   type Launch2IntentRecord,
   type Launch2PoolChain,
   type Launch2PoolChainState,
+  type Launch2PoolTradeRecord,
+  type Launch2PoolTradeStats,
   type Launch2PositionRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
@@ -134,6 +136,14 @@ export interface Launch2ServiceDependencies {
    * quote / prepare 503 POOL_ROUTER_NOT_CONFIGURED.
    */
   readonly poolChain?: Launch2PoolChain | null;
+  /**
+   * Decision 0126: `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS` (default 180): the
+   * on-chain deadline a pool or curve prepare encodes, counted from the
+   * prepare (two device signatures must fit).
+   */
+  readonly tradeDeadlineSeconds?: number;
+  /** Decision 0126: wallet balance cache lifetime (≤ 15 s, default 15 s). */
+  readonly balanceCacheMs?: number;
   readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly logger?: Launch2ServiceLogger;
@@ -199,9 +209,19 @@ export interface Launch2Service {
     readonly body: unknown;
     readonly idempotencyKey: string;
   }): Promise<Resource>;
+  /** Decision 0126: one wallet's attributed official-pool trades. */
+  listPoolTrades(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource>;
 }
 
 const maximumDeadlineSeconds = 600;
+/** Decision 0126: default `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS`. */
+export const launch2DefaultTradeDeadlineSeconds = 180;
+const maximumBalanceCacheMs = 15_000;
 const approvalGas = 80_000n;
 const fallbackGas: Readonly<Record<Launch2IntentKind, bigint>> = Object.freeze({
   nft_mint: 250_000n,
@@ -737,6 +757,59 @@ function encodePoolSwap(input: {
       });
 }
 
+interface WalletBalances {
+  readonly blockNumber: bigint;
+  readonly memeBalance: bigint;
+  readonly usd1Balance: bigint;
+}
+
+const notGraduatedBalances: Resource = Object.freeze({
+  memeBalance: null,
+  usd1Balance: null,
+  balanceStatus: "not_graduated",
+  balanceReasonCode: null,
+  balanceBlockNumber: null,
+});
+
+function unavailableBalances(reasonCode: string): Resource {
+  return Object.freeze({
+    memeBalance: null,
+    usd1Balance: null,
+    balanceStatus: "unavailable",
+    balanceReasonCode: reasonCode,
+    balanceBlockNumber: null,
+  });
+}
+
+function poolTradeStatsOf(stats: Launch2PoolTradeStats | undefined): Resource {
+  return Object.freeze({
+    poolTradeCount: stats?.count ?? "0",
+    lastPoolTradeAt: stats?.lastAt ?? null,
+  });
+}
+
+function poolTradeOf(record: Launch2PoolTradeRecord): Resource {
+  const buy = record.side === "buy";
+  return Object.freeze({
+    poolTradeId: record.poolTradeId,
+    side: record.side,
+    inputToken: buy ? "usd1" : "meme",
+    outputToken: buy ? "meme" : "usd1",
+    amountIn: formatLaunch2Amount(BigInt(record.amountIn)),
+    amountOut: formatLaunch2Amount(BigInt(record.amountOut)),
+    usd1Amount: formatLaunch2Amount(BigInt(record.usd1Amount)),
+    memeAmount: formatLaunch2Amount(BigInt(record.memeAmount)),
+    taxAmount: formatLaunch2Amount(BigInt(record.taxAmount)),
+    taxToken: record.taxToken,
+    priceUsd1: formatLaunch2Amount(BigInt(record.priceE18)),
+    recipientAddress: record.recipientAddress,
+    tradedAt: record.tradedAt,
+    transactionHash: record.transactionHash,
+    logIndex: record.logIndex,
+    blockNumber: record.blockNumber,
+  });
+}
+
 export function createUnavailableLaunch2Service(
   reasonCode: string = launch2ReasonCodes.runtimeUnavailable,
 ): Launch2Service {
@@ -754,6 +827,7 @@ export function createUnavailableLaunch2Service(
     prepareTrade: fail,
     poolQuote: fail,
     preparePoolTrade: fail,
+    listPoolTrades: fail,
   });
 }
 
@@ -762,6 +836,69 @@ export function createLaunch2Service(
 ): Launch2Service {
   const now = deps.now ?? ((): Date => new Date());
   const createUuid = deps.createUuid ?? randomUUID;
+  const tradeDeadlineSeconds = BigInt(
+    Math.min(
+      Math.max(
+        deps.tradeDeadlineSeconds ?? launch2DefaultTradeDeadlineSeconds,
+        1,
+      ),
+      maximumDeadlineSeconds,
+    ),
+  );
+  const balanceCacheMs = Math.min(
+    Math.max(deps.balanceCacheMs ?? maximumBalanceCacheMs, 0),
+    maximumBalanceCacheMs,
+  );
+  /** Decision 0126: (meme|wallet) → balances read at one block. */
+  const balanceCache = new Map<
+    string,
+    { readonly at: number; readonly value: WalletBalances }
+  >();
+
+  /**
+   * Decision 0126: the wallet's MEME / USD1 balances of a graduated
+   * instance (≤ 15 s cache). Never throws: a failed read is
+   * `unavailable` with the reason, never a guessed 0.
+   */
+  async function walletBalancesOf(
+    record: Launch2InstanceRecord,
+    address: string,
+  ): Promise<Resource> {
+    if (record.graduation === null) {
+      return notGraduatedBalances;
+    }
+    if (deps.chain === null) {
+      return unavailableBalances(launch2ReasonCodes.chainNotConfigured);
+    }
+    const reader = deps.chain;
+    const wallet = address.toLowerCase();
+    const key = `${record.addresses.meme}|${wallet}`;
+    const nowMs = now().getTime();
+    const cached = balanceCache.get(key);
+    let value: WalletBalances;
+    if (cached !== undefined && nowMs - cached.at < balanceCacheMs) {
+      value = cached.value;
+    } else {
+      try {
+        value = await reader.readWalletBalances({
+          curve: record.addresses.curve,
+          meme: record.addresses.meme,
+          wallet,
+        });
+      } catch {
+        return unavailableBalances(launch2ReasonCodes.chainReadFailed);
+      }
+      if (balanceCache.size > 1_000) balanceCache.clear();
+      balanceCache.set(key, { at: nowMs, value });
+    }
+    return Object.freeze({
+      memeBalance: formatLaunch2Amount(value.memeBalance),
+      usd1Balance: formatLaunch2Amount(value.usd1Balance),
+      balanceStatus: "available",
+      balanceReasonCode: null,
+      balanceBlockNumber: value.blockNumber.toString(10),
+    });
+  }
 
   function nowSeconds(): bigint {
     return BigInt(Math.floor(now().getTime() / 1000));
@@ -1401,6 +1538,11 @@ export function createLaunch2Service(
     record: Launch2InstanceRecord,
     wallet: AccountWalletRecord,
     request: PoolRequest,
+    /**
+     * Decision 0126: seconds from the quote block's time to the deadline —
+     * the quote TTL for GET …/pool/quote, the trade deadline for a prepare.
+     */
+    deadlineSeconds: bigint,
   ): Promise<{
     readonly resource: Resource;
     readonly state: Launch2PoolChainState;
@@ -1454,8 +1596,7 @@ export function createLaunch2Service(
     const memeIsCurrency0 = key.currency0 === meme;
     const chainNow =
       state.blockTimestamp > nowSeconds() ? state.blockTimestamp : nowSeconds();
-    const deadline =
-      chainNow + BigInt(Math.min(deps.quoteTtlSeconds, maximumDeadlineSeconds));
+    const deadline = chainNow + deadlineSeconds;
     const inputToken = request.side === "buy" ? state.curveUsd1 : meme;
     const pullAmount =
       request.mode === "exactIn" ? request.amount : launch2PoolUnboundedMaxIn;
@@ -1601,7 +1742,12 @@ export function createLaunch2Service(
       });
       const wallet = await walletFor(input.principal, input.walletId, true);
       if (wallet === null) throw V2ApiError.notFound();
-      const priced = await poolQuoteAt(record, wallet, request);
+      const priced = await poolQuoteAt(
+        record,
+        wallet,
+        request,
+        BigInt(Math.min(deps.quoteTtlSeconds, maximumDeadlineSeconds)),
+      );
       return Object.freeze({
         quote: priced.resource,
         contractVersion: v2ContractVersion,
@@ -1628,7 +1774,15 @@ export function createLaunch2Service(
         requestSha256,
         writes,
         async () => {
-          const priced = await poolQuoteAt(record, wallet, body);
+          // Decision 0126: a fresh simulation at the prepare block with the
+          // longer trade deadline (approve + trade are signed one after the
+          // other on the device).
+          const priced = await poolQuoteAt(
+            record,
+            wallet,
+            body,
+            tradeDeadlineSeconds,
+          );
           const { numbers, state, key, zeroForOne, router } = priced;
           const inputBalance =
             body.side === "buy" ? state.usd1Balance : state.memeBalance;
@@ -1723,6 +1877,41 @@ export function createLaunch2Service(
       });
     },
 
+    async listPoolTrades(input) {
+      const record = await visibleInstance(input.instanceId);
+      const store = repository();
+      if (input.walletId === undefined) throw V2ApiError.invalidRequest();
+      const limit = parseLimit(input.limit, 20, 50);
+      const wallet = await walletFor(input.principal, input.walletId, true);
+      if (wallet === null) throw V2ApiError.notFound();
+      const address = wallet.address.toLowerCase();
+      const [rows, stats] =
+        record.graduation === null
+          ? [[] as readonly Launch2PoolTradeRecord[], [] as const]
+          : await Promise.all([
+              store
+                .listPoolTrades({
+                  instanceId: record.instanceId,
+                  walletAddress: address,
+                  limit,
+                })
+                .catch(translate),
+              store
+                .poolTradeStats({
+                  instanceId: record.instanceId,
+                  walletAddresses: [address],
+                })
+                .catch(translate),
+            ]);
+      return Object.freeze({
+        instanceId: record.instanceId,
+        walletId: wallet.walletId,
+        ...poolTradeStatsOf(stats[0]),
+        trades: rows.map(poolTradeOf),
+        contractVersion: v2ContractVersion,
+      });
+    },
+
     async listInstances(input) {
       const store = repository();
       const stage =
@@ -1796,34 +1985,46 @@ export function createLaunch2Service(
       const store = repository();
       const at = nowSeconds();
       const wallet = await walletFor(input.principal, input.walletId, false);
-      const [latest, trades, positions, member] = await Promise.all([
-        store
-          .listBuybacks({
-            instanceId: record.instanceId,
-            after: null,
-            limit: 1,
-          })
-          .catch(translate),
-        store
-          .listTrades({ instanceId: record.instanceId, limit: 20 })
-          .catch(translate),
-        wallet === null
-          ? Promise.resolve([] as readonly Launch2PositionRecord[])
-          : store
-              .listPositions({
-                holderAddresses: [wallet.address],
-                instanceId: record.instanceId,
-              })
-              .catch(translate),
-        wallet === null
-          ? Promise.resolve(null)
-          : store
-              .getSnapshotMember({
-                instanceId: record.instanceId,
-                address: wallet.address,
-              })
-              .catch(translate),
-      ]);
+      const [latest, trades, positions, member, poolStats, balances] =
+        await Promise.all([
+          store
+            .listBuybacks({
+              instanceId: record.instanceId,
+              after: null,
+              limit: 1,
+            })
+            .catch(translate),
+          store
+            .listTrades({ instanceId: record.instanceId, limit: 20 })
+            .catch(translate),
+          wallet === null
+            ? Promise.resolve([] as readonly Launch2PositionRecord[])
+            : store
+                .listPositions({
+                  holderAddresses: [wallet.address],
+                  instanceId: record.instanceId,
+                })
+                .catch(translate),
+          wallet === null
+            ? Promise.resolve(null)
+            : store
+                .getSnapshotMember({
+                  instanceId: record.instanceId,
+                  address: wallet.address,
+                })
+                .catch(translate),
+          wallet === null || record.graduation === null
+            ? Promise.resolve([] as readonly Launch2PoolTradeStats[])
+            : store
+                .poolTradeStats({
+                  instanceId: record.instanceId,
+                  walletAddresses: [wallet.address],
+                })
+                .catch(translate),
+          wallet === null
+            ? Promise.resolve(notGraduatedBalances)
+            : walletBalancesOf(record, wallet.address),
+        ]);
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
       const snapshot = record.snapshot;
@@ -1938,6 +2139,8 @@ export function createLaunch2Service(
                         : stage.stage === "public",
                   }),
                   curve: positionCurveOf(position),
+                  ...balances,
+                  ...poolTradeStatsOf(poolStats[0]),
                 }),
           projectedAt: record.projectedAt,
         }),
@@ -2174,11 +2377,42 @@ export function createLaunch2Service(
         }
       }
       const at = nowSeconds();
+      const stats = await store
+        .poolTradeStats({
+          instanceId: null,
+          walletAddresses: [...byAddress.keys()],
+        })
+        .catch(translate);
+      const statsOf = new Map(
+        stats.map((row) => [`${row.instanceId}|${row.walletAddress}`, row]),
+      );
+      // Decision 0126: live balances of graduated rows, a few reads at a
+      // time (each cached ≤ 15 s).
+      const balancesOf = new Map<string, Resource>();
+      const pending = positions.filter(
+        (position) =>
+          instances.get(position.instanceId)?.graduation !== null &&
+          instances.has(position.instanceId),
+      );
+      for (let index = 0; index < pending.length; index += 8) {
+        await Promise.all(
+          pending.slice(index, index + 8).map(async (position) => {
+            const record = instances.get(
+              position.instanceId,
+            ) as Launch2InstanceRecord;
+            balancesOf.set(
+              `${position.instanceId}|${position.holderAddress}`,
+              await walletBalancesOf(record, position.holderAddress),
+            );
+          }),
+        );
+      }
       return Object.freeze({
         positions: positions.flatMap((position) => {
           const record = instances.get(position.instanceId);
           const wallet = byAddress.get(position.holderAddress);
           if (record === undefined || wallet === undefined) return [];
+          const key = `${position.instanceId}|${position.holderAddress}`;
           return [
             Object.freeze({
               instanceId: record.instanceId,
@@ -2195,6 +2429,8 @@ export function createLaunch2Service(
               snapshotMember: position.snapshotMember,
               curve: positionCurveOf(position),
               lastActivityAt: position.lastActivityAt,
+              ...(balancesOf.get(key) ?? notGraduatedBalances),
+              ...poolTradeStatsOf(statsOf.get(key)),
             }),
           ];
         }),
@@ -2354,6 +2590,16 @@ export function createLaunch2Service(
               proof = eligible.proof;
             }
           }
+          // Decision 0126: the quote's deadline only proves freshness; the
+          // chain deadline leaves room for the approve + trade signatures.
+          const chainNow =
+            state.curve.blockTimestamp > nowSeconds()
+              ? state.curve.blockTimestamp
+              : nowSeconds();
+          const tradeDeadline =
+            chainNow + tradeDeadlineSeconds > body.deadline
+              ? chainNow + tradeDeadlineSeconds
+              : body.deadline;
           const data =
             body.side === "buy"
               ? encodeFunctionData({
@@ -2362,14 +2608,14 @@ export function createLaunch2Service(
                   args: [
                     body.amount,
                     body.minOut,
-                    body.deadline,
+                    tradeDeadline,
                     proof as readonly Hex[],
                   ],
                 })
               : encodeFunctionData({
                   abi: curveEngineAbi,
                   functionName: "sell",
-                  args: [body.amount, body.minOut, body.deadline],
+                  args: [body.amount, body.minOut, tradeDeadline],
                 });
           const graduating =
             body.side === "buy" &&
@@ -2393,7 +2639,7 @@ export function createLaunch2Service(
             tax: numbers.tax,
             refund: numbers.refund,
             valueUsd: body.side === "buy" ? body.amount : numbers.expectedOut,
-            deadline: body.deadline,
+            deadline: tradeDeadline,
             gasHint: graduating ? graduatingBuyGas : fallbackGas[body.side],
           });
         },

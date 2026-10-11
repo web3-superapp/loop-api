@@ -10,6 +10,7 @@ import {
 import type {
   Launch2Chain,
   Launch2ContractRole,
+  Launch2DecodedLog,
   Launch2LaneEvent,
   Launch2LaneInstance,
   Launch2MemeTransferRecord,
@@ -89,6 +90,14 @@ export interface Launch2LaneOptions {
     readonly repository: Launch2MemeAssetRepository;
     readonly reader: Launch2TokenIdentityReader;
   };
+  /**
+   * Decision 0126: `LAUNCH2_POOL_ROUTER_ADDRESS` (lower-case). Present: the
+   * lane also reads the router's `Swap(poolId, payer, recipient, …)` logs of
+   * the official pools and attributes each PoolManager swap the router made
+   * to its payer; every graduated instance re-scans once from its
+   * graduation block so earlier swaps are attributed too.
+   */
+  readonly poolRouter?: string;
   readonly maxLogRange?: bigint;
   readonly pollIntervalMs: number;
   readonly now?: () => Date;
@@ -146,6 +155,24 @@ function rolesOf(
   return { roles, owners, byLaunchId };
 }
 
+function attributionArgs(
+  attribution: ReturnType<typeof pairLaunch2RouterSwaps> extends Map<
+    string,
+    infer V
+  >
+    ? V | undefined
+    : never,
+): Record<string, string> {
+  if (attribution === undefined) return {};
+  return {
+    routerPayer: attribution.payer,
+    routerRecipient: attribution.recipient,
+    routerAmountIn: attribution.amountIn,
+    routerAmountOut: attribution.amountOut,
+    routerLogIndex: String(attribution.routerLogIndex),
+  };
+}
+
 interface PoolOwner {
   readonly instanceId: string;
   readonly poolManager: string;
@@ -163,6 +190,81 @@ function poolFilter(
     filter.set(owner.poolManager, ids);
   }
   return filter;
+}
+
+/**
+ * Decision 0126: pairs each router `Swap` with the PoolManager `Swap` it
+ * caused — same transaction, same pool id, PoolManager `sender` = the
+ * router, the newest such log before the router's, not paired yet, and the
+ * same input amount (the router's `amountIn` = the swap's negative input
+ * delta). Returns PoolManager log key → the router's attribution.
+ */
+export function pairLaunch2RouterSwaps(
+  logs: readonly Launch2DecodedLog[],
+  router: string,
+): Map<
+  string,
+  {
+    readonly payer: string;
+    readonly recipient: string;
+    readonly amountIn: string;
+    readonly amountOut: string;
+    readonly routerLogIndex: number;
+  }
+> {
+  const paired = new Map<
+    string,
+    {
+      readonly payer: string;
+      readonly recipient: string;
+      readonly amountIn: string;
+      readonly amountOut: string;
+      readonly routerLogIndex: number;
+    }
+  >();
+  const keyOf = (log: Launch2DecodedLog): string =>
+    `${log.transactionHash}:${log.logIndex}`;
+  for (const routed of logs) {
+    if (
+      routed.eventName !== "RouterSwap" ||
+      routed.contractAddress !== router
+    ) {
+      continue;
+    }
+    const poolId = routed.args["poolId"];
+    const zeroForOne = routed.args["zeroForOne"];
+    const amountIn = routed.args["amountIn"];
+    if (poolId === undefined || amountIn === undefined) continue;
+    let match: Launch2DecodedLog | null = null;
+    for (const swap of logs) {
+      if (
+        swap.eventName === "Swap" &&
+        swap.transactionHash === routed.transactionHash &&
+        swap.blockHash === routed.blockHash &&
+        swap.logIndex < routed.logIndex &&
+        swap.args["id"] === poolId &&
+        swap.args["sender"] === router &&
+        !paired.has(keyOf(swap)) &&
+        (match === null || swap.logIndex > match.logIndex)
+      ) {
+        match = swap;
+      }
+    }
+    if (match === null) continue;
+    const inputDelta = BigInt(
+      (zeroForOne === "true" ? match.args["amount0"] : match.args["amount1"]) ??
+        "0",
+    );
+    if (-inputDelta !== BigInt(amountIn)) continue;
+    paired.set(keyOf(match), {
+      payer: routed.args["payer"] ?? "",
+      recipient: routed.args["recipient"] ?? "",
+      amountIn,
+      amountOut: routed.args["amountOut"] ?? "0",
+      routerLogIndex: routed.logIndex,
+    });
+  }
+  return paired;
 }
 
 function result(
@@ -197,6 +299,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
   const factories = options.factories.map((factory) =>
     Object.freeze({ ...factory, address: factory.address.toLowerCase() }),
   );
+  const poolRouter = options.poolRouter?.toLowerCase() ?? null;
 
   /** Hook → (PoolManager, currency0): immutable, read once per hook. */
   const hookPools = new Map<
@@ -419,6 +522,23 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const deploy = BigInt(instance.deployBlockNumber);
       if (deploy < fromBlock) fromBlock = deploy;
     }
+    // Decision 0126: graduated instances whose router attribution never
+    // started re-scan once from their graduation block (idempotent upserts
+    // that only fill the missing wallet).
+    const routerRescans =
+      poolRouter === null
+        ? []
+        : instances.filter(
+            (instance) =>
+              instance.poolRouterTargetBlock === null &&
+              instance.officialPoolId !== null &&
+              instance.graduationBlockNumber !== undefined &&
+              instance.graduationBlockNumber !== null,
+          );
+    for (const instance of routerRescans) {
+      const graduated = BigInt(instance.graduationBlockNumber as string);
+      if (graduated < fromBlock) fromBlock = graduated;
+    }
     let scanned: Partial<Launch2LaneResult> = {};
     if (fromBlock <= head.blockNumber) {
       const maximumTo = fromBlock + maxRange - 1n;
@@ -435,11 +555,18 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           : [{ instance, poolId: instance.officialPoolId }],
       );
       await addPools(pools, known);
+      const routerFilter = (
+        ids: ReadonlyMap<string, PoolOwner>,
+      ): { routerSwaps?: { router: string; poolIds: string[] } } =>
+        poolRouter === null || ids.size === 0
+          ? {}
+          : { routerSwaps: { router: poolRouter, poolIds: [...ids.keys()] } };
       const first = await options.chain.getLogs({
         roles,
         fromBlock,
         toBlock,
         ...(pools.size === 0 ? {} : { poolSwaps: poolFilter(pools) }),
+        ...routerFilter(pools),
       });
       const byInstance = new Map(
         instances.map((instance) => [instance.instanceId, instance]),
@@ -468,6 +595,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               fromBlock,
               toBlock,
               poolSwaps: poolFilter(fresh),
+              ...routerFilter(fresh),
             });
       for (const [poolId, owner] of fresh) pools.set(poolId, owner);
       const decoded = {
@@ -481,6 +609,10 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         ignored: first.ignored + (second?.ignored ?? 0),
       };
       if (aborted(signal)) return result("aborted", null);
+      const attributions =
+        poolRouter === null
+          ? new Map<string, never>()
+          : pairLaunch2RouterSwaps(decoded.logs, poolRouter);
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
       const memeTransfers: Launch2MemeTransferRecord[] = [];
@@ -489,7 +621,9 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         const swapPool =
           log.eventName === "Swap"
             ? pools.get(log.args["id"] ?? "")
-            : undefined;
+            : log.eventName === "RouterSwap"
+              ? pools.get(log.args["poolId"] ?? "")
+              : undefined;
         const instanceId =
           log.eventName === "LaunchDeployed"
             ? byLaunchId.get(log.args["launchId"] ?? "")
@@ -497,7 +631,11 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               ? swapPool?.poolManager === log.contractAddress
                 ? swapPool.instanceId
                 : undefined
-              : owners.get(log.contractAddress);
+              : log.eventName === "RouterSwap"
+                ? poolRouter !== null && log.contractAddress === poolRouter
+                  ? swapPool?.instanceId
+                  : undefined
+                : owners.get(log.contractAddress);
         if (instanceId === undefined) {
           // Factory deployments that are not LOOP-registered instances.
           ignored += 1;
@@ -533,11 +671,15 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           eventName: log.eventName,
           // Decision 0124: which side of a Swap is MEME (hook currency0).
           args:
-            swapPool === undefined
+            swapPool === undefined || log.eventName !== "Swap"
               ? log.args
               : Object.freeze({
                   ...log.args,
                   memeIsCurrency0: swapPool.memeIsCurrency0 ? "true" : "false",
+                  // Decision 0126: the router's payer / recipient, if paired.
+                  ...attributionArgs(
+                    attributions.get(`${log.transactionHash}:${log.logIndex}`),
+                  ),
                 }),
           transactionHash: log.transactionHash,
           logIndex: log.logIndex,
@@ -566,6 +708,19 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           : { rewindFromBlockNumber: rewindFrom.toString(10) }),
         activationGraceBlocks: options.reorgDepthBlocks,
         ...(memeTransfers.length === 0 ? {} : { memeTransfers }),
+        ...(routerRescans.length === 0
+          ? {}
+          : {
+              poolRouterCoverage: {
+                instanceIds: routerRescans.map(
+                  (instance) => instance.instanceId,
+                ),
+                targetBlockNumber: (memeTarget !== null && memeTarget > toBlock
+                  ? memeTarget
+                  : toBlock
+                ).toString(10),
+              },
+            }),
         ...(memeRescans.length === 0
           ? {}
           : {
