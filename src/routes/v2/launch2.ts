@@ -26,6 +26,10 @@ import {
   launch2ListQuerySchema,
   launch2NftPrepareRequestSchema,
   launch2PageQuerySchema,
+  launch2PoolIntentResourceSchema,
+  launch2PoolQuoteQuerySchema,
+  launch2PoolQuoteResourceSchema,
+  launch2PoolTradePrepareRequestSchema,
   launch2PositionsResourceSchema,
   launch2QuoteQuerySchema,
   launch2QuoteResourceSchema,
@@ -220,6 +224,83 @@ export function registerV2Launch2Routes(
     async (request, reply) => {
       const params = request.params as InstanceParams;
       const resource = await service.prepareTrade({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(201).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/pool/quote",
+    {
+      schema: {
+        operationId: "getV2Launch2PoolQuote",
+        summary:
+          "Quote a graduated MEME v2 buy or sell on the official v4 pool",
+        description: `Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2PoolQuoteQuerySchema,
+        response: {
+          200: launch2PoolQuoteResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.poolQuote({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        side: query["side"],
+        mode: query["mode"],
+        amount: query["amount"],
+        walletId: query["walletId"],
+        ...(query["slippageBps"] === undefined
+          ? {}
+          : { slippageBps: query["slippageBps"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch2/instances/:instanceId/pool/trade/prepare",
+    {
+      schema: {
+        operationId: "prepareV2Launch2PoolTrade",
+        summary:
+          "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
+        description: `Decision 0124. Re-quotes like GET …/pool/quote at one block and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launch2PoolTradePrepareRequestSchema,
+        response: {
+          201: launch2PoolIntentResourceSchema,
+          ...launch2CommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: [assertNoQuery, assertDecimalStringFields(["amount"])],
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const resource = await service.preparePoolTrade({
         principal: requireAuthenticatedLoopPrincipal(request),
         instanceId: params.instanceId,
         body: request.body,

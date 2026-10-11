@@ -157,6 +157,23 @@ export interface Launch2Service {
     readonly body: unknown;
     readonly idempotencyKey: string;
   }): Promise<Resource>;
+  /** Decision 0124: official-pool quote (graduated instances). */
+  poolQuote(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly side?: unknown;
+    readonly mode?: unknown;
+    readonly amount?: unknown;
+    readonly walletId?: unknown;
+    readonly slippageBps?: unknown;
+  }): Promise<Resource>;
+  /** Decision 0124: official-pool router call (graduated instances). */
+  preparePoolTrade(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource>;
 }
 
 const maximumDeadlineSeconds = 600;
@@ -165,6 +182,8 @@ const fallbackGas: Readonly<Record<Launch2IntentKind, bigint>> = Object.freeze({
   nft_mint: 250_000n,
   buy: 400_000n,
   sell: 250_000n,
+  pool_buy: 300_000n,
+  pool_sell: 300_000n,
 });
 /** The last buy builds the pool atomically; its gas is far above a plain buy. */
 const graduatingBuyGas = 3_000_000n;
@@ -590,6 +609,8 @@ export function createUnavailableLaunch2Service(
     listMyPositions: fail,
     prepareNftMint: fail,
     prepareTrade: fail,
+    poolQuote: fail,
+    preparePoolTrade: fail,
   });
 }
 
@@ -1162,6 +1183,18 @@ export function createLaunch2Service(
   }
 
   return Object.freeze<Launch2Service>({
+    poolQuote: () =>
+      Promise.reject(
+        V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+          reasonCode: "POOL_ROUTER_NOT_CONFIGURED",
+        }),
+      ),
+    preparePoolTrade: () =>
+      Promise.reject(
+        V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+          reasonCode: "POOL_ROUTER_NOT_CONFIGURED",
+        }),
+      ),
     async listInstances(input) {
       const store = repository();
       const stage =

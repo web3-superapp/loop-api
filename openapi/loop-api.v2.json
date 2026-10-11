@@ -154908,6 +154908,92 @@
                         "projectedAt": {
                           "type": "string",
                           "format": "date-time"
+                        },
+                        "pool": {
+                          "description": "Decision 0124 (optional in the schema, always present in answers): the official Uniswap v4 pool after graduation, from the PoolManager Swap logs of officialPoolId the launch2_event lane indexed (every swap of the pool: the in-App router, the buyback executor and any other caller). null before graduation. Volumes are the USD1 side (buy: USD1 in; sell: USD1 out before tax); taxUsd1 is the 2 % taken from sells, taxMeme from buys (exact-output swaps may be 1 wei off, see docs/frontend-v2-launch2-api.md §pool). lastPriceUsd1 = the pool price after the latest indexed swap (null until the first swap). router = LAUNCH2_POOL_ROUTER_ADDRESS (null when not configured: pool quote / prepare are then 503).",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "poolId",
+                                "router",
+                                "tradeCount",
+                                "buyCount",
+                                "sellCount",
+                                "buyVolumeUsd1",
+                                "sellVolumeUsd1",
+                                "volume24hUsd1",
+                                "taxUsd1",
+                                "taxMeme",
+                                "lastPriceUsd1",
+                                "lastTradeAt"
+                              ],
+                              "properties": {
+                                "poolId": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "router": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{40}$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "tradeCount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "buyCount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "sellCount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "buyVolumeUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "sellVolumeUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "volume24hUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "taxUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "taxMeme": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "lastPriceUsd1": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "lastTradeAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
                         }
                       }
                     },
@@ -156344,7 +156430,13 @@
                         },
                         "kind": {
                           "type": "string",
-                          "enum": ["nft_mint", "buy", "sell"]
+                          "enum": [
+                            "nft_mint",
+                            "buy",
+                            "sell",
+                            "pool_buy",
+                            "pool_sell"
+                          ]
                         },
                         "state": {
                           "type": "string",
@@ -157296,7 +157388,13 @@
                         },
                         "kind": {
                           "type": "string",
-                          "enum": ["nft_mint", "buy", "sell"]
+                          "enum": [
+                            "nft_mint",
+                            "buy",
+                            "sell",
+                            "pool_buy",
+                            "pool_sell"
+                          ]
                         },
                         "state": {
                           "type": "string",
@@ -157443,6 +157541,1966 @@
                                 },
                                 { "type": "null" }
                               ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["PERMISSION_DENIED", "POLICY_BLOCKED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
+                        "QUOTE_EXPIRED",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch2/instances/{instanceId}/pool/quote": {
+      "get": {
+        "operationId": "getV2Launch2PoolQuote",
+        "summary": "Quote a graduated MEME v2 buy or sell on the official v4 pool",
+        "tags": ["launch2"],
+        "description": "Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "enum": ["buy", "sell"] },
+            "in": "query",
+            "name": "side",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["exactIn", "exactOut"] },
+            "in": "query",
+            "name": "mode",
+            "required": true,
+            "description": "exactIn: amount = the input (buy: USD1 in, sell: MEME in); exactOut: amount = the net output after the 2 % pool tax (buy: MEME out, sell: USD1 out)."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+            },
+            "in": "query",
+            "name": "amount",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "query",
+            "name": "walletId",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,3})$" },
+            "in": "query",
+            "name": "slippageBps",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "instanceId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["quote", "contractVersion"],
+                  "properties": {
+                    "quote": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "instanceId",
+                        "walletId",
+                        "venue",
+                        "side",
+                        "mode",
+                        "stage",
+                        "requestedAmount",
+                        "amountIn",
+                        "maxIn",
+                        "expectedOut",
+                        "minOut",
+                        "slippageBps",
+                        "taxBps",
+                        "taxAmount",
+                        "taxToken",
+                        "taxUsd1",
+                        "priceBeforeUsd1",
+                        "averagePriceUsd1",
+                        "balance",
+                        "exceedsBalance",
+                        "router",
+                        "poolId",
+                        "poolKey",
+                        "zeroForOne",
+                        "deadline",
+                        "expiresAt",
+                        "quotedAt",
+                        "quotedAtBlock",
+                        "basis"
+                      ],
+                      "properties": {
+                        "instanceId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "venue": {
+                          "type": "string",
+                          "enum": ["official_pool"]
+                        },
+                        "side": { "type": "string", "enum": ["buy", "sell"] },
+                        "mode": {
+                          "type": "string",
+                          "enum": ["exactIn", "exactOut"],
+                          "description": "exactIn: amount = the input (buy: USD1 in, sell: MEME in); exactOut: amount = the net output after the 2 % pool tax (buy: MEME out, sell: USD1 out)."
+                        },
+                        "stage": { "type": "string", "enum": ["graduated"] },
+                        "requestedAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "amountIn": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: the requested input; exactOut: the simulated input the router spends for the requested net output."
+                        },
+                        "maxIn": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: = amountIn; exactOut: amountIn × (1 + slippage), the maxAmountIn of swapExactOut (the router refunds the unused part)."
+                        },
+                        "expectedOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "Net output after the 2 % pool tax (exactOut: = the requested amount)."
+                        },
+                        "minOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: expectedOut × (1 − slippage), the minAmountOut of swapExactIn; exactOut: = expectedOut."
+                        },
+                        "slippageBps": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 5000
+                        },
+                        "taxBps": { "type": "integer", "enum": [200] },
+                        "taxAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding."
+                        },
+                        "taxToken": {
+                          "type": "string",
+                          "enum": ["meme", "usd1"]
+                        },
+                        "taxUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "= taxAmount for a sell; 0 for a buy (taxed in MEME)."
+                        },
+                        "priceBeforeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "Pool spot price (USD1 per MEME) from PoolManager slot0 at the quote block."
+                        },
+                        "averagePriceUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "USD1 side ÷ MEME side of this quote (tax included on the output side)."
+                        },
+                        "balance": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["usd1", "meme"],
+                          "properties": {
+                            "usd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            "meme": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            }
+                          }
+                        },
+                        "exceedsBalance": {
+                          "type": "boolean",
+                          "description": "maxIn is above the wallet's input-token balance at the quote block; the prepare would be 409 INSUFFICIENT_BALANCE."
+                        },
+                        "router": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "poolId": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "poolKey": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "currency0",
+                            "currency1",
+                            "fee",
+                            "tickSpacing",
+                            "hooks"
+                          ],
+                          "properties": {
+                            "currency0": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "currency1": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "fee": { "type": "integer", "enum": [2500] },
+                            "tickSpacing": { "type": "integer", "enum": [60] },
+                            "hooks": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            }
+                          }
+                        },
+                        "zeroForOne": {
+                          "type": "boolean",
+                          "description": "The input is currency0 (buy: USD1 < MEME)."
+                        },
+                        "deadline": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "The swap deadline the prepare encodes (quote + TTL)."
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "= deadline."
+                        },
+                        "quotedAt": { "type": "string", "format": "date-time" },
+                        "quotedAtBlock": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "basis": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["blockNumber", "blockHash"],
+                          "properties": {
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "DATA_STALE",
+                        "VERSION_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch2/instances/{instanceId}/pool/trade/prepare": {
+      "post": {
+        "operationId": "prepareV2Launch2PoolTrade",
+        "summary": "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
+        "tags": ["launch2"],
+        "description": "Decision 0124. Re-quotes like GET …/pool/quote at one block and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "walletId",
+                  "side",
+                  "mode",
+                  "amount",
+                  "slippageBps"
+                ],
+                "properties": {
+                  "walletId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  },
+                  "side": { "type": "string", "enum": ["buy", "sell"] },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["exactIn", "exactOut"],
+                    "description": "exactIn: amount = the input (buy: USD1 in, sell: MEME in); exactOut: amount = the net output after the 2 % pool tax (buy: MEME out, sell: USD1 out)."
+                  },
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                    "description": "Same meaning as the quote's amount for the same side / mode."
+                  },
+                  "slippageBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5000,
+                    "description": "exactIn: minOut = expectedOut × (1 − slippage); exactOut: maxIn = amountIn × (1 + slippage), rounded up."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "path",
+            "name": "instanceId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["launch2Intent", "quote", "contractVersion"],
+                  "properties": {
+                    "launch2Intent": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "intentId",
+                        "kind",
+                        "state",
+                        "instanceId",
+                        "walletId",
+                        "chainId",
+                        "chainReference",
+                        "contractAddress",
+                        "amountIn",
+                        "expectedOut",
+                        "minOut",
+                        "taxUsd1",
+                        "refundUsd1",
+                        "deadline",
+                        "expiresAt",
+                        "createdAt",
+                        "calldata",
+                        "unsignedTransaction",
+                        "approval",
+                        "payloadDigest",
+                        "snapshotBlockNumber",
+                        "snapshotBlockHash",
+                        "simulation",
+                        "policy",
+                        "signing"
+                      ],
+                      "properties": {
+                        "intentId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "nft_mint",
+                            "buy",
+                            "sell",
+                            "pool_buy",
+                            "pool_sell"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": ["prepared", "expired"]
+                        },
+                        "instanceId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "enum": ["eip155:56", "eip155:97"]
+                        },
+                        "chainReference": { "type": "integer" },
+                        "contractAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "amountIn": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "expectedOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "minOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "taxUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "refundUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "deadline": { "type": "string", "format": "date-time" },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "calldata": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["to", "data", "value"],
+                          "properties": {
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]*$"
+                            },
+                            "value": { "type": "string", "enum": ["0"] }
+                          }
+                        },
+                        "unsignedTransaction": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "approval": {
+                          "anyOf": [
+                            { "type": "object", "additionalProperties": true },
+                            { "type": "null" }
+                          ]
+                        },
+                        "payloadDigest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "snapshotBlockNumber": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "snapshotBlockHash": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "simulation": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["passed", "reverted", "unavailable"]
+                            },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        "policy": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "configVersion",
+                            "canaryMaxUsd",
+                            "valueUsd",
+                            "priceSource"
+                          ],
+                          "properties": {
+                            "configVersion": { "type": "string" },
+                            "canaryMaxUsd": { "type": "string" },
+                            "valueUsd": { "type": "string" },
+                            "priceSource": {
+                              "type": "string",
+                              "enum": ["usd1_par"]
+                            }
+                          }
+                        },
+                        "signing": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["mode", "allowed", "reasonCode"],
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": ["device_eth_send_transaction"]
+                            },
+                            "allowed": { "type": "boolean" },
+                            "reasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "quote": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "instanceId",
+                        "walletId",
+                        "venue",
+                        "side",
+                        "mode",
+                        "stage",
+                        "requestedAmount",
+                        "amountIn",
+                        "maxIn",
+                        "expectedOut",
+                        "minOut",
+                        "slippageBps",
+                        "taxBps",
+                        "taxAmount",
+                        "taxToken",
+                        "taxUsd1",
+                        "priceBeforeUsd1",
+                        "averagePriceUsd1",
+                        "balance",
+                        "exceedsBalance",
+                        "router",
+                        "poolId",
+                        "poolKey",
+                        "zeroForOne",
+                        "deadline",
+                        "expiresAt",
+                        "quotedAt",
+                        "quotedAtBlock",
+                        "basis"
+                      ],
+                      "properties": {
+                        "instanceId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "walletId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "venue": {
+                          "type": "string",
+                          "enum": ["official_pool"]
+                        },
+                        "side": { "type": "string", "enum": ["buy", "sell"] },
+                        "mode": {
+                          "type": "string",
+                          "enum": ["exactIn", "exactOut"],
+                          "description": "exactIn: amount = the input (buy: USD1 in, sell: MEME in); exactOut: amount = the net output after the 2 % pool tax (buy: MEME out, sell: USD1 out)."
+                        },
+                        "stage": { "type": "string", "enum": ["graduated"] },
+                        "requestedAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "amountIn": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: the requested input; exactOut: the simulated input the router spends for the requested net output."
+                        },
+                        "maxIn": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: = amountIn; exactOut: amountIn × (1 + slippage), the maxAmountIn of swapExactOut (the router refunds the unused part)."
+                        },
+                        "expectedOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "Net output after the 2 % pool tax (exactOut: = the requested amount)."
+                        },
+                        "minOut": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "exactIn: expectedOut × (1 − slippage), the minAmountOut of swapExactIn; exactOut: = expectedOut."
+                        },
+                        "slippageBps": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 5000
+                        },
+                        "taxBps": { "type": "integer", "enum": [200] },
+                        "taxAmount": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding."
+                        },
+                        "taxToken": {
+                          "type": "string",
+                          "enum": ["meme", "usd1"]
+                        },
+                        "taxUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "= taxAmount for a sell; 0 for a buy (taxed in MEME)."
+                        },
+                        "priceBeforeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "Pool spot price (USD1 per MEME) from PoolManager slot0 at the quote block."
+                        },
+                        "averagePriceUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                          "description": "USD1 side ÷ MEME side of this quote (tax included on the output side)."
+                        },
+                        "balance": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["usd1", "meme"],
+                          "properties": {
+                            "usd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            "meme": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            }
+                          }
+                        },
+                        "exceedsBalance": {
+                          "type": "boolean",
+                          "description": "maxIn is above the wallet's input-token balance at the quote block; the prepare would be 409 INSUFFICIENT_BALANCE."
+                        },
+                        "router": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "poolId": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "poolKey": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "currency0",
+                            "currency1",
+                            "fee",
+                            "tickSpacing",
+                            "hooks"
+                          ],
+                          "properties": {
+                            "currency0": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "currency1": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "fee": { "type": "integer", "enum": [2500] },
+                            "tickSpacing": { "type": "integer", "enum": [60] },
+                            "hooks": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            }
+                          }
+                        },
+                        "zeroForOne": {
+                          "type": "boolean",
+                          "description": "The input is currency0 (buy: USD1 < MEME)."
+                        },
+                        "deadline": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "The swap deadline the prepare encodes (quote + TTL)."
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "= deadline."
+                        },
+                        "quotedAt": { "type": "string", "format": "date-time" },
+                        "quotedAtBlock": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "basis": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["blockNumber", "blockHash"],
+                          "properties": {
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
                             }
                           }
                         }

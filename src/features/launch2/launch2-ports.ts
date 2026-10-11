@@ -1,4 +1,8 @@
-import type { Launch2HoldReason, Launch2Stage } from "./launch2-contract.js";
+import type {
+  Launch2HoldReason,
+  Launch2IntentKind,
+  Launch2Stage,
+} from "./launch2-contract.js";
 import type { Launch2CurveState } from "./launch2-curve-math.js";
 import type { Launch2FactoryGeneration } from "./launch2-generation.js";
 
@@ -381,7 +385,7 @@ export interface CreateLaunch2IntentRecord {
   readonly instanceId: string;
   readonly walletId: string;
   readonly walletAddress: string;
-  readonly kind: "nft_mint" | "buy" | "sell";
+  readonly kind: Launch2IntentKind;
   readonly chainId: string;
   readonly contractAddress: string;
   readonly amountIn: string;
