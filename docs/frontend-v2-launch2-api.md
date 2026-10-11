@@ -1,4 +1,10 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124)
+
+> **S146 / 决策 0124 变化（给 App）**：毕业（`stage = graduated`）后在页内买卖外盘（Uniswap v4 官方池，经
+> `OfficialPoolRouter`）。新增 `GET …/pool/quote` 与 `POST …/pool/trade/prepare`（§3.8、§3.9），详情新增
+> `instance.pool`（§3.10，毕业前为 `null`）。外盘税 2 % 从**输出**扣（买：扣 MEME；卖：扣 USD1），与内盘
+> 10 % 不同。新意图种类 `pool_buy` / `pool_sell`。曲线的 `…/quote`、`…/trade/prepare` 对毕业实例仍是
+> `409 LAUNCH2_SOLD_OUT`，毕业后的交易面板改走 pool 路由。
 
 > **S145 / 决策 0122 变化（给 App）**：① 第三版工厂（BSC 测试网 `0xc3ac…d1d2`）的回购**没有价格保护**；
 > `GET …/buybacks` 的 `minMemeOut / referencePriceUsd1 / spotPriceUsd1` 可为 `null`（新工厂的成交），
@@ -564,20 +570,192 @@ chain read fails. Copy: 「回购不等于销毁」 in ⓘ.
 
 `curve.net` is curve bought − sold; MEME moved wallet-to-wallet after graduation is not tracked.
 
+### 3.8 `GET /v2/launch2/instances/{instanceId}/pool/quote?side=&mode=&amount=&walletId=&slippageBps=` (Decision 0124)
+
+Graduated instances only. `side` `buy` (USD1 → MEME) | `sell` (MEME → USD1); `mode` `exactIn`
+(`amount` = what the wallet pays: buy USD1, sell MEME) | `exactOut` (`amount` = what the wallet
+receives **after** the 2 % tax: buy MEME, sell USD1); `amount` decimal string (> 0, ≤ 18
+decimals); `walletId` required (the signing wallet; its balances are shown); `slippageBps`
+0..5000, default 100.
+
+The server simulates the router (`eth_call`, the wallet's input-token balance / allowance
+overridden in the call only) on the official pool at one block. No fixture is ever returned.
+
+```json
+{
+  "quote": {
+    "instanceId": "8a0c…",
+    "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+    "venue": "official_pool",
+    "side": "buy",
+    "mode": "exactIn",
+    "stage": "graduated",
+    "requestedAmount": "10",
+    "amountIn": "10",
+    "maxIn": "10",
+    "expectedOut": "15680",
+    "minOut": "15523.2",
+    "slippageBps": 100,
+    "taxBps": 200,
+    "taxAmount": "320",
+    "taxToken": "meme",
+    "taxUsd1": "0",
+    "priceBeforeUsd1": "0.000625",
+    "averagePriceUsd1": "0.000637755102040816",
+    "balance": { "usd1": "1000", "meme": "2000000" },
+    "exceedsBalance": false,
+    "router": "0xcb022501a427154501adce5b6dc8f16674ae8f5d",
+    "poolId": "0x67ff…882d",
+    "poolKey": {
+      "currency0": "0x3a1236e68ecf3225640367c84b6f50a51d0b0195",
+      "currency1": "0x…6666",
+      "fee": 2500,
+      "tickSpacing": 60,
+      "hooks": "0x…20cc"
+    },
+    "zeroForOne": true,
+    "deadline": "2027-01-15T08:01:00.000Z",
+    "expiresAt": "2027-01-15T08:01:00.000Z",
+    "quotedAt": "2027-01-15T08:00:00.000Z",
+    "quotedAtBlock": "135999001",
+    "basis": { "blockNumber": "135999001", "blockHash": "0x…" }
+  },
+  "contractVersion": "2.0"
+}
+```
+
+Field meaning by mode:
+
+| field         | exactIn                               | exactOut                                                        |
+| ------------- | ------------------------------------- | --------------------------------------------------------------- |
+| `amountIn`    | = amount                              | simulated input for the requested net output                    |
+| `maxIn`       | = amountIn                            | amountIn × (1 + slippage), rounded up (router refunds the rest) |
+| `expectedOut` | simulated net output (after 2 % tax)  | = amount                                                        |
+| `minOut`      | expectedOut × (1 − slippage), down    | = amount                                                        |
+| `taxAmount`   | 2 % of the gross output (≤ 1 wei off) | exact hook tax                                                  |
+
+- Show 「外盘交易税 2 %（{taxAmount} {taxToken}）」; `taxUsd1` is only non-zero on a sell.
+- `exceedsBalance: true` → disable the confirm button, offer the balance as MAX (`balance`).
+- Re-quote when `expiresAt` passes (TTL 60 s); the prepare re-quotes itself anyway.
+
+### 3.9 `POST /v2/launch2/instances/{instanceId}/pool/trade/prepare` (Decision 0124)
+
+Headers: §1 plus `Idempotency-Key`. Body:
+
+```json
+{
+  "walletId": "d64786bb-…",
+  "side": "buy",
+  "mode": "exactIn",
+  "amount": "10",
+  "slippageBps": 100
+}
+```
+
+`slippageBps` is an integer here (required). `201`:
+
+```json
+{
+  "launch2Intent": {
+    "intentId": "…",
+    "kind": "pool_buy",
+    "state": "prepared",
+    "contractAddress": "0xcb022501a427154501adce5b6dc8f16674ae8f5d",
+    "amountIn": "10",
+    "expectedOut": "15680",
+    "minOut": "15523.2",
+    "taxUsd1": "0",
+    "refundUsd1": "0",
+    "deadline": "2027-01-15T08:01:00.000Z",
+    "expiresAt": "2027-01-15T08:01:00.000Z",
+    "calldata": { "to": "0xcb02…", "data": "0x2523c148…", "value": "0" },
+    "unsignedTransaction": {
+      "chainId": 97,
+      "to": "0xcb02…",
+      "data": "0x2523c148…",
+      "value": "0x0",
+      "from": "0x…",
+      "gas": "0x34bc0",
+      "nonce": "0x8",
+      "type": "legacy",
+      "gasPrice": "0x3b9aca00",
+      "maxFeePerGas": null,
+      "maxPriorityFeePerGas": null
+    },
+    "approval": {
+      "token": "0x3a12…0195",
+      "spender": "0xcb02…",
+      "amount": "10",
+      "calldata": { "to": "0x3a12…0195", "data": "0x095ea7b3…", "value": "0" },
+      "unsignedTransaction": { "…": "nonce 0x7" }
+    },
+    "simulation": { "status": "passed", "reasonCode": null },
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": true,
+      "reasonCode": null
+    },
+    "…": "payloadDigest, snapshotBlockNumber/Hash, policy as §3.4"
+  },
+  "quote": { "…": "the §3.8 quote the intent was built from" },
+  "contractVersion": "2.0"
+}
+```
+
+- `calldata` = `swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline)` (selector
+  `0x2523c148`) or `swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline)`
+  (`0x2dfe07a9`); recipient is always the signing wallet.
+- `approval` (non-null) must be signed and mined first (nonce N), then the router call (N+1).
+  Buy approves USD1, sell approves MEME, amount = `amountIn` (exactIn) / `maxIn` (exactOut).
+- `simulation.status`: `passed` (with a pending approve: passes once the approve lands);
+  `reverted` → `signing.allowed = false` (`LAUNCH2_SIMULATION_REVERTED`), re-quote;
+  `unavailable` → the node could not estimate; signing still allowed with the fallback gas.
+- `amountIn` on the intent is the most the router may pull; the router refunds the unused part
+  of `maxIn`.
+- Replays with the same key return the same intent **and** the same `quote`.
+
+### 3.10 `instance.pool` on `GET /v2/launch2/instances/{instanceId}` (Decision 0124)
+
+`null` before graduation; after:
+
+```json
+"pool": {
+  "poolId": "0x67ff…882d",
+  "router": "0xcb022501a427154501adce5b6dc8f16674ae8f5d",
+  "tradeCount": "3",
+  "buyCount": "2",
+  "sellCount": "1",
+  "buyVolumeUsd1": "150",
+  "sellVolumeUsd1": "40",
+  "volume24hUsd1": "190",
+  "taxUsd1": "0.8",
+  "taxMeme": "4800",
+  "lastPriceUsd1": "0.000625",
+  "lastTradeAt": "2027-01-15T07:59:30.000Z"
+}
+```
+
+- Counts every swap of the official pool (the App router, the buyback executor, any other
+  router). Volumes are the USD1 side (sell volume = USD1 out before tax). `lastPriceUsd1` is
+  the pool price after the latest indexed swap (`null` until the first one — then use the quote's
+  `priceBeforeUsd1`). `router: null` = pool trading not configured on this server: hide the
+  pool trade panel, keep the statistics.
+- `recentTrades` stays curve-only.
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
-| HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                |
-| ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                             |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                         |
-| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2    |
-| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason                                                                                                                                                                                                                            |
-| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`              |
-| 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                   |
-| 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                      |
-| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                         |
-| 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`                                                                                                                                                     |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED` |
+| HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                                                                                                                                                          |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2                                                                                                                                 |
+| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason                                                                                                                                                                                                                                                                                                                                                         |
+| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                                                                           |
+| 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                                                                                                                                                |
+| 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                                                                                                                                                   |
+| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`; pool (0124): `POOL_NOT_GRADUATED` (`stage`), `POOL_QUOTE_UNAVAILABLE` (`revertReason`: contract error name, `UNKNOWN`, or `STATE_OVERRIDE_UNSUPPORTED`), `POOL_INSUFFICIENT_LIQUIDITY`, `POOL_QUOTE_ZERO`                                                                       |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED`; pool (0124): `POOL_ROUTER_NOT_CONFIGURED`, `POOL_ROUTER_CODE_MISMATCH`, `POOL_ROUTER_MANAGER_MISMATCH`, `POOL_KEY_MISMATCH` |
 
 ## 5. Unavailable behaviour
 
@@ -585,6 +763,13 @@ Never fabricate a stage, price, or list: a 503 shows the module unavailable with
 empty `instances` list is the empty state (the lane has indexed nothing yet). `viewer: null`
 means no wallet, not zero holdings. `buyback.keeper: null` means the keeper has not run for
 this instance (lane off by default, or not graduated): show the ledger only, no "回购暂缓".
+
+Pool trading (0124): `POOL_ROUTER_NOT_CONFIGURED` / `POOL_ROUTER_CODE_MISMATCH` /
+`POOL_ROUTER_MANAGER_MISMATCH` / `POOL_KEY_MISMATCH` are server-side states — show 「外盘交易暂不可用」
+with retry, never a price. `POOL_NOT_GRADUATED` means the read model has not confirmed the
+graduation yet (or the instance is not graduated): show the curve panel. `POOL_QUOTE_UNAVAILABLE`
+/ `POOL_INSUFFICIENT_LIQUIDITY` / `POOL_QUOTE_ZERO` belong in the panel next to the amount
+(「金额过大，池子深度不足」/「金额过小」/「暂时无法报价」).
 
 ## 6. Preflight samples to add (coordinator)
 
