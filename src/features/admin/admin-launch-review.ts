@@ -76,6 +76,21 @@ export interface AdminLaunchProjectSummary {
     readonly materialVersion: number;
     readonly rejectedAt: string;
   } | null;
+  /** Decision 0125: the latest console approval of the catalog material. */
+  readonly materialApproval: {
+    readonly approverUserId: string;
+    readonly materialVersion: number;
+    readonly approvedAt: string;
+  } | null;
+  /** Decision 0125: the community the owner named (null: none). */
+  readonly communityId: string | null;
+  readonly community: {
+    readonly communityId: string;
+    readonly name: string;
+    readonly verificationStatus: "pending" | "verified" | "rejected";
+    readonly boundAssetKey: string | null;
+    readonly binding: string | null;
+  } | null;
   readonly stage: AdminLaunchStage;
   readonly latestConfigVersion: number | null;
   readonly latestConfigHash: string | null;
@@ -420,6 +435,14 @@ export interface AdminLaunchReviewConsoleService {
     version: string,
     body: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown>>;
+  /** Decision 0125 (`launch.approve`: reviewer only). */
+  approveProjectMaterial(
+    context: AdminRequestContext,
+    idempotencyKey: unknown,
+    projectId: string,
+    materialVersion: string,
+    body: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>>;
   /** Decision 0122 (`launch.approve`: reviewer only). */
   rejectProject(
     context: AdminRequestContext,
@@ -611,6 +634,9 @@ export function createAdminLaunchReviewConsoleService(options: {
       launchReviewStatus: item.launchReviewStatus,
       materialVersion: item.materialVersion,
       rejection: item.rejection,
+      materialApproval: item.materialApproval,
+      communityId: item.communityId,
+      community: item.community,
       stage: item.stage,
       latestConfigVersion: item.latestConfigVersion,
       latestConfigHash: item.latestConfigHash,
@@ -732,6 +758,7 @@ export function createAdminLaunchReviewConsoleService(options: {
       readonly action:
         | "launch.config.approve"
         | "launch.config.reject"
+        | "launch.project.approve"
         | "launch.project.reject"
         | "testnet.acceptance.record";
       readonly operationId: string;
@@ -1039,6 +1066,51 @@ export function createAdminLaunchReviewConsoleService(options: {
             reasonCode: stringOf(row["reason_code"]),
             note: typeof row["note"] === "string" ? row["note"] : null,
             rejectedAt: isoOf(row["rejected_at"]),
+          }),
+          audit: auditReference(audit),
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async approveProjectMaterial(
+      context,
+      idempotencyKey,
+      projectId,
+      materialVersion,
+      body,
+    ) {
+      assertAdminPermission(context.principal, "launch.approve");
+      const operationId = requireAdminIdempotencyKey(idempotencyKey);
+      try {
+        const id = projectIdParam(projectId);
+        if (
+          !versionPattern.test(materialVersion) ||
+          Number(materialVersion) > maximumVersion
+        ) {
+          throw new AdminApiError("NOT_FOUND", { reasonCode: "OPS_NOT_FOUND" });
+        }
+        const { result, audit } = await run(context, {
+          action: "launch.project.approve",
+          operationId,
+          projectId: id,
+          reason: reason(body["reason"]),
+          payload: { materialVersion: Number(materialVersion) },
+        });
+        const row = (result.result ?? {}) as Record<string, unknown>;
+        return Object.freeze({
+          operationId: result.operationId,
+          replayed: result.replayed,
+          approval: Object.freeze({
+            approvalId: stringOf(row["approval_id"]),
+            projectId: stringOf(row["project_id"]),
+            materialVersion: Number(row["material_version"]),
+            approverUserId: stringOf(row["reviewer_user_id"]),
+            reason: stringOf(row["reason"]),
+            launchId:
+              typeof row["launch_id"] === "string" ? row["launch_id"] : null,
+            approvedAt: isoOf(row["created_at"]),
           }),
           audit: auditReference(audit),
         });

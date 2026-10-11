@@ -881,3 +881,17 @@ pnpm mining:snapshot --confirm                                       # 跑一次
 ```
 
 社区绑定资产走 `POST/PUT /v2/communities` 的 `boundAssetKey`（社区 owner 自助）。
+
+## S148 变更（决策 0125）：快照算力按数量加权
+
+与小时结算（决策 0123）一致，旧快照通道的资产算力改为 **持有量 × 权重**，不乘参考价。
+
+- `GET /v2/mining/summary`、`GET /v2/mining/assets`：新增**必有**键 `assetPowerBasis: "quantity"`（可用与不可用两种形态都有）。
+  严格键集合的客户端须加入此键。
+- `included[].power = holding × weight`；`referencePriceUsd` / `referencePriceQuality` / `referencePriceProxyAssetId` /
+  `referencePricePairAddress` 与 `referencePrice.priceVersion` 继续下发，仅作「观察到的价格」，**不参与计算**，页面不要再显示
+  「持有量 × 参考价 × 权重」。
+- `GET /v2/mining/rules`：`expressionKey` 改为 `mining.rules.formula.holdingTimesWeight`（旧键
+  `holdingTimesReferencePriceTimesWeight` 不再出现）；`priceGuardRules` 仍在响应里，但已**废弃**，不要作为公式的一部分展示。
+- 已写入的旧快照保留当时的数值，直到快照通道写下一份快照。
+- 不可用行为不变：持有量为正但没有可用参考价的资产仍会使该次快照 `incomplete`（决策 0057）。

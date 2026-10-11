@@ -246,6 +246,101 @@ describe("Decision 0116 runner — inputs", () => {
     expect(u1?.assetHoldings[0]).toMatchObject({ assetId: ASSET });
   });
 
+  it("Decision 0125: after graduation a quantity hour reads the indexed ERC-20 balances instead of leaving the pool", () => {
+    const graduation = S + 1_800n;
+    const curveAndTransfers = {
+      assetId: ASSET,
+      source: "launch2" as const,
+      graduatedAt: graduation,
+      openingPriceE18: loop / 100n,
+      openingBalances: [{ address: A, balanceRaw: 100n * loop }],
+      moves: [
+        {
+          address: A,
+          deltaRaw: 200n * loop,
+          at: S + 900n,
+          priceAfterE18: loop / 50n,
+        },
+      ],
+      // At graduation A holds 300 (ERC-20 truth); B receives 50 from A at
+      // S + 2700 (a transfer the curve never saw).
+      postGraduation: {
+        from: graduation,
+        openingBalances: [{ address: A, balanceRaw: 300n * loop }],
+        moves: [
+          { address: A, deltaRaw: -50n * loop, at: S + 2_700n },
+          { address: B, deltaRaw: 50n * loop, at: S + 2_700n },
+        ],
+      },
+    };
+    const prepared = prepareMiningHour({
+      hourStart: S,
+      versions: [version()],
+      facts: facts({ nftOpenings: [], assets: [curveAndTransfers] }),
+    });
+    expect(prepared.summary["excludedAssets"]).toEqual([]);
+    const result = settleMiningHour(prepared.input);
+    const u1 = result.users.find((row) => row.userId === U1);
+    const u2 = result.users.find((row) => row.userId === U2);
+    // A: 100 × 900 s + 300 × 900 s (curve) + 300 × 900 s + 250 × 900 s.
+    expect(u1?.assetSelfPower).toBe(
+      ((100n + 300n + 300n + 250n) * loop * 900n) / 3_600n,
+    );
+    expect(u2?.assetSelfPower).toBe((50n * loop * 900n) / 3_600n);
+
+    // A whole hour after graduation: only the transfer balances.
+    const later = prepareMiningHour({
+      hourStart: S + 3_600n,
+      versions: [version()],
+      facts: facts({
+        nftOpenings: [],
+        assets: [
+          {
+            ...curveAndTransfers,
+            openingBalances: [],
+            moves: [],
+            postGraduation: {
+              from: S + 3_600n,
+              openingBalances: [
+                { address: A, balanceRaw: 250n * loop },
+                { address: B, balanceRaw: 50n * loop },
+              ],
+              moves: [],
+            },
+          },
+        ],
+      }),
+    });
+    const hour2 = settleMiningHour(later.input);
+    expect(hour2.users.find((row) => row.userId === U1)?.assetSelfPower).toBe(
+      250n * loop,
+    );
+
+    // Without coverage the asset still leaves the pool at graduation.
+    const uncovered = prepareMiningHour({
+      hourStart: S,
+      versions: [version()],
+      facts: facts({
+        nftOpenings: [],
+        assets: [{ ...curveAndTransfers, postGraduation: null }],
+      }),
+    });
+    expect(uncovered.summary["excludedAssets"]).toEqual([
+      {
+        assetId: ASSET,
+        reasonCode: "MINING_ASSET_GRADUATED_UNREADABLE",
+        from: new Date(Number(graduation) * 1000).toISOString(),
+      },
+    ]);
+    // A valuation (replay) hour has no post-graduation price: excluded too.
+    const valued = prepareMiningHour({
+      hourStart: S,
+      versions: [version("2", "2026-10-10T00:00:00.000Z", "valuation")],
+      facts: facts({ nftOpenings: [], assets: [curveAndTransfers] }),
+    });
+    expect(valued.summary["excludedAssets"]).toHaveLength(1);
+  });
+
   it("Decision 0123: an hour that switches from a valuation version to a quantity version mid-hour reads prices only for the first slice's rule", () => {
     const versions = [
       version("2", "2026-10-10T00:00:00.000Z", "valuation"),

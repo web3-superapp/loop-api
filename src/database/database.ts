@@ -59,6 +59,7 @@ import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
 import { createPostgresLaunch2PublicationRepository } from "./launch2-snapshot-publication-repository.js";
 import { createPostgresLaunch2BuybackAttemptRepository } from "./launch2-buyback-attempt-repository.js";
+import { createPostgresLaunch2MemeAssetRepository } from "./launch2-meme-asset-repository.js";
 import { createPostgresMiningSettlementRepository } from "./mining-settlement-repository.js";
 import type { MiningSettlementRepository } from "../features/mining/hourly-settlement-ports.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
@@ -72,6 +73,7 @@ import type { MemeRepository } from "../features/meme/meme-repository.js";
 import type { Launch2Repository } from "../features/launch2/launch2-ports.js";
 import type { Launch2PublicationRepository } from "../features/launch2/launch2-snapshot-publisher.js";
 import type { Launch2BuybackAttemptRepository } from "../features/launch2/launch2-buyback-keeper.js";
+import type { Launch2MemeAssetRepository } from "../features/launch2/launch2-meme-assets.js";
 import { createPostgresPublicProfileRepository } from "./public-profile-repository.js";
 import { createPostgresStreamUserIdentityRepository } from "./stream-user-identity-repository.js";
 import type { MediaStorage } from "../features/media/media-storage.js";
@@ -255,6 +257,8 @@ export interface Database {
   readonly launch2Publications?: Launch2PublicationRepository;
   /** Decision 0121: buyback keeper attempts (worker only). */
   readonly launch2BuybackAttempts?: Launch2BuybackAttemptRepository;
+  /** Decision 0125: MEME Asset Registry rows + community binding (lane). */
+  readonly launch2MemeAssets?: Launch2MemeAssetRepository;
   /** Decision 0116: hourly settlement, ledger, and claims. */
   readonly miningSettlement?: MiningSettlementRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
@@ -492,6 +496,9 @@ export function createPostgresDatabase(
       ...(config.hooksLaunch === undefined
         ? {}
         : { minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds }),
+      ...(config.launchChain === undefined
+        ? {}
+        : { launchChainId: config.launchChain.chainId }),
     }),
     hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
     hooksLaunchExecutor: (leaseSeconds: number) =>
@@ -501,6 +508,7 @@ export function createPostgresDatabase(
     launch2: createPostgresLaunch2Repository(pool),
     launch2Publications: createPostgresLaunch2PublicationRepository(pool),
     launch2BuybackAttempts: createPostgresLaunch2BuybackAttemptRepository(pool),
+    launch2MemeAssets: createPostgresLaunch2MemeAssetRepository(pool),
     miningSettlement: createPostgresMiningSettlementRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),

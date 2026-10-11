@@ -30,6 +30,9 @@ import {
   launchApproveResourceSchema,
   launchConfigRejectRequestSchema,
   launchConfigRejectResourceSchema,
+  launchMaterialApproveRequestSchema,
+  launchMaterialApproveResourceSchema,
+  launchMaterialParamsSchema,
   launchProjectRejectRequestSchema,
   launchProjectRejectResourceSchema,
   launchProjectDetailResourceSchema,
@@ -471,6 +474,49 @@ export function registerAdminRoleRoutes(
         idempotencyKey(request),
         projectId,
         version,
+        body(request),
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    `${adminApiPrefix}/launch/projects/:projectId/materials/:materialVersion/approve`,
+    {
+      schema: {
+        operationId: "approveAdminLaunchProjectMaterial",
+        summary: "Approve a launch project's catalog material (reviewer)",
+        description:
+          "Decision 0125 (`launch.approve`: reviewer only — the platform administrator cannot approve; the project owner is excluded). The console counterpart of `pnpm launch:review <projectId> approve`: approves `submitted` / `in_review` catalog material at exactly materialVersion (compare-and-swap; the path names the version as read). review_status becomes approved (reviewReasonCode operator_manual_review), the catalog launches row is created on the launch chain slot (unscheduled), and a launch_project_approvals row and a launch_review_events operator row are written in the same transaction; after this the owner can save a Hooks config. Runs the `launch.project.approve` command as the account's bound LOOP user with operationId = Idempotency-Key; same key + same body replays (`replayed: true`). Refusals: 403 PERMISSION_DENIED (OPS_SELF_APPROVAL / OPS_FORBIDDEN), 404 NOT_FOUND (OPS_NOT_FOUND / ADMIN_LAUNCH_PROJECT_NOT_FOUND), 409 ADMIN_CONFLICT (OPS_LAUNCH_NOT_IN_REVIEW — already approved, rejected, draft, or returned; OPS_VERSION_CONFLICT — the material changed; OPS_IDEMPOTENCY_CONFLICT), 422 VALIDATION_FAILED (ADMIN_REASON_TEXT_INVALID). Audit: `launch.project.approve.requested` before (503 ADMIN_AUDIT_UNAVAILABLE when it cannot be written, nothing runs), then `.decided` or `.failed`; the service writes ops_audit.",
+        tags: ["admin-launch"],
+        security: adminSecurity,
+        headers: idempotencyHeadersSchema,
+        params: launchMaterialParamsSchema,
+        querystring: emptyQuerySchema,
+        body: launchMaterialApproveRequestSchema,
+        response: {
+          200: launchMaterialApproveResourceSchema,
+          ...adminErrors(
+            ...guardedErrors,
+            "NOT_FOUND",
+            "ADMIN_CONFLICT",
+            "VALIDATION_FAILED",
+          ),
+        },
+      },
+      ...guard("launch.approve"),
+    },
+    async (request, reply) => {
+      const { projectId, materialVersion } = request.params as {
+        readonly projectId: string;
+        readonly materialVersion: string;
+      };
+      const resource = await launchReview.approveProjectMaterial(
+        requestContext(request),
+        idempotencyKey(request),
+        projectId,
+        materialVersion,
         body(request),
       );
       noStore(reply);

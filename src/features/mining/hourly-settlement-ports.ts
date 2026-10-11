@@ -119,6 +119,26 @@ export interface MiningAssetFact {
     readonly at: bigint;
     readonly priceAfterE18: bigint;
   }[];
+  /**
+   * Decision 0125: ERC-20 balances after graduation, from the indexed MEME
+   * `Transfer` logs — opening balances at `from` (= max(graduation, hour
+   * start)) and the transfers in `[from, hourEnd)` in chain order. Null /
+   * absent when the asset has not graduated in or before the hour, or its
+   * transfer coverage was not complete before the hour ended (the asset
+   * then leaves the pool at graduation, as before).
+   */
+  readonly postGraduation?: {
+    readonly from: bigint;
+    readonly openingBalances: readonly {
+      readonly address: string;
+      readonly balanceRaw: bigint;
+    }[];
+    readonly moves: readonly {
+      readonly address: string;
+      readonly deltaRaw: bigint;
+      readonly at: bigint;
+    }[];
+  } | null;
 }
 
 export interface MiningWalletOwnerFact {
@@ -395,6 +415,10 @@ export interface MiningSettlementRepository {
     userId: string,
     epochId: string,
   ): Promise<MiningEpochRewardRecord | null>;
+  /**
+   * Settled hours of one user, newest first. Decision 0125: rows with zero
+   * power on both tracks and no reward are not listed.
+   */
   listUserEpochRewards(input: {
     readonly userId: string;
     readonly beforeHourStart: string | null;

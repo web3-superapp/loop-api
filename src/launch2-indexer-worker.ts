@@ -12,9 +12,15 @@ import type {
   Launch2ContractRole,
   Launch2LaneEvent,
   Launch2LaneInstance,
+  Launch2MemeTransferRecord,
   Launch2Repository,
   Launch2SnapshotMemberRecord,
 } from "./features/launch2/launch2-ports.js";
+import {
+  registerPendingLaunch2MemeAssets,
+  type Launch2MemeAssetRepository,
+  type Launch2TokenIdentityReader,
+} from "./features/launch2/launch2-meme-assets.js";
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
 
@@ -36,7 +42,12 @@ import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
  * 3. rebuilds a published snapshot from the indexed NFT transfers at the
  *    cutoff block and keeps the proofs only when the Merkle root and the
  *    cutoff block hash/time reproduce;
- * 4. re-derives every instance stage and `nextChangeAt` from the clock.
+ * 4. re-derives every instance stage and `nextChangeAt` from the clock;
+ * 5. Decision 0125: also reads every instance's MEME ERC-20 `Transfer`
+ *    logs into `launch2_meme_transfers` (an instance whose coverage never
+ *    started re-scans once from its deploy block, like a late-registered
+ *    one), and registers each deployed MEME in the Asset Registry with the
+ *    project's community binding (`memeAssets`, retried every tick).
  *
  * It never signs or sends.
  */
@@ -54,6 +65,8 @@ export type Launch2LaneResult = {
   readonly registered: number;
   readonly snapshotsChecked: number;
   readonly stagesChanged: number;
+  /** Decision 0125: MEME registry rows inserted this tick. */
+  readonly assetsRegistered: number;
 };
 
 export interface Launch2LaneOptions {
@@ -66,6 +79,14 @@ export interface Launch2LaneOptions {
    */
   readonly factories: readonly Launch2FactoryEntry[];
   readonly reorgDepthBlocks: number;
+  /**
+   * Decision 0125: Asset Registry + community binding of deployed MEMEs.
+   * Absent: nothing is registered (the lane still indexes).
+   */
+  readonly memeAssets?: {
+    readonly repository: Launch2MemeAssetRepository;
+    readonly reader: Launch2TokenIdentityReader;
+  };
   readonly maxLogRange?: bigint;
   readonly pollIntervalMs: number;
   readonly now?: () => Date;
@@ -112,6 +133,8 @@ function rolesOf(
         instance.addresses.buybackExecutor,
         instance.generation === "v2" ? "buybackExecutorV2" : "buybackExecutor",
       ],
+      // Decision 0125: MEME ERC-20 transfers (post-graduation balances).
+      [instance.addresses.meme, "meme"],
     ];
     for (const [address, role] of entries) {
       roles.set(address, role);
@@ -136,6 +159,7 @@ function result(
     registered: 0,
     snapshotsChecked: 0,
     stagesChanged: 0,
+    assetsRegistered: 0,
     ...extra,
   });
 }
@@ -307,6 +331,11 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
     const newDeploys = instances
       .filter((instance) => registeredSet.has(instance.instanceId))
       .map((instance) => BigInt(instance.deployBlockNumber));
+    // Decision 0125: instances whose MEME transfer coverage never started
+    // re-scan once from their deploy block (idempotent upserts).
+    const memeRescans = instances.filter(
+      (instance) => instance.memeTransfersTargetBlock === null,
+    );
     let kind: Launch2LaneResult["kind"] = "advanced";
     let fromBlock: bigint;
     let startedFrom: bigint;
@@ -334,6 +363,13 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         if (deploy < fromBlock) fromBlock = deploy;
       }
     }
+    // The re-scan must reach the block the lane had already passed.
+    const memeTarget =
+      checkpoint === null ? null : BigInt(checkpoint.lastBlockNumber);
+    for (const instance of memeRescans) {
+      const deploy = BigInt(instance.deployBlockNumber);
+      if (deploy < fromBlock) fromBlock = deploy;
+    }
     let scanned: Partial<Launch2LaneResult> = {};
     if (fromBlock <= head.blockNumber) {
       const maximumTo = fromBlock + maxRange - 1n;
@@ -348,6 +384,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       if (aborted(signal)) return result("aborted", null);
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
+      const memeTransfers: Launch2MemeTransferRecord[] = [];
       let ignored = decoded.ignored;
       for (const log of decoded.logs) {
         const instanceId =
@@ -368,6 +405,20 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           }
           at = block.timestamp;
           timestamps.set(log.blockNumber, at);
+        }
+        if (roles.get(log.contractAddress) === "meme") {
+          memeTransfers.push({
+            instanceId,
+            from: log.args["from"] ?? "",
+            to: log.args["to"] ?? "",
+            amount: log.args["value"] ?? "",
+            transactionHash: log.transactionHash,
+            logIndex: log.logIndex,
+            blockNumber: log.blockNumber.toString(10),
+            blockHash: log.blockHash,
+            at: at.toString(10),
+          });
+          continue;
         }
         events.push({
           instanceId,
@@ -400,6 +451,18 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           ? {}
           : { rewindFromBlockNumber: rewindFrom.toString(10) }),
         activationGraceBlocks: options.reorgDepthBlocks,
+        ...(memeTransfers.length === 0 ? {} : { memeTransfers }),
+        ...(memeRescans.length === 0
+          ? {}
+          : {
+              memeTransferCoverage: {
+                instanceIds: memeRescans.map((instance) => instance.instanceId),
+                targetBlockNumber: (memeTarget !== null && memeTarget > toBlock
+                  ? memeTarget
+                  : toBlock
+                ).toString(10),
+              },
+            }),
       });
       if (ignored > 0) {
         options.onWarning?.({
@@ -410,7 +473,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       scanned = {
         fromBlockNumber: fromBlock.toString(10),
         toBlockNumber: toBlock.toString(10),
-        eventCount: events.length,
+        eventCount: events.length + memeTransfers.length,
         ignoredCount: ignored,
       };
     } else {
@@ -418,11 +481,23 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
     }
     const snapshotsChecked = await verifySnapshots();
     const stagesChanged = await refreshStages();
+    const assets =
+      options.memeAssets === undefined
+        ? null
+        : await registerPendingLaunch2MemeAssets({
+            repository: options.memeAssets.repository,
+            reader: options.memeAssets.reader,
+            chainId: options.chainId,
+            ...(options.onWarning === undefined
+              ? {}
+              : { onWarning: options.onWarning }),
+          });
     return result(kind, null, {
       ...scanned,
       registered: registered.length,
       snapshotsChecked,
       stagesChanged,
+      assetsRegistered: assets?.registered ?? 0,
     });
   }
 

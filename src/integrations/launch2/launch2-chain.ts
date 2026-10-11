@@ -2,6 +2,7 @@ import {
   createPublicClient,
   decodeEventLog,
   decodeFunctionData,
+  erc20Abi,
   fallback,
   http,
   recoverTypedDataAddress,
@@ -78,6 +79,8 @@ const roleAbis: Readonly<
     abi: legacyV2BuybackExecutorAbi,
     events: ["BuybackCompleted", "BuybackPausedEvent", "BuybackResumed"],
   },
+  // Decision 0125: the MEME ERC-20 (generated ABI lists no events).
+  meme: { abi: erc20Abi, events: ["Transfer"] },
 };
 
 function lower(value: string): string {

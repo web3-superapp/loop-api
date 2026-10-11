@@ -429,11 +429,11 @@ describe("selectMiningPrice with a derived price (Decisions 0057 and 0059)", () 
         referencePriceProxyAssetId: null,
         referencePricePairAddress: wbnbPairAddress,
         weight: "1",
-        power: "2.9886107563",
+        power: "2.99",
         blockNumber: "123001455",
       },
     ]);
-    expect(result.totalPower).toBe("2.9886107563");
+    expect(result.totalPower).toBe("2.99");
   });
 
   it("records the holding as unread when the derived price is out of band (Decision 0057)", () => {

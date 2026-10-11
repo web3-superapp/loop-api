@@ -544,6 +544,117 @@ describe("Operator console role separation (Decision 0109)", () => {
     );
   });
 
+  it("lets only a reviewer approve the catalog material at a version, idempotently, audited (Decision 0125)", async () => {
+    const harness = await createHarness();
+    const admin = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    const reviewer = await seedAndLogin(
+      harness,
+      "reviewer",
+      harness.reviewerUserId,
+    );
+    const owner = await seedAndLogin(harness, "reviewer", harness.ownerUserId);
+    const approve = (
+      cookie: string,
+      payload: Record<string, unknown>,
+      key: string | null = randomUUID(),
+      version = "1",
+      projectId = harness.projectId,
+    ) =>
+      harness.app.inject({
+        method: "POST",
+        url: `/admin/v1/launch/projects/${projectId}/materials/${version}/approve`,
+        headers: {
+          cookie,
+          ...(key === null ? {} : { "idempotency-key": key }),
+        },
+        payload,
+      });
+    // The platform administrator cannot approve (same model as versions).
+    expectError(
+      await approve(admin, { reason: "looks complete" }),
+      403,
+      "PERMISSION_DENIED",
+    );
+    // The project owner is never the reviewer.
+    expectError(
+      await approve(owner, { reason: "mine" }),
+      403,
+      "PERMISSION_DENIED",
+      "OPS_SELF_APPROVAL",
+    );
+    // Shape: a reason is required, no extra keys, a positive version.
+    expectError(await approve(reviewer, {}), 400, "INVALID_REQUEST");
+    expectError(
+      await approve(reviewer, { reason: "ok", materialVersion: 1 }),
+      400,
+      "INVALID_REQUEST",
+    );
+    expectError(
+      await approve(reviewer, { reason: "   " }),
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_REASON_TEXT_INVALID",
+    );
+    expectError(
+      await approve(reviewer, { reason: "ok" }, randomUUID(), "0"),
+      400,
+      "INVALID_REQUEST",
+    );
+    expectError(
+      await approve(reviewer, { reason: "ok" }, null),
+      400,
+      "INVALID_REQUEST",
+    );
+    expect(harness.hooks.executed).toHaveLength(0);
+
+    const key = randomUUID();
+    const approved = await approve(
+      reviewer,
+      { reason: " Material complete " },
+      key,
+    );
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json()).toMatchObject({
+      operationId: key,
+      replayed: false,
+      approval: {
+        approvalId: key,
+        projectId: harness.projectId,
+        materialVersion: 1,
+        approverUserId: harness.reviewerUserId,
+        reason: "Material complete",
+        launchId: "11111111-1111-4111-8111-111111111111",
+      },
+    });
+    expect(harness.hooks.executed.at(-1)).toMatchObject({
+      action: "launch.project.approve",
+      target: harness.projectId,
+      payload: { materialVersion: 1 },
+    });
+    const replay = await approve(
+      reviewer,
+      { reason: " Material complete " },
+      key,
+    );
+    expect(replay.statusCode, replay.body).toBe(200);
+    expect(replay.json()).toMatchObject({ replayed: true });
+    expect(harness.hooks.executed).toHaveLength(1);
+    expectError(
+      await approve(reviewer, { reason: "another body" }, key),
+      409,
+      "ADMIN_CONFLICT",
+      "OPS_IDEMPOTENCY_CONFLICT",
+    );
+    const actions = harness.admin.audit.map((row) => row.action);
+    for (const action of [
+      "launch.project.approve.requested",
+      "launch.project.approve.decided",
+    ]) {
+      expect(actions).toContain(action);
+    }
+  });
+
   it("lets only the platform administrator release a blocked snapshot publication, audited (Decision 0120)", async () => {
     const harness = await createHarness();
     const admin = (await login(harness.app, "operator", bootstrapPassword))

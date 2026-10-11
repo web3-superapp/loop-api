@@ -275,6 +275,7 @@ export const miningSummaryResourceSchema = {
     "referralBoost",
     "formula",
     "snapshot",
+    "assetPowerBasis",
     "contractVersion",
   ],
   properties: {
@@ -286,6 +287,12 @@ export const miningSummaryResourceSchema = {
     referralBoost: unavailableSchema,
     formula: formulaStateSchema,
     snapshot: snapshotSchema,
+    assetPowerBasis: {
+      type: "string",
+      const: "quantity",
+      description:
+        "Decision 0125: asset power = holding × weight (token quantity, requirer ruling 2026-10-10). referencePrice* fields are still published as the observed fact but do not multiply the power. Snapshots stored before 0125 keep the power they were computed with (holding × referencePriceUsd × weight) until the next snapshot.",
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -301,6 +308,7 @@ export const miningAssetsResourceSchema = {
     "source",
     "referencePrice",
     "formula",
+    "assetPowerBasis",
     "contractVersion",
   ],
   properties: {
@@ -396,6 +404,12 @@ export const miningAssetsResourceSchema = {
       ],
     },
     formula: formulaStateSchema,
+    assetPowerBasis: {
+      type: "string",
+      const: "quantity",
+      description:
+        "Decision 0125: asset power = holding × weight (token quantity, requirer ruling 2026-10-10). referencePrice* fields are still published as the observed fact but do not multiply the power. Snapshots stored before 0125 keep the power they were computed with (holding × referencePriceUsd × weight) until the next snapshot.",
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -797,7 +811,11 @@ const formulaProjectionSchema = {
     scope: scopeSchema,
     effectiveAt: nullableDateTimeSchema,
     approvedAt: nullableDateTimeSchema,
-    expressionKey: ruleKeySchema,
+    expressionKey: {
+      ...ruleKeySchema,
+      description:
+        "Decision 0125: mining.rules.formula.holdingTimesWeight (asset power = holding × weight). Versions stored with the retired holdingTimesReferencePriceTimesWeight key are projected with the new key.",
+    },
     dailyOutputKey: ruleKeySchema,
     assetWeights: {
       type: "object",
@@ -856,6 +874,8 @@ const formulaProjectionSchema = {
       },
     },
     priceGuardRules: {
+      description:
+        "Deprecated (Decision 0125): asset power no longer uses the reference price (holding × weight), so these rules only govern which observed price is published beside a holding; do not show them as part of the formula. Kept for client compatibility.",
       type: "array",
       maxItems: 16,
       items: {

@@ -340,13 +340,65 @@ export function prepareMiningHour(input: {
     a.assetId < b.assetId ? -1 : 1,
   )) {
     let cutoff = end;
+    // Decision 0125: after graduation a quantity hour reads the indexed
+    // ERC-20 balances; a valuation hour (replay) still has no price there.
+    const post =
+      asset.graduatedAt !== null &&
+      asset.graduatedAt < end &&
+      !valued &&
+      asset.postGraduation !== undefined &&
+      asset.postGraduation !== null
+        ? asset.postGraduation
+        : null;
     if (asset.graduatedAt !== null && asset.graduatedAt < end) {
       cutoff = asset.graduatedAt > start ? asset.graduatedAt : start;
-      excludedAssets.push({
-        assetId: asset.assetId,
-        reasonCode: miningSettlementReasonCodes.assetGraduatedUnreadable,
-        from: iso(cutoff),
-      });
+      if (post === null) {
+        excludedAssets.push({
+          assetId: asset.assetId,
+          reasonCode: miningSettlementReasonCodes.assetGraduatedUnreadable,
+          from: iso(cutoff),
+        });
+      }
+    }
+    if (post !== null) {
+      const from = post.from > start ? post.from : start;
+      const balances = new Map<string, Timeline<string>>();
+      for (const opening of post.openingBalances) {
+        balances.set(opening.address, {
+          key: opening.address,
+          opening: opening.balanceRaw,
+          moves: [],
+        });
+      }
+      for (const move of post.moves) {
+        const row = balances.get(move.address) ?? {
+          key: move.address,
+          opening: 0n,
+          moves: [],
+        };
+        row.moves.push({ at: move.at, delta: move.deltaRaw });
+        balances.set(move.address, row);
+      }
+      for (const row of [...balances.values()].sort((a, b) =>
+        a.key < b.key ? -1 : 1,
+      )) {
+        const segments = segmentsOf(row.opening, row.moves, from, end);
+        if (segments.length === 0) continue;
+        const userId = ownerOf.get(row.key);
+        if (userId === undefined) {
+          unattributed += 1;
+          continue;
+        }
+        for (const segment of segments) {
+          assetHoldings.push({
+            userId,
+            assetId: asset.assetId,
+            from: segment.from,
+            to: segment.to,
+            balanceRaw: segment.value,
+          });
+        }
+      }
     }
     if (cutoff <= start) continue;
     if (valued) {

@@ -426,6 +426,72 @@ const projectSummarySchema = {
         { type: "null" },
       ],
     },
+    materialApproval: {
+      description:
+        "Decision 0125 (optional in the schema, always present): the latest console approval of the catalog material (POST …/materials/{materialVersion}/approve); null when none (also for material approved with the pnpm launch:review script).",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["approverUserId", "materialVersion", "approvedAt"],
+          properties: {
+            approverUserId: uuidSchema,
+            materialVersion: { type: "integer", minimum: 1 },
+            approvedAt: dateTimeSchema,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    communityId: {
+      description:
+        "Decision 0125 (optional in the schema, always present): launch_projects.community_id — the community the owner named for the MEME; null when none.",
+      anyOf: [uuidSchema, { type: "null" }],
+    },
+    community: {
+      description:
+        "Decision 0125 (optional in the schema, always present): the named community as it is now, for the community_binding_mismatch review — name, its current boundAssetKey (null when unbound), verificationStatus, and binding = the launch2_event lane's one automatic binding attempt of the latest MEME v2 instance (bound | already_bound | conflict | not_owner | community_unavailable | asset_blocked | none; null before the MEME is registered). null when the project names no community.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "communityId",
+            "name",
+            "verificationStatus",
+            "boundAssetKey",
+            "binding",
+          ],
+          properties: {
+            communityId: uuidSchema,
+            name: { type: "string" },
+            verificationStatus: {
+              type: "string",
+              enum: ["pending", "verified", "rejected"],
+            },
+            boundAssetKey: { anyOf: [{ type: "string" }, { type: "null" }] },
+            binding: {
+              anyOf: [
+                {
+                  type: "string",
+                  enum: [
+                    "bound",
+                    "already_bound",
+                    "conflict",
+                    "not_owner",
+                    "community_unavailable",
+                    "asset_blocked",
+                    "none",
+                  ],
+                },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+        { type: "null" },
+      ],
+    },
     stage: {
       type: "string",
       enum: [...adminLaunchStages],
@@ -524,6 +590,17 @@ export const launchVersionParamsSchema = {
   properties: {
     projectId: { type: "string", maxLength: 64 },
     version: { type: "string", pattern: "^[1-9][0-9]{0,9}$" },
+  },
+} as const;
+
+/** Decision 0125: `…/materials/{materialVersion}/approve`. */
+export const launchMaterialParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["projectId", "materialVersion"],
+  properties: {
+    projectId: { type: "string", maxLength: 64 },
+    materialVersion: { type: "string", pattern: "^[1-9][0-9]{0,9}$" },
   },
 } as const;
 
@@ -1364,6 +1441,63 @@ export const launchApproveResourceSchema = {
         configHash: hash32Schema,
         approverUserId: uuidSchema,
         reason: { type: "string" },
+        approvedAt: nullableDateTimeSchema,
+      },
+    },
+    audit: nullableAuditReferenceSchema,
+  },
+} as const;
+
+/** Decision 0125: `POST …/materials/{materialVersion}/approve`. */
+export const launchMaterialApproveRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["reason"],
+  properties: {
+    reason: {
+      type: "string",
+      minLength: 1,
+      maxLength: 2000,
+      description:
+        "Internal approval note (ops_audit / launch_project_approvals); 1–500 characters after trimming. Never shown to the applicant.",
+    },
+  },
+} as const;
+
+export const launchMaterialApproveResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["operationId", "replayed", "approval", "audit"],
+  properties: {
+    operationId: {
+      ...uuidSchema,
+      description: "= the Idempotency-Key (= approval.approvalId).",
+    },
+    replayed: { type: "boolean" },
+    approval: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "approvalId",
+        "projectId",
+        "materialVersion",
+        "approverUserId",
+        "reason",
+        "launchId",
+        "approvedAt",
+      ],
+      properties: {
+        approvalId: uuidSchema,
+        projectId: uuidSchema,
+        materialVersion: { type: "integer", minimum: 1 },
+        approverUserId: uuidSchema,
+        reason: { type: "string" },
+        launchId: {
+          description:
+            "The catalog launches row the approval created (or found).",
+          anyOf: [uuidSchema, { type: "null" }],
+        },
         approvedAt: nullableDateTimeSchema,
       },
     },

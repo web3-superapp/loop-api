@@ -17,7 +17,8 @@ import { isDerivedPriceAllowed } from "./mining-reference-pricing.js";
 /**
  * Pure Mining Power snapshot computation (Decisions 0036 and 0043, 03 §7.1).
  *
- * `power(account, asset) = holding × referencePriceUsd × weight`, where
+ * `power(account, asset) = holding × weight` (Decision 0125; it was
+ * `holding × referencePriceUsd × weight` before), where
  * `holding` is the observed raw balance scaled by the asset's decimals, the
  * reference price is a *fresh* market fact, and `weight` is the formula's
  * asset weight multiplied by the approved community weight when exactly one
@@ -411,10 +412,10 @@ export function computeMiningSnapshot(
     }
     priceSource ??= price.source;
     const holding = scaleRawHolding(balance.rawValue, balance.decimals);
-    const power = multiplyDecimalStrings(
-      multiplyDecimalStrings(holding, price.priceUsd),
-      weight,
-    );
+    // Decision 0125 (requirer ruling 2026-10-10, docs/16 §7): quantity, not
+    // value — the reference price is still read and published with the row,
+    // but it no longer multiplies the power.
+    const power = multiplyDecimalStrings(holding, weight);
     const key = `${balance.ownerUserId}|${balance.assetId}`;
     const existing = perAccountAsset.get(key);
     snapshotHoldingsSource = mergeHoldingsSource(

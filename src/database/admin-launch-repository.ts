@@ -49,6 +49,16 @@ const summaryRowSchema = z
     rejection_reviewer_id: uuid.nullable(),
     rejection_material_version: z.number().int().nullable(),
     rejected_at: date.nullable(),
+    material_approver_id: uuid.nullable(),
+    material_approved_version: z.number().int().nullable(),
+    material_approved_at: date.nullable(),
+    community_id: uuid.nullable(),
+    community_name: z.string().nullable(),
+    community_verification_status: z
+      .enum(["pending", "verified", "rejected"])
+      .nullable(),
+    community_bound_asset_key: z.string().nullable(),
+    community_binding: z.string().nullable(),
     created_at: date,
     updated_at: date,
     cursor_key: z.string(),
@@ -89,6 +99,29 @@ function mapSummary(raw: unknown): AdminLaunchProjectSummary {
             reviewerUserId: row.rejection_reviewer_id,
             materialVersion: row.rejection_material_version,
             rejectedAt: row.rejected_at.toISOString(),
+          }),
+    materialApproval:
+      row.material_approver_id === null ||
+      row.material_approved_version === null ||
+      row.material_approved_at === null
+        ? null
+        : Object.freeze({
+            approverUserId: row.material_approver_id,
+            materialVersion: row.material_approved_version,
+            approvedAt: row.material_approved_at.toISOString(),
+          }),
+    communityId: row.community_id,
+    community:
+      row.community_id === null ||
+      row.community_name === null ||
+      row.community_verification_status === null
+        ? null
+        : Object.freeze({
+            communityId: row.community_id,
+            name: row.community_name,
+            verificationStatus: row.community_verification_status,
+            boundAssetKey: row.community_bound_asset_key,
+            binding: row.community_binding,
           }),
     stage: row.stage,
     latestConfigVersion: row.config_version,
@@ -132,6 +165,16 @@ const summarySql = `
     rj.reviewer_user_id as rejection_reviewer_id,
     rj.material_version as rejection_material_version,
     rj.created_at as rejected_at,
+    ma.reviewer_user_id as material_approver_id,
+    ma.material_version as material_approved_version,
+    ma.created_at as material_approved_at,
+    p.community_id, co.name as community_name,
+    co.verification_status as community_verification_status,
+    co.bound_asset_key as community_bound_asset_key,
+    (select i.community_binding from public.launch2_instances i
+      where i.project_id = p.project_id
+      order by i.registered_at desc, i.instance_id desc limit 1)
+      as community_binding,
     p.created_at, p.updated_at,
     to_char(p.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_key,
     c.config_version, c.config_hash, c.owner_user_id as config_owner_user_id,
@@ -150,6 +193,13 @@ const summarySql = `
       else 'approved'
     end as stage
   from public.launch_projects p
+  left join public.communities co on co.community_id = p.community_id
+  left join lateral (
+    select reviewer_user_id, material_version, created_at
+    from public.launch_project_approvals
+    where project_id = p.project_id
+    order by created_at desc, approval_id desc limit 1
+  ) ma on true
   left join lateral (
     select reason_code, note, reviewer_user_id, material_version, created_at
     from public.launch_project_rejections

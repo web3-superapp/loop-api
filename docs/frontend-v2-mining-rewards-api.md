@@ -386,3 +386,40 @@ prepare 返回 `409 INSUFFICIENT_BALANCE`：
 | `MINING_CLAIM_CHAIN_READ_FAILED`       | RPC 读取失败                  | prepare / report 503，可重试                          |
 
 `hourly.claim.executable = false` 时把 Claim 按钮置灰并显示 `hourly.claim.reasonCode`；可领取余额照常显示。
+
+## 8. S148 变更（决策 0125）
+
+Base URL、请求头、错误体与 §1、§6 相同；**没有新增或删除任何字段**（0141 codec 的键集合不变），只改变值的口径。
+
+### 8.1 `hourly.displayState` 按本人首个结算小时判定（S138 观察 ②）
+
+- 以前：只要全网有已结算小时就是 `displaying` / `settling`，没有奖励行的新用户看到 `displaying` + 0。
+- 现在：调用者**本人**还没有任何一个「有算力（两轨任一 > 0）或有奖励」的已结算小时时，
+  `displayState = "awaiting_first_settlement"`，且 `lastHour = null`、`display = null`、`tracks = null`；
+  `totals` 照常返回（全 0）；`referral.levels` 照常返回（比例来自参数）；`reasonCode` 为 `null`（有生效参数时）。
+- 同时 `hourly.claim` 为 `{executable: false, reasonCode: "MINING_NOTHING_SETTLED"}`（§3.4 第 3 条的口径也改为「本人」）。
+- 页面：沿用现有 `awaiting_first_settlement` 文案「首个小时结算后开始展示奖励」，不做增长动画。
+
+### 8.2 合约暂停时不可领取（S138 D3）
+
+§3.4 的顺序表在第 7 条（服务端配置）之后追加：
+
+| 顺序 | `reasonCode`                     | 条件                                                   | 页面建议（App 已有中文）   |
+| ---- | -------------------------------- | ------------------------------------------------------ | -------------------------- |
+| 8    | `MINING_CLAIM_CONTRACT_PAUSED`   | 前 7 条都满足，链上 `LoopRewardClaim.paused()` 为 true | 领取合约已暂停，暂不能领取 |
+| 8    | `MINING_CLAIM_CHAIN_READ_FAILED` | 前 7 条都满足，但读合约失败（RPC 不可用）              | 领取暂不可用（通用文案）   |
+
+- 原因码沿用 prepare 已有的 `MINING_CLAIM_CONTRACT_PAUSED`（App 的 `miningClaimUnavailableText` 已映射），没有新造
+  `CLAIM_CONTRACT_PAUSED`。
+- 只有前 7 条都满足时才读链，`GET /v2/mining/rewards` 不因链不可用而失败。
+
+### 8.3 `GET /v2/mining/rewards/epochs` 不再返回零算力小时（S138 D2）
+
+两轨 `*TotalPower` 都为 0 且 `totalRewardRaw = 0` 的小时不出现在列表里（与 §4 的「无算力的小时没有行」一致）。
+翻页游标不变。
+
+### 8.4 毕业后的资产轨
+
+launch2 MEME 毕业后不再整段为 0：后端索引 MEME 的 ERC-20 `Transfer`，毕业后的持币数量按链上余额的小时 TWAB × 权重计算。
+`tracks.asset.excludedAssets` 里 `MINING_ASSET_GRADUATED_UNREADABLE` 只会出现在该实例转账覆盖尚未完成之前已结算的小时。
+字段不变。

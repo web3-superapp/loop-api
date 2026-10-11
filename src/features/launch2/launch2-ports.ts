@@ -21,7 +21,9 @@ export type Launch2ContractRole =
   | "snapshots"
   | "curve"
   | "buybackExecutor"
-  | "buybackExecutorV2";
+  | "buybackExecutorV2"
+  /** Decision 0125: the MEME ERC-20 itself (`Transfer` only). */
+  | "meme";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -318,6 +320,27 @@ export interface Launch2LaneInstance {
   readonly activatedAt: string | null;
   readonly stage: Launch2Stage;
   readonly nextChangeAt: string | null;
+  /**
+   * Decision 0125: the block the one-time MEME `Transfer` re-scan of this
+   * instance must reach (null: the re-scan has not started yet, so the
+   * lane rewinds to the deploy block). Absent when the repository does not
+   * track the coverage (no re-scan is triggered).
+   */
+  readonly memeTransfersTargetBlock?: string | null;
+}
+
+/** Decision 0125: one MEME ERC-20 `Transfer` of a launch2 instance. */
+export interface Launch2MemeTransferRecord {
+  readonly instanceId: string;
+  readonly from: string;
+  readonly to: string;
+  readonly amount: string;
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  /** Unix seconds (block timestamp). */
+  readonly at: string;
 }
 
 export interface Launch2PositionRecord {
@@ -455,6 +478,17 @@ export interface Launch2Repository {
     readonly rewindFromBlockNumber?: string;
     /** Blocks past the activation block before a missing activation is a hold. */
     readonly activationGraceBlocks: number;
+    /** Decision 0125: MEME ERC-20 transfers of this segment. */
+    readonly memeTransfers?: readonly Launch2MemeTransferRecord[];
+    /**
+     * Decision 0125: instances whose MEME re-scan starts with this segment
+     * (from their deploy block); their coverage is complete once a
+     * checkpoint reaches `targetBlockNumber`.
+     */
+    readonly memeTransferCoverage?: {
+      readonly instanceIds: readonly string[];
+      readonly targetBlockNumber: string;
+    };
   }): Promise<{ readonly storedCount: number; readonly touched: number }>;
   listSnapshotsToVerify(chainId: string): Promise<
     readonly {

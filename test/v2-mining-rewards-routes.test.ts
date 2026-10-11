@@ -266,6 +266,42 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
     });
   });
 
+  it("Decision 0125: awaits the caller's own first settled hour, not the network's (S138 observation 2)", async () => {
+    // The network settled 10:00–11:00, the caller has no row in it.
+    const repository = createInMemoryMiningSettlement();
+    repository.versions.push(parameterVersion());
+    repository.epochs.push(epochRecord());
+    repository.rewards.push(
+      rewardRecord("66666666-6666-4666-8666-666666666666", 60n * loop),
+    );
+    const { app } = await createApp({ repository });
+    const hourly = (await get(app, "/v2/mining/rewards")).json<{
+      hourly: Record<string, unknown>;
+    }>().hourly;
+    expect(hourly).toMatchObject({
+      displayState: "awaiting_first_settlement",
+      reasonCode: null,
+      lastHour: null,
+      display: null,
+      tracks: null,
+      totals: { settledRaw: "0", claimableRaw: "0" },
+      claim: { executable: false, reasonCode: "MINING_NOTHING_SETTLED" },
+    });
+    // A zero-power row is not a first settled hour either.
+    repository.rewards.push(
+      rewardRecord(s7AccountId, 0n, {
+        nftSelfPower: "0",
+        nftTotalPower: "0",
+        nftHoldings: [],
+      }),
+    );
+    expect(
+      (await get(app, "/v2/mining/rewards")).json<{
+        hourly: Record<string, unknown>;
+      }>().hourly["displayState"],
+    ).toBe("awaiting_first_settlement");
+  });
+
   it("is unavailable (never zero) while the settlement store is down", async () => {
     const repository = seededRepository();
     repository.unavailable = true;
@@ -380,6 +416,32 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
       });
     });
 
+    it("Decision 0125 (S138 D3): is false with MINING_CLAIM_CONTRACT_PAUSED while the contract is paused, MINING_CLAIM_CHAIN_READ_FAILED when unreadable", async () => {
+      const paused = defaultClaimChainState();
+      paused.paused = true;
+      expect(await claimOf((await createApp({ chain: paused })).app)).toEqual({
+        executable: false,
+        reasonCode: "MINING_CLAIM_CONTRACT_PAUSED",
+        latest: null,
+      });
+      const down = defaultClaimChainState();
+      down.unavailable = true;
+      expect(
+        await claimOf((await createApp({ chain: down })).app),
+      ).toMatchObject({
+        executable: false,
+        reasonCode: "MINING_CLAIM_CHAIN_READ_FAILED",
+      });
+      // The ledger reasons come first: nothing to claim is not a chain read.
+      const empty = await createApp({
+        repository: seededRepository(0n),
+        chain: paused,
+      });
+      expect(await claimOf(empty.app)).toMatchObject({
+        reasonCode: "MINING_CLAIM_NOTHING_TO_CLAIM",
+      });
+    });
+
     it("reports the configuration reason only after the ledger allows a claim", async () => {
       const { app } = await createApp({ deps: { signer: null } });
       expect(await claimOf(app)).toMatchObject({
@@ -413,6 +475,34 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
     for (const key of requiredOf(miningClaimsResourceSchema)) {
       expect(Object.hasOwn(claims.json<object>(), key), key).toBe(true);
     }
+  });
+
+  it("Decision 0125 (S138 D2): the epoch list leaves out zero-power hours", async () => {
+    const repository = seededRepository();
+    repository.epochs.push(
+      epochRecord({
+        epochId: "55555555-5555-4555-8555-555555555555",
+        hourStart: "2026-10-10T09:00:00.000Z",
+        hourEnd: "2026-10-10T10:00:00.000Z",
+      }),
+    );
+    repository.rewards.push(
+      rewardRecord(s7AccountId, 0n, {
+        epochId: "55555555-5555-4555-8555-555555555555",
+        hourStart: "2026-10-10T09:00:00.000Z",
+        hourEnd: "2026-10-10T10:00:00.000Z",
+        nftSelfPower: "0",
+        nftTotalPower: "0",
+        nftHoldings: [],
+      }),
+    );
+    const { app } = await createApp({ repository });
+    const items = (await get(app, "/v2/mining/rewards/epochs")).json<{
+      items: { hourStart: string }[];
+    }>().items;
+    expect(items.map((item) => item.hourStart)).toEqual([
+      "2026-10-10T10:00:00.000Z",
+    ]);
   });
 
   it("§9-8 prepares a voucher for the full settled balance with the chain nonce", async () => {

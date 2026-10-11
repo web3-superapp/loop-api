@@ -36,6 +36,8 @@ export interface LaunchProjectRecord {
   readonly reviewReasonCode: string | null;
   /** Decision 0122: the latest reviewer rejection while `rejected`. */
   readonly rejection: HooksLaunchRejection | null;
+  /** Decision 0125: the community the MEME binds to, if named. */
+  readonly communityId: string | null;
   readonly submittedAt: string | null;
   readonly reviewedAt: string | null;
   readonly launchId: string | null;
@@ -235,6 +237,19 @@ export class LaunchVersionConflictError extends Error {
   constructor() {
     super("The stored launch project version conflicts");
     this.name = "LaunchVersionConflictError";
+  }
+}
+
+/**
+ * Decision 0125: the named community does not exist, is rejected, or the
+ * caller is not its active owner (one code, no enumeration).
+ */
+export class LaunchCommunityNotOwnedError extends Error {
+  readonly code = "launch_community_not_owned";
+
+  constructor() {
+    super("The named community is not owned by the caller");
+    this.name = "LaunchCommunityNotOwnedError";
   }
 }
 

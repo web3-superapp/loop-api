@@ -101568,6 +101568,11 @@
                               { "type": "null" }
                             ]
                           },
+                          "communityId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "description": "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch."
+                          },
                           "kyb": {
                             "type": "object",
                             "additionalProperties": false,
@@ -102181,6 +102186,16 @@
                       }
                     }
                   },
+                  "communityId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      },
+                      { "type": "null" }
+                    ],
+                    "description": "Decision 0125: the community the MEME binds to once it is deployed (the launch2_event lane registers the MEME in the Asset Registry and sets that community's bound asset when it is unbound and the owner still owns it). The caller must be the community's active owner and the community must not be rejected, else 422 VALIDATION_FAILED with detailsSafe.reasonCode LAUNCH_COMMUNITY_NOT_OWNED. On create: absent or null = none (only a named community joins the idempotency digest). On replace: absent keeps the stored value, null clears it, an unchanged ID is not re-checked."
+                  },
                   "kind": {
                     "type": "string",
                     "enum": ["ido", "launch2"],
@@ -102414,6 +102429,11 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "description": "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch."
                         },
                         "kyb": {
                           "type": "object",
@@ -103318,6 +103338,11 @@
                             { "type": "null" }
                           ]
                         },
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "description": "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch."
+                        },
                         "kyb": {
                           "type": "object",
                           "additionalProperties": false,
@@ -103934,6 +103959,16 @@
                             ]
                           }
                         }
+                      },
+                      "communityId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          { "type": "null" }
+                        ],
+                        "description": "Decision 0125: the community the MEME binds to once it is deployed (the launch2_event lane registers the MEME in the Asset Registry and sets that community's bound asset when it is unbound and the owner still owns it). The caller must be the community's active owner and the community must not be rejected, else 422 VALIDATION_FAILED with detailsSafe.reasonCode LAUNCH_COMMUNITY_NOT_OWNED. On create: absent or null = none (only a named community joins the idempotency digest). On replace: absent keeps the stored value, null clears it, an unchanged ID is not re-checked."
                       }
                     }
                   }
@@ -104165,6 +104200,11 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "description": "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch."
                         },
                         "kyb": {
                           "type": "object",
@@ -105077,6 +105117,11 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "communityId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "description": "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch."
                         },
                         "kyb": {
                           "type": "object",
@@ -114137,6 +114182,7 @@
                     "referralBoost",
                     "formula",
                     "snapshot",
+                    "assetPowerBasis",
                     "contractVersion"
                   ],
                   "properties": {
@@ -114567,6 +114613,11 @@
                           }
                         }
                       ]
+                    },
+                    "assetPowerBasis": {
+                      "type": "string",
+                      "description": "Decision 0125: asset power = holding × weight (token quantity, requirer ruling 2026-10-10). referencePrice* fields are still published as the observed fact but do not multiply the power. Snapshots stored before 0125 keep the power they were computed with (holding × referencePriceUsd × weight) until the next snapshot.",
+                      "enum": ["quantity"]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -115068,6 +115119,7 @@
                     "source",
                     "referencePrice",
                     "formula",
+                    "assetPowerBasis",
                     "contractVersion"
                   ],
                   "properties": {
@@ -115613,6 +115665,11 @@
                           }
                         }
                       ]
+                    },
+                    "assetPowerBasis": {
+                      "type": "string",
+                      "description": "Decision 0125: asset power = holding × weight (token quantity, requirer ruling 2026-10-10). referencePrice* fields are still published as the observed fact but do not multiply the power. Snapshots stored before 0125 keep the power they were computed with (holding × referencePriceUsd × weight) until the next snapshot.",
+                      "enum": ["quantity"]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
@@ -122441,7 +122498,8 @@
                             "expressionKey": {
                               "type": "string",
                               "minLength": 1,
-                              "maxLength": 128
+                              "maxLength": 128,
+                              "description": "Decision 0125: mining.rules.formula.holdingTimesWeight (asset power = holding × weight). Versions stored with the retired holdingTimesReferencePriceTimesWeight key are projected with the new key."
                             },
                             "dailyOutputKey": {
                               "type": "string",
@@ -122554,6 +122612,7 @@
                               }
                             },
                             "priceGuardRules": {
+                              "description": "Deprecated (Decision 0125): asset power no longer uses the reference price (holding × weight), so these rules only govern which observed price is published beside a holding; do not show them as part of the formula. Kept for client compatibility.",
                               "type": "array",
                               "maxItems": 16,
                               "items": {
@@ -122643,7 +122702,8 @@
                           "expressionKey": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": 128
+                            "maxLength": 128,
+                            "description": "Decision 0125: mining.rules.formula.holdingTimesWeight (asset power = holding × weight). Versions stored with the retired holdingTimesReferencePriceTimesWeight key are projected with the new key."
                           },
                           "dailyOutputKey": {
                             "type": "string",
@@ -122756,6 +122816,7 @@
                             }
                           },
                           "priceGuardRules": {
+                            "description": "Deprecated (Decision 0125): asset power no longer uses the reference price (holding × weight), so these rules only govern which observed price is published beside a holding; do not show them as part of the formula. Kept for client compatibility.",
                             "type": "array",
                             "maxItems": 16,
                             "items": {

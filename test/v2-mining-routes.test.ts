@@ -224,6 +224,7 @@ describe("LOOP API V2 mining module", () => {
         status: "unavailable",
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
       },
+      assetPowerBasis: "quantity",
       contractVersion: "2.0",
     });
     const rewards = await app.inject({
@@ -265,6 +266,7 @@ describe("LOOP API V2 mining module", () => {
         reasonCode: "MINING_FORMULA_BASELINE_PENDING",
         pendingVersion: "miningFormulaV1-draft",
       },
+      assetPowerBasis: "quantity",
       contractVersion: "2.0",
     });
   });
@@ -694,6 +696,7 @@ describe("LOOP API V2 mining module", () => {
             unreadInputs: [],
           },
         },
+        assetPowerBasis: "quantity",
         contractVersion: "2.0",
       });
     });
@@ -893,6 +896,7 @@ describe("LOOP API V2 mining module", () => {
           effectiveAt: approvedAt,
           scope: "development_baseline",
         },
+        assetPowerBasis: "quantity",
         contractVersion: "2.0",
       });
     });
@@ -1890,6 +1894,8 @@ describe("LOOP API V2 mining module", () => {
           configVersion: documents.configVersion,
           status: "approved",
           scope: "development_baseline",
+          // Decision 0125: the stored retired key is projected as quantity.
+          expressionKey: "mining.rules.formula.holdingTimesWeight",
           assetWeights: {
             [loopAsset]: "1",
             [cakeAsset]: "1",

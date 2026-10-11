@@ -69,6 +69,7 @@ const project = Object.freeze({
   kybStatus: "unavailable" as const,
   reviewReasonCode: null,
   rejection: null,
+  communityId: null,
   submittedAt: createdAt,
   reviewedAt: createdAt,
   launchId,

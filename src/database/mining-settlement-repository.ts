@@ -361,7 +361,9 @@ export function createPostgresMiningSettlementRepository(
         chainId === input.chainId
           ? await query(
               `select instance_id, graduated_at,
-                 extract(epoch from graduated_at)::bigint::text as graduated_s
+                 extract(epoch from graduated_at)::bigint::text as graduated_s,
+                 extract(epoch from meme_transfers_complete_at)::bigint::text
+                   as transfers_complete_s
                from public.launch2_instances
                where chain_id = $1 and meme_address = $2`,
               [chainId, address],
@@ -420,10 +422,94 @@ export function createPostgresMiningSettlementRepository(
             priceAfterE18: priceOf(sold),
           });
         });
+        // Decision 0125: post-graduation ERC-20 balances, only for an hour
+        // that ended after the MEME transfer coverage was complete (an
+        // earlier hour was settled without them and replays the same way).
+        const complete =
+          launch2[0]["transfers_complete_s"] === null
+            ? null
+            : epochSeconds(launch2[0], "transfers_complete_s");
+        let postGraduation: MiningAssetFact["postGraduation"] = null;
+        if (
+          graduated !== null &&
+          graduated < input.hourEnd &&
+          complete !== null &&
+          complete < input.hourEnd
+        ) {
+          const from =
+            graduated > input.hourStart ? graduated : input.hourStart;
+          const fromIso = isoOf(from);
+          const transferOpenings = await query(
+            `select address, sum(delta)::text as balance from (
+               select to_address as address, amount as delta
+               from public.launch2_meme_transfers
+               where instance_id = $1 and not removed
+                 and transferred_at < $2::timestamptz and to_address <> $3
+               union all
+               select from_address, -amount
+               from public.launch2_meme_transfers
+               where instance_id = $1 and not removed
+                 and transferred_at < $2::timestamptz and from_address <> $3
+             ) moves
+             group by address having sum(delta) <> 0
+             order by address`,
+            [instanceId, fromIso, zeroAddress],
+          );
+          const transfers = await query(
+            `select from_address, to_address, amount::text as amount,
+               extract(epoch from transferred_at)::bigint::text as at
+             from public.launch2_meme_transfers
+             where instance_id = $1 and not removed
+               and transferred_at >= $2::timestamptz
+               and transferred_at < $3::timestamptz
+             order by block_number, log_index`,
+            [instanceId, fromIso, end],
+          );
+          const transferMoves: {
+            address: string;
+            deltaRaw: bigint;
+            at: bigint;
+          }[] = [];
+          for (const row of transfers) {
+            const amount = BigInt(text(row, "amount"));
+            const at = epochSeconds(row, "at");
+            const fromAddress = text(row, "from_address");
+            const toAddress = text(row, "to_address");
+            if (fromAddress !== zeroAddress) {
+              transferMoves.push({
+                address: fromAddress,
+                deltaRaw: -amount,
+                at,
+              });
+            }
+            if (toAddress !== zeroAddress) {
+              transferMoves.push({ address: toAddress, deltaRaw: amount, at });
+            }
+          }
+          for (const row of transferOpenings) {
+            if (BigInt(text(row, "balance")) < 0n) {
+              throw new MiningSettlementInputError(
+                miningSettlementReasonCodes.inputInvalid,
+                "negative MEME balance",
+              );
+            }
+          }
+          postGraduation = Object.freeze({
+            from,
+            openingBalances: transferOpenings.map((row) =>
+              Object.freeze({
+                address: text(row, "address"),
+                balanceRaw: BigInt(text(row, "balance")),
+              }),
+            ),
+            moves: transferMoves.map((move) => Object.freeze(move)),
+          });
+        }
         assets.push(
           Object.freeze({
             assetId,
             source: "launch2" as const,
+            postGraduation,
             graduatedAt: graduated,
             openingPriceE18: openingPrice,
             openingBalances: openings.map((row) =>
@@ -1279,6 +1365,9 @@ export function createPostgresMiningSettlementRepository(
          join public.mining_epochs e on e.epoch_id = r.epoch_id
          where r.owner_user_id = $1 and e.status = 'settled'
            and ($2::timestamptz is null or e.hour_start < $2::timestamptz)
+           -- Decision 0125 (S138 D2): a zero-power hour is not listed.
+           and (r.nft_total_power::numeric > 0 or r.asset_total_power::numeric > 0
+             or r.total_reward_raw > 0)
          order by e.hour_start desc limit $3`,
         [input.userId, input.beforeHourStart, input.limit],
       );

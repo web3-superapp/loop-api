@@ -19270,6 +19270,93 @@
                               { "type": "null" }
                             ]
                           },
+                          "materialApproval": {
+                            "description": "Decision 0125 (optional in the schema, always present): the latest console approval of the catalog material (POST …/materials/{materialVersion}/approve); null when none (also for material approved with the pnpm launch:review script).",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "approverUserId",
+                                  "materialVersion",
+                                  "approvedAt"
+                                ],
+                                "properties": {
+                                  "approverUserId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "materialVersion": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                  },
+                                  "approvedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "communityId": {
+                            "description": "Decision 0125 (optional in the schema, always present): launch_projects.community_id — the community the owner named for the MEME; null when none.",
+                            "anyOf": [
+                              { "type": "string", "format": "uuid" },
+                              { "type": "null" }
+                            ]
+                          },
+                          "community": {
+                            "description": "Decision 0125 (optional in the schema, always present): the named community as it is now, for the community_binding_mismatch review — name, its current boundAssetKey (null when unbound), verificationStatus, and binding = the launch2_event lane's one automatic binding attempt of the latest MEME v2 instance (bound | already_bound | conflict | not_owner | community_unavailable | asset_blocked | none; null before the MEME is registered). null when the project names no community.",
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "communityId",
+                                  "name",
+                                  "verificationStatus",
+                                  "boundAssetKey",
+                                  "binding"
+                                ],
+                                "properties": {
+                                  "communityId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  },
+                                  "name": { "type": "string" },
+                                  "verificationStatus": {
+                                    "type": "string",
+                                    "enum": ["pending", "verified", "rejected"]
+                                  },
+                                  "boundAssetKey": {
+                                    "anyOf": [
+                                      { "type": "string" },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "binding": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "bound",
+                                          "already_bound",
+                                          "conflict",
+                                          "not_owner",
+                                          "community_unavailable",
+                                          "asset_blocked",
+                                          "none"
+                                        ]
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "stage": {
                             "type": "string",
                             "enum": [
@@ -19824,6 +19911,93 @@
                                 "rejectedAt": {
                                   "type": "string",
                                   "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "materialApproval": {
+                          "description": "Decision 0125 (optional in the schema, always present): the latest console approval of the catalog material (POST …/materials/{materialVersion}/approve); null when none (also for material approved with the pnpm launch:review script).",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "approverUserId",
+                                "materialVersion",
+                                "approvedAt"
+                              ],
+                              "properties": {
+                                "approverUserId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "materialVersion": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "approvedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "communityId": {
+                          "description": "Decision 0125 (optional in the schema, always present): launch_projects.community_id — the community the owner named for the MEME; null when none.",
+                          "anyOf": [
+                            { "type": "string", "format": "uuid" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "community": {
+                          "description": "Decision 0125 (optional in the schema, always present): the named community as it is now, for the community_binding_mismatch review — name, its current boundAssetKey (null when unbound), verificationStatus, and binding = the launch2_event lane's one automatic binding attempt of the latest MEME v2 instance (bound | already_bound | conflict | not_owner | community_unavailable | asset_blocked | none; null before the MEME is registered). null when the project names no community.",
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "communityId",
+                                "name",
+                                "verificationStatus",
+                                "boundAssetKey",
+                                "binding"
+                              ],
+                              "properties": {
+                                "communityId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "name": { "type": "string" },
+                                "verificationStatus": {
+                                  "type": "string",
+                                  "enum": ["pending", "verified", "rejected"]
+                                },
+                                "boundAssetKey": {
+                                  "anyOf": [
+                                    { "type": "string" },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "binding": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "bound",
+                                        "already_bound",
+                                        "conflict",
+                                        "not_owner",
+                                        "community_unavailable",
+                                        "asset_blocked",
+                                        "none"
+                                      ]
+                                    },
+                                    { "type": "null" }
+                                  ]
                                 }
                               }
                             },
@@ -22083,6 +22257,624 @@
                           "anyOf": [{ "type": "string" }, { "type": "null" }]
                         },
                         "rejectedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "audit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["auditId", "seq", "at"],
+                          "properties": {
+                            "auditId": { "type": "string", "format": "uuid" },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "description": "Display number of the audit row (「审计 #seq」)."
+                            },
+                            "at": { "type": "string", "format": "date-time" }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ADMIN_SESSION_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["ADMIN_CONFLICT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CAPABILITY_UNAVAILABLE", "REQUEST_TIMEOUT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/v1/launch/projects/{projectId}/materials/{materialVersion}/approve": {
+      "post": {
+        "operationId": "approveAdminLaunchProjectMaterial",
+        "summary": "Approve a launch project's catalog material (reviewer)",
+        "tags": ["admin-launch"],
+        "description": "Decision 0125 (`launch.approve`: reviewer only — the platform administrator cannot approve; the project owner is excluded). The console counterpart of `pnpm launch:review <projectId> approve`: approves `submitted` / `in_review` catalog material at exactly materialVersion (compare-and-swap; the path names the version as read). review_status becomes approved (reviewReasonCode operator_manual_review), the catalog launches row is created on the launch chain slot (unscheduled), and a launch_project_approvals row and a launch_review_events operator row are written in the same transaction; after this the owner can save a Hooks config. Runs the `launch.project.approve` command as the account's bound LOOP user with operationId = Idempotency-Key; same key + same body replays (`replayed: true`). Refusals: 403 PERMISSION_DENIED (OPS_SELF_APPROVAL / OPS_FORBIDDEN), 404 NOT_FOUND (OPS_NOT_FOUND / ADMIN_LAUNCH_PROJECT_NOT_FOUND), 409 ADMIN_CONFLICT (OPS_LAUNCH_NOT_IN_REVIEW — already approved, rejected, draft, or returned; OPS_VERSION_CONFLICT — the material changed; OPS_IDEMPOTENCY_CONFLICT), 422 VALIDATION_FAILED (ADMIN_REASON_TEXT_INVALID). Audit: `launch.project.approve.requested` before (503 ADMIN_AUDIT_UNAVAILABLE when it cannot be written, nothing runs), then `.decided` or `.failed`; the service writes ops_audit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reason"],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "Internal approval note (ops_audit / launch_project_approvals); 1–500 characters after trimming. Never shown to the applicant."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$" },
+            "in": "path",
+            "name": "materialVersion",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "description": "Lower-case UUIDv4. The same key with the same body replays the first result (`replayed: true`); with another body or actor it is 409 ADMIN_CONFLICT (ADMIN_IDEMPOTENCY_CONFLICT / OPS_IDEMPOTENCY_CONFLICT)."
+          }
+        ],
+        "security": [{ "adminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operationId", "replayed", "approval", "audit"],
+                  "properties": {
+                    "operationId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "= the Idempotency-Key (= approval.approvalId)."
+                    },
+                    "replayed": { "type": "boolean" },
+                    "approval": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "approvalId",
+                        "projectId",
+                        "materialVersion",
+                        "approverUserId",
+                        "reason",
+                        "launchId",
+                        "approvedAt"
+                      ],
+                      "properties": {
+                        "approvalId": { "type": "string", "format": "uuid" },
+                        "projectId": { "type": "string", "format": "uuid" },
+                        "materialVersion": { "type": "integer", "minimum": 1 },
+                        "approverUserId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "reason": { "type": "string" },
+                        "launchId": {
+                          "description": "The catalog launches row the approval created (or found).",
+                          "anyOf": [
+                            { "type": "string", "format": "uuid" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "approvedAt": {
                           "anyOf": [
                             { "type": "string", "format": "date-time" },
                             { "type": "null" }

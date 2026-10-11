@@ -166,6 +166,14 @@ const projectValuesRequestSchema = {
       ],
     },
     officialLinks: officialLinksRequestSchema,
+    communityId: {
+      anyOf: [
+        { type: "string", pattern: opaqueIdPatternSource },
+        { type: "null" },
+      ],
+      description:
+        "Decision 0125: the community the MEME binds to once it is deployed (the launch2_event lane registers the MEME in the Asset Registry and sets that community's bound asset when it is unbound and the owner still owns it). The caller must be the community's active owner and the community must not be rejected, else 422 VALIDATION_FAILED with detailsSafe.reasonCode LAUNCH_COMMUNITY_NOT_OWNED. On create: absent or null = none (only a named community joins the idempotency digest). On replace: absent keeps the stored value, null clears it, an unchanged ID is not re-checked.",
+    },
   },
 } as const;
 
@@ -295,6 +303,12 @@ const projectProjectionSchema = {
       description:
         "Decision 0122 (optional in the schema, always present for the owner): the reviewer rejection while reviewStatus is rejected — reasonCode incomplete_materials | name_or_ticker_conflict | buyback_recipient_invalid | community_binding_mismatch | other, the reviewer's note (always present for other) and the time. A rejected project can be edited (PUT) and resubmitted; null otherwise and for non-owners.",
       anyOf: [hooksLaunchRejectionSchema, { type: "null" }],
+    },
+    communityId: {
+      type: "string",
+      pattern: opaqueIdPatternSource,
+      description:
+        "Decision 0125 (optional in the schema): present only when the project names a community (owner and public projections alike); absent means none. Reviewers reject a mismatch with reasonCode community_binding_mismatch.",
     },
     kyb: {
       type: "object",

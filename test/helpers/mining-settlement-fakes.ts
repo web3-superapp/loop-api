@@ -202,7 +202,11 @@ export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
           .filter(
             (r) =>
               r.userId === userId &&
-              (beforeHourStart === null || r.hourStart < beforeHourStart),
+              (beforeHourStart === null || r.hourStart < beforeHourStart) &&
+              // Decision 0125: zero-power hours are not listed.
+              (Number(r.nftTotalPower) > 0 ||
+                Number(r.assetTotalPower) > 0 ||
+                BigInt(r.totalRewardRaw) > 0n),
           )
           .sort((a, b) => (a.hourStart < b.hourStart ? 1 : -1))
           .slice(0, limit),

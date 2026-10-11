@@ -58,13 +58,19 @@ function harness(options: {
   readonly checkpoint?: Launch2Checkpoint | null;
   readonly registered?: string[];
   readonly hashes?: Map<bigint, string>;
+  readonly memeAssets?: Parameters<typeof createLaunch2Lane>[0]["memeAssets"];
 }) {
   const commits: Parameters<Launch2Repository["commitSegment"]>[0][] = [];
   const verifications: Parameters<
     Launch2Repository["recordSnapshotVerification"]
   >[0][] = [];
   const stageUpdates: Parameters<Launch2Repository["updateStages"]>[0][] = [];
-  const logQueries: { fromBlock: bigint; toBlock: bigint }[] = [];
+  const logQueries: {
+    fromBlock: bigint;
+    toBlock: bigint;
+    roles: ReadonlyMap<string, string>;
+  }[] = [];
+  const warnings: { reasonCode: string; instanceId?: string }[] = [];
   let checkpoint = options.checkpoint ?? null;
   let snapshotsToVerify: Awaited<
     ReturnType<Launch2Repository["listSnapshotsToVerify"]>
@@ -112,7 +118,11 @@ function harness(options: {
     getBlock: (n) =>
       Promise.resolve({ hash: blockHash(n), timestamp: 1_000n + n }),
     getLogs: (input) => {
-      logQueries.push({ fromBlock: input.fromBlock, toBlock: input.toBlock });
+      logQueries.push({
+        fromBlock: input.fromBlock,
+        toBlock: input.toBlock,
+        roles: input.roles,
+      });
       return Promise.resolve({
         logs: (options.logs ?? []).filter(
           (log) =>
@@ -136,9 +146,14 @@ function harness(options: {
     maxLogRange: 1_000n,
     pollIntervalMs: 1_000,
     now: () => new Date(1_800_000_000_000),
+    onWarning: (warning) => warnings.push(warning),
+    ...(options.memeAssets === undefined
+      ? {}
+      : { memeAssets: options.memeAssets }),
   });
   return {
     lane,
+    warnings,
     commits,
     verifications,
     stageUpdates,
@@ -249,6 +264,196 @@ describe("launch2_event lane (Decision 0114)", () => {
     expect(result.fromBlockNumber).toBe("250");
     expect(commits[0]?.rewindFromBlockNumber).toBeUndefined();
     expect(result.registered).toBe(1);
+  });
+
+  it("Decision 0125: indexes the MEME ERC-20 and stores its transfers apart from the module events", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "50" });
+    const holder = "0x" + "c".repeat(40);
+    const logs: Launch2DecodedLog[] = [
+      {
+        contractAddress: instance.addresses.meme,
+        eventName: "Transfer",
+        args: {
+          from: instance.addresses.curve,
+          to: holder,
+          value: "1000",
+        },
+        transactionHash: hash(9n),
+        logIndex: 3,
+        blockNumber: 150n,
+        blockHash: hash(150n),
+      },
+      {
+        contractAddress: instance.addresses.nft,
+        eventName: "Transfer",
+        args: { from: holder, to: instance.addresses.curve, tokenId: "1" },
+        transactionHash: hash(10n),
+        logIndex: 0,
+        blockNumber: 151n,
+        blockHash: hash(151n),
+      },
+    ];
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 400n,
+      logs,
+    });
+    const result = await lane.runOnce();
+    expect(logQueries[0]?.roles.get(instance.addresses.meme)).toBe("meme");
+    expect(result.eventCount).toBe(2);
+    // The NFT Transfer stays a module event; the MEME one is a transfer.
+    expect(commits[0]?.events.map((event) => event.contractAddress)).toEqual([
+      instance.addresses.nft,
+    ]);
+    expect(commits[0]?.memeTransfers).toEqual([
+      {
+        instanceId: instance.instanceId,
+        from: instance.addresses.curve,
+        to: holder,
+        amount: "1000",
+        transactionHash: hash(9n),
+        logIndex: 3,
+        blockNumber: "150",
+        blockHash: hash(150n),
+        at: "1150",
+      },
+    ]);
+    // Coverage already started: no re-scan, no coverage update.
+    expect(commits[0]?.memeTransferCoverage).toBeUndefined();
+  });
+
+  it("Decision 0125: an instance whose MEME coverage never started re-scans once from its deploy block up to the old checkpoint", async () => {
+    const covered = laneInstance({
+      deployBlockNumber: "100",
+      memeTransfersTargetBlock: "900",
+    });
+    const uncovered = laneInstance({
+      deployBlockNumber: "300",
+      launchId: hash(78n),
+      memeTransfersTargetBlock: null,
+    });
+    const { lane, commits } = harness({
+      instances: [covered, uncovered],
+      head: 2_500n,
+      checkpoint: {
+        lastBlockNumber: "2000",
+        lastBlockHash: hash(2_000n),
+        startedFromBlockNumber: "100",
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("advanced");
+    expect(result.fromBlockNumber).toBe("300");
+    expect(result.toBlockNumber).toBe("1299");
+    expect(commits[0]?.rewindFromBlockNumber).toBeUndefined();
+    expect(commits[0]?.memeTransferCoverage).toEqual({
+      instanceIds: [uncovered.instanceId],
+      targetBlockNumber: "2000",
+    });
+    // A repository without coverage tracking never triggers a re-scan.
+    const untracked = laneInstance({ deployBlockNumber: "300" });
+    const plain = harness({
+      instances: [untracked],
+      head: 2_500n,
+      checkpoint: {
+        lastBlockNumber: "2000",
+        lastBlockHash: hash(2_000n),
+        startedFromBlockNumber: "100",
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    const next = await plain.lane.runOnce();
+    expect(next.fromBlockNumber).toBe("2001");
+    expect(plain.commits[0]?.memeTransferCoverage).toBeUndefined();
+  });
+
+  it("Decision 0125: registers pending MEMEs every tick, skips unreadable or invalid identities with a warning", async () => {
+    const instance = laneInstance();
+    const registrations: { instanceId: string; identity: unknown }[] = [];
+    const pending = [
+      {
+        instanceId: "11111111-1111-4111-8111-111111111111",
+        chainId: "eip155:97",
+        memeAddress: "0x" + "1".repeat(36) + "6666",
+        assetRegistered: false,
+      },
+      {
+        instanceId: "22222222-2222-4222-8222-222222222222",
+        chainId: "eip155:97",
+        memeAddress: "0x" + "2".repeat(36) + "6666",
+        assetRegistered: false,
+      },
+      {
+        instanceId: "33333333-3333-4333-8333-333333333333",
+        chainId: "eip155:97",
+        memeAddress: "0x" + "3".repeat(36) + "6666",
+        assetRegistered: true,
+      },
+      {
+        instanceId: "44444444-4444-4444-8444-444444444444",
+        chainId: "eip155:97",
+        memeAddress: "0x" + "4".repeat(36) + "6666",
+        assetRegistered: false,
+      },
+    ];
+    const { lane, warnings } = harness({
+      instances: [instance],
+      head: 50n,
+      memeAssets: {
+        repository: {
+          listPendingMemeAssets: () => Promise.resolve(pending),
+          registerMemeAsset: (input) => {
+            registrations.push(input);
+            return Promise.resolve({
+              assetId: `eip155:97:${input.instanceId}`,
+              inserted: input.identity !== null,
+              communityBinding: "bound",
+            });
+          },
+        },
+        reader: {
+          readTokenIdentity: (address) => {
+            if (address.startsWith("0x2")) {
+              return Promise.reject(new Error("rpc down"));
+            }
+            return Promise.resolve({
+              symbol: address.startsWith("0x4") ? "  " : "FROG",
+              name: "Frog Coin",
+              decimals: 18,
+              blockNumber: 77n,
+            });
+          },
+        },
+      },
+    });
+    const result = await lane.runOnce();
+    expect(result.assetsRegistered).toBe(1);
+    expect(registrations).toEqual([
+      {
+        instanceId: pending[0]?.instanceId,
+        identity: {
+          symbol: "FROG",
+          name: "Frog Coin",
+          decimals: 18,
+          blockNumber: 77n,
+        },
+      },
+      // Already in the registry: only the community binding is attempted.
+      { instanceId: pending[2]?.instanceId, identity: null },
+    ]);
+    expect(warnings).toEqual([
+      {
+        reasonCode: "LAUNCH2_ASSET_IDENTITY_UNAVAILABLE",
+        count: 1,
+        instanceId: pending[1]?.instanceId,
+      },
+      {
+        reasonCode: "LAUNCH2_ASSET_IDENTITY_INVALID",
+        count: 1,
+        instanceId: pending[3]?.instanceId,
+      },
+    ]);
   });
 
   it("keeps proofs only when the rebuilt holder list reproduces the root and the cutoff", async () => {

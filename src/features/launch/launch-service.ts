@@ -74,6 +74,7 @@ import {
   LaunchNotFoundError,
   LaunchRepositoryUnavailableError,
   LaunchVersionConflictError,
+  LaunchCommunityNotOwnedError,
   type LaunchCatalogRecord,
   type LaunchConfigRecord,
   type LaunchDetailRecord,
@@ -493,6 +494,11 @@ function translate(error: unknown): never {
   if (error instanceof LaunchVersionConflictError) {
     throw V2ApiError.versionConflict();
   }
+  if (error instanceof LaunchCommunityNotOwnedError) {
+    throw V2ApiError.fromCode("VALIDATION_FAILED", {
+      reasonCode: launchCommunityNotOwnedReasonCode,
+    });
+  }
   if (error instanceof LaunchDataStaleError) {
     throw V2ApiError.fromCode("DATA_STALE");
   }
@@ -504,6 +510,9 @@ function translate(error: unknown): never {
   }
   throw error;
 }
+
+/** Decision 0125: 422 VALIDATION_FAILED reason for a community not owned. */
+export const launchCommunityNotOwnedReasonCode = "LAUNCH_COMMUNITY_NOT_OWNED";
 
 /**
  * Public projection. A non-owner only sees an approved project and never its
@@ -528,6 +537,8 @@ function projectProjection(
       ? launchReviewReasonText(record.reviewStatus, record.reviewReasonCode)
       : null,
     rejection: owner ? record.rejection : null,
+    // Decision 0125: present only when the project names a community.
+    ...(record.communityId === null ? {} : { communityId: record.communityId }),
     kyb: Object.freeze({
       status: "unavailable" as const,
       state: record.kybStatus,

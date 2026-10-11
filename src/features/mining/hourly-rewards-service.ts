@@ -503,7 +503,7 @@ export function createMiningRewardsService(
       const repo = deps.repository;
       try {
         const nowSeconds = BigInt(Math.floor(serverTime.getTime() / 1000));
-        const [balance, latest, versions, claims] = await Promise.all([
+        const [balance, latest, versions, claims, ownRows] = await Promise.all([
           repo.getBalance(principal.userId),
           repo.latestSettledEpoch(),
           repo.listApprovedParameterVersions(),
@@ -513,7 +513,18 @@ export function createMiningRewardsService(
             beforeClaimId: null,
             limit: 1,
           }),
+          // Decision 0125: the user's own powered hours (any one).
+          repo.listUserEpochRewards({
+            userId: principal.userId,
+            beforeHourStart: null,
+            limit: 1,
+          }),
         ]);
+        // Decision 0125 (S138 observation 2): the display starts with the
+        // user's own first settled hour with a reward row, not the
+        // network's (requirer §1.8 "首个小时结算后开始展示奖励").
+        const ownHourSettled =
+          ownRows.length > 0 || BigInt(balance.settledTotalRaw) > 0n;
         const version = miningVersionAt(versions, nowSeconds);
         const reward =
           latest === null
@@ -531,16 +542,30 @@ export function createMiningRewardsService(
                   totalRewardRaw: total,
                 },
         });
-        const gate = miningClaimGate({
+        let gate = miningClaimGate({
           configReason: claimReason,
           hasApprovedVersion: version !== null,
-          hasSettledHour: latest !== null,
+          hasSettledHour: latest !== null && ownHourSettled,
           claimableRaw: BigInt(balance.unclaimedRaw),
           minimumClaimRaw: BigInt(
             version?.document.minimumClaimRaw ?? miningFixedScale.toString(),
           ),
           latestClaimStatus: claims[0]?.status ?? null,
         });
+        // Decision 0125 (S138 D3): every other condition holds, so the
+        // contract decides — paused (or unreadable) is not executable.
+        if (gate === null && deps.chain !== null) {
+          const chain = deps.chain;
+          try {
+            const funding = await chain.readFunding(
+              deps.contractAddress as string,
+            );
+            if (funding.paused) gate = reasons.claimContractPaused;
+          } catch {
+            gate = reasons.claimChainReadFailed;
+          }
+        }
+        const awaiting = latest === null || !ownHourSettled;
         const excluded = (latest?.inputSummary["excludedAssets"] ?? []) as {
           assetId: string;
           reasonCode: string;
@@ -562,7 +587,9 @@ export function createMiningRewardsService(
               })));
         return Object.freeze({
           ...base,
-          displayState: display.displayState,
+          displayState: awaiting
+            ? "awaiting_first_settlement"
+            : display.displayState,
           reasonCode:
             latest === null && version === null
               ? reasons.parametersPending
@@ -572,63 +599,60 @@ export function createMiningRewardsService(
             claimedRaw: balance.claimedTotalRaw,
             claimableRaw: balance.unclaimedRaw,
           }),
-          lastHour:
-            latest === null
-              ? null
-              : Object.freeze({
-                  epochId: latest.epochId,
-                  hourStart: latest.hourStart,
-                  hourEnd: latest.hourEnd,
-                  settledAt: latest.settledAt,
-                  nftRewardRaw: reward?.nftRewardRaw ?? "0",
-                  assetRewardRaw: reward?.assetRewardRaw ?? "0",
-                  totalRewardRaw: total.toString(),
+          lastHour: awaiting
+            ? null
+            : Object.freeze({
+                epochId: latest.epochId,
+                hourStart: latest.hourStart,
+                hourEnd: latest.hourEnd,
+                settledAt: latest.settledAt,
+                nftRewardRaw: reward?.nftRewardRaw ?? "0",
+                assetRewardRaw: reward?.assetRewardRaw ?? "0",
+                totalRewardRaw: total.toString(),
+              }),
+          display: awaiting
+            ? null
+            : Object.freeze({
+                windowStart: display.windowStart,
+                windowEnd: display.windowEnd,
+                totalRaw: display.totalRaw,
+                perMinuteRaw: display.perMinuteRaw,
+                completedMinutes: display.completedMinutes,
+                displayedRaw: display.displayedRaw,
+                nextUpdateAt: display.nextUpdateAt,
+              }),
+          tracks: awaiting
+            ? null
+            : Object.freeze({
+                nft: Object.freeze({
+                  realNftCount: (reward?.nftHoldings ?? [])
+                    .reduce(
+                      (sum, holding) => sum + BigInt(holding.countAtEnd),
+                      0n,
+                    )
+                    .toString(),
+                  selfPower: reward?.nftSelfPower ?? "0",
+                  referralPower: reward?.nftReferralPower ?? "0",
+                  totalPower: reward?.nftTotalPower ?? "0",
+                  networkPower: latest.denominatorNftPower,
+                  budgetRaw: latest.budgetNftRaw,
+                  rewardRaw: reward?.nftRewardRaw ?? "0",
+                  holdings: reward?.nftHoldings ?? [],
                 }),
-          display:
-            latest === null
-              ? null
-              : Object.freeze({
-                  windowStart: display.windowStart,
-                  windowEnd: display.windowEnd,
-                  totalRaw: display.totalRaw,
-                  perMinuteRaw: display.perMinuteRaw,
-                  completedMinutes: display.completedMinutes,
-                  displayedRaw: display.displayedRaw,
-                  nextUpdateAt: display.nextUpdateAt,
+                asset: Object.freeze({
+                  selfPower: reward?.assetSelfPower ?? "0",
+                  referralPower: reward?.assetReferralPower ?? "0",
+                  totalPower: reward?.assetTotalPower ?? "0",
+                  networkPower: latest.denominatorAssetPower,
+                  budgetRaw: latest.budgetAssetRaw,
+                  rewardRaw: reward?.assetRewardRaw ?? "0",
+                  holdings: reward?.assetHoldings ?? [],
+                  excludedAssets: excluded.map((entry) => ({
+                    assetId: entry.assetId,
+                    reasonCode: entry.reasonCode,
+                  })),
                 }),
-          tracks:
-            latest === null
-              ? null
-              : Object.freeze({
-                  nft: Object.freeze({
-                    realNftCount: (reward?.nftHoldings ?? [])
-                      .reduce(
-                        (sum, holding) => sum + BigInt(holding.countAtEnd),
-                        0n,
-                      )
-                      .toString(),
-                    selfPower: reward?.nftSelfPower ?? "0",
-                    referralPower: reward?.nftReferralPower ?? "0",
-                    totalPower: reward?.nftTotalPower ?? "0",
-                    networkPower: latest.denominatorNftPower,
-                    budgetRaw: latest.budgetNftRaw,
-                    rewardRaw: reward?.nftRewardRaw ?? "0",
-                    holdings: reward?.nftHoldings ?? [],
-                  }),
-                  asset: Object.freeze({
-                    selfPower: reward?.assetSelfPower ?? "0",
-                    referralPower: reward?.assetReferralPower ?? "0",
-                    totalPower: reward?.assetTotalPower ?? "0",
-                    networkPower: latest.denominatorAssetPower,
-                    budgetRaw: latest.budgetAssetRaw,
-                    rewardRaw: reward?.assetRewardRaw ?? "0",
-                    holdings: reward?.assetHoldings ?? [],
-                    excludedAssets: excluded.map((entry) => ({
-                      assetId: entry.assetId,
-                      reasonCode: entry.reasonCode,
-                    })),
-                  }),
-                }),
+              }),
           referral:
             levels === null
               ? null

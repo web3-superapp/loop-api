@@ -193,6 +193,19 @@ export const hooksLaunchReviewCommandSchema = z.discriminatedUnion("action", [
         .superRefine(requireOtherNote),
     })
     .strict(),
+  // Decision 0125: reviewer approval of the catalog material (the console
+  // counterpart of `pnpm launch:review <id> approve`).
+  z
+    .object({
+      ...commandBase,
+      action: z.literal("launch.project.approve"),
+      payload: z
+        .object({
+          materialVersion: z.number().int().positive().max(2_147_483_647),
+        })
+        .strict(),
+    })
+    .strict(),
   z
     .object({
       ...commandBase,
@@ -220,6 +233,7 @@ export function hooksLaunchCommandPermission(
   if (
     action === "launch.config.approve" ||
     action === "launch.config.reject" ||
+    action === "launch.project.approve" ||
     action === "launch.project.reject"
   ) {
     return "launch.approve";

@@ -397,6 +397,98 @@ async function rejectProject(
   return inserted.rows[0];
 }
 
+/**
+ * Decision 0125: a reviewer approves the catalog material of a submitted /
+ * in-review project (compare-and-swap on `material_version`), the console
+ * counterpart of `pnpm launch:review <id> approve`: review_status becomes
+ * approved (reason `operator_manual_review`), the catalog `launches` row is
+ * created (unscheduled, on the launch chain slot), and a
+ * `launch_project_approvals` row plus a `launch_review_events` operator row
+ * are written in the same transaction. The owner can never approve their
+ * own project.
+ */
+async function approveProject(
+  client: PoolClient,
+  actor: string,
+  command: Extract<
+    HooksLaunchReviewCommand,
+    { action: "launch.project.approve" }
+  >,
+  launchChainId: string,
+): Promise<unknown> {
+  const projectId = command.target;
+  const project = (
+    await client.query<{
+      owner_user_id: string;
+      review_status: string;
+      material_version: number;
+    }>(
+      `select owner_user_id, review_status, material_version
+       from public.launch_projects where project_id = $1 for update`,
+      [projectId],
+    )
+  ).rows[0];
+  if (!project) throw new HooksLaunchReviewError("OPS_NOT_FOUND");
+  if (project.owner_user_id === actor) {
+    throw new HooksLaunchReviewError("OPS_SELF_APPROVAL");
+  }
+  if (!["submitted", "in_review"].includes(project.review_status)) {
+    throw new HooksLaunchReviewError("OPS_LAUNCH_NOT_IN_REVIEW");
+  }
+  if (project.material_version !== command.payload.materialVersion) {
+    throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
+  }
+  await client.query(
+    `update public.launch_projects set
+       review_status = 'approved',
+       review_reason_code = 'operator_manual_review',
+       reviewed_at = clock_timestamp(),
+       record_version = record_version + 1,
+       updated_at = clock_timestamp()
+     where project_id = $1`,
+    [projectId],
+  );
+  const launch = await client.query<{ launch_id: string }>(
+    `insert into public.launches (launch_id, project_id, chain_id)
+     values ($1, $2, $3)
+     on conflict (project_id) do nothing
+     returning launch_id`,
+    [randomUUID(), projectId, launchChainId],
+  );
+  await client.query(
+    `insert into public.launch_review_events (
+       project_id, actor_type, actor_user_id, event_type, from_status,
+       to_status, reason_code, request_id
+     ) values ($1, 'operator', null, 'project_approved', $2, 'approved',
+       'operator_manual_review', $3)`,
+    [projectId, project.review_status, command.operationId],
+  );
+  const inserted = await client.query<Record<string, unknown>>(
+    `insert into public.launch_project_approvals (
+       approval_id, project_id, material_version, reviewer_user_id, reason
+     ) values ($1, $2, $3, $4, $5)
+     returning approval_id, project_id, material_version, reviewer_user_id,
+       reason, created_at`,
+    [
+      command.operationId,
+      projectId,
+      command.payload.materialVersion,
+      actor,
+      command.reason,
+    ],
+  );
+  const launchId =
+    launch.rows[0]?.launch_id ??
+    (
+      await client.query<{ launch_id: string }>(
+        "select launch_id from public.launches where project_id = $1",
+        [projectId],
+      )
+    ).rows[0]?.launch_id ??
+    null;
+  return { ...inserted.rows[0], launch_id: launchId };
+}
+
 async function recordAcceptance(
   client: PoolClient,
   actor: string,
@@ -459,8 +551,15 @@ export function createPostgresHooksLaunchReviewRepository(
     readonly now?: () => number;
     /** Decision 0117: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS; default 86,400. */
     readonly minimumLeadSeconds?: number;
+    /**
+     * Decision 0125: the chain a material approval creates the catalog
+     * `launches` row on (LAUNCH_CHAIN_ID, like `pnpm launch:review`);
+     * default BSC mainnet, the launch repository's default.
+     */
+    readonly launchChainId?: string;
   } = {},
 ): HooksLaunchReviewRepository {
+  const launchChainId = options.launchChainId ?? "eip155:56";
   const now = options.now ?? (() => Math.floor(Date.now() / 1_000));
   const minimumLeadSeconds =
     options.minimumLeadSeconds ?? defaultMinimumLeadSeconds;
@@ -604,6 +703,8 @@ export function createPostgresHooksLaunchReviewRepository(
           result = await rejectConfig(client, actor, command);
         } else if (command.action === "launch.project.reject") {
           result = await rejectProject(client, actor, command);
+        } else if (command.action === "launch.project.approve") {
+          result = await approveProject(client, actor, command, launchChainId);
         } else {
           result = await recordAcceptance(client, actor, command);
         }

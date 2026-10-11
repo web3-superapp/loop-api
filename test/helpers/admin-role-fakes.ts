@@ -359,6 +359,9 @@ export function launchProjectFixture(
     launchReviewStatus: "approved",
     materialVersion: 1,
     rejection: null,
+    materialApproval: null,
+    communityId: null,
+    community: null,
     stage: "awaiting_approval",
     latestConfigVersion: 1,
     latestConfigHash: `0x${"ab".repeat(32)}`,
@@ -507,6 +510,7 @@ export function createFakeHooksReview(input: {
       const permission =
         command.action === "launch.config.approve" ||
         command.action === "launch.config.reject" ||
+        command.action === "launch.project.approve" ||
         command.action === "launch.project.reject"
           ? "launch.approve"
           : command.action === "testnet.acceptance.record"
@@ -565,33 +569,43 @@ export function createFakeHooksReview(input: {
                 note: command.payload.note,
                 rejected_at: now,
               }
-            : command.action === "launch.project.reject"
+            : command.action === "launch.project.approve"
               ? {
-                  rejection_id: command.operationId,
+                  approval_id: command.operationId,
                   project_id: command.target,
                   material_version: command.payload.materialVersion,
                   reviewer_user_id: actor,
-                  reason_code: command.payload.reasonCode,
-                  note: command.payload.note,
+                  reason: command.reason,
+                  launch_id: "11111111-1111-4111-8111-111111111111",
                   created_at: now,
                 }
-              : command.action === "testnet.acceptance.record"
+              : command.action === "launch.project.reject"
                 ? {
-                    acceptance_id: command.operationId,
+                    rejection_id: command.operationId,
                     project_id: command.target,
-                    config_version: command.payload.configVersion,
-                    chain_id: 97,
-                    config_hash: command.payload.configHash.toLowerCase(),
-                    contract_manifest_hash:
-                      command.payload.contractManifestHash.toLowerCase(),
-                    checklist_version: command.payload.checklistVersion,
-                    outcome: command.payload.outcome,
-                    evidence: command.payload.evidence,
-                    actor_id: actor,
-                    reason: command.reason,
+                    material_version: command.payload.materialVersion,
+                    reviewer_user_id: actor,
+                    reason_code: command.payload.reasonCode,
+                    note: command.payload.note,
                     created_at: now,
                   }
-                : {};
+                : command.action === "testnet.acceptance.record"
+                  ? {
+                      acceptance_id: command.operationId,
+                      project_id: command.target,
+                      config_version: command.payload.configVersion,
+                      chain_id: 97,
+                      config_hash: command.payload.configHash.toLowerCase(),
+                      contract_manifest_hash:
+                        command.payload.contractManifestHash.toLowerCase(),
+                      checklist_version: command.payload.checklistVersion,
+                      outcome: command.payload.outcome,
+                      evidence: command.payload.evidence,
+                      actor_id: actor,
+                      reason: command.reason,
+                      created_at: now,
+                    }
+                  : {};
       operations.set(command.operationId, { actor, body, result });
       return Promise.resolve({
         operationId: command.operationId,

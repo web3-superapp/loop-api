@@ -319,6 +319,9 @@ const projectValuesSchema = z
     narrative: boundedText(maximumLaunchNarrativeCodePoints).nullable(),
     // Omitting the object is the same as omitting every key (all null).
     officialLinks: officialLinksSchema.optional(),
+    // Decision 0125: the community the MEME binds to (owner only); absent
+    // on create = none, absent on replace = unchanged, null = none.
+    communityId: z.string().regex(opaqueIdPattern).nullable().optional(),
   })
   .strict();
 
@@ -338,6 +341,11 @@ export interface LaunchProjectValues {
   readonly ticker: string;
   readonly narrative: string | null;
   readonly officialLinks: LaunchOfficialLinks;
+  /**
+   * Decision 0125: undefined = not sent (create: none; replace: keep),
+   * null = none, else the community's opaque ID.
+   */
+  readonly communityId?: string | null;
 }
 
 export interface ReplaceLaunchProjectRequest {
@@ -390,6 +398,9 @@ export function parseLaunchProjectValues(value: unknown): LaunchProjectValues {
     ticker: parsed.data.ticker,
     narrative: parsed.data.narrative,
     officialLinks: normalizeLinks(parsed.data.officialLinks),
+    ...(parsed.data.communityId === undefined
+      ? {}
+      : { communityId: parsed.data.communityId }),
   });
 }
 
@@ -407,6 +418,9 @@ export function parseReplaceLaunchProjectRequest(
       ticker: parsed.data.project.ticker,
       narrative: parsed.data.project.narrative,
       officialLinks: normalizeLinks(parsed.data.project.officialLinks),
+      ...(parsed.data.project.communityId === undefined
+        ? {}
+        : { communityId: parsed.data.project.communityId }),
     }),
   });
 }
@@ -454,6 +468,11 @@ export function launchProjectDigestParts(
       const link = values.officialLinks[key];
       return [key, link === null ? "null" : "set", link ?? ""];
     }),
+    // Decision 0125: only a named community joins the digest, so a create
+    // without one keeps its pre-0125 digest.
+    ...(values.communityId === undefined || values.communityId === null
+      ? []
+      : ["communityId", values.communityId]),
   ]);
 }
 
@@ -798,6 +817,11 @@ export interface LaunchProjectProjection {
     readonly note: string | null;
     readonly at: string;
   } | null;
+  /**
+   * Decision 0125: the community the project names (present only when
+   * set, so clients built before 0125 keep decoding unbound projects).
+   */
+  readonly communityId?: string;
   readonly kyb: UnavailableProjection & { readonly state: LaunchKybStatus };
   readonly attachments: UnavailableProjection;
   readonly submittedAt: string | null;

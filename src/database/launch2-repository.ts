@@ -159,6 +159,7 @@ const instanceColumns = `
   buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
   coalesce(activated_at, registered_at) as sort_at,
+  meme_transfers_target_block::text,
   (select jsonb_build_object(
       'status', p.status, 'txHash', p.tx_hash,
       'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
@@ -838,6 +839,8 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     activatedAt: instance.activatedAt,
     stage: instance.stage,
     nextChangeAt: instance.nextChangeAt,
+    // Decision 0125: null until the one MEME transfer re-scan started.
+    memeTransfersTargetBlock: nullableText(row, "meme_transfers_target_block"),
   });
 }
 
@@ -1007,6 +1010,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               "launch2_nft_mints",
               "launch2_trades",
               "launch2_buybacks",
+              "launch2_meme_transfers",
             ]) {
               const rewound = await client.query<{ instance_id: string }>({
                 text: `
@@ -1024,6 +1028,67 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             await insertFact(client, input.chainId, event);
             touched.add(event.instanceId);
           }
+          // Decision 0125: MEME ERC-20 transfers (raw facts, no projection).
+          for (const transfer of input.memeTransfers ?? []) {
+            await client.query({
+              text: `
+                insert into public.launch2_meme_transfers (
+                  chain_id, transaction_hash, log_index, block_number,
+                  block_hash, instance_id, from_address, to_address, amount,
+                  transferred_at
+                )
+                values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9::numeric,
+                  $10::timestamptz)
+                on conflict (chain_id, transaction_hash, log_index) do update set
+                  block_number = excluded.block_number,
+                  block_hash = excluded.block_hash,
+                  instance_id = excluded.instance_id,
+                  from_address = excluded.from_address,
+                  to_address = excluded.to_address,
+                  amount = excluded.amount,
+                  transferred_at = excluded.transferred_at,
+                  removed = false,
+                  observed_at = clock_timestamp()
+              `,
+              values: [
+                input.chainId,
+                transfer.transactionHash,
+                transfer.logIndex,
+                transfer.blockNumber,
+                transfer.blockHash,
+                transfer.instanceId,
+                transfer.from,
+                transfer.to,
+                transfer.amount,
+                secondsToTimestamp(transfer.at),
+              ],
+            });
+          }
+          if (input.memeTransferCoverage !== undefined) {
+            await client.query({
+              text: `
+                update public.launch2_instances
+                set meme_transfers_target_block = $3::numeric
+                where chain_id = $1 and instance_id = any($2::uuid[])
+                  and meme_transfers_target_block is null
+              `,
+              values: [
+                input.chainId,
+                input.memeTransferCoverage.instanceIds,
+                input.memeTransferCoverage.targetBlockNumber,
+              ],
+            });
+          }
+          await client.query({
+            text: `
+              update public.launch2_instances
+              set meme_transfers_complete_at = clock_timestamp()
+              where chain_id = $1 and meme_transfers_complete_at is null
+                and meme_transfers_target_block is not null
+                and meme_transfers_target_block <= $2::numeric
+            `,
+            values: [input.chainId, input.checkpoint.lastBlockNumber],
+          });
           // An activation the lane should have seen by now (its block plus
           // the grace) and did not: re-checked although no fact changed.
           const overdue = await client.query<{ instance_id: string }>({

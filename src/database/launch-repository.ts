@@ -36,6 +36,7 @@ import {
   type LaunchScheduleStatus,
 } from "../features/launch/launch-contract.js";
 import {
+  LaunchCommunityNotOwnedError,
   LaunchDataStaleError,
   LaunchIdempotencyConflictError,
   LaunchMilestoneTransitionError,
@@ -120,6 +121,7 @@ const projectRowSchema = z
       })
       .strict()
       .nullable(),
+    community_id: opaqueIdSchema.nullable(),
     submitted_at: dateSchema.nullable(),
     reviewed_at: dateSchema.nullable(),
     launch_id: opaqueIdSchema.nullable(),
@@ -221,6 +223,7 @@ const projectColumns = `
     from public.launch_project_rejections r
     where r.project_id = p.project_id
     order by r.created_at desc, r.rejection_id desc limit 1) end as rejection,
+  p.community_id::text as community_id,
   p.submitted_at,
   p.reviewed_at,
   l.launch_id,
@@ -265,6 +268,7 @@ function mapProject(raw: unknown): LaunchProjectRecord {
             note: row.rejection.note,
             at: new Date(row.rejection.at).toISOString(),
           }),
+    communityId: row.community_id,
     submittedAt: toNullableIsoString(row.submitted_at),
     reviewedAt: toNullableIsoString(row.reviewed_at),
     launchId: row.launch_id,
@@ -341,8 +345,34 @@ function unavailable(): LaunchRepositoryUnavailableError {
   return new LaunchRepositoryUnavailableError();
 }
 
+/**
+ * Decision 0125: a project may name only a community its owner owns (an
+ * active `owner` membership of a community that is not rejected).
+ */
+async function assertCommunityOwned(
+  client: DatabaseClient,
+  communityId: string,
+  ownerUserId: string,
+): Promise<void> {
+  const result = await client.query({
+    text: `
+      select 1
+      from public.communities c
+      join public.community_memberships m
+        on m.community_id = c.community_id
+      where c.community_id = $1 and c.verification_status <> 'rejected'
+        and m.owner_user_id = $2 and m.role = 'owner' and m.status = 'active'
+    `,
+    values: [communityId, ownerUserId],
+  });
+  if (result.rowCount !== 1) {
+    throw new LaunchCommunityNotOwnedError();
+  }
+}
+
 function translate(error: unknown): never {
   if (
+    error instanceof LaunchCommunityNotOwnedError ||
     error instanceof LaunchDataStaleError ||
     error instanceof LaunchIdempotencyConflictError ||
     error instanceof LaunchMilestoneTransitionError ||
@@ -494,13 +524,17 @@ export function createPostgresLaunchRepository(
           if (replay !== null) {
             return replay;
           }
+          const communityId = rawInput.values.communityId ?? null;
+          if (communityId !== null) {
+            await assertCommunityOwned(client, communityId, ownerUserId);
+          }
           await client.query({
             text: `
               insert into public.launch_projects (
                 project_id, owner_user_id, name, ticker, narrative, official_links,
-                kind
+                kind, community_id
               )
-              values ($1, $2, $3, $4, $5, $6::jsonb, $7)
+              values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::uuid)
             `,
             values: [
               projectId,
@@ -510,6 +544,7 @@ export function createPostgresLaunchRepository(
               rawInput.values.narrative,
               linksJson(rawInput.values),
               z.enum(launchProjectKinds).parse(rawInput.kind),
+              communityId,
             ],
           });
           await appendReviewAudit(client, {
@@ -600,6 +635,15 @@ export function createPostgresLaunchRepository(
           if (current.version !== expectedVersion) {
             throw new LaunchVersionConflictError();
           }
+          // Decision 0125: absent keeps the stored community; a new one
+          // must be owned by the caller (an unchanged one is not re-checked).
+          const communityId =
+            rawInput.values.communityId === undefined
+              ? current.communityId
+              : rawInput.values.communityId;
+          if (communityId !== null && communityId !== current.communityId) {
+            await assertCommunityOwned(client, communityId, ownerUserId);
+          }
           const updated = await client.query({
             text: `
               update public.launch_projects
@@ -608,6 +652,7 @@ export function createPostgresLaunchRepository(
                 ticker = $4,
                 narrative = $5,
                 official_links = $6::jsonb,
+                community_id = $7::uuid,
                 material_version = material_version + 1,
                 record_version = record_version + 1,
                 updated_at = clock_timestamp()
@@ -621,6 +666,7 @@ export function createPostgresLaunchRepository(
               rawInput.values.ticker,
               rawInput.values.narrative,
               linksJson(rawInput.values),
+              communityId,
             ],
           });
           if (updated.rowCount !== 1) {

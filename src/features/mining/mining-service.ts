@@ -424,6 +424,13 @@ function translate(error: unknown): never {
   throw error;
 }
 
+/** Decision 0125: the asset power rule of `/v2/mining/*` snapshots. */
+export const miningSnapshotAssetPowerBasis = "quantity" as const;
+export const miningLegacyExpressionKey =
+  "mining.rules.formula.holdingTimesReferencePriceTimesWeight";
+export const miningQuantityExpressionKey =
+  "mining.rules.formula.holdingTimesWeight";
+
 function formulaProjection(
   record: MiningFormulaRecord,
 ): MiningFormulaProjection {
@@ -433,7 +440,12 @@ function formulaProjection(
     scope: record.formula.scope ?? null,
     effectiveAt: record.effectiveAt,
     approvedAt: record.approvedAt,
-    expressionKey: record.formula.expressionKey,
+    // Decision 0125: every snapshot is computed as holding × weight now,
+    // whatever key the stored version carries.
+    expressionKey:
+      record.formula.expressionKey === miningLegacyExpressionKey
+        ? miningQuantityExpressionKey
+        : record.formula.expressionKey,
     dailyOutputKey: record.formula.dailyOutputKey,
     assetWeights: record.formula.assetWeights,
     dailyOutput: record.formula.dailyOutput ?? null,
@@ -827,6 +839,7 @@ export function createMiningService(dependencies: {
             referralBoost: unavailable(miningReasonCodes.referralBoostPending),
             formula,
             snapshot: missingSnapshot(resolution),
+            assetPowerBasis: miningSnapshotAssetPowerBasis,
             contractVersion: v2ContractVersion,
           });
         }
@@ -851,6 +864,7 @@ export function createMiningService(dependencies: {
           referralBoost: unavailable(miningReasonCodes.referralBoostPending),
           formula,
           snapshot: snapshotProjection(resolution),
+          assetPowerBasis: miningSnapshotAssetPowerBasis,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {
@@ -871,6 +885,7 @@ export function createMiningService(dependencies: {
             source: missingSnapshot(resolution),
             referencePrice: reason,
             formula,
+            assetPowerBasis: miningSnapshotAssetPowerBasis,
             contractVersion: v2ContractVersion,
           });
         }
@@ -952,6 +967,7 @@ export function createMiningService(dependencies: {
             priceVersion: snapshot.priceVersion,
           }),
           formula,
+          assetPowerBasis: miningSnapshotAssetPowerBasis,
           contractVersion: v2ContractVersion,
         });
       } catch (error) {

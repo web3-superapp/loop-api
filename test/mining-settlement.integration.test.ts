@@ -337,6 +337,38 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     ).toBe(remainderBudget);
     const balance = await repository.getBalance(users[6]!);
     expect(balance.settledTotalRaw).toBe(row(6)!.totalRewardRaw);
+    // Decision 0125 (S138 D2): a user's epoch list leaves out an hour where
+    // both tracks had zero power and nothing was paid.
+    for (const entry of rows) {
+      const listed = await repository.listUserEpochRewards({
+        userId: entry.userId,
+        beforeHourStart: null,
+        limit: 10,
+      });
+      const powered =
+        fixed(entry.nftTotalPower) > 0n ||
+        fixed(entry.assetTotalPower) > 0n ||
+        BigInt(entry.totalRewardRaw) > 0n;
+      expect(
+        listed.some((item) => item.epochId === outcome.epoch.epochId),
+        entry.userId,
+      ).toBe(powered);
+    }
+    const zeroRows = await pool.query<{ owner_user_id: string }>(
+      `select owner_user_id::text from public.mining_epoch_rewards
+       where epoch_id = $1 and nft_total_power::numeric = 0
+         and asset_total_power::numeric = 0 and total_reward_raw = 0`,
+      [outcome.epoch.epochId],
+    );
+    for (const zeroRow of zeroRows.rows) {
+      expect(
+        await repository.listUserEpochRewards({
+          userId: zeroRow.owner_user_id,
+          beforeHourStart: null,
+          limit: 10,
+        }),
+      ).toEqual([]);
+    }
   });
 
   it("§9-10 re-running the hour records it once (runner and repository both)", async () => {

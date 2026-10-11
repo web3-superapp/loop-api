@@ -90,7 +90,7 @@ describe("scaleRawHolding", () => {
 });
 
 describe("computeMiningSnapshot (pure)", () => {
-  it("computes holding × fresh reference price × weight per account and asset", () => {
+  it("Decision 0125: computes holding × weight per account and asset (the fresh price is published, not multiplied)", () => {
     const result = computeMiningSnapshot(
       {
         balances: [
@@ -120,7 +120,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: null,
         referencePricePairAddress: null,
         weight: "1",
-        power: "0.125",
+        power: "0.5",
         blockNumber: "118",
       },
       {
@@ -132,11 +132,11 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: null,
         referencePricePairAddress: null,
         weight: "1",
-        power: "0.5",
+        power: "2",
         blockNumber: "120",
       },
     ]);
-    expect(result.totalPower).toBe("0.625");
+    expect(result.totalPower).toBe("2.5");
     expect(result.skipped).toEqual([]);
   });
 
@@ -217,7 +217,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: null,
         referencePricePairAddress: null,
         weight: "1",
-        power: "12",
+        power: "3",
         blockNumber: "100",
       },
       {
@@ -229,11 +229,11 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: null,
         referencePricePairAddress: null,
         weight: "0.5",
-        power: "10",
+        power: "5",
         blockNumber: "100",
       },
     ]);
-    expect(result.totalPower).toBe("22");
+    expect(result.totalPower).toBe("8");
     expect(result.skipped).toEqual([
       { assetId: pendingAsset, reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW" },
       { assetId: ambiguousAsset, reasonCode: "COMMUNITY_WEIGHT_AMBIGUOUS" },
@@ -277,9 +277,10 @@ describe("computeMiningSnapshot (pure)", () => {
     });
   });
 
-  it("computes the development baseline as the USD value of the holdings (hand-checked)", () => {
-    // Decision 0043: every registered asset weighs 1, so power is holding ×
-    // reference price. Expected values are written by hand, not derived.
+  it("computes the development baseline as the token quantity × weight (Decision 0125, hand-checked)", () => {
+    // Decision 0043: every registered asset weighs 1; Decision 0125: power is
+    // the holding itself (the price is published, not multiplied). Expected
+    // values are written by hand, not derived.
     const baseline = buildMiningDevBaselineDocuments([
       loopAsset,
       communityAsset,
@@ -287,13 +288,13 @@ describe("computeMiningSnapshot (pure)", () => {
     const result = computeMiningSnapshot(
       {
         balances: [
-          // 1.5 × 720.78 = 1081.17
+          // 1.5 × 1 = 1.5 (price 720.78 not used)
           balance(alice, loopAsset, "1500000000000000000", "200"),
-          // 250 × 0.9997 = 249.925
+          // 250 × 1 = 250
           balance(alice, communityAsset, "250000000000000000000", "200"),
-          // 0.000000000000000001 × 720.78 = 0.00000000000000072078
+          // 0.000000000000000001 × 1
           balance(bob, loopAsset, "1", "199"),
-          // 0 × 0.9997 = 0
+          // 0 × 1 = 0
           balance(bob, communityAsset, "0", "199"),
         ],
         prices: [price(loopAsset, "720.78"), price(communityAsset, "0.9997")],
@@ -309,13 +310,13 @@ describe("computeMiningSnapshot (pure)", () => {
     expect(
       result.powers.map((row) => [row.ownerUserId, row.assetId, row.power]),
     ).toEqual([
-      [bob, loopAsset, "0.00000000000000072078"],
+      [bob, loopAsset, "0.000000000000000001"],
       [bob, communityAsset, "0"],
-      [alice, loopAsset, "1081.17"],
-      [alice, communityAsset, "249.925"],
+      [alice, loopAsset, "1.5"],
+      [alice, communityAsset, "250"],
     ]);
-    // 1081.17 + 249.925 + 0.00000000000000072078 + 0
-    expect(result.totalPower).toBe("1331.09500000000000072078");
+    // 1.5 + 250 + 0.000000000000000001 + 0
+    expect(result.totalPower).toBe("251.500000000000000001");
     expect(result.skipped).toEqual([]);
   });
 
@@ -398,7 +399,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: wbnbAsset,
         referencePricePairAddress: null,
         weight: "1",
-        power: "180.195",
+        power: "0.25",
         blockNumber: "100",
       },
     ]);
@@ -508,7 +509,7 @@ describe("computeMiningSnapshot (pure)", () => {
     );
     expect(zero).toMatchObject({
       kind: "computed",
-      totalPower: "3",
+      totalPower: "2",
       skipped: [
         { assetId: communityAsset, reasonCode: "MINING_PRICE_PAIR_NOT_FOUND" },
       ],
@@ -586,7 +587,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePriceProxyAssetId: null,
         referencePricePairAddress: null,
         weight: "1",
-        power: "6",
+        power: "4",
         blockNumber: "12",
       },
     ]);

@@ -44,6 +44,8 @@ import { createLaunch2Lane } from "./launch2-indexer-worker.js";
 import { launch2FactoryEntries } from "./features/launch2/launch2-generation.js";
 import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
+import { createLaunch2TokenIdentityReader } from "./integrations/launch2/launch2-meme-asset-chain.js";
+import type { Launch2MemeAssetRepository } from "./features/launch2/launch2-meme-assets.js";
 import {
   launch2PublisherDefaults,
   type Launch2PublicationRepository,
@@ -243,6 +245,8 @@ export interface ReconciliationWorkerDatabase {
   readonly launch2Publications?: Launch2PublicationRepository;
   /** Buyback keeper attempts (Decision 0121); absent keeps it off. */
   readonly launch2BuybackAttempts?: Launch2BuybackAttemptRepository;
+  /** Decision 0125: MEME registry + community binding; absent: not registered. */
+  readonly launch2MemeAssets?: Launch2MemeAssetRepository;
   /** `mining_hourly_settlement` lane (Decision 0116); absent keeps it idle. */
   readonly miningSettlement?: MiningSettlementRepository;
   /** Hooks deployment executor (Decision 0112); absent keeps it off. */
@@ -339,6 +343,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createHooksLaunchExecutorLane?: typeof createHooksLaunchExecutorLane;
   /** Test seam for the launch2 lane's chain reader (Decision 0114). */
   readonly createLaunch2Chain?: typeof createLaunch2Chain;
+  /** Decision 0125 test seam: the MEME identity reader. */
+  readonly createLaunch2TokenIdentityReader?: typeof createLaunch2TokenIdentityReader;
   /** Test seam for the snapshot publisher's chain client (Decision 0118). */
   readonly createLaunch2PublisherChain?: typeof createLaunch2PublisherChain;
   readonly createLaunch2SnapshotPublisherLane?: typeof createLaunch2SnapshotPublisherLane;
@@ -821,6 +827,17 @@ export async function runReconciliationWorker(
             }),
             reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
             pollIntervalMs: launch2Config.pollIntervalMs,
+            ...(database.launch2MemeAssets === undefined
+              ? {}
+              : {
+                  memeAssets: {
+                    repository: database.launch2MemeAssets,
+                    reader: (
+                      options.createLaunch2TokenIdentityReader ??
+                      createLaunch2TokenIdentityReader
+                    )({ rpcUrls: launchChainConfig.rpcUrls }),
+                  },
+                }),
             onWarning: (warning) => {
               options.logger.warn(
                 { ...logFields(), lane: "launch2_event", ...warning },

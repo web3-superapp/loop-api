@@ -1568,3 +1568,58 @@ Content-Type: application/json
 
 合约键为空或写开关关闭：三种 `kind` 都是不带 `detailsSafe` 的 `503 CAPABILITY_UNAVAILABLE`（与之前字节相同）；
 读链失败：`503` + S83a 原因码。任何情况下都不会用默认值或缓存的持仓冒充链上事实，被拒的请求不存 Intent。
+
+## S148：项目绑定社区 `communityId`（决策 0125）
+
+Base URL / headers 与 §2 相同（`POST` 需要 UUIDv4 `Idempotency-Key`；`PUT` 不带）。
+
+### 请求
+
+`POST /v2/launch/projects`：
+
+```json
+{
+  "name": "Frog",
+  "ticker": "FROG",
+  "narrative": null,
+  "kind": "launch2",
+  "communityId": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+}
+```
+
+`PUT /v2/launch/projects/{projectId}`：
+
+```json
+{
+  "expectedVersion": 3,
+  "project": {
+    "name": "Frog",
+    "ticker": "FROG",
+    "narrative": null,
+    "communityId": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+  }
+}
+```
+
+- `communityId`：可选，UUID 或 `null`。创建时不传 / `null` = 不绑定。修改时**不传 = 保持原值**、`null` = 清除、新值需重新校验。
+- 只能填调用者本人是**群主（owner）**、且未被驳回的社区；否则 `422 VALIDATION_FAILED`，
+  `detailsSafe.reasonCode = "LAUNCH_COMMUNITY_NOT_OWNED"`（社区不存在也返回这个码）。
+- 只有在 `draft` / `returned` / `rejected` 可改（与其它资料相同）。
+
+### 响应
+
+`project.communityId`：**只在项目绑定了社区时出现**（本人与他人投影相同）；没有绑定时该键不存在。
+已有客户端在不填社区时不受影响；要填社区的版本需要把 `communityId` 加入项目对象的键集合。
+
+### 绑定生效
+
+项目部署后（链上 `LaunchDeployed` 被索引），后端把 MEME 登记进资产表，并在该社区**尚未绑定任何代币**且项目方仍是群主时，
+自动把社区的绑定代币设为这个 MEME（之后 `GET /v2/communities/{id}` 的 `boundAsset` 指向它，NFT 轨按社区计算算力）。
+社区已绑定其它代币时不覆盖；审核人可用拒绝理由 `community_binding_mismatch` 退回。
+
+### 错误码（新增）
+
+| HTTP | code                | `detailsSafe.reasonCode`     | 处理                    |
+| ---- | ------------------- | ---------------------------- | ----------------------- |
+| 422  | `VALIDATION_FAILED` | `LAUNCH_COMMUNITY_NOT_OWNED` | 只能选自己是群主的社区  |
+| 400  | `INVALID_REQUEST`   | —                            | `communityId` 不是 UUID |

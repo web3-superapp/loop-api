@@ -1159,3 +1159,86 @@ OPS_BUYBACK_RECIPIENT_FIXED`；服务端未配置固定地址 → `503 / HOOKS_L
 `root / dataHash` 为全零、`signerAddresses = []`，状态机与名单发布相同（`pending → broadcast → confirmed`）。
 失败码新增 `LAUNCH2_SNAPSHOT_OPENED_BY_OTHER`（别人先开了盘，无需处理）。`snapshotClosure` 只会出现在第二版及更早
 工厂的实例上（deprecated）；已开盘实例的「放行重试」返回 `409 LAUNCH2_SNAPSHOT_ALREADY_ON_CHAIN`。
+
+## 15. S148 变更（决策 0125）：目录资料「批准」按钮、项目社区
+
+### 15.0 给 loop-admin 的改动清单
+
+1. 项目详情目录资料区：在「拒绝」旁加「批准」按钮（reviewer 可见，`launchReviewStatus` 为 `submitted` / `in_review` 时可点），
+   调 §15.1；成功后刷新详情（`launchReviewStatus = approved`、`materialApproval` 有值）。
+2. 列表 / 详情展示 `community`（社区名、当前绑定代币、自动绑定结果），审核「社区绑定不一致」时参考。
+
+### 15.1 `POST /admin/v1/launch/projects/{projectId}/materials/{materialVersion}/approve`
+
+- 权限：`launch.approve`（仅 reviewer；平台管理员 403；项目方本人 403 `OPS_SELF_APPROVAL`）。
+- 头：会话 cookie + UUIDv4 `Idempotency-Key`（= `approvalId`；同 key 同请求体重放返回 `replayed: true`）。
+- 路径 `materialVersion` 取详情 `project.materialVersion`（资料被改过则 409 `OPS_VERSION_CONFLICT`）。
+
+```json
+{ "reason": "资料齐全，官网可访问" }
+```
+
+`reason` 必填，去首尾空白后 1–500 字，仅内部审计，不展示给项目方。
+
+200：
+
+```json
+{
+  "operationId": "1b4e28ba-2fa1-4d2e-8f3b-1c2d3e4f5a6b",
+  "replayed": false,
+  "approval": {
+    "approvalId": "1b4e28ba-2fa1-4d2e-8f3b-1c2d3e4f5a6b",
+    "projectId": "…",
+    "materialVersion": 2,
+    "approverUserId": "…",
+    "reason": "资料齐全，官网可访问",
+    "launchId": "…",
+    "approvedAt": "2026-10-11T03:00:00.000Z"
+  },
+  "audit": { "auditId": "…", "seq": 42, "at": "2026-10-11T03:00:00.000Z" }
+}
+```
+
+效果与 `pnpm launch:review <projectId> approve` 相同：`launchReviewStatus = approved`（`reviewReasonCode = operator_manual_review`）、
+创建目录 `launches` 行（`launchId`）、写 `launch_project_approvals` 与审核事件。之后项目方即可保存 Hooks 配置。
+
+错误：
+
+| HTTP | code                     | `detailsSafe.reasonCode`                                                                |
+| ---- | ------------------------ | --------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`        | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`；`reason` 缺失、多余字段；`materialVersion` 不是正整数 |
+| 403  | `PERMISSION_DENIED`      | `ADMIN_ROLE_FORBIDDEN` / `OPS_SELF_APPROVAL` / `OPS_FORBIDDEN`                          |
+| 404  | `NOT_FOUND`              | `OPS_NOT_FOUND` / `ADMIN_LAUNCH_PROJECT_NOT_FOUND`                                      |
+| 409  | `ADMIN_CONFLICT`         | `OPS_LAUNCH_NOT_IN_REVIEW`（已批准 / 已拒绝 / 草稿 / 退回）                             |
+| 409  | `ADMIN_CONFLICT`         | `OPS_VERSION_CONFLICT`（资料版本已变，刷新详情）                                        |
+| 409  | `ADMIN_CONFLICT`         | `OPS_IDEMPOTENCY_CONFLICT`（同 key 不同请求，换新 key）                                 |
+| 422  | `VALIDATION_FAILED`      | `ADMIN_REASON_TEXT_INVALID`（空白或超过 500 字）                                        |
+| 503  | `CAPABILITY_UNAVAILABLE` | `ADMIN_AUDIT_UNAVAILABLE` / `HOOKS_LAUNCH_REVIEW_UNAVAILABLE` / `OPS_COMMAND_FAILED`    |
+
+审计：`launch.project.approve.requested / .decided / .failed`（`targetType = launch_project`），另有 `ops_audit`。
+
+### 15.2 列表 / 详情新增字段（`project`，三项总是返回）
+
+```json
+{
+  "materialApproval": {
+    "approverUserId": "…",
+    "materialVersion": 2,
+    "approvedAt": "2026-10-11T03:00:00.000Z"
+  },
+  "communityId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "community": {
+    "communityId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "name": "Frog DAO",
+    "verificationStatus": "verified",
+    "boundAssetKey": "eip155:97:0x…6666",
+    "binding": "bound"
+  }
+}
+```
+
+- `materialApproval`：最近一次在后台批准的目录资料；没有（或用脚本批准）为 `null`。
+- `communityId` / `community`：项目方填的社区；未填为 `null`。`boundAssetKey` 是社区**当前**绑定的代币（`null` = 未绑定）。
+- `binding`：链上部署后自动绑定的结果——`bound`（已绑定到本 MEME）、`already_bound`（原本就是）、`conflict`（社区已绑定其它代币，未覆盖）、
+  `not_owner`（项目方已不是群主）、`community_unavailable`（社区不存在或已驳回）、`asset_blocked`（该代币被封禁）、`none`（未填社区）；
+  MEME 尚未登记时为 `null`。`conflict` / `not_owner` 时可用拒绝理由 `community_binding_mismatch`。

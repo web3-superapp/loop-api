@@ -172,6 +172,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     // Decision 0122: reviewer rejections (catalog material / config version)
     hooks_launch_config_rejections: "user",
     launch_project_rejections: "user",
+    // Decision 0125: console approvals of catalog material
+    launch_project_approvals: "user",
     hooks_testnet_acceptances: "user",
     hooks_launch_deployment_tasks: "user",
     hooks_launch_deployment_events: "user",
@@ -184,6 +186,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_nft_mints: "user",
     launch2_trades: "user",
     launch2_buybacks: "user",
+    // Decision 0125: MEME ERC-20 transfers of a launch2 instance
+    launch2_meme_transfers: "user",
     launch2_snapshot_members: "user",
     launch2_positions: "user",
     launch2_intents: "user",
@@ -372,6 +376,7 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
   del("launch2_trades", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_nft_mints", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_events", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_meme_transfers", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_instances", `instance_id in ${doomedLaunch2Instances}`),
   // Hooks Launch project-side configuration and signing tasks
   del("hooks_launch_deployment_events", `job_id in ${doomedDeploymentTasks}`),
@@ -402,6 +407,7 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
       or ${ownedBy("reviewer_id")}`,
   ),
   del("launch_project_rejections", ownedBy("reviewer_user_id")),
+  del("launch_project_approvals", ownedBy("reviewer_user_id")),
   del(
     "hooks_launch_project_config_versions",
     `(project_id, config_version) in ${doomedConfigVersions}`,

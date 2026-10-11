@@ -6,6 +6,7 @@ import {
   LaunchDataStaleError,
   LaunchNotFoundError,
   LaunchVersionConflictError,
+  LaunchCommunityNotOwnedError,
   createUnavailableLaunchRepository,
   type LaunchCatalogRecord,
   type LaunchDetailRecord,
@@ -46,6 +47,7 @@ const draft: LaunchProjectRecord = Object.freeze({
   kybStatus: "unavailable",
   reviewReasonCode: null,
   rejection: null,
+  communityId: null,
   submittedAt: null,
   reviewedAt: null,
   launchId: null,
@@ -685,6 +687,107 @@ describe("LOOP API V2 launch module", () => {
       headers: s7CommonHeaders(),
     });
     expect(badFilter.statusCode).toBe(400);
+  });
+
+  it("Decision 0125: takes an owned communityId on create and replace, projects it only when set, and refuses one not owned with 422", async () => {
+    const communityId = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    const bound = { ...draft, kind: "launch2" as const, communityId };
+    const { app, repository } = await createApp(
+      repositoryFake({
+        createProject: vi.fn(() => Promise.resolve(bound)),
+        replaceProject: vi.fn(() =>
+          Promise.resolve({ ...bound, version: 2, materialVersion: 2 }),
+        ),
+      }),
+    );
+    const payload = { name: "MoonCat", ticker: "MCAT", narrative: null };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, kind: "launch2", communityId },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({ project: { communityId } });
+    const createMock = calls(repository, "createProject") as unknown as {
+      readonly mock: {
+        readonly calls: [
+          { values: { communityId?: string | null }; requestSha256: string },
+        ][];
+      };
+    };
+    expect(createMock.mock.calls[0]?.[0].values.communityId).toBe(communityId);
+    const plain = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, kind: "launch2", communityId: null },
+    });
+    expect(plain.statusCode).toBe(201);
+    // Only a named community changes the idempotency digest.
+    expect(createMock.mock.calls[1]?.[0].requestSha256).not.toBe(
+      createMock.mock.calls[0]?.[0].requestSha256,
+    );
+    const replaced = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 1, project: { ...payload, communityId } },
+    });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    const replaceMock = calls(repository, "replaceProject") as unknown as {
+      readonly mock: {
+        readonly calls: [{ values: { communityId?: string | null } }][];
+      };
+    };
+    expect(replaceMock.mock.calls[0]?.[0].values.communityId).toBe(communityId);
+    // Absent on replace: the stored value stays (the key is not sent).
+    await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 2, project: payload },
+    });
+    expect(
+      Object.hasOwn(replaceMock.mock.calls[1]?.[0].values ?? {}, "communityId"),
+    ).toBe(false);
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, communityId: "not-a-uuid" },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    // An unbound project has no communityId key at all.
+    const unbound = await createApp();
+    const read = await unbound.app.inject({
+      method: "GET",
+      url: `/v2/launch/projects/${projectId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(
+      Object.hasOwn(read.json<{ project: object }>().project, "communityId"),
+    ).toBe(false);
+
+    const refused = await createApp(
+      repositoryFake({
+        createProject: vi.fn(() =>
+          Promise.reject(new LaunchCommunityNotOwnedError()),
+        ),
+      }),
+    );
+    const notOwned = await refused.app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, communityId },
+    });
+    expect(notOwned.statusCode).toBe(422);
+    expect(notOwned.json()).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "LAUNCH_COMMUNITY_NOT_OWNED" },
+    });
   });
 
   it("projects a launch with pending configuration slots, rounds, and pending graduation steps", async () => {

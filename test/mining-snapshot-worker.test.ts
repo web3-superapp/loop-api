@@ -257,12 +257,12 @@ describe("mining-snapshot lane", () => {
         blockNumber: "500",
         blockHash: hash,
         priceVersion: "dexscreener:2026-09-08T00:04:00.000Z",
-        totalPower: "2",
+        totalPower: "4",
         powers: [
           expect.objectContaining({
             ownerUserId: alice,
             assetId: loopAssetId,
-            power: "2",
+            power: "4",
           }),
         ],
       }),
@@ -446,7 +446,7 @@ describe("mining-snapshot lane", () => {
             assetId: loopAssetId,
             referencePriceQuality: "proxied",
             referencePriceProxyAssetId: wbnb,
-            power: "2",
+            power: "4",
           }),
         ],
       }),
@@ -630,7 +630,7 @@ describe("mining-snapshot lane", () => {
             // inverted, so nothing is derived.
             referencePriceQuality: "fresh",
             referencePricePairAddress: deepPairAddress,
-            power: "1",
+            power: "4",
           }),
         ],
       }),
