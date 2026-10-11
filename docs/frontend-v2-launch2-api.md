@@ -1,4 +1,15 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126)
+
+> **S150 / 决策 0126 变化（给 App）**：① **签名有效期**：报价（`…/quote`、`…/pool/quote`）的 `deadline` /
+> `expiresAt` 仍是 60 s 新鲜度；prepare 返回的意图 `deadline` / `expiresAt`（以及编码进合约调用的 deadline）
+> 改为 **prepare 时刻 + 180 s**（服务端 `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS`，默认 180），外盘 prepare 在该
+> 区块重新模拟（`quote.basis` 是 prepare 区块）。App 以意图的 `expiresAt` 判断能否继续签第二笔（授权后签交易），
+> 不要再用报价的 60 s。② **持仓余额**：详情 `viewer` 与 `GET /v2/launch2/me/positions` 每行新增
+> `memeBalance` / `usd1Balance` / `balanceStatus` / `balanceReasonCode` / `balanceBlockNumber`（毕业后链读，
+> ≤ 15 s 缓存；毕业前为 `null` + `not_graduated`）。③ **自己的外盘成交**：新增
+> `GET …/pool/trades?walletId=&limit=`（§3.11），`viewer` 与 positions 新增 `poolTradeCount` /
+> `lastPoolTradeAt`——成交确认请看自己的 `poolTradeCount` 增加，**不要**再看全池 `pool.tradeCount`。只在外盘交易
+> 过（没有内盘 / NFT）的钱包现在也出现在 positions 里。**严格解码的客户端必须加上这 7 个 key。**
 
 > **S146 / 决策 0124 变化（给 App）**：毕业（`stage = graduated`）后在页内买卖外盘（Uniswap v4 官方池，经
 > `OfficialPoolRouter`）。新增 `GET …/pool/quote` 与 `POST …/pool/trade/prepare`（§3.8、§3.9），详情新增
@@ -477,6 +488,12 @@ same resource with `kind: "buy"|"sell"`, `contractAddress` = curve,
 `calldata` = `buy(amountInMax, minMemeOut, deadline, proof)` / `sell(memeIn, minUsd1Out, deadline)`,
 `approval` for USD1 (buy) or MEME (sell) when short. The contract refunds unused USD1.
 
+Deadline (Decision 0126): the body's `deadline` is the quote's (60 s): past it → `409
+QUOTE_EXPIRED`. The deadline encoded in `buy` / `sell` and the intent's `deadline` / `expiresAt`
+are `max(body.deadline, prepare time + 180 s)`, so the approve and the trade can both be signed.
+Use `launch2Intent.expiresAt` as the signing limit; after it `state` is `expired` /
+`signing.allowed = false` (`LAUNCH2_INTENT_EXPIRED`) → re-quote.
+
 Refusals to handle in the panel (no toast, no error page):
 
 - `409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED` → re-quote silently.
@@ -561,14 +578,41 @@ chain read fails. Copy: 「回购不等于销毁」 in ⓘ.
         "usd1Received": "0",
         "taxUsd1": "5"
       },
-      "lastActivityAt": "…"
+      "lastActivityAt": "…",
+      "memeBalance": null,
+      "usd1Balance": null,
+      "balanceStatus": "not_graduated",
+      "balanceReasonCode": null,
+      "balanceBlockNumber": null,
+      "poolTradeCount": "0",
+      "lastPoolTradeAt": null
     }
   ],
   "contractVersion": "2.0"
 }
 ```
 
-`curve.net` is curve bought − sold; MEME moved wallet-to-wallet after graduation is not tracked.
+`curve.net` is curve bought − sold (curve phase only).
+
+Decision 0126 — wallet balances and own pool trades (same seven keys on the detail `viewer`, §3.2):
+
+| key                  | graduated (`stage = graduated`)                                             | before graduation |
+| -------------------- | --------------------------------------------------------------------------- | ----------------- |
+| `memeBalance`        | MEME `balanceOf(wallet)` at `balanceBlockNumber` (null when unavailable)    | `null`            |
+| `usd1Balance`        | the instance USD1 `balanceOf(wallet)` at the same block                     | `null`            |
+| `balanceStatus`      | `available` \| `unavailable` (chain read failed / launch slot not set up)   | `not_graduated`   |
+| `balanceReasonCode`  | `unavailable`: `LAUNCH2_CHAIN_READ_FAILED` / `LAUNCH2_CHAIN_NOT_CONFIGURED` | `null`            |
+| `balanceBlockNumber` | block of both reads                                                         | `null`            |
+| `poolTradeCount`     | the wallet's attributed official-pool trades (`"0"` none)                   | `"0"`             |
+| `lastPoolTradeAt`    | block time of its newest one                                                | `null`            |
+
+- Balances are read live (one block, cached ≤ 15 s per wallet and instance); a failed read
+  never becomes `"0"` — show 「余额暂不可用」 and keep the rest of the row.
+- Graduated: show 「持有 {memeBalance} {ticker}」 from `memeBalance` (it covers curve buys, pool
+  trades and wallet-to-wallet transfers); before graduation keep using `curve.net`.
+- A wallet whose only activity is pool trades (through the router) is listed (curve zeros, no
+  NFT). A wallet that only received MEME by transfer is not listed (open the detail with its
+  `walletId` to see its balance).
 
 ### 3.8 `GET /v2/launch2/instances/{instanceId}/pool/quote?side=&mode=&amount=&walletId=&slippageBps=` (Decision 0124)
 
@@ -637,6 +681,10 @@ Field meaning by mode:
 - Show 「外盘交易税 2 %（{taxAmount} {taxToken}）」; `taxUsd1` is only non-zero on a sell.
 - `exceedsBalance: true` → disable the confirm button, offer the balance as MAX (`balance`).
 - Re-quote when `expiresAt` passes (TTL 60 s); the prepare re-quotes itself anyway.
+- Decision 0126: the quote's `deadline` / `expiresAt` are only its freshness. The prepare
+  (§3.9) re-simulates at its own block and encodes its own deadline (prepare + 180 s); the
+  `quote` returned with the intent carries that deadline (`deadline = expiresAt` = the
+  intent's).
 
 ### 3.9 `POST /v2/launch2/instances/{instanceId}/pool/trade/prepare` (Decision 0124)
 
@@ -666,8 +714,8 @@ Headers: §1 plus `Idempotency-Key`. Body:
     "minOut": "15523.2",
     "taxUsd1": "0",
     "refundUsd1": "0",
-    "deadline": "2027-01-15T08:01:00.000Z",
-    "expiresAt": "2027-01-15T08:01:00.000Z",
+    "deadline": "2027-01-15T08:03:00.000Z",
+    "expiresAt": "2027-01-15T08:03:00.000Z",
     "calldata": { "to": "0xcb02…", "data": "0x2523c148…", "value": "0" },
     "unsignedTransaction": {
       "chainId": 97,
@@ -713,6 +761,14 @@ Headers: §1 plus `Idempotency-Key`. Body:
 - `amountIn` on the intent is the most the router may pull; the router refunds the unused part
   of `maxIn`.
 - Replays with the same key return the same intent **and** the same `quote`.
+- Decision 0126: `deadline` = `expiresAt` = prepare time + 180 s (server
+  `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS`, 60..600, default 180); the router call encodes the same
+  deadline; `quote.basis` / `quotedAtBlock` = the prepare block (a fresh simulation, not the
+  earlier GET). Sign the approve and then the router call before `expiresAt`; after it the
+  intent is `expired` → prepare again (new `Idempotency-Key`).
+- Confirmation (0126): after the router transaction is mined, poll the detail (or §3.11) until
+  `viewer.poolTradeCount` grows (the lane needs the block plus confirmations); do not use the
+  pool-wide `pool.tradeCount` (buybacks and other wallets move it too).
 
 ### 3.10 `instance.pool` on `GET /v2/launch2/instances/{instanceId}` (Decision 0124)
 
@@ -742,6 +798,58 @@ Headers: §1 plus `Idempotency-Key`. Body:
   pool trade panel, keep the statistics.
 - `recentTrades` stays curve-only.
 
+### 3.11 `GET /v2/launch2/instances/{instanceId}/pool/trades?walletId=&limit=` (Decision 0126)
+
+The caller's wallet's own official-pool trades, newest first. `walletId` required (one of the
+caller's wallets: else `404`); `limit` 1..50, default 20 (no cursor). Headers as §1 (read).
+
+The `launch2_event` lane reads `OfficialPoolRouter`'s own `Swap(poolId, payer, recipient,
+zeroForOne, amountIn, amountOut)` logs beside the PoolManager `Swap` and pairs them (same
+transaction, PoolManager sender = the router, router log after it, same input amount); the payer
+is the trader. Swaps that did not go through the router (the buyback executor, other routers)
+are never attributed to anyone.
+
+```json
+{
+  "instanceId": "8a0c…",
+  "walletId": "d64786bb-408d-415d-8a69-6277d56c921b",
+  "poolTradeCount": "2",
+  "lastPoolTradeAt": "2027-01-15T08:00:40.000Z",
+  "trades": [
+    {
+      "poolTradeId": "5e0f0a8e-4c0a-4b8e-9a0c-2f7d1c3b4a50",
+      "side": "buy",
+      "inputToken": "usd1",
+      "outputToken": "meme",
+      "amountIn": "10",
+      "amountOut": "15680",
+      "usd1Amount": "10",
+      "memeAmount": "16000",
+      "taxAmount": "320",
+      "taxToken": "meme",
+      "priceUsd1": "0.000625",
+      "recipientAddress": "0x…000a",
+      "tradedAt": "2027-01-15T08:00:40.000Z",
+      "transactionHash": "0xabab…",
+      "logIndex": 4,
+      "blockNumber": "136098447"
+    }
+  ],
+  "contractVersion": "2.0"
+}
+```
+
+- `amountIn` / `amountOut` = what the wallet paid / received net (router event, exact);
+  `usd1Amount` / `memeAmount` = the pool side (output before the 2 % tax); `priceUsd1` = pool
+  price after the swap. Show 「买入 {amountOut} {ticker}，花费 {amountIn} USD1」 / 「卖出 …」.
+- `poolTradeId` is opaque and stable (use it as the list key; never the hash).
+- Before graduation: `200` with `trades: []`, `poolTradeCount: "0"`.
+- Errors: `400 INVALID_REQUEST` (no / bad `walletId`, bad `limit`), `404 NOT_FOUND` (unknown
+  instance `LAUNCH2_INSTANCE_NOT_FOUND`, or a wallet that is not the caller's), `503` as §5.
+- Unattributed history: pool trades the lane indexed before it read router logs are attributed
+  by its one-time re-scan from the graduation block once the worker runs with
+  `LAUNCH2_POOL_ROUTER_*`; until then they are missing here (never guessed).
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
 | HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -763,6 +871,10 @@ Never fabricate a stage, price, or list: a 503 shows the module unavailable with
 empty `instances` list is the empty state (the lane has indexed nothing yet). `viewer: null`
 means no wallet, not zero holdings. `buyback.keeper: null` means the keeper has not run for
 this instance (lane off by default, or not graduated): show the ledger only, no "回购暂缓".
+
+Wallet balances (0126): `balanceStatus: "unavailable"` never blocks the detail / positions; show
+「余额暂不可用」 for that row only. Without the router in the worker, pool trades stay unattributed
+(`poolTradeCount: "0"`, §3.11 empty) — the pool statistics still move.
 
 Pool trading (0124): `POOL_ROUTER_NOT_CONFIGURED` / `POOL_ROUTER_CODE_MISMATCH` /
 `POOL_ROUTER_MANAGER_MISMATCH` / `POOL_KEY_MISMATCH` are server-side states — show 「外盘交易暂不可用」

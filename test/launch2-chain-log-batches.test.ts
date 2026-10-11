@@ -6,6 +6,7 @@ import {
   launch2DefaultMaxAddressesPerLogQuery,
 } from "../src/integrations/launch2/launch2-chain.js";
 import {
+  officialPoolRouterAbi,
   poolManagerAbi,
   snapshotRegistryAbi,
 } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
@@ -187,6 +188,84 @@ describe("launch2 chain reader splits the eth_getLogs address filter", () => {
           tick: "-3",
         }) as unknown,
       }),
+    ]);
+  });
+
+  it("asks the router for its Swap logs by pool id (topic1), batched, decoded as RouterSwap (Decision 0126)", async () => {
+    const router = `0x${"cc".repeat(20)}`;
+    const payer = `0x${"aa".repeat(20)}`;
+    const ids = Array.from(
+      { length: 9 },
+      (_, i) => `0x${(i + 1).toString(16).padStart(64, "0")}`,
+    );
+    const requests: { address: unknown; topics: unknown }[] = [];
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      transport: custom({
+        request: ({ method, params }: { method: string; params?: unknown }) => {
+          if (method !== "eth_getLogs") throw new Error(`unexpected ${method}`);
+          const filter = (
+            params as [{ address: unknown; topics?: unknown }]
+          )[0];
+          requests.push({ address: filter.address, topics: filter.topics });
+          if (requests.length !== 1) return Promise.resolve([]);
+          return Promise.resolve([
+            {
+              address: router,
+              topics: encodeEventTopics({
+                abi: officialPoolRouterAbi,
+                eventName: "Swap",
+                args: {
+                  poolId: ids[0] as Hex,
+                  payer: payer as Hex,
+                  recipient: payer as Hex,
+                },
+              }) as Hex[],
+              data: encodeAbiParameters(
+                [{ type: "bool" }, { type: "uint256" }, { type: "uint256" }],
+                [true, 10n, 15n],
+              ),
+              blockNumber: "0x10",
+              blockHash,
+              transactionHash: `0x${"ab".repeat(32)}`,
+              transactionIndex: "0x0",
+              logIndex: "0x4",
+              removed: false,
+            },
+          ]);
+        },
+      }),
+    });
+    const result = await chain.getLogs({
+      roles: new Map(),
+      fromBlock: 1n,
+      toBlock: 20n,
+      routerSwaps: { router, poolIds: ids },
+    });
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(String(request.address).toLowerCase()).toBe(router);
+    }
+    const topics = requests.map((request) => request.topics as unknown[]);
+    expect((topics[0]?.[1] as string[]).length).toBe(8);
+    expect((topics[1]?.[1] as string[]).length).toBe(1);
+    expect(result.logs).toEqual([
+      {
+        contractAddress: router,
+        eventName: "RouterSwap",
+        args: {
+          poolId: ids[0],
+          payer,
+          recipient: payer,
+          zeroForOne: "true",
+          amountIn: "10",
+          amountOut: "15",
+        },
+        transactionHash: `0x${"ab".repeat(32)}`,
+        logIndex: 4,
+        blockNumber: 16n,
+        blockHash,
+      },
     ]);
   });
 });

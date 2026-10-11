@@ -9,7 +9,10 @@ import type {
   Launch2Repository,
   Launch2SnapshotMemberRecord,
 } from "../src/features/launch2/launch2-ports.js";
-import { createLaunch2Lane } from "../src/launch2-indexer-worker.js";
+import {
+  createLaunch2Lane,
+  pairLaunch2RouterSwaps,
+} from "../src/launch2-indexer-worker.js";
 import {
   instanceFixture,
   launch2Factory,
@@ -747,5 +750,200 @@ describe("launch2_event lane: official-pool swaps (Decision 0124)", () => {
       "Swap",
     ]);
     expect(commits[0]?.events[1]?.args["memeIsCurrency0"]).toBe("false");
+  });
+});
+
+describe("launch2_event lane: router attribution (Decision 0126)", () => {
+  const poolManager = "0x" + "9".repeat(40);
+  const router = "0x" + "c".repeat(40);
+  const buyback = "0x" + "5".repeat(40);
+  const trader = "0x" + "a".repeat(40);
+  const poolId = hash(4242n);
+
+  function poolSwap(
+    block: bigint,
+    tx: bigint,
+    index: number,
+    sender = router,
+    amounts: { amount0: string; amount1: string } = {
+      amount0: "-1000",
+      amount1: "1500",
+    },
+  ): Launch2DecodedLog {
+    return {
+      contractAddress: poolManager,
+      eventName: "Swap",
+      args: {
+        id: poolId,
+        sender,
+        ...amounts,
+        sqrtPriceX96: "79228162514264337593543950336",
+        liquidity: "1",
+        tick: "0",
+        fee: "2500",
+      },
+      transactionHash: hash(tx),
+      logIndex: index,
+      blockNumber: block,
+      blockHash: hash(block),
+    };
+  }
+
+  function routerSwap(
+    block: bigint,
+    tx: bigint,
+    index: number,
+    overrides: Record<string, string> = {},
+  ): Launch2DecodedLog {
+    return {
+      contractAddress: router,
+      eventName: "RouterSwap",
+      args: {
+        poolId,
+        payer: trader,
+        recipient: trader,
+        zeroForOne: "true",
+        amountIn: "1000",
+        amountOut: "1470",
+        ...overrides,
+      },
+      transactionHash: hash(tx),
+      logIndex: index,
+      blockNumber: block,
+      blockHash: hash(block),
+    };
+  }
+
+  const graduated = () =>
+    laneInstance({
+      deployBlockNumber: "100",
+      graduated: true,
+      officialPoolId: poolId,
+      graduationBlockNumber: "140",
+      poolRouterTargetBlock: "120",
+    });
+
+  it("asks for the router's Swap logs by pool id and attributes the PoolManager swap it made to the payer", async () => {
+    const instance = graduated();
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 200n,
+      logs: [
+        // A routed buy: PoolManager log 2, router log 5 (same tx).
+        poolSwap(150n, 1n, 2),
+        routerSwap(150n, 1n, 5),
+        // The buyback executor: no router log, never attributed.
+        poolSwap(160n, 2n, 1, buyback),
+      ],
+      hookPool: { poolManager, currency0: instance.addresses.meme },
+      poolRouter: router,
+    });
+    await lane.runOnce();
+    expect(logQueries[0]?.routerSwaps).toEqual({ router, poolIds: [poolId] });
+    const events = commits[0]?.events ?? [];
+    expect(events.map((event) => event.eventName)).toEqual([
+      "Swap",
+      "RouterSwap",
+      "Swap",
+    ]);
+    expect(events[0]?.args).toMatchObject({
+      routerPayer: trader,
+      routerRecipient: trader,
+      routerAmountIn: "1000",
+      routerAmountOut: "1470",
+      routerLogIndex: "5",
+    });
+    expect(events[1]?.instanceId).toBe(instance.instanceId);
+    expect(events[2]?.args["routerPayer"]).toBeUndefined();
+  });
+
+  it("pairs only the same transaction, a router-sent swap before the router log, with the same input", () => {
+    const pairs = pairLaunch2RouterSwaps(
+      [
+        // tx 1: two routed swaps in one transaction (a batch caller).
+        poolSwap(150n, 1n, 1),
+        routerSwap(150n, 1n, 2),
+        poolSwap(150n, 1n, 3, router, { amount0: "-2000", amount1: "2900" }),
+        routerSwap(150n, 1n, 4, {
+          payer: "0x" + "b".repeat(40),
+          amountIn: "2000",
+        }),
+        // tx 2: the router log names another input amount → unpaired.
+        poolSwap(151n, 2n, 1),
+        routerSwap(151n, 2n, 2, { amountIn: "999" }),
+        // tx 3: the PoolManager sender is not the router → unpaired.
+        poolSwap(152n, 3n, 1, buyback),
+        routerSwap(152n, 3n, 2),
+        // tx 4: the router log comes first → unpaired.
+        routerSwap(153n, 4n, 1),
+        poolSwap(153n, 4n, 2),
+        // tx 5: a sell (zeroForOne false: the input is currency1).
+        poolSwap(154n, 5n, 1, router, { amount0: "300", amount1: "-500" }),
+        routerSwap(154n, 5n, 2, {
+          zeroForOne: "false",
+          amountIn: "500",
+          amountOut: "294",
+        }),
+      ],
+      router,
+    );
+    expect([...pairs.keys()].sort()).toEqual(
+      [`${hash(1n)}:1`, `${hash(1n)}:3`, `${hash(5n)}:1`].sort(),
+    );
+    expect(pairs.get(`${hash(1n)}:3`)?.payer).toBe("0x" + "b".repeat(40));
+    expect(pairs.get(`${hash(5n)}:1`)).toMatchObject({
+      amountIn: "500",
+      amountOut: "294",
+      routerLogIndex: 2,
+    });
+  });
+
+  it("re-scans a graduated instance once from its graduation block to attribute older swaps", async () => {
+    const instance = { ...graduated(), poolRouterTargetBlock: null };
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: {
+        lastBlockNumber: "300",
+        lastBlockHash: hash(300n),
+        startedFromBlockNumber: "100",
+        updatedAt: new Date().toISOString(),
+      },
+      logs: [poolSwap(150n, 1n, 2), routerSwap(150n, 1n, 5)],
+      hookPool: { poolManager, currency0: instance.addresses.meme },
+      poolRouter: router,
+    });
+    await lane.runOnce();
+    expect(logQueries[0]?.fromBlock).toBe(140n);
+    expect(commits[0]?.poolRouterCoverage).toEqual({
+      instanceIds: [instance.instanceId],
+      // The segment (140..400) already passes the old checkpoint (300).
+      targetBlockNumber: "400",
+    });
+    expect(commits[0]?.events[0]?.args["routerPayer"]).toBe(trader);
+  });
+
+  it("reads no router logs and starts no re-scan without the router", async () => {
+    const instance = { ...graduated(), poolRouterTargetBlock: null };
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: {
+        lastBlockNumber: "300",
+        lastBlockHash: hash(300n),
+        startedFromBlockNumber: "100",
+        updatedAt: new Date().toISOString(),
+      },
+      logs: [poolSwap(350n, 1n, 2), routerSwap(350n, 1n, 5)],
+      hookPool: { poolManager, currency0: instance.addresses.meme },
+    });
+    await lane.runOnce();
+    expect(logQueries[0]?.fromBlock).toBe(301n);
+    expect(logQueries[0]?.routerSwaps).toBeUndefined();
+    expect(commits[0]?.poolRouterCoverage).toBeUndefined();
+    expect(commits[0]?.events.map((event) => event.eventName)).toEqual([
+      "Swap",
+    ]);
+    expect(commits[0]?.events[0]?.args["routerPayer"]).toBeUndefined();
   });
 });

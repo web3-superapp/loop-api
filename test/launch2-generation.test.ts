@@ -191,6 +191,33 @@ describe("Decision 0122 LAUNCH2_LEGACY_FACTORIES", () => {
       { address: legacy.toLowerCase(), generation: "v2" },
     ]);
   });
+
+  it("Decision 0126: hands the router address to the lane only as the configured pair", () => {
+    const base = {
+      DATABASE_URL: "postgres://loop:loop@127.0.0.1:5432/loop",
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH2_INDEXER_ENABLED: "true",
+      HOOKS_LAUNCH_FACTORY_ADDRESS: current,
+      HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+    };
+    expect(
+      loadReconciliationWorkerConfig(base).launch2Indexer?.poolRouterAddress,
+    ).toBeNull();
+    const router = "0xcb022501A427154501aDcE5b6dC8f16674aE8f5D";
+    expect(
+      loadReconciliationWorkerConfig({
+        ...base,
+        LAUNCH2_POOL_ROUTER_ADDRESS: router,
+        LAUNCH2_POOL_ROUTER_CODE_HASH: `0x${"9a".repeat(32)}`,
+      }).launch2Indexer?.poolRouterAddress,
+    ).toBe(router.toLowerCase());
+    expect(() =>
+      loadReconciliationWorkerConfig({
+        ...base,
+        LAUNCH2_POOL_ROUTER_ADDRESS: router,
+      }),
+    ).toThrow(ConfigurationError);
+  });
 });
 
 describe("Decision 0122 zero-holder opening stage", () => {

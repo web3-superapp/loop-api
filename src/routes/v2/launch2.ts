@@ -319,7 +319,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "listV2Launch2MyPoolTrades",
         summary: "List one wallet's official-pool trades of a MEME v2 instance",
-        description: `Decision 0126. The caller's wallet (walletId, required; 404 when it is not the caller's active wallet) — its official-pool swaps the launch2_event lane attributed: each OfficialPoolRouter Swap(poolId, payer, recipient, …) log is paired with the PoolManager Swap of the same pool in the same transaction (the PoolManager sender must be the router, the router log follows it, the input amounts agree); the payer is the trader. Swaps that did not go through the router (the buyback executor, other routers) are never attributed. Newest first; limit <= 50 (default 20). poolTradeCount / lastPoolTradeAt cover all of the wallet's attributed trades. Before graduation the list is empty. ${unavailableNote}`,
+        description: `Decision 0126. The caller's wallet (walletId, required; 404 when it is not one of the caller's wallets) — its official-pool swaps the launch2_event lane attributed: each OfficialPoolRouter Swap(poolId, payer, recipient, …) log is paired with the PoolManager Swap of the same pool in the same transaction (the PoolManager sender must be the router, the router log follows it, the input amounts agree); the payer is the trader. Swaps that did not go through the router (the buyback executor, other routers) are never attributed. Newest first; limit <= 50 (default 20). poolTradeCount / lastPoolTradeAt cover all of the wallet's attributed trades. Before graduation the list is empty. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

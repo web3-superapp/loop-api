@@ -9,6 +9,7 @@ import pg from "pg";
 import {
   createPublicClient,
   createWalletClient,
+  decodeFunctionData,
   encodeFunctionData,
   erc20Abi,
   http,
@@ -45,6 +46,7 @@ import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks
 import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import {
   curveEngineAbi,
+  officialPoolRouterAbi,
   snapshotRegistryAbi,
 } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
 import { createLaunch2Chain } from "../src/integrations/launch2/launch2-chain.js";
@@ -81,6 +83,12 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
  *   official pool id into `launch2_pool_swaps` and the instance `pool`
  *   projection (counts, USD1 volumes, taxes, last price); a reorg rewind
  *   forgets the sell and the lane re-reads it.
+ * - Decision 0126: prepares encode prepare time + 180 s (the quote keeps
+ *   its 60 s); a lane without the router indexes the buy unattributed, the
+ *   lane with the router re-scans from the graduation block once and
+ *   attributes it (and the sell) to the trader from the router's
+ *   Swap(payer); the wallet's pool trades, its pool-trade count, live MEME /
+ *   USD1 balances on the viewer and a pool-only position follow.
  *
  * Skips when anvil / forge / loop-contracts are absent.
  */
@@ -512,8 +520,10 @@ describe.skipIf(skipReason !== null)(
 
     function laneFor(
       repository: ReturnType<typeof createPostgresLaunch2Repository>,
+      poolRouter?: string,
     ) {
       return createLaunch2Lane({
+        ...(poolRouter === undefined ? {} : { poolRouter }),
         repository,
         chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
         chainId: "eip155:97",
@@ -810,6 +820,23 @@ describe.skipIf(skipReason !== null)(
       expect(
         (buyPrepared["quote"] as Record<string, unknown>)["expectedOut"],
       ).toBe(buyQuote["expectedOut"]);
+      // Decision 0126: the quote's freshness stays 60 s; the prepare
+      // re-simulates and encodes prepare time + 180 s.
+      const seconds = (value: unknown) =>
+        BigInt(Math.floor(Date.parse(String(value)) / 1000));
+      expect(
+        seconds(buyQuote["expiresAt"]) - seconds(buyQuote["quotedAt"]),
+      ).toBeLessThanOrEqual(61n);
+      const buyDeadline = seconds(buyIntent["deadline"]);
+      expect(
+        buyDeadline - seconds(buyIntent["createdAt"]),
+      ).toBeGreaterThanOrEqual(179n);
+      expect(seconds(buyIntent["expiresAt"])).toBe(buyDeadline);
+      const buyCall = decodeFunctionData({
+        abi: officialPoolRouterAbi,
+        data: (buyIntent["calldata"] as { data: Hex }).data,
+      });
+      expect(buyCall.args.at(-1)).toBe(buyDeadline);
       const feeVault = deployed.roles["LOOP_FEE_VAULT"] as string;
       const memeBefore = await balanceOf(meme, trader);
       const vaultMemeBefore = await balanceOf(meme, feeVault);
@@ -841,6 +868,59 @@ describe.skipIf(skipReason !== null)(
         true,
       );
       expect(buyTax).toBe(((memeBought + buyTax) * 200n) / 10_000n);
+
+      // Decision 0126: a lane without the router indexes the buy without a
+      // wallet (the dev state of blocks 136098143 / 136098447) ...
+      await chain.mine(3);
+      await catchUp(lane);
+      const unattributed = await pool.query<{ wallet: string | null }>(
+        `select wallet_address as wallet from public.launch2_pool_swaps
+         where instance_id = $1 and not removed`,
+        [instanceId],
+      );
+      expect(unattributed.rows).toEqual([{ wallet: null }]);
+      // ... the lane with the router re-scans from the graduation block once
+      // and attributes it from the router's Swap(payer).
+      const routedLane = laneFor(repository, router);
+      await catchUp(routedLane);
+      const backfilled = await pool.query<{
+        wallet: string | null;
+        recipient: string | null;
+        amount_in: string | null;
+        amount_out: string | null;
+      }>(
+        `select wallet_address as wallet, recipient_address as recipient,
+           router_amount_in::text as amount_in,
+           router_amount_out::text as amount_out
+         from public.launch2_pool_swaps
+         where instance_id = $1 and not removed`,
+        [instanceId],
+      );
+      expect(backfilled.rows).toEqual([
+        {
+          wallet: trader,
+          recipient: trader,
+          amount_in: (50n * wad).toString(10),
+          amount_out: memeBought.toString(10),
+        },
+      ]);
+      const coverage = await pool.query<{
+        target: string | null;
+        complete: boolean;
+      }>(
+        `select pool_router_target_block::text as target,
+           pool_router_complete_at is not null as complete
+         from public.launch2_instances where instance_id = $1`,
+        [instanceId],
+      );
+      expect(coverage.rows[0]?.target).not.toBeNull();
+      expect(coverage.rows[0]?.complete).toBe(true);
+      const routerEvents = await pool.query<{ n: string }>(
+        `select count(*)::text as n from public.launch2_events
+         where instance_id = $1 and event_name = 'RouterSwap' and not removed`,
+        [instanceId],
+      );
+      expect(routerEvents.rows[0]?.n).toBe("1");
 
       // 2. Exact-output sell for 10 USD1 net.
       await refreshNow();
@@ -911,7 +991,7 @@ describe.skipIf(skipReason !== null)(
 
       // 3. The lane indexes both PoolManager Swap logs of the pool id.
       await chain.mine(3);
-      await catchUp(lane);
+      await catchUp(routedLane);
       const swaps = await pool.query<{
         side: string;
         caller_address: string;
@@ -972,6 +1052,64 @@ describe.skipIf(skipReason !== null)(
         parseLaunch2Amount(detail["pool"]?.["sellVolumeUsd1"] as string),
       ).toBe(10n * wad + sellTax);
 
+      // Decision 0126: the wallet's own trades, count and live balances.
+      const ownTrades = await service.listPoolTrades({
+        principal: principal(traderUser),
+        instanceId,
+        walletId,
+      });
+      expect(ownTrades).toMatchObject({
+        walletId,
+        poolTradeCount: "2",
+        lastPoolTradeAt: expect.any(String) as unknown,
+      });
+      expect(
+        (ownTrades["trades"] as Record<string, unknown>[]).map((trade) => [
+          trade["side"],
+          trade["inputToken"],
+          trade["amountIn"],
+          trade["amountOut"],
+        ]),
+      ).toEqual([
+        ["sell", "meme", sellQuote["amountIn"], "10"],
+        ["buy", "usd1", "50", buyQuote["expectedOut"]],
+      ]);
+      const viewed = (
+        await service.getInstance({
+          principal: principal(traderUser),
+          instanceId,
+          walletId,
+        })
+      )["instance"] as Record<string, Record<string, unknown>>;
+      const memeNow = await balanceOf(meme, trader);
+      const usd1Now = await balanceOf(deployed.usd1, trader);
+      expect(viewed["viewer"]).toMatchObject({
+        walletId,
+        balanceStatus: "available",
+        balanceReasonCode: null,
+        poolTradeCount: "2",
+      });
+      expect(parseLaunch2Amount(viewed["viewer"]?.["memeBalance"])).toBe(
+        memeNow,
+      );
+      expect(parseLaunch2Amount(viewed["viewer"]?.["usd1Balance"])).toBe(
+        usd1Now,
+      );
+      // A pool-only trader (no curve trade, no NFT) has a position now.
+      const positions = (
+        await service.listMyPositions({ principal: principal(traderUser) })
+      )["positions"] as Record<string, unknown>[];
+      expect(positions).toHaveLength(1);
+      expect(positions[0]).toMatchObject({
+        instanceId,
+        walletId,
+        stage: "graduated",
+        balanceStatus: "available",
+        poolTradeCount: "2",
+        curve: { bought: "0", sold: "0" },
+      });
+      expect(parseLaunch2Amount(positions[0]?.["memeBalance"])).toBe(memeNow);
+
       // 4. A rewind forgets the sell; the lane re-reads it.
       const checkpoint = await repository.getCheckpoint("eip155:97");
       await repository.commitSegment({
@@ -993,11 +1131,17 @@ describe.skipIf(skipReason !== null)(
         "update public.indexer_checkpoints set last_block_hash = $1 where lane = 'launch2_event'",
         [`0x${"0".repeat(64)}`],
       );
-      expect((await lane.runOnce()).kind).toBe("reorged");
+      expect((await routedLane.runOnce()).kind).toBe("reorged");
       expect((await repository.getInstance(instanceId))?.pool).toMatchObject({
         tradeCount: "2",
         sellCount: "1",
       });
+      const reread = await pool.query<{ wallet: string | null }>(
+        `select wallet_address as wallet from public.launch2_pool_swaps
+         where instance_id = $1 and not removed order by block_number, log_index`,
+        [instanceId],
+      );
+      expect(reread.rows).toEqual([{ wallet: trader }, { wallet: trader }]);
       expect(anvilAccount(0).address).toBeDefined();
     }, 1_800_000);
   },

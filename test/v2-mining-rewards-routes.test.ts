@@ -248,6 +248,53 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
     expect(hourly["claim"]).toMatchObject({ executable: true, latest: null });
   });
 
+  it("Decision 0126: a graduated MEME excluded from a quantity hour reads MINING_ASSET_GRADUATED_BALANCE_PENDING; a valuation hour keeps MINING_ASSET_GRADUATED_UNREADABLE", async () => {
+    const assetId = "eip155:97:0x00000000000000000000000000000000000000e1";
+    const cases: [Record<string, unknown>, string][] = [
+      // Stored before the runner distinguished the cases (quantity hour).
+      [
+        {
+          assetPowerBases: ["quantity"],
+          excludedAssets: [
+            { assetId, reasonCode: "MINING_ASSET_GRADUATED_UNREADABLE" },
+          ],
+        },
+        "MINING_ASSET_GRADUATED_BALANCE_PENDING",
+      ],
+      // Stored by the Decision 0126 runner.
+      [
+        {
+          assetPowerBases: ["quantity"],
+          excludedAssets: [
+            { assetId, reasonCode: "MINING_ASSET_GRADUATED_BALANCE_PENDING" },
+          ],
+        },
+        "MINING_ASSET_GRADUATED_BALANCE_PENDING",
+      ],
+      // A valuation (pre-0123) hour: no post-graduation price existed.
+      [
+        {
+          assetPowerBases: ["valuation"],
+          excludedAssets: [
+            { assetId, reasonCode: "MINING_ASSET_GRADUATED_UNREADABLE" },
+          ],
+        },
+        "MINING_ASSET_GRADUATED_UNREADABLE",
+      ],
+    ];
+    for (const [inputSummary, reasonCode] of cases) {
+      const repository = seededRepository();
+      repository.epochs.splice(0, 1, epochRecord({ inputSummary }));
+      const { app } = await createApp({ repository });
+      const hourly = (await get(app, "/v2/mining/rewards")).json<{
+        hourly: { tracks: { asset: { excludedAssets: unknown[] } } };
+      }>().hourly;
+      expect(hourly.tracks.asset.excludedAssets, reasonCode).toEqual([
+        { assetId, reasonCode },
+      ]);
+    }
+  });
+
   it("shows awaiting_first_settlement with the parameters in force and no growth", async () => {
     const repository = createInMemoryMiningSettlement();
     repository.versions.push(parameterVersion());

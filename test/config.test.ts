@@ -818,6 +818,28 @@ describe("launch chain slot (Decision 0038)", () => {
     ).toThrow(/LAUNCH2_POOL_ROUTER_ADDRESS/);
   });
 
+  it("parses LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (Decision 0126: default 180, 60..600)", () => {
+    expect(loadConfig(validEnvironment()).launch2.tradeDeadlineSeconds).toBe(
+      180,
+    );
+    expect(
+      loadConfig({
+        ...validEnvironment(),
+        LAUNCH2_POOL_TRADE_DEADLINE_SECONDS: "300",
+      }).launch2.tradeDeadlineSeconds,
+    ).toBe(300);
+    for (const value of ["59", "601", "abc"]) {
+      expect(
+        () =>
+          loadConfig({
+            ...validEnvironment(),
+            LAUNCH2_POOL_TRADE_DEADLINE_SECONDS: value,
+          }),
+        value,
+      ).toThrow(/LAUNCH2_POOL_TRADE_DEADLINE_SECONDS/);
+    }
+  });
+
   it("keeps the shared slot without endpoints when the primary chain has none", () => {
     const config = loadConfig(validEnvironment());
     expect(config.launchChain).toEqual({

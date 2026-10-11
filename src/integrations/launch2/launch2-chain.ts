@@ -460,7 +460,7 @@ export function createLaunch2Chain(input: {
       const tokenAbi = memeTokenAbi as Abi;
       const usd1 = await read<string>(
         request.curve,
-        curveEngineAbi as Abi,
+        curveEngineAbi,
         "usd1",
         [],
         at,

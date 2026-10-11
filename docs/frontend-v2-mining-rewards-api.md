@@ -117,7 +117,7 @@ Content-Type: application/json
         "excludedAssets": [
           {
             "assetId": "eip155:97:0x…6666",
-            "reasonCode": "MINING_ASSET_GRADUATED_UNREADABLE"
+            "reasonCode": "MINING_ASSET_GRADUATED_BALANCE_PENDING"
           }
         ]
       }
@@ -421,5 +421,12 @@ Base URL、请求头、错误体与 §1、§6 相同；**没有新增或删除�
 ### 8.4 毕业后的资产轨
 
 launch2 MEME 毕业后不再整段为 0：后端索引 MEME 的 ERC-20 `Transfer`，毕业后的持币数量按链上余额的小时 TWAB × 权重计算。
-`tracks.asset.excludedAssets` 里 `MINING_ASSET_GRADUATED_UNREADABLE` 只会出现在该实例转账覆盖尚未完成之前已结算的小时。
-字段不变。
+`tracks.asset.excludedAssets` 的原因码（决策 0126，字段不变）：
+
+| reasonCode                               | 何时出现                                                                                           | App 文案（建议）                 |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `MINING_ASSET_GRADUATED_BALANCE_PENDING` | 新：数量口径的小时里，该 MEME 已毕业但毕业后的余额追踪（MEME `Transfer` 覆盖）尚未完成。不涉及价格 | 「已毕业，外盘持有数量同步中」   |
+| `MINING_ASSET_GRADUATED_UNREADABLE`      | 旧：只剩 0123 之前按估值（价格）结算、被重放的小时                                                 | 「已毕业，外盘持有数量暂读不到」 |
+
+覆盖完成后的小时不再列出该资产。0126 之前已结算、库里存的是旧码的数量口径小时，接口按新码返回（结算摘要不改写，不进 digest）。
+未知原因码按「暂不计入」兜底。

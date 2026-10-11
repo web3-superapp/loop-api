@@ -1,4 +1,4 @@
-export const latestMigrationName = "000069_mining_and_launch2_followups";
+export const latestMigrationName = "000070_launch2_pool_wallet_attribution";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

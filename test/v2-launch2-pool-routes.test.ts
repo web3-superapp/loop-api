@@ -526,8 +526,26 @@ describe("V2 launch2 official-pool routes (Decision 0124)", () => {
       10n * wad,
       15_523_200_000_000_000_000_000n,
       walletAddress,
-      launch2NowSeconds + 60n,
+      // Decision 0126: the trade deadline (default 180 s), not the quote TTL.
+      launch2NowSeconds + 180n,
     ]);
+    const tradeDeadline = new Date(
+      Number(launch2NowSeconds + 180n) * 1000,
+    ).toISOString();
+    expect(intent["deadline"]).toBe(tradeDeadline);
+    expect(intent["expiresAt"]).toBe(tradeDeadline);
+    expect(payload.quote["deadline"]).toBe(tradeDeadline);
+    expect(payload.quote["expiresAt"]).toBe(tradeDeadline);
+    // Re-simulated at the prepare: the quote pass (full override) and the
+    // signable call (allowance only), both encoding the trade deadline.
+    expect(pool!.calls).toHaveLength(2);
+    for (const call of pool!.calls) {
+      const args = decodeFunctionData({
+        abi: officialPoolRouterAbi,
+        data: call.data as `0x${string}`,
+      }).args;
+      expect(args.at(-1)).toBe(launch2NowSeconds + 180n);
+    }
     // Quote simulation, then the prepare's: allowance overridden, real
     // balance (the approve is pending).
     expect(pool!.calls.at(-1)?.override).toEqual({

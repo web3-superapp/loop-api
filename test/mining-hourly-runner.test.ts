@@ -325,10 +325,11 @@ describe("Decision 0116 runner — inputs", () => {
         assets: [{ ...curveAndTransfers, postGraduation: null }],
       }),
     });
+    // Decision 0126: a quantity hour names the pending balance coverage.
     expect(uncovered.summary["excludedAssets"]).toEqual([
       {
         assetId: ASSET,
-        reasonCode: "MINING_ASSET_GRADUATED_UNREADABLE",
+        reasonCode: "MINING_ASSET_GRADUATED_BALANCE_PENDING",
         from: new Date(Number(graduation) * 1000).toISOString(),
       },
     ]);
@@ -338,7 +339,12 @@ describe("Decision 0116 runner — inputs", () => {
       versions: [version("2", "2026-10-10T00:00:00.000Z", "valuation")],
       facts: facts({ nftOpenings: [], assets: [curveAndTransfers] }),
     });
-    expect(valued.summary["excludedAssets"]).toHaveLength(1);
+    expect(valued.summary["excludedAssets"]).toEqual([
+      expect.objectContaining({
+        assetId: ASSET,
+        reasonCode: "MINING_ASSET_GRADUATED_UNREADABLE",
+      }),
+    ]);
   });
 
   it("Decision 0123: an hour that switches from a valuation version to a quantity version mid-hour reads prices only for the first slice's rule", () => {

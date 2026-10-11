@@ -681,7 +681,10 @@ describe("V2 launch2 routes (Decision 0114)", () => {
       amountIn: "10",
       expectedOut: quote.expectedOut,
       minOut: quote.minOut,
-      deadline,
+      // Decision 0126: the quote's 60 s deadline proves freshness; the
+      // encoded deadline is prepare time + 180 s.
+      deadline: iso(launch2NowSeconds + 180n),
+      expiresAt: iso(launch2NowSeconds + 180n),
       simulation: {
         status: "unavailable",
         reasonCode: "LAUNCH2_APPROVAL_REQUIRED",
@@ -697,7 +700,7 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(decoded.args).toEqual([
       10n * wad,
       parseLaunch2Amount(quote.minOut),
-      launch2NowSeconds + 60n,
+      launch2NowSeconds + 180n,
       [`0x${"99".repeat(32)}`],
     ]);
     expect(JSON.stringify(intent)).not.toMatch(/signature|privateKey/iu);
@@ -709,6 +712,18 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         .intentId,
     ).toBe(intent["intentId"]);
     expect(repository.builds.count).toBe(1);
+    // A quote deadline beyond prepare + 180 s is kept as it is.
+    const later = await post(
+      app,
+      url,
+      { ...body, deadline: iso(launch2NowSeconds + 300n) },
+      s7IdempotencyKey("f"),
+    );
+    expect(later.statusCode).toBe(201);
+    expect(
+      later.json<{ launch2Intent: { deadline: string } }>().launch2Intent
+        .deadline,
+    ).toBe(iso(launch2NowSeconds + 300n));
     // Another order filled first: the fresh quote is below the old minOut.
     const moved = await post(
       app,
