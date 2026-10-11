@@ -78,6 +78,7 @@ const truncateControlPlane = `
     public.hooks_launch_config_rejections,
     public.launch2_snapshot_closures,
     public.launch2_buyback_attempts,
+    public.launch2_pool_swaps,
     public.launch2_snapshot_publications,
     public.launch2_intents,
     public.mining_reward_ledger_events,

@@ -28,6 +28,7 @@ import {
 } from "../../integrations/bsc/tx-builder.js";
 import {
   curveEngineAbi,
+  officialPoolRouterAbi,
   projectNFTAbi,
 } from "../../integrations/launch/hooks-launch-protocol-abi.generated.js";
 import {
@@ -72,11 +73,30 @@ import {
   type Launch2Chain,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
+  type Launch2PoolChain,
+  type Launch2PoolChainState,
   type Launch2PositionRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
   type Launch2ViewerChainState,
 } from "./launch2-ports.js";
+import {
+  launch2PoolAveragePriceE18,
+  launch2PoolId,
+  launch2PoolKey,
+  launch2PoolMaxAmount,
+  launch2PoolMaxIn,
+  launch2PoolMinOut,
+  launch2PoolPriceE18,
+  launch2PoolReasonCodes,
+  launch2PoolTaxBps,
+  launch2PoolTaxOfNet,
+  launch2PoolUnboundedMaxIn,
+  launch2PoolZeroForOne,
+  type Launch2PoolKey,
+  type Launch2PoolMode,
+  type Launch2PoolSide,
+} from "./launch2-pool.js";
 import { deriveLaunch2Stage, launch2EarlyRoundEnd } from "./launch2-stage.js";
 
 /**
@@ -109,6 +129,11 @@ export interface Launch2ServiceDependencies {
   readonly unavailableReason: string | null;
   readonly quoteTtlSeconds: number;
   readonly defaultSlippageBps: number;
+  /**
+   * Decision 0124: the official-pool router reader; null keeps the pool
+   * quote / prepare 503 POOL_ROUTER_NOT_CONFIGURED.
+   */
+  readonly poolChain?: Launch2PoolChain | null;
   readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly logger?: Launch2ServiceLogger;
@@ -594,6 +619,124 @@ function parseTradeBody(body: unknown): TradeBody {
   };
 }
 
+interface PoolRequest {
+  readonly side: Launch2PoolSide;
+  readonly mode: Launch2PoolMode;
+  readonly amount: bigint;
+  readonly slippageBps: number;
+}
+
+interface PoolNumbers {
+  readonly amountIn: bigint;
+  readonly maxIn: bigint;
+  readonly expectedOut: bigint;
+  readonly minOut: bigint;
+  readonly tax: bigint;
+  readonly deadline: bigint;
+}
+
+function parsePoolRequest(input: {
+  readonly side: unknown;
+  readonly mode: unknown;
+  readonly amount: unknown;
+  readonly slippageBps: unknown;
+}): PoolRequest {
+  const { side, mode, slippageBps } = input;
+  if (
+    (side !== "buy" && side !== "sell") ||
+    (mode !== "exactIn" && mode !== "exactOut") ||
+    typeof slippageBps !== "number" ||
+    !Number.isInteger(slippageBps) ||
+    slippageBps < 0 ||
+    slippageBps > 5_000
+  ) {
+    throw V2ApiError.invalidRequest();
+  }
+  const amount = parseLaunch2Amount(input.amount);
+  if (amount === null || amount === 0n || amount > launch2PoolMaxAmount) {
+    refuse("VALIDATION_FAILED", launch2ReasonCodes.amountInvalid);
+  }
+  return { side, mode, amount, slippageBps };
+}
+
+function parsePoolTradeBody(
+  body: unknown,
+): PoolRequest & { readonly walletId: string } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw V2ApiError.invalidRequest();
+  }
+  const value = body as Record<string, unknown>;
+  const allowed = new Set([
+    "walletId",
+    "side",
+    "mode",
+    "amount",
+    "slippageBps",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw V2ApiError.invalidRequest();
+  }
+  const walletId = value["walletId"];
+  if (typeof walletId !== "string" || !isOpaqueId(walletId)) {
+    throw V2ApiError.invalidRequest();
+  }
+  return {
+    walletId,
+    ...parsePoolRequest({
+      side: value["side"],
+      mode: value["mode"],
+      amount: value["amount"],
+      slippageBps: value["slippageBps"],
+    }),
+  };
+}
+
+/** Decision 0124: `swapExactIn` / `swapExactOut` calldata of the router. */
+function encodePoolSwap(input: {
+  readonly mode: Launch2PoolMode;
+  readonly key: Launch2PoolKey;
+  readonly zeroForOne: boolean;
+  readonly amountIn: bigint;
+  readonly expectedOut: bigint;
+  readonly minOut: bigint;
+  readonly maxIn: bigint;
+  readonly recipient: string;
+  readonly deadline: bigint;
+}): string {
+  const key = {
+    currency0: input.key.currency0 as Hex,
+    currency1: input.key.currency1 as Hex,
+    fee: input.key.fee,
+    tickSpacing: input.key.tickSpacing,
+    hooks: input.key.hooks as Hex,
+  };
+  return input.mode === "exactIn"
+    ? encodeFunctionData({
+        abi: officialPoolRouterAbi,
+        functionName: "swapExactIn",
+        args: [
+          key,
+          input.zeroForOne,
+          input.amountIn,
+          input.minOut,
+          input.recipient as Hex,
+          input.deadline,
+        ],
+      })
+    : encodeFunctionData({
+        abi: officialPoolRouterAbi,
+        functionName: "swapExactOut",
+        args: [
+          key,
+          input.zeroForOne,
+          input.expectedOut,
+          input.maxIn,
+          input.recipient as Hex,
+          input.deadline,
+        ],
+      });
+}
+
 export function createUnavailableLaunch2Service(
   reasonCode: string = launch2ReasonCodes.runtimeUnavailable,
 ): Launch2Service {
@@ -950,7 +1093,12 @@ export function createLaunch2Service(
     readonly wallet: AccountWalletRecord;
     readonly writes: BscWriteConfig;
     readonly kind: Launch2IntentKind;
-    readonly state: Launch2ViewerChainState;
+    /** The read block and the instance's USD1 (curve-bound). */
+    readonly state: {
+      readonly usd1: string;
+      readonly blockNumber: bigint;
+      readonly blockHash: string;
+    };
     readonly contract: string;
     readonly data: string;
     readonly approval: {
@@ -965,6 +1113,20 @@ export function createLaunch2Service(
     readonly valueUsd: bigint;
     readonly deadline: bigint;
     readonly gasHint: bigint;
+    /** Decision 0124: the verified pool router, trusted as a target. */
+    readonly verifiedRouter?: string;
+    /**
+     * Decision 0124: a simulation that also runs while the approve is
+     * pending (the allowance overridden in the call); replaces the plain
+     * eth_call + estimate.
+     */
+    readonly simulate?: (approvalPending: boolean) => Promise<{
+      readonly status: "passed" | "reverted" | "unavailable";
+      readonly reasonCode: string | null;
+      readonly gas: bigint | null;
+    }>;
+    /** Extra policy keys stored with the intent (bound by the digest). */
+    readonly policyExtra?: Readonly<Record<string, unknown>>;
   }): Promise<CreateLaunch2IntentRecord> {
     const client = callClient();
     const { wallet, writes } = input;
@@ -984,6 +1146,9 @@ export function createLaunch2Service(
         input.contract,
         ...(input.approval === null ? [] : [input.approval.token]),
       ],
+      ...(input.verifiedRouter === undefined
+        ? {}
+        : { verifiedRouter: input.verifiedRouter }),
     });
     const valueUsd = formatLaunch2Amount(input.valueUsd);
     enforceCanaryCeiling(writes, valueUsd);
@@ -1013,7 +1178,18 @@ export function createLaunch2Service(
     };
     let simulation: { status: string; reasonCode: string | null };
     let gasLimit = input.gasHint;
-    if (approvalTarget !== null) {
+    if (input.simulate !== undefined) {
+      const simulated = await chainRead(() =>
+        (input.simulate as NonNullable<typeof input.simulate>)(
+          approvalTarget !== null,
+        ),
+      );
+      simulation = {
+        status: simulated.status,
+        reasonCode: simulated.reasonCode,
+      };
+      if (simulated.gas !== null) gasLimit = (simulated.gas * 12n) / 10n;
+    } else if (approvalTarget !== null) {
       simulation = {
         status: "unavailable",
         reasonCode: launch2ReasonCodes.approvalRequired,
@@ -1107,6 +1283,7 @@ export function createLaunch2Service(
       valueUsd,
       priceSource: "usd1_par",
       simulation,
+      ...input.policyExtra,
     };
     const binding = {
       version: "launch2IntentV1",
@@ -1156,13 +1333,16 @@ export function createLaunch2Service(
     });
   }
 
-  async function createIntent(
+  async function createIntentRecord(
     principal: AuthenticatedLoopPrincipal,
     idempotencyKey: string,
     requestSha256: string,
     writes: BscWriteConfig,
     build: () => Promise<CreateLaunch2IntentRecord>,
-  ): Promise<Resource> {
+  ): Promise<{
+    readonly record: Launch2IntentRecord;
+    readonly resource: Resource;
+  }> {
     try {
       const outcome = await repository().createIntent({
         ownerUserId: principal.userId,
@@ -1176,25 +1356,373 @@ export function createLaunch2Service(
             : dailyCanaryAdmission(writes, valueUsd, now());
         },
       });
-      return projectLaunch2Intent(outcome.intent, now());
+      return {
+        record: outcome.intent,
+        resource: projectLaunch2Intent(outcome.intent, now()),
+      };
     } catch (error) {
       return translate(error);
     }
   }
 
+  async function createIntent(
+    principal: AuthenticatedLoopPrincipal,
+    idempotencyKey: string,
+    requestSha256: string,
+    writes: BscWriteConfig,
+    build: () => Promise<CreateLaunch2IntentRecord>,
+  ): Promise<Resource> {
+    return (
+      await createIntentRecord(
+        principal,
+        idempotencyKey,
+        requestSha256,
+        writes,
+        build,
+      )
+    ).resource;
+  }
+
+  function poolChain(): Launch2PoolChain {
+    if (deps.poolChain === undefined || deps.poolChain === null) {
+      return unavailableWith(launch2PoolReasonCodes.routerNotConfigured);
+    }
+    return deps.poolChain;
+  }
+
+  /**
+   * Decision 0124: one official-pool quote at one block — the read-model
+   * stage must be `graduated`, the router verified by code hash, the
+   * PoolKey rebuilt from the hook and checked against `officialPoolId`,
+   * then the router call simulated from the wallet with the input token's
+   * balance and allowance overridden in the call only.
+   */
+  async function poolQuoteAt(
+    record: Launch2InstanceRecord,
+    wallet: AccountWalletRecord,
+    request: PoolRequest,
+  ): Promise<{
+    readonly resource: Resource;
+    readonly state: Launch2PoolChainState;
+    readonly key: Launch2PoolKey;
+    readonly zeroForOne: boolean;
+    readonly router: string;
+    readonly numbers: PoolNumbers;
+  }> {
+    if (record.holdReason !== null) {
+      refuse("DATA_STALE", launch2ReasonCodes.instancePaused, {
+        holdReason: record.holdReason,
+      });
+    }
+    const stage = stageOf(record, nowSeconds()).stage;
+    const graduation = record.graduation;
+    if (stage !== "graduated" || graduation === null) {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.notGraduated, {
+        stage,
+      });
+    }
+    const pool = poolChain();
+    const check = await chainRead(() => pool.verifyRouter());
+    if (check.status !== "ok") return unavailableWith(check.reasonCode);
+    const address = wallet.address.toLowerCase();
+    const state = await chainRead(() =>
+      pool.readPoolState({
+        hook: record.addresses.hook,
+        curve: record.addresses.curve,
+        meme: record.addresses.meme,
+        poolId: graduation.poolId,
+        wallet: address,
+      }),
+    );
+    if (state.hookPoolManager !== check.poolManager) {
+      return unavailableWith(launch2PoolReasonCodes.routerManagerMismatch);
+    }
+    const key = launch2PoolKey({
+      meme: record.addresses.meme,
+      usd1: state.curveUsd1,
+      hook: record.addresses.hook,
+    });
+    if (
+      key.currency0 !== state.currency0 ||
+      key.currency1 !== state.currency1 ||
+      launch2PoolId(key) !== graduation.poolId.toLowerCase()
+    ) {
+      return unavailableWith(launch2PoolReasonCodes.keyMismatch);
+    }
+    const meme = record.addresses.meme.toLowerCase();
+    const zeroForOne = launch2PoolZeroForOne(key, request.side, meme);
+    const memeIsCurrency0 = key.currency0 === meme;
+    const chainNow =
+      state.blockTimestamp > nowSeconds() ? state.blockTimestamp : nowSeconds();
+    const deadline =
+      chainNow + BigInt(Math.min(deps.quoteTtlSeconds, maximumDeadlineSeconds));
+    const inputToken = request.side === "buy" ? state.curveUsd1 : meme;
+    const pullAmount =
+      request.mode === "exactIn" ? request.amount : launch2PoolUnboundedMaxIn;
+    const data = encodePoolSwap({
+      mode: request.mode,
+      key,
+      zeroForOne,
+      amountIn: request.amount,
+      expectedOut: request.amount,
+      minOut: 0n,
+      maxIn: launch2PoolUnboundedMaxIn,
+      recipient: address,
+      deadline,
+    });
+    const simulated = await chainRead(() =>
+      pool.simulate({
+        blockNumber: state.blockNumber,
+        from: address,
+        data,
+        override: {
+          token: inputToken,
+          balance: pullAmount,
+          allowance: pullAmount,
+        },
+      }),
+    );
+    if (simulated.status === "override_unsupported") {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteUnavailable, {
+        revertReason: "STATE_OVERRIDE_UNSUPPORTED",
+      });
+    }
+    if (simulated.status === "reverted") {
+      const name = simulated.errorName;
+      if (name === "InsufficientOutput") {
+        refuse(
+          "VALIDATION_FAILED",
+          launch2PoolReasonCodes.insufficientLiquidity,
+        );
+      }
+      if (name === "InvalidSwapDelta") {
+        refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteZero);
+      }
+      if (name === "InvalidAmount") {
+        refuse("VALIDATION_FAILED", launch2ReasonCodes.amountInvalid);
+      }
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteUnavailable, {
+        revertReason: name ?? "UNKNOWN",
+      });
+    }
+    const amountIn =
+      request.mode === "exactIn" ? request.amount : simulated.returned;
+    const expectedOut =
+      request.mode === "exactIn" ? simulated.returned : request.amount;
+    if (expectedOut === 0n || amountIn === 0n) {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteZero);
+    }
+    const maxIn =
+      request.mode === "exactIn"
+        ? amountIn
+        : launch2PoolMaxIn(amountIn, request.slippageBps);
+    const minOut =
+      request.mode === "exactIn"
+        ? launch2PoolMinOut(expectedOut, request.slippageBps)
+        : expectedOut;
+    const tax = launch2PoolTaxOfNet(expectedOut, request.mode);
+    const usd1Side = request.side === "buy" ? amountIn : expectedOut;
+    const memeSide = request.side === "buy" ? expectedOut : amountIn;
+    const inputBalance =
+      request.side === "buy" ? state.usd1Balance : state.memeBalance;
+    const numbers: PoolNumbers = {
+      amountIn,
+      maxIn,
+      expectedOut,
+      minOut,
+      tax,
+      deadline,
+    };
+    const resource = Object.freeze({
+      instanceId: record.instanceId,
+      walletId: wallet.walletId,
+      venue: "official_pool",
+      side: request.side,
+      mode: request.mode,
+      stage: "graduated",
+      requestedAmount: formatLaunch2Amount(request.amount),
+      amountIn: formatLaunch2Amount(amountIn),
+      maxIn: formatLaunch2Amount(maxIn),
+      expectedOut: formatLaunch2Amount(expectedOut),
+      minOut: formatLaunch2Amount(minOut),
+      slippageBps: request.slippageBps,
+      taxBps: Number(launch2PoolTaxBps),
+      taxAmount: formatLaunch2Amount(tax),
+      taxToken: request.side === "buy" ? "meme" : "usd1",
+      taxUsd1: formatLaunch2Amount(request.side === "sell" ? tax : 0n),
+      priceBeforeUsd1: formatLaunch2Amount(
+        launch2PoolPriceE18(state.sqrtPriceX96, memeIsCurrency0),
+      ),
+      averagePriceUsd1: formatLaunch2Amount(
+        launch2PoolAveragePriceE18(usd1Side, memeSide),
+      ),
+      balance: Object.freeze({
+        usd1: formatLaunch2Amount(state.usd1Balance),
+        meme: formatLaunch2Amount(state.memeBalance),
+      }),
+      exceedsBalance: maxIn > inputBalance,
+      router: pool.router,
+      poolId: graduation.poolId.toLowerCase(),
+      poolKey: key,
+      zeroForOne,
+      deadline: isoOf(deadline),
+      expiresAt: isoOf(deadline),
+      quotedAt: now().toISOString(),
+      quotedAtBlock: state.blockNumber.toString(10),
+      basis: Object.freeze({
+        blockNumber: state.blockNumber.toString(10),
+        blockHash: state.blockHash,
+      }),
+    });
+    return {
+      resource,
+      state,
+      key,
+      zeroForOne,
+      router: pool.router,
+      numbers,
+    };
+  }
+
   return Object.freeze<Launch2Service>({
-    poolQuote: () =>
-      Promise.reject(
-        V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
-          reasonCode: "POOL_ROUTER_NOT_CONFIGURED",
-        }),
-      ),
-    preparePoolTrade: () =>
-      Promise.reject(
-        V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
-          reasonCode: "POOL_ROUTER_NOT_CONFIGURED",
-        }),
-      ),
+    async poolQuote(input) {
+      const record = await visibleInstance(input.instanceId);
+      const request = parsePoolRequest({
+        side: input.side,
+        mode: input.mode,
+        amount: input.amount,
+        slippageBps:
+          input.slippageBps === undefined
+            ? deps.defaultSlippageBps
+            : typeof input.slippageBps === "string" &&
+                /^(0|[1-9][0-9]{0,3})$/u.test(input.slippageBps)
+              ? Number(input.slippageBps)
+              : Number.NaN,
+      });
+      const wallet = await walletFor(input.principal, input.walletId, true);
+      if (wallet === null) throw V2ApiError.notFound();
+      const priced = await poolQuoteAt(record, wallet, request);
+      return Object.freeze({
+        quote: priced.resource,
+        contractVersion: v2ContractVersion,
+      });
+    },
+
+    async preparePoolTrade(input) {
+      const writes = writesOrUnavailable();
+      const body = parsePoolTradeBody(input.body);
+      const record = await visibleInstance(input.instanceId);
+      const wallet = await signingWallet(input.principal, body.walletId);
+      const requestSha256 = requestDigest([
+        record.instanceId,
+        wallet.walletId,
+        "official_pool",
+        body.side,
+        body.mode,
+        body.amount.toString(10),
+        String(body.slippageBps),
+      ]);
+      const intent = await createIntentRecord(
+        input.principal,
+        input.idempotencyKey,
+        requestSha256,
+        writes,
+        async () => {
+          const priced = await poolQuoteAt(record, wallet, body);
+          const { numbers, state, key, zeroForOne, router } = priced;
+          const inputBalance =
+            body.side === "buy" ? state.usd1Balance : state.memeBalance;
+          if (numbers.maxIn > inputBalance) {
+            refuse(
+              "INSUFFICIENT_BALANCE",
+              body.side === "buy"
+                ? launch2ReasonCodes.usd1Insufficient
+                : launch2ReasonCodes.memeInsufficient,
+              {
+                maxAmountIn: formatLaunch2Amount(inputBalance),
+                requiredAmountIn: formatLaunch2Amount(numbers.maxIn),
+              },
+            );
+          }
+          const address = wallet.address.toLowerCase();
+          const data = encodePoolSwap({
+            mode: body.mode,
+            key,
+            zeroForOne,
+            amountIn: numbers.amountIn,
+            expectedOut: numbers.expectedOut,
+            minOut: numbers.minOut,
+            maxIn: numbers.maxIn,
+            recipient: address,
+            deadline: numbers.deadline,
+          });
+          const inputToken =
+            body.side === "buy" ? state.curveUsd1 : record.addresses.meme;
+          const pool = poolChain();
+          const call = (approvalPending: boolean) => ({
+            blockNumber: state.blockNumber,
+            from: address,
+            data,
+            override: approvalPending
+              ? { token: inputToken, balance: null, allowance: numbers.maxIn }
+              : null,
+          });
+          const kind = body.side === "buy" ? "pool_buy" : "pool_sell";
+          return sealIntent({
+            principal: input.principal,
+            record,
+            wallet,
+            writes,
+            kind,
+            state: {
+              usd1: state.curveUsd1,
+              blockNumber: state.blockNumber,
+              blockHash: state.blockHash,
+            },
+            contract: router,
+            data,
+            approval: { token: inputToken, amount: numbers.maxIn },
+            amountIn: numbers.maxIn,
+            expectedOut: numbers.expectedOut,
+            minOut: numbers.minOut,
+            tax: body.side === "sell" ? numbers.tax : 0n,
+            refund: 0n,
+            valueUsd: body.side === "buy" ? numbers.maxIn : numbers.expectedOut,
+            deadline: numbers.deadline,
+            gasHint: fallbackGas[kind],
+            verifiedRouter: router,
+            simulate: async (approvalPending) => {
+              const simulated = await pool.simulate(call(approvalPending));
+              if (simulated.status !== "ok") {
+                const reverted = simulated.status === "reverted";
+                return {
+                  status: reverted ? "reverted" : "unavailable",
+                  reasonCode: reverted
+                    ? launch2ReasonCodes.simulationReverted
+                    : launch2ReasonCodes.simulationUnavailable,
+                  gas: null,
+                };
+              }
+              const gas = await pool.estimateGas(call(approvalPending));
+              return gas === null
+                ? {
+                    status: "unavailable",
+                    reasonCode: launch2ReasonCodes.simulationUnavailable,
+                    gas: null,
+                  }
+                : { status: "passed", reasonCode: null, gas };
+            },
+            policyExtra: { poolQuote: priced.resource },
+          });
+        },
+      );
+      return Object.freeze({
+        launch2Intent: intent.resource["launch2Intent"],
+        quote: intent.record.policy["poolQuote"],
+        contractVersion: v2ContractVersion,
+      });
+    },
+
     async listInstances(input) {
       const store = repository();
       const stage =
@@ -1366,6 +1894,32 @@ export function createLaunch2Service(
                   transactionHash: graduation.transactionHash,
                 }),
           buyback: buybackSummaryOf(record, latest[0] ?? null),
+          pool:
+            graduation === null
+              ? null
+              : Object.freeze({
+                  poolId: graduation.poolId,
+                  router: deps.poolChain?.router ?? null,
+                  tradeCount: record.pool.tradeCount,
+                  buyCount: record.pool.buyCount,
+                  sellCount: record.pool.sellCount,
+                  buyVolumeUsd1: formatLaunch2Amount(
+                    BigInt(record.pool.buyVolumeUsd1),
+                  ),
+                  sellVolumeUsd1: formatLaunch2Amount(
+                    BigInt(record.pool.sellVolumeUsd1),
+                  ),
+                  volume24hUsd1: formatLaunch2Amount(
+                    BigInt(record.pool.volume24hUsd1),
+                  ),
+                  taxUsd1: formatLaunch2Amount(BigInt(record.pool.taxUsd1)),
+                  taxMeme: formatLaunch2Amount(BigInt(record.pool.taxMeme)),
+                  lastPriceUsd1:
+                    record.pool.lastPriceE18 === null
+                      ? null
+                      : formatLaunch2Amount(BigInt(record.pool.lastPriceE18)),
+                  lastTradeAt: record.pool.lastTradeAt,
+                }),
           recentTrades: trades.map(tradeOf),
           viewer:
             wallet === null

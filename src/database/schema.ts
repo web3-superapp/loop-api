@@ -1,4 +1,4 @@
-export const latestMigrationName = "000067_mining_quantity_weighting";
+export const latestMigrationName = "000068_launch2_official_pool_trades";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -155,6 +155,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_snapshot_closures",
   "public.launch2_snapshot_publication_releases",
   "public.launch2_buyback_attempts",
+  "public.launch2_pool_swaps",
   "public.launch_project_rejections",
   "public.hooks_launch_config_rejections",
   "public.mining_parameter_versions",

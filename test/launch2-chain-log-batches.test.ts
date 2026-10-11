@@ -5,7 +5,10 @@ import {
   createLaunch2Chain,
   launch2DefaultMaxAddressesPerLogQuery,
 } from "../src/integrations/launch2/launch2-chain.js";
-import { snapshotRegistryAbi } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
+import {
+  poolManagerAbi,
+  snapshotRegistryAbi,
+} from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
 
 /**
  * Public BSC Testnet RPCs refuse `eth_getLogs` with ≥ 10 filter addresses
@@ -109,5 +112,81 @@ describe("launch2 chain reader splits the eth_getLogs address filter", () => {
       toBlock: 2n,
     });
     expect(calls).toBe(1);
+  });
+  it("asks the PoolManager for Swap logs by pool id only (topic1), in batches, decoded as Swap (Decision 0124)", async () => {
+    const poolManager = `0x${"99".repeat(20)}`;
+    const ids = Array.from(
+      { length: 10 },
+      (_, i) => `0x${(i + 1).toString(16).padStart(64, "0")}`,
+    );
+    const requests: { address: unknown; topics: unknown }[] = [];
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      transport: custom({
+        request: ({ method, params }: { method: string; params?: unknown }) => {
+          if (method !== "eth_getLogs") throw new Error(`unexpected ${method}`);
+          const filter = (
+            params as [{ address: unknown; topics?: unknown }]
+          )[0];
+          requests.push({ address: filter.address, topics: filter.topics });
+          if (requests.length !== 1) return Promise.resolve([]);
+          return Promise.resolve([
+            {
+              address: poolManager,
+              topics: encodeEventTopics({
+                abi: poolManagerAbi,
+                eventName: "Swap",
+                args: {
+                  id: ids[0] as Hex,
+                  sender: `0x${"55".repeat(20)}`,
+                },
+              }) as Hex[],
+              data: encodeAbiParameters(
+                [
+                  { type: "int128" },
+                  { type: "int128" },
+                  { type: "uint160" },
+                  { type: "uint128" },
+                  { type: "int24" },
+                  { type: "uint24" },
+                ],
+                [-5n, 7n, 2n ** 96n, 1n, -3, 2500],
+              ),
+              blockNumber: "0x10",
+              blockHash,
+              transactionHash: `0x${"ab".repeat(32)}`,
+              transactionIndex: "0x0",
+              logIndex: "0x1",
+              removed: false,
+            },
+          ]);
+        },
+      }),
+    });
+    const result = await chain.getLogs({
+      roles: new Map(),
+      fromBlock: 1n,
+      toBlock: 20n,
+      poolSwaps: new Map([[poolManager, ids]]),
+    });
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(String(request.address).toLowerCase()).toBe(poolManager);
+    }
+    const topics = requests.map((request) => request.topics as unknown[]);
+    expect((topics[0]?.[1] as string[]).length).toBe(8);
+    expect((topics[1]?.[1] as string[]).length).toBe(2);
+    expect(result.logs).toEqual([
+      expect.objectContaining({
+        contractAddress: poolManager,
+        eventName: "Swap",
+        args: expect.objectContaining({
+          id: ids[0],
+          amount0: "-5",
+          amount1: "7",
+          tick: "-3",
+        }) as unknown,
+      }),
+    ]);
   });
 });

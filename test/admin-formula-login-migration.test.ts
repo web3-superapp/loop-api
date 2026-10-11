@@ -54,7 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000067_mining_quantity_weighting");
+    expect(latestMigrationName).toBe("000068_launch2_official_pool_trades");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

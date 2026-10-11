@@ -4,6 +4,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { decodeFunctionData } from "viem";
+
 import {
   Launch2IdempotencyConflictError,
   type CreateLaunch2IntentRecord,
@@ -11,6 +13,10 @@ import {
   type Launch2Chain,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
+  type Launch2PoolCall,
+  type Launch2PoolChain,
+  type Launch2PoolRouterCheck,
+  type Launch2PoolSimulation,
   type Launch2PositionRecord,
   type Launch2Repository,
   type Launch2SnapshotMemberRecord,
@@ -18,6 +24,11 @@ import {
   type Launch2ViewerChainState,
 } from "../../src/features/launch2/launch2-ports.js";
 import { launch2ReserveAt } from "../../src/features/launch2/launch2-curve-math.js";
+import {
+  launch2PoolId,
+  launch2PoolKey,
+} from "../../src/features/launch2/launch2-pool.js";
+import { officialPoolRouterAbi } from "../../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
 import { memeUsd1 } from "./meme-service-fakes.js";
 
 export const launch2Factory = "0x5555555555555555555555555555555555555555";
@@ -113,6 +124,18 @@ export function instanceFixture(
     openedWithoutHolders: null,
     graduation: null,
     buyback: { paused: false, count: "0", usd1: "0", meme: "0", lastAt: null },
+    pool: {
+      tradeCount: "0",
+      buyCount: "0",
+      sellCount: "0",
+      buyVolumeUsd1: "0",
+      sellVolumeUsd1: "0",
+      volume24hUsd1: "0",
+      taxUsd1: "0",
+      taxMeme: "0",
+      lastPriceE18: null,
+      lastTradeAt: null,
+    },
     buybackKeeper: null,
     registeredAt: new Date(
       Number(launch2NowSeconds - 86_400n) * 1000,
@@ -306,6 +329,7 @@ export function createFakeLaunch2Chain(
     getLogs: unused,
     readSnapshotPublication: unused,
     recoverSnapshotSigners: unused,
+    readHookPool: unused,
     readViewerState: () => {
       state.viewerReads += 1;
       if (state.failViewer) return Promise.reject(new Error("rpc down"));
@@ -334,5 +358,175 @@ export function createFakeLaunch2Chain(
         nextOrderAmountIn: 100n * wad,
         nextOrderExecutable: false,
       }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Decision 0124: official-pool fixtures.
+// ---------------------------------------------------------------------------
+
+export const launch2PoolRouter = "0x9999999999999999999999999999999999999999";
+export const launch2PoolRouterCodeHash = `0x${"cd".repeat(32)}`;
+export const launch2PoolManager = "0x8888888888888888888888888888888888888888";
+/** USD1 (0x22…) sorts before MEME (0xaa…6666): currency0 = USD1. */
+export const launch2PoolSqrtPriceX96 = 40n * 2n ** 96n;
+/** 1 USD1 buys 1,600 MEME at the fixture price (0.000625 USD1 / MEME). */
+export const launch2PoolMemePerUsd1 = 1_600n;
+
+export const launch2PoolEnv = Object.freeze({
+  LAUNCH2_POOL_ROUTER_ADDRESS: launch2PoolRouter,
+  LAUNCH2_POOL_ROUTER_CODE_HASH: launch2PoolRouterCodeHash,
+});
+
+export function graduatedInstance(
+  overrides: Partial<Launch2InstanceRecord> = {},
+): Launch2InstanceRecord {
+  const base = instanceFixture({
+    nftSaleStart: new Date(
+      Number(launch2NowSeconds - 604_800n - 7_200n) * 1000,
+    ).toISOString(),
+  });
+  const key = launch2PoolKey({
+    meme: base.addresses.meme,
+    usd1: memeUsd1,
+    hook: base.addresses.hook,
+  });
+  return instanceFixture({
+    ...base,
+    snapshot: {
+      root: `0x${"33".repeat(32)}`,
+      dataHash: `0x${"44".repeat(32)}`,
+      cutoffBlock: "500",
+      cutoffBlockHash: `0x${"55".repeat(32)}`,
+      publishedAt: new Date(
+        Number(launch2NowSeconds - 7_000n) * 1000,
+      ).toISOString(),
+      publishedBlock: "510",
+      transactionHash: `0x${"66".repeat(32)}`,
+      verification: "verified",
+      memberCount: 2,
+      signers: null,
+    },
+    soldSupply: (800_000_000n * wad).toString(10),
+    stage: "graduated",
+    graduation: {
+      graduatedAt: new Date(
+        Number(launch2NowSeconds - 1_000n) * 1000,
+      ).toISOString(),
+      blockNumber: "4000",
+      transactionHash: `0x${"67".repeat(32)}`,
+      poolId: launch2PoolId(key),
+    },
+    ...overrides,
+  });
+}
+
+export interface FakeLaunch2PoolState {
+  routerCheck: Launch2PoolRouterCheck;
+  failRead: boolean;
+  /** Overrides the computed simulation outcome. */
+  simulation: Launch2PoolSimulation | null;
+  /** The prepare's simulation (real balance) reverts. */
+  prepareReverts: boolean;
+  estimate: bigint | null;
+  usd1Balance: bigint;
+  memeBalance: bigint;
+  hookPoolManager: string;
+  currency0: string | null;
+  calls: Launch2PoolCall[];
+  estimates: Launch2PoolCall[];
+}
+
+export function defaultPoolState(
+  overrides: Partial<FakeLaunch2PoolState> = {},
+): FakeLaunch2PoolState {
+  return {
+    routerCheck: { status: "ok", poolManager: launch2PoolManager },
+    failRead: false,
+    simulation: null,
+    prepareReverts: false,
+    estimate: 180_000n,
+    usd1Balance: 1_000n * wad,
+    memeBalance: 2_000_000n * wad,
+    hookPoolManager: launch2PoolManager,
+    currency0: null,
+    calls: [],
+    estimates: [],
+    ...overrides,
+  };
+}
+
+/**
+ * A pool at a constant price (no impact): exactIn returns the net output
+ * after the 2 % tax; exactOut returns the input for the net output.
+ */
+export function createFakeLaunch2PoolChain(
+  state: FakeLaunch2PoolState,
+): Launch2PoolChain {
+  return {
+    router: launch2PoolRouter,
+    verifyRouter: () => Promise.resolve(state.routerCheck),
+    readPoolState: (input) => {
+      if (state.failRead) return Promise.reject(new Error("rpc down"));
+      const key = launch2PoolKey({
+        meme: input.meme,
+        usd1: memeUsd1,
+        hook: input.hook,
+      });
+      return Promise.resolve({
+        blockNumber: 5_000n,
+        blockHash: `0x${"77".repeat(32)}`,
+        blockTimestamp: launch2NowSeconds,
+        hookPoolManager: state.hookPoolManager,
+        currency0: state.currency0 ?? key.currency0,
+        currency1: key.currency1,
+        curveUsd1: memeUsd1,
+        sqrtPriceX96: launch2PoolSqrtPriceX96,
+        usd1Balance: state.usd1Balance,
+        memeBalance: state.memeBalance,
+        usd1Allowance: 0n,
+        memeAllowance: 0n,
+      });
+    },
+    simulate: (call) => {
+      state.calls.push(call);
+      if (state.simulation !== null) return Promise.resolve(state.simulation);
+      if (
+        state.prepareReverts &&
+        (call.override === null || call.override.balance === null)
+      ) {
+        return Promise.resolve({
+          status: "reverted",
+          errorName: "ERC20InsufficientBalance",
+        });
+      }
+      const decoded = decodeFunctionData({
+        abi: officialPoolRouterAbi,
+        data: call.data as `0x${string}`,
+      });
+      const zeroForOne = decoded.args[1];
+      const amount = decoded.args[2] as bigint;
+      // zeroForOne = USD1 in (buy).
+      const grossOf = (input: bigint) =>
+        zeroForOne
+          ? input * launch2PoolMemePerUsd1
+          : input / launch2PoolMemePerUsd1;
+      if (decoded.functionName === "swapExactIn") {
+        const gross = grossOf(amount);
+        return Promise.resolve({
+          status: "ok",
+          returned: gross - (gross * 200n) / 10_000n,
+        });
+      }
+      const gross = amount + (amount * 200n + 9_799n) / 9_800n;
+      const input = zeroForOne
+        ? (gross + launch2PoolMemePerUsd1 - 1n) / launch2PoolMemePerUsd1
+        : gross * launch2PoolMemePerUsd1;
+      return Promise.resolve({ status: "ok", returned: input });
+    },
+    estimateGas: (call) => {
+      state.estimates.push(call);
+      return Promise.resolve(state.estimate);
+    },
   };
 }
