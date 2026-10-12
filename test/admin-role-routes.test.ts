@@ -951,6 +951,120 @@ describe("Operator console role separation (Decision 0109)", () => {
     }
   });
 
+  it("binds an operator by the App-visible LOOP ID (Decision 0130)", async () => {
+    const harness = await createHarness();
+    harness.accounts.loopIds.set("LOOP-GBZM3XAT", harness.reviewerUserId);
+    harness.accounts.loopIds.set("LOOP-ACCEPT01", harness.acceptorUserId);
+    const admin = (await login(harness.app, "operator", bootstrapPassword))
+      .cookie;
+    async function create(payload: Record<string, unknown>) {
+      return harness.app.inject({
+        method: "POST",
+        url: "/admin/v1/accounts",
+        headers: { cookie: admin, "idempotency-key": randomUUID() },
+        payload: { password: accountPassword, ...payload },
+      });
+    }
+    // Shape and role rules first: nothing is resolved for these.
+    expectError(
+      await create({
+        username: "rev-bad",
+        role: "reviewer",
+        operatorLoopId: "LOOP-123",
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+    expectError(
+      await create({
+        username: "aud-loop",
+        role: "auditor",
+        operatorLoopId: "LOOP-GBZM3XAT",
+      }),
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED",
+    );
+    const unknown = await create({
+      username: "rev-unknown",
+      role: "reviewer",
+      operatorLoopId: "loop-zzzzzzzz",
+    });
+    expectError(
+      unknown,
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND",
+    );
+    expect(unknown.json()).toMatchObject({
+      detailsSafe: { operatorLoopId: "LOOP-ZZZZZZZZ" },
+    });
+    expectError(
+      await create({
+        username: "rev-mismatch",
+        role: "reviewer",
+        operatorLoopId: "LOOP-GBZM3XAT",
+        operatorUserId: harness.acceptorUserId,
+      }),
+      422,
+      "VALIDATION_FAILED",
+      "ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH",
+    );
+    expect(harness.accounts.accounts.size).toBe(0);
+    // Any case; resolves to the user ID, which stays the binding.
+    const created = await create({
+      username: "rev-loop",
+      role: "reviewer",
+      operatorLoopId: "loop-gbzm3xat",
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({
+      account: {
+        operatorUserId: harness.reviewerUserId,
+        operator: { loopId: "LOOP-GBZM3XAT", enabled: true },
+      },
+    });
+    // Both given and naming the same user is accepted.
+    const both = await create({
+      username: "acc-both",
+      role: "testnet_acceptor",
+      operatorLoopId: "LOOP-ACCEPT01",
+      operatorUserId: harness.acceptorUserId,
+    });
+    expect(both.statusCode, both.body).toBe(201);
+    expect(both.json()).toMatchObject({
+      account: {
+        operatorUserId: harness.acceptorUserId,
+        operator: { loopId: "LOOP-ACCEPT01" },
+      },
+    });
+    // One active account per LOOP user, whichever identity was typed.
+    expectError(
+      await create({
+        username: "rev-again",
+        role: "testnet_acceptor",
+        operatorUserId: harness.reviewerUserId,
+      }),
+      409,
+      "ADMIN_CONFLICT",
+      "ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND",
+    );
+    const list = await harness.app.inject({
+      method: "GET",
+      url: "/admin/v1/accounts",
+      headers: { cookie: admin },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    const items = list.json<{
+      items: { username: string; operator: { loopId: string } | null }[];
+    }>().items;
+    expect(
+      Object.fromEntries(
+        items.map((entry) => [entry.username, entry.operator?.loopId ?? null]),
+      ),
+    ).toEqual({ "rev-loop": "LOOP-GBZM3XAT", "acc-both": "LOOP-ACCEPT01" });
+  });
+
   it("forces a first password change, then ends the old session", async () => {
     const harness = await createHarness();
     await harness.accounts.seed({

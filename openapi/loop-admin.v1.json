@@ -15634,8 +15634,12 @@
                               {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["enabled", "grants"],
+                                "required": ["loopId", "enabled", "grants"],
                                 "properties": {
+                                  "loopId": {
+                                    "type": ["string", "null"],
+                                    "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                  },
                                   "enabled": {
                                     "type": ["boolean", "null"],
                                     "description": "null: no ops_operators row."
@@ -16027,7 +16031,7 @@
         "operationId": "createAdminAccount",
         "summary": "Create a console account",
         "tags": ["admin-accounts"],
-        "description": "Decision 0109 (`accounts.manage`: platform_admin). The role is fixed for the account's life. reviewer / testnet_acceptor need `operatorUserId` (a LOOP user; 422 ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND) and, in the same transaction, get that user's ops_operators row enabled and its ops_grants replaced by the role's (reviewer: launch.read, launch.approve, audit.read; testnet_acceptor: launch.read, testnet.read, testnet.accept, audit.read; optionally scoped to `projectIds`), with an ops_audit row. One active account per LOOP user (409 ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND). Username taken (any case, or the bootstrap name) → 409 ADMIN_ACCOUNT_USERNAME_TAKEN. The holder must change the password at first login. 201 on create; an exact Idempotency-Key replay is 200 with `replayed: true`.",
+        "description": "Decision 0109 (`accounts.manage`: platform_admin). The role is fixed for the account's life. reviewer / testnet_acceptor need `operatorUserId` (a LOOP user; 422 ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND) or, Decision 0130, `operatorLoopId` (the App-visible LOOP ID; 422 ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND; both given and naming different users → 422 ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH) and, in the same transaction, get that user's ops_operators row enabled and its ops_grants replaced by the role's (reviewer: launch.read, launch.approve, audit.read; testnet_acceptor: launch.read, testnet.read, testnet.accept, audit.read; optionally scoped to `projectIds`), with an ops_audit row. One active account per LOOP user (409 ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND). Username taken (any case, or the bootstrap name) → 409 ADMIN_ACCOUNT_USERNAME_TAKEN. The holder must change the password at first login. 201 on create; an exact Idempotency-Key replay is 200 with `replayed: true`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -16062,7 +16066,17 @@
                       { "type": "string", "format": "uuid" },
                       { "type": "null" }
                     ],
-                    "description": "Required for reviewer / testnet_acceptor (the LOOP user that holds the ops grants); refused for other roles. One active account per LOOP user."
+                    "description": "reviewer / testnet_acceptor need this or `operatorLoopId` (the LOOP user that holds the ops grants); refused for other roles. One active account per LOOP user."
+                  },
+                  "operatorLoopId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[Ll][Oo][Oo][Pp]-[A-Za-z0-9]{8}$"
+                      },
+                      { "type": "null" }
+                    ],
+                    "description": "Decision 0130: the LOOP ID the App shows (`LOOP-XXXXXXXX`, any case; upper-cased by the server), as an alternative to `operatorUserId`. Unknown → 422 VALIDATION_FAILED (ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND). With `operatorUserId` both must name the same user, else 422 VALIDATION_FAILED (ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH). Refused for roles without an operator."
                   },
                   "operatorLabel": {
                     "type": ["string", "null"],
@@ -16185,8 +16199,12 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["enabled", "grants"],
+                              "required": ["loopId", "enabled", "grants"],
                               "properties": {
+                                "loopId": {
+                                  "type": ["string", "null"],
+                                  "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                },
                                 "enabled": {
                                   "type": ["boolean", "null"],
                                   "description": "null: no ops_operators row."
@@ -16365,8 +16383,12 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["enabled", "grants"],
+                              "required": ["loopId", "enabled", "grants"],
                               "properties": {
+                                "loopId": {
+                                  "type": ["string", "null"],
+                                  "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                },
                                 "enabled": {
                                   "type": ["boolean", "null"],
                                   "description": "null: no ops_operators row."
@@ -17070,8 +17092,12 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["enabled", "grants"],
+                              "required": ["loopId", "enabled", "grants"],
                               "properties": {
+                                "loopId": {
+                                  "type": ["string", "null"],
+                                  "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                },
                                 "enabled": {
                                   "type": ["boolean", "null"],
                                   "description": "null: no ops_operators row."
@@ -17776,8 +17802,12 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["enabled", "grants"],
+                              "required": ["loopId", "enabled", "grants"],
                               "properties": {
+                                "loopId": {
+                                  "type": ["string", "null"],
+                                  "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                },
                                 "enabled": {
                                   "type": ["boolean", "null"],
                                   "description": "null: no ops_operators row."
@@ -18541,8 +18571,12 @@
                             {
                               "type": "object",
                               "additionalProperties": false,
-                              "required": ["enabled", "grants"],
+                              "required": ["loopId", "enabled", "grants"],
                               "properties": {
+                                "loopId": {
+                                  "type": ["string", "null"],
+                                  "description": "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone."
+                                },
                                 "enabled": {
                                   "type": ["boolean", "null"],
                                   "description": "null: no ops_operators row."

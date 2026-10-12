@@ -135,8 +135,13 @@ const operatorStateSchema = {
     {
       type: "object",
       additionalProperties: false,
-      required: ["enabled", "grants"],
+      required: ["loopId", "enabled", "grants"],
       properties: {
+        loopId: {
+          type: ["string", "null"],
+          description:
+            "Decision 0130: the bound user's LOOP ID (`LOOP-XXXXXXXX`, what the App's Me page shows). null only if the user row is gone.",
+        },
         enabled: {
           type: ["boolean", "null"],
           description: "null: no ops_operators row.",
@@ -272,7 +277,15 @@ export const accountCreateRequestSchema = {
     operatorUserId: {
       ...nullableUuidSchema,
       description:
-        "Required for reviewer / testnet_acceptor (the LOOP user that holds the ops grants); refused for other roles. One active account per LOOP user.",
+        "reviewer / testnet_acceptor need this or `operatorLoopId` (the LOOP user that holds the ops grants); refused for other roles. One active account per LOOP user.",
+    },
+    operatorLoopId: {
+      anyOf: [
+        { type: "string", pattern: "^[Ll][Oo][Oo][Pp]-[A-Za-z0-9]{8}$" },
+        { type: "null" },
+      ],
+      description:
+        "Decision 0130: the LOOP ID the App shows (`LOOP-XXXXXXXX`, any case; upper-cased by the server), as an alternative to `operatorUserId`. Unknown → 422 VALIDATION_FAILED (ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND). With `operatorUserId` both must name the same user, else 422 VALIDATION_FAILED (ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH). Refused for roles without an operator.",
     },
     operatorLabel: {
       type: ["string", "null"],

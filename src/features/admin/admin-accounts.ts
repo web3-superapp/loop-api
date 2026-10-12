@@ -53,6 +53,11 @@ export interface AdminAccountCredentialRecord extends AdminAccountRecord {
 }
 
 export interface AdminOperatorState {
+  /**
+   * Decision 0130: the bound user's `loop_users.loop_id` (what the App's
+   * Me page shows); null only if the user row is gone.
+   */
+  readonly loopId: string | null;
   readonly enabled: boolean | null;
   readonly grants: readonly { permission: string; scope: string }[];
 }
@@ -95,6 +100,11 @@ export interface AdminAccountRepository {
     username: string,
   ): Promise<AdminAccountCredentialRecord | null>;
   get(accountId: string): Promise<AdminAccountCredentialRecord | null>;
+  /**
+   * Decision 0130: the `loop_users.id` whose `loop_id` is exactly this
+   * (already upper-cased) LOOP ID; null when no user has it.
+   */
+  findOperatorUserIdByLoopId(loopId: string): Promise<string | null>;
   /** Newest first, at most `adminAccountListMaximum`. */
   list(): Promise<readonly AdminAccountListItem[]>;
   create(input: {
@@ -221,6 +231,8 @@ const uuidV4Pattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const canonicalUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+/** Decision 0130: the App-visible LOOP ID, any case on input. */
+export const adminOperatorLoopIdPattern = /^LOOP-[A-Z0-9]{8}$/iu;
 const reasonCodePattern = /^[a-z][a-z0-9_]{0,63}$/u;
 const forbiddenTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 export const adminPasswordMinimumLength = 12;
@@ -463,24 +475,53 @@ export function createAdminAccountService(options: {
         }
         const secret = password(body["password"]);
         const operatorUserIdValue = body["operatorUserId"] ?? null;
+        const operatorLoopIdValue = body["operatorLoopId"] ?? null;
         const labelValue = body["operatorLabel"] ?? null;
         const projectIdsValue = body["projectIds"] ?? null;
         let operatorUserId: string | null = null;
         let operatorLabel: string | null = null;
         let projectIds: readonly string[] | null = null;
         if (adminOperatorRoles.has(role)) {
-          if (operatorUserIdValue === null) {
+          if (operatorUserIdValue === null && operatorLoopIdValue === null) {
             throw new AdminApiError("VALIDATION_FAILED", {
               reasonCode: adminReasonCodes.accountOperatorRequired,
             });
           }
           if (
-            typeof operatorUserIdValue !== "string" ||
-            !canonicalUuidPattern.test(operatorUserIdValue)
+            operatorUserIdValue !== null &&
+            (typeof operatorUserIdValue !== "string" ||
+              !canonicalUuidPattern.test(operatorUserIdValue))
+          ) {
+            throw new AdminApiError("INVALID_REQUEST");
+          }
+          if (
+            operatorLoopIdValue !== null &&
+            (typeof operatorLoopIdValue !== "string" ||
+              !adminOperatorLoopIdPattern.test(operatorLoopIdValue))
           ) {
             throw new AdminApiError("INVALID_REQUEST");
           }
           operatorUserId = operatorUserIdValue;
+          if (operatorLoopIdValue !== null) {
+            // Decision 0130: the operator may type the LOOP ID the App
+            // shows; it resolves to the user ID, which stays the binding.
+            const loopId = operatorLoopIdValue.toUpperCase();
+            const resolved =
+              await repository().findOperatorUserIdByLoopId(loopId);
+            if (resolved === null) {
+              throw new AdminApiError("VALIDATION_FAILED", {
+                reasonCode: adminReasonCodes.accountOperatorLoopIdUnknown,
+                operatorLoopId: loopId,
+              });
+            }
+            if (operatorUserId !== null && operatorUserId !== resolved) {
+              throw new AdminApiError("VALIDATION_FAILED", {
+                reasonCode: adminReasonCodes.accountOperatorIdentityMismatch,
+                operatorLoopId: loopId,
+              });
+            }
+            operatorUserId = resolved;
+          }
           if (labelValue === null) {
             operatorLabel = username;
           } else if (
@@ -515,6 +556,7 @@ export function createAdminAccountService(options: {
           }
         } else if (
           operatorUserIdValue !== null ||
+          operatorLoopIdValue !== null ||
           labelValue !== null ||
           projectIdsValue !== null
         ) {

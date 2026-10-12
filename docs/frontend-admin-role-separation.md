@@ -144,6 +144,7 @@
   "status": "active",
   "operatorUserId": "0b9f6c1a-7d2e-4f3a-8b5c-1d2e3f4a5b6c",
   "operator": {
+    "loopId": "LOOP-GBZM3XAT",
     "enabled": true,
     "grants": [
       { "permission": "audit.read", "scope": "*" },
@@ -162,6 +163,8 @@
 
 - `operator` 是绑定 LOOP 用户的实时运营授权（`ops_operators` + `ops_grants`）；未绑定的角色为 `null`。
   `enabled: false` = 已撤销；`enabled: null` = 没有运营记录。`scope` 为 `*` 或一个项目 ID。
+  `loopId`（Decision 0130）：绑定用户在 App「我」页面显示的 LOOP ID，列表里显示它而不是 UUID；
+  只有用户行不存在时为 `null`。
 - 永远不返回密码或哈希。
 
 写接口回执 `accountWrite`：
@@ -209,7 +212,12 @@
 
 - `username`：`^[A-Za-z0-9._@-]{1,64}$`，大小写不敏感唯一，不能是引导账号名。
 - `role`：`platform_admin | reviewer | testnet_acceptor | auditor`，建后不可改。
-- `operatorUserId`：reviewer / testnet_acceptor **必填**（LOOP 用户 ID），其它角色**不许带**。
+- `operatorUserId`：reviewer / testnet_acceptor 与 `operatorLoopId` **二选一必填**（LOOP 用户 ID，
+  UUID），其它角色**不许带**。
+- `operatorLoopId`（Decision 0130）：App 里可见的 LOOP ID（`LOOP-XXXXXXXX`，大小写不敏感，服务端转大写），
+  服务端解析成用户 ID 后按 `operatorUserId` 绑定。查无此 LOOP ID → 422
+  `ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND`（带 `operatorLoopId`）；两个都给但指向不同用户 → 422
+  `ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH`。其它角色不许带。
 - `operatorLabel`：可选，默认用 username（≤ 80 字）。
 - `projectIds`：可选；`null` = 全部项目；数组（1–20 个项目 ID）= 只授权这些项目（「按项目授权」）。
 - 账号建好后 `passwordChangeRequired: true`，持有人首次登录必须改密码。
@@ -218,7 +226,8 @@
 403、409 `ADMIN_CONFLICT`（`ADMIN_ACCOUNT_USERNAME_TAKEN`、`ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND`、
 `ADMIN_IDEMPOTENCY_CONFLICT`）、422 `VALIDATION_FAILED`（`ADMIN_PASSWORD_INVALID`、
 `ADMIN_ACCOUNT_OPERATOR_REQUIRED`、`ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED`、
-`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`（带 `projectId`）、
+`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND`、
+`ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`（带 `projectId`）、
 `ADMIN_OPERATOR_LABEL_INVALID`）、429 `ADMIN_LOGIN_BUSY`、503、500。
 
 ### 4.3 `POST /admin/v1/accounts/{accountId}/disable` 停用（`accounts.manage`，`Idempotency-Key` 必填）
@@ -475,20 +484,20 @@
 
 错误体仍是七字段：`code, category, retryable, userMessageKey, correlationId, detailsSafe, providerReferenceSafe`。
 
-| code                      | HTTP | category       | 本批新增的 reasonCode                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------- | ---- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PERMISSION_DENIED`（新） | 403  | authorization  | `ADMIN_ROLE_FORBIDDEN`（+`permission`）、`ADMIN_PASSWORD_CHANGE_REQUIRED`、`OPS_FORBIDDEN`、`OPS_SELF_APPROVAL`、`OPS_SELF_ACCEPTANCE`、`ADMIN_FORMULA_SELF_APPROVAL`（S129）                                                                                                                                                                                                 |
-| `ADMIN_SESSION_REQUIRED`  | 401  | authentication | — （账号停用 / 改密 / 重置后旧 cookie 也是它）                                                                                                                                                                                                                                                                                                                                |
-| `ADMIN_LOGIN_INVALID`     | 401  | authentication | — （也用于改密时当前密码错）                                                                                                                                                                                                                                                                                                                                                  |
-| `ADMIN_LOGIN_LOCKED`      | 423  | rateLimit      | — （S129 起 `detailsSafe` = `{scope: "username" \| "ip", retryAfterSeconds}`）                                                                                                                                                                                                                                                                                                |
-| `ADMIN_LOGIN_BUSY`        | 429  | rateLimit      | — （也用于建账号 / 重置时密码哈希繁忙，`Retry-After: 1`）                                                                                                                                                                                                                                                                                                                     |
-| `ADMIN_CONFLICT`          | 409  | conflict       | `ADMIN_IDEMPOTENCY_CONFLICT`、`ADMIN_ACCOUNT_USERNAME_TAKEN`、`ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND`、`ADMIN_ACCOUNT_DISABLED`、`ADMIN_ACCOUNT_SELF`、`ADMIN_ACCOUNT_ENVIRONMENT`、`ADMIN_UPDATED_AT_MISMATCH`、`OPS_VERSION_CONFLICT`、`OPS_LAUNCH_NOT_APPROVED`、`OPS_LAUNCH_CONFIG_NOT_APPROVED`、`OPS_IDEMPOTENCY_CONFLICT`、`ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`（S129） |
-| `INVALID_REQUEST`         | 400  | validation     | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`（或无 reasonCode：请求头/体格式由 schema 拒绝）                                                                                                                                                                                                                                                                                              |
-| `VALIDATION_FAILED`       | 422  | validation     | `ADMIN_PASSWORD_INVALID`、`ADMIN_ACCOUNT_OPERATOR_REQUIRED`、`ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED`、`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`、`ADMIN_OPERATOR_LABEL_INVALID`、`ADMIN_REASON_CODE_INVALID`、`ADMIN_REASON_TEXT_INVALID`、`OPS_INVALID_COMMAND`、`OPS_INVALID_LAUNCH_CONFIG`                                                   |
-| `NOT_FOUND`               | 404  | validation     | `ADMIN_ACCOUNT_NOT_FOUND`、`ADMIN_LAUNCH_PROJECT_NOT_FOUND`、`OPS_NOT_FOUND`                                                                                                                                                                                                                                                                                                  |
-| `CAPABILITY_UNAVAILABLE`  | 503  | availability   | `ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`、`HOOKS_LAUNCH_REVIEW_UNAVAILABLE`、`OPS_COMMAND_FAILED`                                                                                                                                                                                                                                                              |
-| `REQUEST_TIMEOUT`         | 503  | availability   | —                                                                                                                                                                                                                                                                                                                                                                             |
-| `INTERNAL_ERROR`          | 500  | internal       | —                                                                                                                                                                                                                                                                                                                                                                             |
+| code                      | HTTP | category       | 本批新增的 reasonCode                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------- | ---- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERMISSION_DENIED`（新） | 403  | authorization  | `ADMIN_ROLE_FORBIDDEN`（+`permission`）、`ADMIN_PASSWORD_CHANGE_REQUIRED`、`OPS_FORBIDDEN`、`OPS_SELF_APPROVAL`、`OPS_SELF_ACCEPTANCE`、`ADMIN_FORMULA_SELF_APPROVAL`（S129）                                                                                                                                                                                                                                       |
+| `ADMIN_SESSION_REQUIRED`  | 401  | authentication | — （账号停用 / 改密 / 重置后旧 cookie 也是它）                                                                                                                                                                                                                                                                                                                                                                      |
+| `ADMIN_LOGIN_INVALID`     | 401  | authentication | — （也用于改密时当前密码错）                                                                                                                                                                                                                                                                                                                                                                                        |
+| `ADMIN_LOGIN_LOCKED`      | 423  | rateLimit      | — （S129 起 `detailsSafe` = `{scope: "username" \| "ip", retryAfterSeconds}`）                                                                                                                                                                                                                                                                                                                                      |
+| `ADMIN_LOGIN_BUSY`        | 429  | rateLimit      | — （也用于建账号 / 重置时密码哈希繁忙，`Retry-After: 1`）                                                                                                                                                                                                                                                                                                                                                           |
+| `ADMIN_CONFLICT`          | 409  | conflict       | `ADMIN_IDEMPOTENCY_CONFLICT`、`ADMIN_ACCOUNT_USERNAME_TAKEN`、`ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND`、`ADMIN_ACCOUNT_DISABLED`、`ADMIN_ACCOUNT_SELF`、`ADMIN_ACCOUNT_ENVIRONMENT`、`ADMIN_UPDATED_AT_MISMATCH`、`OPS_VERSION_CONFLICT`、`OPS_LAUNCH_NOT_APPROVED`、`OPS_LAUNCH_CONFIG_NOT_APPROVED`、`OPS_IDEMPOTENCY_CONFLICT`、`ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN`（S129）                                       |
+| `INVALID_REQUEST`         | 400  | validation     | `ADMIN_IDEMPOTENCY_KEY_REQUIRED`（或无 reasonCode：请求头/体格式由 schema 拒绝）                                                                                                                                                                                                                                                                                                                                    |
+| `VALIDATION_FAILED`       | 422  | validation     | `ADMIN_PASSWORD_INVALID`、`ADMIN_ACCOUNT_OPERATOR_REQUIRED`、`ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED`、`ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND`、`ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND`、`ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH`、`ADMIN_ACCOUNT_PROJECT_NOT_FOUND`、`ADMIN_OPERATOR_LABEL_INVALID`、`ADMIN_REASON_CODE_INVALID`、`ADMIN_REASON_TEXT_INVALID`、`OPS_INVALID_COMMAND`、`OPS_INVALID_LAUNCH_CONFIG` |
+| `NOT_FOUND`               | 404  | validation     | `ADMIN_ACCOUNT_NOT_FOUND`、`ADMIN_LAUNCH_PROJECT_NOT_FOUND`、`OPS_NOT_FOUND`                                                                                                                                                                                                                                                                                                                                        |
+| `CAPABILITY_UNAVAILABLE`  | 503  | availability   | `ADMIN_DATABASE_UNAVAILABLE`、`ADMIN_AUDIT_UNAVAILABLE`、`HOOKS_LAUNCH_REVIEW_UNAVAILABLE`、`OPS_COMMAND_FAILED`                                                                                                                                                                                                                                                                                                    |
+| `REQUEST_TIMEOUT`         | 503  | availability   | —                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `INTERNAL_ERROR`          | 500  | internal       | —                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## 7. 不可用时的行为
 

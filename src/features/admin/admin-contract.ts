@@ -305,6 +305,8 @@ export const adminReasonCodes = Object.freeze({
   accountUsernameTaken: "ADMIN_ACCOUNT_USERNAME_TAKEN",
   accountOperatorBound: "ADMIN_ACCOUNT_OPERATOR_ALREADY_BOUND",
   accountOperatorUnknown: "ADMIN_ACCOUNT_OPERATOR_USER_NOT_FOUND",
+  accountOperatorLoopIdUnknown: "ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND",
+  accountOperatorIdentityMismatch: "ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH",
   accountOperatorRequired: "ADMIN_ACCOUNT_OPERATOR_REQUIRED",
   accountOperatorNotAllowed: "ADMIN_ACCOUNT_OPERATOR_NOT_ALLOWED",
   accountProjectUnknown: "ADMIN_ACCOUNT_PROJECT_NOT_FOUND",

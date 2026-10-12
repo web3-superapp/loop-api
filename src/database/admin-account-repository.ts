@@ -70,6 +70,7 @@ const accountColumns = `
 
 const operatorStateSchema = z
   .object({
+    loopId: z.string().nullable(),
     enabled: z.boolean().nullable(),
     grants: z.array(
       z.object({ permission: z.string(), scope: z.string() }).strict(),
@@ -234,7 +235,12 @@ async function readOperator(
     "select permission, scope from public.ops_grants where user_id = $1 order by permission, scope",
     [userId],
   );
+  const user = await client.query<{ loop_id: string }>(
+    "select loop_id from public.loop_users where id = $1",
+    [userId],
+  );
   return Object.freeze({
+    loopId: user.rows[0]?.loop_id ?? null,
     enabled: operator.rows[0]?.enabled ?? null,
     grants: Object.freeze(
       grants.rows.map((row) =>
@@ -402,11 +408,25 @@ export function createPostgresAdminAccountRepository(
       }
     },
 
+    async findOperatorUserIdByLoopId(loopId) {
+      try {
+        const result = await pool.query<{ id: string }>(
+          "select id from public.loop_users where loop_id = $1",
+          [loopId],
+        );
+        const row = result.rows[0];
+        return row === undefined ? null : uuidSchema.parse(row.id);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async list() {
       try {
         const result = await pool.query(
           `select ${accountColumns},
              case when a.operator_user_id is null then null else jsonb_build_object(
+               'loopId', u.loop_id,
                'enabled', o.enabled,
                'grants', coalesce((
                  select jsonb_agg(jsonb_build_object('permission', g.permission, 'scope', g.scope)
@@ -417,6 +437,7 @@ export function createPostgresAdminAccountRepository(
              l.locked_until
            from public.admin_accounts a
            left join public.ops_operators o on o.user_id = a.operator_user_id
+           left join public.loop_users u on u.id = a.operator_user_id
            left join public.admin_login_attempts l
              on l.scope = 'username'
              and l.subject_key = lower(a.username)

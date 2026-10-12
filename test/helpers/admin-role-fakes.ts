@@ -37,7 +37,9 @@ import {
 
 export interface InMemoryAdminAccounts extends AdminAccountRepository {
   readonly accounts: Map<string, AdminAccountCredentialRecord>;
-  readonly operators: Map<string, AdminOperatorState>;
+  readonly operators: Map<string, Omit<AdminOperatorState, "loopId">>;
+  /** Decision 0130: LOOP ID → loop_users.id (the App-visible identity). */
+  readonly loopIds: Map<string, string>;
   /** Decision 0111: lower-cased username → lockedUntil (ISO). */
   readonly locks: Map<string, string>;
   seed(input: {
@@ -53,7 +55,15 @@ export function createInMemoryAdminAccounts(
   audit: Pick<AdminRepository, "appendAudit">,
 ): InMemoryAdminAccounts {
   const accounts = new Map<string, AdminAccountCredentialRecord>();
-  const operators = new Map<string, AdminOperatorState>();
+  const operators = new Map<string, Omit<AdminOperatorState, "loopId">>();
+  const loopIds = new Map<string, string>();
+
+  function loopIdOf(userId: string): string | null {
+    for (const [loopId, owner] of loopIds) {
+      if (owner === userId) return loopId;
+    }
+    return null;
+  }
   const locks = new Map<string, string>();
   const commands = new Map<
     string,
@@ -66,10 +76,13 @@ export function createInMemoryAdminAccounts(
       operator:
         record.operatorUserId === null
           ? null
-          : (operators.get(record.operatorUserId) ?? {
-              enabled: null,
-              grants: [],
-            }),
+          : {
+              loopId: loopIdOf(record.operatorUserId),
+              ...(operators.get(record.operatorUserId) ?? {
+                enabled: null,
+                grants: [],
+              }),
+            },
       lockedUntil: locks.get(record.username.toLowerCase()) ?? null,
     };
   }
@@ -107,7 +120,11 @@ export function createInMemoryAdminAccounts(
   const repository: InMemoryAdminAccounts = {
     accounts,
     operators,
+    loopIds,
     locks,
+    findOperatorUserIdByLoopId(loopId) {
+      return Promise.resolve(loopIds.get(loopId) ?? null);
+    },
     async seed(input) {
       const now = new Date().toISOString();
       const record: AdminAccountCredentialRecord = {

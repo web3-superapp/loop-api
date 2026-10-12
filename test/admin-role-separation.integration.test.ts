@@ -368,6 +368,103 @@ describe("Decision 0109 console accounts (000055)", () => {
     expect(JSON.stringify(listed)).not.toContain("argon2");
   });
 
+  it("resolves an App-visible LOOP ID to the bound user (Decision 0130)", async () => {
+    const reviewerUser = await user();
+    const otherUser = await user();
+    const loopIdOf = async (id: string) =>
+      (
+        await pool.query<{ loop_id: string }>(
+          "select loop_id from public.loop_users where id = $1",
+          [id],
+        )
+      ).rows[0]!.loop_id;
+    const loopId = await loopIdOf(reviewerUser);
+    expect(loopId).toMatch(/^LOOP-[0-9A-Z]{8}$/u);
+    const base = { password: initialPassword, role: "reviewer" };
+    // Unknown LOOP ID: nothing is written.
+    const before = await pool.query(
+      "select count(*)::int as n from public.admin_accounts",
+    );
+    expect(
+      await refusal(
+        accounts.create(bootstrap, randomUUID(), {
+          ...base,
+          username: name("ghost"),
+          operatorLoopId: "LOOP-00000000",
+        }),
+      ),
+    ).toMatchObject({
+      statusCode: 422,
+      reasonCode: "ADMIN_ACCOUNT_OPERATOR_LOOP_ID_NOT_FOUND",
+    });
+    // Both identities given but naming different users.
+    expect(
+      await refusal(
+        accounts.create(bootstrap, randomUUID(), {
+          ...base,
+          username: name("mismatch"),
+          operatorLoopId: loopId,
+          operatorUserId: otherUser,
+        }),
+      ),
+    ).toMatchObject({
+      statusCode: 422,
+      reasonCode: "ADMIN_ACCOUNT_OPERATOR_IDENTITY_MISMATCH",
+    });
+    const after = await pool.query(
+      "select count(*)::int as n from public.admin_accounts",
+    );
+    expect(after.rows[0]).toEqual(before.rows[0]);
+    // Lower-case LOOP ID resolves to the user ID on the real table.
+    const created = await accounts.create(bootstrap, randomUUID(), {
+      ...base,
+      username: name("by-loop-id"),
+      operatorLoopId: loopId.toLowerCase(),
+    });
+    expect(created.status).toBe(201);
+    const account = (
+      created.body as {
+        account: {
+          accountId: string;
+          operatorUserId: string;
+          operator: { loopId: string; enabled: boolean };
+        };
+      }
+    ).account;
+    expect(account.operatorUserId).toBe(reviewerUser);
+    expect(account.operator).toMatchObject({ loopId, enabled: true });
+    const stored = await pool.query(
+      "select operator_user_id from public.admin_accounts where id = $1",
+      [account.accountId],
+    );
+    expect(stored.rows).toEqual([{ operator_user_id: reviewerUser }]);
+    const grants = await pool.query(
+      "select permission from public.ops_grants where user_id = $1 order by permission",
+      [reviewerUser],
+    );
+    expect(
+      grants.rows.map((row: { permission: string }) => row.permission),
+    ).toEqual(["audit.read", "launch.approve", "launch.read"]);
+    // Both identities naming the same user are accepted.
+    const acceptor = await user();
+    const both = await accounts.create(bootstrap, randomUUID(), {
+      ...base,
+      role: "testnet_acceptor",
+      username: name("both"),
+      operatorLoopId: await loopIdOf(acceptor),
+      operatorUserId: acceptor,
+    });
+    expect(both.status).toBe(201);
+    // The list projects the LOOP ID next to the user ID.
+    const listed = (await accounts.list(bootstrap)) as {
+      items: { accountId: string; operator: { loopId: string } | null }[];
+    };
+    expect(
+      listed.items.find((entry) => entry.accountId === account.accountId)
+        ?.operator?.loopId,
+    ).toBe(loopId);
+  });
+
   it("ends sessions on disable and reset, and revokes the operator", async () => {
     const reviewerUser = await user();
     const reviewer = await activate({
