@@ -747,6 +747,12 @@ const environmentSchema = z
     // Decision 0116: the claim voucher signer and the console test trigger.
     MINING_REWARD_SIGNER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     MINING_SETTLEMENT_TEST_TRIGGER: booleanString,
+    // Decision 0128: the testnet faucet (tBNB + MockUSD1), BSC Testnet only.
+    TESTNET_FAUCET_ENABLED: booleanString,
+    TESTNET_FAUCET_BNB_AMOUNT: z.string().trim().min(1).max(40),
+    TESTNET_FAUCET_USD1_AMOUNT: z.string().trim().min(1).max(40),
+    TESTNET_FAUCET_COOLDOWN_SECONDS: positiveIntegerString(60, 2_592_000),
+    TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     ...miningSettlementEnvironmentShape,
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
@@ -806,6 +812,16 @@ const environmentSchema = z
     refineLaunchContractEnvironment(value, context);
     refineHooksLaunchFactoryEnvironment(value, context);
     refineLaunch2PoolRouterEnvironment(value, context);
+    // Decision 0128: the faucet signs on BSC Testnet only. Deliberately not
+    // bound to NODE_ENV: staging is production on chain 97.
+    if (value.TESTNET_FAUCET_ENABLED && value.LAUNCH_CHAIN_ID !== "97") {
+      context.addIssue({
+        code: "custom",
+        message:
+          "TESTNET_FAUCET_ENABLED is permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
+        path: ["TESTNET_FAUCET_ENABLED"],
+      });
+    }
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1630,6 +1646,8 @@ export interface AppConfig {
   readonly memeOperator: {
     readonly privateKey: `0x${string}`;
   } | null;
+  /** Decision 0128: the testnet faucet; `enabled` false keeps it 503. */
+  readonly testnetFaucet: TestnetFaucetConfig;
   readonly serviceName: "loop-api";
   readonly serviceVersion: string;
 }
@@ -2341,6 +2359,113 @@ export function parseMemeOperator(data: {
   }
   return Object.freeze({
     privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
+  });
+}
+
+export interface TestnetFaucetConfig {
+  readonly enabled: boolean;
+  /** Canonical decimal string published as `bnbAmount`. */
+  readonly bnbAmount: string;
+  /** The same amount in wei (decimal integer string). */
+  readonly bnbAmountWei: string;
+  /** Canonical decimal string published as `usd1Amount`; raw follows `decimals()`. */
+  readonly usd1Amount: string;
+  readonly cooldownSeconds: number;
+  /** TESTNET_FAUCET_OPERATOR_PRIVATE_KEY, else MEME_OPERATOR_PRIVATE_KEY; never logged. */
+  readonly operatorPrivateKey: `0x${string}` | null;
+  /** LAUNCH_USD1_ADDRESS, lower-case. */
+  readonly usd1Address: string | null;
+}
+
+const faucetDecimalPattern = /^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$/u;
+
+/** Strips trailing fraction zeros: "0.020" → "0.02", "500.0" → "500". */
+function canonicalFaucetDecimal(value: string): string {
+  const [whole = "0", fraction = ""] = value.split(".");
+  const trimmed = fraction.replace(/0+$/u, "");
+  return trimmed === "" ? whole : `${whole}.${trimmed}`;
+}
+
+/** Exact decimal → integer units with `decimals` places (no float). */
+export function faucetDecimalToRaw(value: string, decimals: number): bigint {
+  const [whole = "0", fraction = ""] = value.split(".");
+  if (fraction.length > decimals) {
+    throw new RangeError("too many fraction digits");
+  }
+  return BigInt(whole + fraction.padEnd(decimals, "0"));
+}
+
+function parseFaucetAmount(
+  name: string,
+  value: string,
+  maximum: bigint,
+  issues: string[],
+): string {
+  if (!faucetDecimalPattern.test(value)) {
+    issues.push(
+      `${name}: must be a positive decimal with at most 18 fraction digits`,
+    );
+    return "0";
+  }
+  const canonical = canonicalFaucetDecimal(value);
+  const raw = faucetDecimalToRaw(canonical, 18);
+  if (raw <= 0n || raw > maximum * 10n ** 18n) {
+    issues.push(`${name}: must be greater than 0 and at most ${maximum}`);
+  }
+  return canonical;
+}
+
+/**
+ * Decision 0128: the testnet faucet. Amounts and the operator key are
+ * validated whether or not it is enabled (a malformed value refuses boot);
+ * the chain-97 rule is the schema refinement. A missing key or USD1 address
+ * is not a boot failure: the capability reports it. The key never enters a
+ * log line or an error message.
+ */
+export function parseTestnetFaucet(data: {
+  readonly TESTNET_FAUCET_ENABLED: boolean;
+  readonly TESTNET_FAUCET_BNB_AMOUNT: string;
+  readonly TESTNET_FAUCET_USD1_AMOUNT: string;
+  readonly TESTNET_FAUCET_COOLDOWN_SECONDS: number;
+  readonly TESTNET_FAUCET_OPERATOR_PRIVATE_KEY?: string | undefined;
+  readonly MEME_OPERATOR_PRIVATE_KEY?: string | undefined;
+  readonly LAUNCH_USD1_ADDRESS?: string | undefined;
+}): TestnetFaucetConfig {
+  const issues: string[] = [];
+  const bnbAmount = parseFaucetAmount(
+    "TESTNET_FAUCET_BNB_AMOUNT",
+    data.TESTNET_FAUCET_BNB_AMOUNT,
+    1n,
+    issues,
+  );
+  const usd1Amount = parseFaucetAmount(
+    "TESTNET_FAUCET_USD1_AMOUNT",
+    data.TESTNET_FAUCET_USD1_AMOUNT,
+    1_000_000n,
+    issues,
+  );
+  const ownKey = data.TESTNET_FAUCET_OPERATOR_PRIVATE_KEY?.trim() ?? "";
+  if (ownKey !== "" && !privateKeyPattern.test(ownKey)) {
+    issues.push(
+      "TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: must be a 32-byte hex key",
+    );
+  }
+  if (issues.length > 0) {
+    throw new ConfigurationError(issues);
+  }
+  // The fallback key is validated by parseMemeOperator.
+  const key =
+    ownKey !== "" ? ownKey : (data.MEME_OPERATOR_PRIVATE_KEY?.trim() ?? "");
+  const usd1 = data.LAUNCH_USD1_ADDRESS?.trim() ?? "";
+  return Object.freeze({
+    enabled: data.TESTNET_FAUCET_ENABLED,
+    bnbAmount,
+    bnbAmountWei: faucetDecimalToRaw(bnbAmount, 18).toString(),
+    usd1Amount,
+    cooldownSeconds: data.TESTNET_FAUCET_COOLDOWN_SECONDS,
+    operatorPrivateKey:
+      key !== "" && privateKeyPattern.test(key) ? normalizedKey(key) : null,
+    usd1Address: /^0x[0-9a-fA-F]{40}$/u.test(usd1) ? usd1.toLowerCase() : null,
   });
 }
 
@@ -3272,6 +3397,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["MINING_REWARD_SIGNER_PRIVATE_KEY"],
     MINING_SETTLEMENT_TEST_TRIGGER:
       environment["MINING_SETTLEMENT_TEST_TRIGGER"] ?? "false",
+    TESTNET_FAUCET_ENABLED: environment["TESTNET_FAUCET_ENABLED"] ?? "false",
+    TESTNET_FAUCET_BNB_AMOUNT:
+      environment["TESTNET_FAUCET_BNB_AMOUNT"] ?? "0.02",
+    TESTNET_FAUCET_USD1_AMOUNT:
+      environment["TESTNET_FAUCET_USD1_AMOUNT"] ?? "500",
+    TESTNET_FAUCET_COOLDOWN_SECONDS:
+      environment["TESTNET_FAUCET_COOLDOWN_SECONDS"] ?? "86400",
+    TESTNET_FAUCET_OPERATOR_PRIVATE_KEY:
+      environment["TESTNET_FAUCET_OPERATOR_PRIVATE_KEY"],
     ...miningSettlementEnvironmentDefaults(environment),
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
@@ -3482,6 +3616,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ),
     admin: parseAdminConsoleConfig(parsed.data),
     memeOperator: parseMemeOperator(parsed.data),
+    testnetFaucet: parseTestnetFaucet(parsed.data),
     serviceName: "loop-api",
     serviceVersion,
   });

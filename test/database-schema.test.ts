@@ -191,6 +191,7 @@ describe("database schema readiness contract", () => {
       "public.mining_claims",
       "public.mining_reward_ledger_events",
       "public.mining_reward_balances",
+      "public.testnet_faucet_grants",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000072_launch2_pool_user_trades";
+export const latestMigrationName = "000073_testnet_faucet_grants";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -167,4 +167,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.mining_claims",
   "public.mining_reward_ledger_events",
   "public.mining_reward_balances",
+  "public.testnet_faucet_grants",
 ] as const);

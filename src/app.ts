@@ -454,6 +454,13 @@ import { createMiningClaimSigner } from "./features/mining/claim-voucher.js";
 import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
 import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
+import { createTestnetFaucetChain } from "./integrations/bsc/testnet-faucet-chain.js";
+import type { TestnetFaucetChain } from "./features/testnet-faucet/testnet-faucet-contract.js";
+import {
+  createTestnetFaucetService,
+  type TestnetFaucetService,
+} from "./features/testnet-faucet/testnet-faucet-service.js";
+import { registerV2TestnetFaucetRoutes } from "./routes/v2/testnet-faucet.js";
 import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
@@ -608,6 +615,9 @@ export interface BuildAppOptions {
   /** Decision 0116 seams: the LoopRewardClaim reader and the rewards service. */
   readonly miningClaimChain?: MiningClaimChain | null;
   readonly miningRewardsService?: MiningRewardsService;
+  /** Decision 0128 seams: the faucet operator chain and the faucet service. */
+  readonly testnetFaucetChain?: TestnetFaucetChain | null;
+  readonly testnetFaucetService?: TestnetFaucetService;
   /** Test seams for the D20 modules (Decision 0037). */
   readonly deviceService?: DeviceService;
   /** Test seam for the push channel (Decision 0067); `null` keeps it closed. */
@@ -2210,6 +2220,28 @@ export async function buildApp(
             chainReference: config.launchChain.chainReference,
           })
         : null;
+  // Decision 0128: the testnet faucet. The operator chain exists only when
+  // the faucet is enabled on the BSC Testnet slot with a key and endpoints;
+  // the service reports every missing piece as the capability reason.
+  const testnetFaucetChain =
+    options.testnetFaucetChain !== undefined
+      ? options.testnetFaucetChain
+      : composeTestnetFaucetChain(config);
+  const testnetFaucetService =
+    options.testnetFaucetService ??
+    createTestnetFaucetService({
+      config: config.testnetFaucet,
+      launchChainId: config.launchChain.chainId,
+      rpcConfigured:
+        config.launchChain.rpcUrls.length > 0 ||
+        (options.testnetFaucetChain !== undefined &&
+          options.testnetFaucetChain !== null),
+      repository: database.testnetFaucet ?? null,
+      wallets: database.accountWallets ?? null,
+      chain: testnetFaucetChain,
+      logger: app.log,
+      now: options.walletIntentNow ?? ((): Date => new Date()),
+    });
   const miningRewardsService =
     options.miningRewardsService ??
     createMiningRewardsService({
@@ -2535,6 +2567,9 @@ export async function buildApp(
         communityAiRuntimeAvailable,
         pushRuntimeAvailable,
         memeRuntimeAvailable,
+        testnetFaucetState: () => ({
+          reasonCode: testnetFaucetService.unavailableReason(),
+        }),
         launch2State: () => ({
           reasonCode:
             options.launch2Service !== undefined
@@ -2594,6 +2629,11 @@ export async function buildApp(
       adminSettings: adminSettingsReader,
       cursorCodec: v2CursorCodec,
     });
+    registerV2TestnetFaucetRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      testnetFaucetService,
+    );
   }
 
   const adminConfig = adminMounted ? config.admin : null;
@@ -2859,6 +2899,33 @@ export async function buildApp(
   });
 
   return app;
+}
+
+/**
+ * Decision 0128: the faucet operator chain, composed only when the faucet is
+ * enabled on the BSC Testnet slot with an operator key and endpoints. The
+ * key never reaches a log.
+ */
+function composeTestnetFaucetChain(
+  config: AppConfig,
+): TestnetFaucetChain | null {
+  const faucet = config.testnetFaucet;
+  if (
+    !faucet.enabled ||
+    faucet.operatorPrivateKey === null ||
+    config.launchChain.rpcUrls.length === 0
+  ) {
+    return null;
+  }
+  try {
+    return createTestnetFaucetChain({
+      privateKey: faucet.operatorPrivateKey,
+      chainReference: config.launchChain.chainReference,
+      rpcUrls: config.launchChain.rpcUrls,
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -13,9 +13,9 @@ from route schemas by `pnpm openapi:generate` and checked for drift by
 modules use V2; the console management surface is never part of V2.
 
 `openapi/loop-api.v2.json` is the single source of truth for every count in this
-repository's documentation. It currently publishes **132** V2 operations across
-**109** V2 paths, and `GET /v2/meta/capabilities` currently returns **31**
-capability IDs. Recount from the committed artifact after each module lands
+repository's documentation. It currently publishes **185** V2 operations across
+**156** V2 paths, and `GET /v2/meta/capabilities` currently returns **34**
+capability IDs (recounted at Decision 0128). Recount from the committed artifact after each module lands
 rather than trusting a number quoted in prose.
 
 ## Status model
@@ -84,13 +84,13 @@ and deployed-environment evidence remain unverified.
   D20 security/settings/support contract is in
   `docs/frontend-v2-security-settings-api.md`.
 
-| Method and path              | Request                                                                 | Success projection                                                                                                                                                                              | Interface     | Capability                                                                                                                                                |
-| ---------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab (v3 tabs `chat, square, meme, intel, wallet`, `productPolicyV2.2026-10-08`, Decision 0100; `defaultRoute: "chat"`, Decision 0105); configuration-driven version/terms gates | `implemented` | `implemented`; gates are `available` only from complete config, region stays unavailable                                                                  |
-| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence                                                                                                                                           | `implemented` | `implemented`; deferred capabilities remain unavailable; `launch` evidence confirmed per Decision 0083; `meme` (Decision 0101); `launch2` (Decision 0114) |
-| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID                                                                                                                                       | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified                                                                                       |
-| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection                                                                                                                                          | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping                                                                            |
-| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`                                                                                                                                       | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external                                                                         |
+| Method and path              | Request                                                                 | Success projection                                                                                                                                                                              | Interface     | Capability                                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /v2/meta/client-policy` | No input                                                                | Versioned route/tab (v3 tabs `chat, square, meme, intel, wallet`, `productPolicyV2.2026-10-08`, Decision 0100; `defaultRoute: "chat"`, Decision 0105); configuration-driven version/terms gates | `implemented` | `implemented`; gates are `available` only from complete config, region stays unavailable                                                                                                   |
+| `GET /v2/meta/capabilities`  | No input                                                                | Runtime availability separated from external evidence                                                                                                                                           | `implemented` | `implemented`; deferred capabilities remain unavailable; `launch` evidence confirmed per Decision 0083; `meme` (Decision 0101); `launch2` (Decision 0114); `testnetFaucet` (Decision 0128) |
+| `POST /v2/session/bootstrap` | Bearer, contract/client/platform/device/idempotency headers; no payload | Opaque account/session plus server-derived Stream user ID                                                                                                                                       | `implemented` | `blocked-provider`; physical-device Privy matrix remains unverified                                                                                                                        |
+| `GET /v2/account/me`         | Bearer and contract/client headers; no payload                          | Opaque account/authentication/communication projection                                                                                                                                          | `implemented` | `blocked-provider`; requires a current valid Privy token and bootstrap mapping                                                                                                             |
+| `POST /v2/session/logout`    | Bootstrap headers plus owner-bound opaque session ID; no payload        | Durable revoked session and `providerLogoutRequired=true`                                                                                                                                       | `implemented` | `blocked-provider`; Privy SDK logout and physical-device behavior remain external                                                                                                          |
 
 ### V2 profile module (Decision 0030, `V2_MODULES_ENABLED=profile`)
 
@@ -654,6 +654,21 @@ pre-0123 versions replay under their valuation rule. Unlisted communities count
 `hourly.claim.executable` is false while parameters are pending
 (`MINING_PARAMETERS_PENDING`), nothing is settled (`MINING_NOTHING_SETTLED`),
 claimable is 0 / under the minimum, or a claim is in flight.
+
+### V2 testnet faucet (Decision 0128, `TESTNET_FAUCET_ENABLED`, BSC Testnet only)
+
+Not a `V2_MODULES_ENABLED` module: both routes are always registered and answer
+503 with the `testnetFaucet` capability reason until `TESTNET_FAUCET_ENABLED=true`
+on `LAUNCH_CHAIN_ID=97` (any other chain refuses boot) with an operator key
+(`TESTNET_FAUCET_OPERATOR_PRIVATE_KEY`, falling back to `MEME_OPERATOR_PRIVATE_KEY`),
+`LAUNCH_USD1_ADDRESS`, and `LAUNCH_BSC_RPC_URLS`. The API signs a tBNB transfer
+and `MockUSD1.mint(address, amount)`; migration 000073 `testnet_faucet_grants`
+holds the per-address cooldown. Contract: `docs/frontend-v2-testnet-faucet-api.md`.
+
+| Method and path           | Request                                             | Success projection                                                                                                                             | Interface     | Capability                                                                                                  |
+| ------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /v2/testnet/faucet`  | Bearer + headers; `walletId` (own embedded wallet)  | `bnbAmount`, `usd1Amount`, `cooldownSeconds`, `available`, `nextAvailableAt`, `lastGrant`                                                      | `implemented` | `implemented`; default `unavailable` (`TESTNET_FAUCET_DISABLED`)                                            |
+| `POST /v2/testnet/faucet` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` `bnb` / `usd1` `{amount, transactionHash}`, `grantedAt`, `nextAvailableAt`; 429 cooldown, 503 `TESTNET_FAUCET_PARTIAL`, 503 operator low | `implemented` | `blocked-provider` until the staging operator account holds tBNB; no on-chain (anvil / testnet) run in S156 |
 
 ### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
 

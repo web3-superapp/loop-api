@@ -288,6 +288,12 @@ export interface V2ProductPolicyRuntime {
    * Optional; absent is unavailable.
    */
   readonly launch2State?: () => { readonly reasonCode: string | null };
+  /**
+   * Decision 0128: the testnet faucet. `reasonCode` null = enabled on BSC
+   * Testnet with the operator key, USD1, RPC, and repositories composed.
+   * Optional; absent is unavailable (TESTNET_FAUCET_RUNTIME_UNAVAILABLE).
+   */
+  readonly testnetFaucetState?: () => { readonly reasonCode: string | null };
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -526,6 +532,7 @@ export const v2CapabilityIds = Object.freeze([
   "communityAi",
   "meme",
   "launch2",
+  "testnetFaucet",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -1051,6 +1058,29 @@ function launch2Capability(
   });
 }
 
+/**
+ * Decision 0128: not a `V2_MODULES_ENABLED` module, so never `deferred`; the
+ * configuration reason (disabled, wrong chain, operator / USD1 / RPC
+ * missing) or the runtime reason closes it.
+ */
+function testnetFaucetCapability(
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const reasonCode =
+    runtime.testnetFaucetState === undefined
+      ? "TESTNET_FAUCET_RUNTIME_UNAVAILABLE"
+      : runtime.testnetFaucetState().reasonCode;
+  return Object.freeze({
+    capabilityId: "testnetFaucet",
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable" as const,
+      reasonCode: null,
+    }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1278,6 +1308,7 @@ export async function createV2CapabilitiesProjection(
       : deferredCapability("communityAi", "COMMUNITY_AI_RUNTIME_DEFERRED"),
     memeCapability(config, runtime),
     launch2Capability(config, runtime),
+    testnetFaucetCapability(runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

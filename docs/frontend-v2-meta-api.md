@@ -54,3 +54,7 @@
 | 503  | `REQUEST_TIMEOUT` | 整页错误态，可重试               |
 
 只读接口失败时用「读不到 / 请稍后再试」口吻，**不要**用写入口吻（走查 `about` 首次进入报「操作没有完成」是前端错误分类，与 A-1 同族）。
+
+## `testnetFaucet` 能力位（决策 0128，2026-10-12）
+
+`GET /v2/meta/capabilities` 新增第 34 个能力位 `testnetFaucet`（排在 `launch2` 之后）。它不是 `V2_MODULES_ENABLED` 模块，只会是 `available` 或 `unavailable`（`reasonCode` 为 `TESTNET_FAUCET_DISABLED` / `TESTNET_FAUCET_WRONG_CHAIN` / `TESTNET_FAUCET_OPERATOR_NOT_CONFIGURED` / `TESTNET_FAUCET_USD1_NOT_CONFIGURED` / `TESTNET_FAUCET_RPC_NOT_CONFIGURED` / `TESTNET_FAUCET_RUNTIME_UNAVAILABLE`），`evidence` 恒为 `notApplicable`。路由与错误码见 `docs/frontend-v2-testnet-faucet-api.md`。

@@ -62,6 +62,8 @@ import { createPostgresLaunch2BuybackAttemptRepository } from "./launch2-buyback
 import { createPostgresLaunch2MemeAssetRepository } from "./launch2-meme-asset-repository.js";
 import { createPostgresMiningSettlementRepository } from "./mining-settlement-repository.js";
 import type { MiningSettlementRepository } from "../features/mining/hourly-settlement-ports.js";
+import { createPostgresTestnetFaucetRepository } from "./testnet-faucet-repository.js";
+import type { TestnetFaucetRepository } from "../features/testnet-faucet/testnet-faucet-contract.js";
 import { createPostgresAdminRepository } from "./admin-repository.js";
 import { createPostgresAdminAccountRepository } from "./admin-account-repository.js";
 import { createPostgresAdminLoginAttemptStore } from "./admin-login-attempt-repository.js";
@@ -261,6 +263,8 @@ export interface Database {
   readonly launch2MemeAssets?: Launch2MemeAssetRepository;
   /** Decision 0116: hourly settlement, ledger, and claims. */
   readonly miningSettlement?: MiningSettlementRepository;
+  /** Decision 0128: testnet faucet grants. */
+  readonly testnetFaucet?: TestnetFaucetRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -510,6 +514,7 @@ export function createPostgresDatabase(
     launch2BuybackAttempts: createPostgresLaunch2BuybackAttemptRepository(pool),
     launch2MemeAssets: createPostgresLaunch2MemeAssetRepository(pool),
     miningSettlement: createPostgresMiningSettlementRepository(pool),
+    testnetFaucet: createPostgresTestnetFaucetRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

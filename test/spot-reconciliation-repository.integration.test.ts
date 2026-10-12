@@ -1277,6 +1277,7 @@ describe("PostgreSQL Spot reconciliation repository", () => {
     public.launch2_pool_swaps,
     public.launch2_snapshot_publications,
     public.launch2_intents,
+    public.testnet_faucet_grants,
     public.mining_reward_ledger_events,
     public.mining_reward_balances,
     public.mining_claims,

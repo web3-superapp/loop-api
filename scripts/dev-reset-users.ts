@@ -213,6 +213,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     mining_claims: "user",
     mining_reward_ledger_events: "user",
     mining_reward_balances: "user",
+    // Testnet faucet grants (Decision 0128)
+    testnet_faucet_grants: "user",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",
@@ -431,6 +433,12 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     `${ownedBy()} or idempotency_record_id in ${ownedIdempotency}`,
   ),
   del("mining_epoch_rewards", ownedBy()),
+  // Decision 0128: faucet grants reference the wallet and the idempotency row
+  del(
+    "testnet_faucet_grants",
+    `${ownedBy()} or idempotency_record_id in ${ownedIdempotency}
+      or wallet_id in ${ownedWallets}`,
+  ),
   del("mining_reward_ledger", ownedBy()),
   del("mining_snapshot_powers", ownedBy()),
   // MEME user intents
