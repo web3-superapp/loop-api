@@ -4,8 +4,12 @@ import {
   miningClaimDailyCapRaw,
   miningClaimTotalCapRaw,
   miningDefaultParameterDocument,
+  miningSettlementFailureLogLevel,
+  miningSettlementNextAttemptAt,
+  miningSettlementRetryDelaySeconds,
   parseMiningParameterDocument,
 } from "../src/features/mining/hourly-settlement-contract.js";
+import type { MiningEpochRecord } from "../src/features/mining/hourly-settlement-ports.js";
 import type { MiningSettlementFacts } from "../src/features/mining/hourly-settlement-ports.js";
 import {
   createMiningSettlementRunner,
@@ -705,5 +709,150 @@ describe("Decision 0116 runner — settle", () => {
       "skipped",
     ]);
     expect(fakeRunner.settleHour).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Decision 0129 §3: failed-hour retry backoff", () => {
+  const failedAt = "2026-10-10T11:10:00.000Z";
+  const minute = 60_000;
+
+  it("backs off 1, 2, 4, 8 … minutes, capped at 60", () => {
+    expect(
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 20, 1_000].map(
+        (attempts) => miningSettlementRetryDelaySeconds(attempts) / 60,
+      ),
+    ).toEqual([0, 1, 2, 4, 8, 16, 32, 60, 60, 60, 60]);
+    expect(
+      miningSettlementNextAttemptAt({ attemptCount: 3, updatedAt: failedAt }),
+    ).toBe(Date.parse(failedAt) + 4 * minute);
+  });
+
+  it("logs a failure as warn below 10 consecutive failures and as error from 10 on", () => {
+    expect(miningSettlementFailureLogLevel(null)).toBe("warn");
+    expect(miningSettlementFailureLogLevel(1)).toBe("warn");
+    expect(miningSettlementFailureLogLevel(9)).toBe("warn");
+    expect(miningSettlementFailureLogLevel(10)).toBe("error");
+    expect(miningSettlementFailureLogLevel(57)).toBe("error");
+  });
+
+  function failingRunner(clock: { now: number }, start: MiningEpochRecord[]) {
+    const repo = createInMemoryMiningSettlement();
+    repo.versions.push(version());
+    repo.epochs.push(...start);
+    repo.readIndexerFreshness = vi.fn(() =>
+      Promise.resolve({
+        lanes: [
+          {
+            lane: "launch2_event",
+            hasSources: true,
+            updatedAt: "2026-10-10T11:05:00.000Z",
+          },
+        ],
+      }),
+    );
+    const reads = vi.fn(() =>
+      Promise.resolve(facts({ unknownAssetIds: [ASSET] })),
+    );
+    repo.readSettlementFacts = reads;
+    repo.recordEpochFailure = vi.fn(
+      (input: Parameters<typeof repo.recordEpochFailure>[0]) => {
+        const index = repo.epochs.findIndex(
+          (entry) => entry.hourStart === input.hourStart,
+        );
+        const previous = index === -1 ? 0 : repo.epochs[index]!.attemptCount;
+        const epoch = epochRecord({
+          status: "failed",
+          settledAt: null,
+          inputDigest: null,
+          failureReasonCode: input.reasonCode,
+          attemptCount: previous + 1,
+          trigger: input.trigger,
+          updatedAt: new Date(clock.now).toISOString(),
+        });
+        if (index === -1) repo.epochs.push(epoch);
+        else repo.epochs[index] = epoch;
+        return Promise.resolve(epoch);
+      },
+    );
+    const runner = createMiningSettlementRunner({
+      repository: repo,
+      chainId: "eip155:97",
+      indexerGraceSeconds: 120,
+      now: () => new Date(clock.now),
+    });
+    return { repo, runner, reads };
+  }
+
+  it("retries a failed hour only once its backoff ran out; a test trigger is not held back", async () => {
+    const clock = { now: Date.parse(failedAt) + 4 * minute - 1 };
+    const failed = epochRecord({
+      status: "failed",
+      settledAt: null,
+      inputDigest: null,
+      failureReasonCode: "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
+      attemptCount: 3,
+      updatedAt: failedAt,
+    });
+    const { runner, reads } = failingRunner(clock, [failed]);
+    expect(
+      await runner.settleHour({ hourStart: S, trigger: "scheduled" }),
+    ).toEqual({
+      kind: "skipped",
+      reasonCode: "MINING_SETTLEMENT_RETRY_BACKOFF",
+    });
+    expect(reads).not.toHaveBeenCalled();
+    expect(
+      await runner.settleHour({ hourStart: S, trigger: "test_trigger" }),
+    ).toMatchObject({ kind: "failed" });
+    expect(reads).toHaveBeenCalledTimes(1);
+    // The test trigger's failure (attempt 4) restarts the clock: 8 minutes.
+    clock.now += 8 * minute - 1;
+    expect(
+      await runner.settleHour({ hourStart: S, trigger: "scheduled" }),
+    ).toMatchObject({ kind: "skipped" });
+    clock.now += 1;
+    expect(
+      await runner.settleHour({ hourStart: S, trigger: "scheduled" }),
+    ).toMatchObject({ kind: "failed", epoch: { attemptCount: 5 } });
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+
+  it("the lane attempts and reports a failing hour only at 0, 1, 3, 7, 15 … minutes, not every tick", async () => {
+    const clock = { now: Date.parse(failedAt) };
+    const { runner } = failingRunner(clock, []);
+    const repo = createInMemoryMiningSettlement();
+    const events: { minute: number; attemptCount: number | null }[] = [];
+    const lane = createMiningSettlementLane({
+      runner: {
+        ...runner,
+        candidateHours: () => Promise.resolve([S]),
+      },
+      repository: repo,
+      rewards: null,
+      pollIntervalMs: 60_000,
+      catchupHours: 3,
+      maxHoursPerTick: 6,
+      onEvent: (event) => {
+        if (event.outcome === "failed") {
+          events.push({
+            minute: (clock.now - Date.parse(failedAt)) / minute,
+            attemptCount: event.attemptCount,
+          });
+        }
+      },
+    });
+    // A tick a minute for 40 minutes.
+    for (let tick = 0; tick <= 40; tick += 1) {
+      await lane.runOnce();
+      clock.now += minute;
+    }
+    expect(events).toEqual([
+      { minute: 0, attemptCount: 1 },
+      { minute: 1, attemptCount: 2 },
+      { minute: 3, attemptCount: 3 },
+      { minute: 7, attemptCount: 4 },
+      { minute: 15, attemptCount: 5 },
+      { minute: 31, attemptCount: 6 },
+    ]);
   });
 });

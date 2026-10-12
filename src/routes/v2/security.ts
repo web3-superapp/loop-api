@@ -1,6 +1,7 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { requireAuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import { V2ApiError } from "../../core/http/v2-error.js";
 import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
 import {
   emptyQueryStringSchema,
@@ -13,6 +14,7 @@ import {
   deviceRiskPolicy,
   recentSecurityEventLimit,
   securityCapabilityIds,
+  securityCapabilityProjections,
 } from "../../features/security/security-contract.js";
 import { v2CommonHeadersSchema } from "../../features/session/session-contract.js";
 import {
@@ -28,7 +30,8 @@ import type { V2RouteDependencies } from "./index.js";
 
 /**
  * Security centre (D20, Decision 0037): the six Privy-side security methods
- * are always `unavailable` with pending evidence; the summary composes facts
+ * are `unavailable` with pending evidence by default (Decision 0129 §4:
+ * `?projection=current` reports the client-wired ones); the summary composes facts
  * from the session, approvals, and notification modules without a score.
  */
 
@@ -56,18 +59,33 @@ const securityCapabilitiesResourceSchema = {
           capabilityId: { type: "string", enum: [...securityCapabilityIds] },
           status: {
             type: "string",
-            const: "unavailable",
+            enum: ["unavailable", "available"],
             description:
-              "Never available in this step: Privy plan/SDK/device evidence is pending for every method (03 §5.2). The client shows the reason and the how-to-enable guide only.",
+              "Default projection (pendingOnly, Decision 0037): always unavailable with pending evidence. Decision 0129 §4, projection=current: mfa and autoRecovery are available (confirmed evidence), passkey is available while the API publishes a relying-party association (else unavailable / PASSKEY_RELYING_PARTY_NOT_CONFIGURED), recoveryPassword / socialRecovery / keyExport stay unavailable.",
           },
-          reasonCode: reasonCodeSchema,
+          reasonCode: {
+            anyOf: [reasonCodeSchema, { type: "null" }],
+            description: "The unavailability reason; null when available.",
+          },
           evidence: {
             type: "object",
             additionalProperties: false,
             required: ["status", "reasonCode"],
             properties: {
-              status: { type: "string", const: "pending" },
+              status: {
+                type: "string",
+                enum: ["pending", "confirmed"],
+                description:
+                  "pending with an unavailable item; confirmed with an available one (projection=current only).",
+              },
               reasonCode: reasonCodeSchema,
+              reference: {
+                type: "string",
+                minLength: 1,
+                maxLength: 120,
+                description:
+                  "Decision 0129 §4: present with confirmed evidence only — where the evidence is recorded (the client step and decision).",
+              },
             },
           },
           guideKey: {
@@ -259,6 +277,26 @@ const securitySummaryResourceSchema = {
   },
 } as const;
 
+/**
+ * Decision 0129 §4: no body; the only query key is `projection`, with one of
+ * the two values (anything else is 400 INVALID_REQUEST).
+ */
+function assertCapabilitiesQuery(request: FastifyRequest): Promise<void> {
+  const query = request.query as Record<string, unknown>;
+  const keys = Object.keys(query);
+  if (
+    request.body !== undefined ||
+    keys.some((key) => key !== "projection") ||
+    (keys.length === 1 &&
+      !(securityCapabilityProjections as readonly unknown[]).includes(
+        query["projection"],
+      ))
+  ) {
+    throw V2ApiError.invalidRequest();
+  }
+  return Promise.resolve();
+}
+
 export function registerV2SecurityRoutes(
   app: FastifyInstance,
   dependencies: V2RouteDependencies,
@@ -272,24 +310,40 @@ export function registerV2SecurityRoutes(
         operationId: "listV2SecurityCapabilities",
         summary: "List MFA, passkey, recovery, and key-export availability",
         description:
-          "Every item is unavailable with a PRIVY_<X>_EVIDENCE_PENDING reason until Privy Go/No-Go evidence exists. No local simulation; the key-export page shows an explanation and a non-executable button.",
+          "Default (no query, Decision 0037 bytes): every item is unavailable with a PRIVY_<X>_EVIDENCE_PENDING reason. Decision 0129 §4: ?projection=current reports what the client wired through privy_flutter — mfa (TOTP, S60a) and autoRecovery (Privy embedded-wallet default) available with confirmed evidence, passkey (S64) available while the API publishes a relying-party association (Decision 0063) and otherwise unavailable / PASSKEY_RELYING_PARTY_NOT_CONFIGURED; recoveryPassword, socialRecovery and keyExport stay unavailable with their pending reason. Apps whose codec accepts only unavailable must not send projection=current. No local simulation; the key-export page shows an explanation and a non-executable button.",
         tags: ["security"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
-        querystring: emptyQueryStringSchema,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            projection: {
+              type: "string",
+              enum: [...securityCapabilityProjections],
+              description:
+                "pendingOnly (default) or current (Decision 0129 §4).",
+            },
+          },
+        },
         response: {
           200: securityCapabilitiesResourceSchema,
           ...accountReadErrors,
         },
       },
       onRequest: validateReadHeaders,
-      preValidation: assertNoBodyOrQuery,
+      preValidation: assertCapabilitiesQuery,
       preHandler: authenticateLoopBearer,
     },
     async (request, reply) => {
       requireAuthenticatedLoopPrincipal(request);
       reply.header("cache-control", "no-store");
-      return reply.code(200).send(securityService.listCapabilities());
+      const { projection } = request.query as { projection?: string };
+      return reply.code(200).send(
+        securityService.listCapabilities({
+          projection: projection === "current" ? "current" : "pendingOnly",
+        }),
+      );
     },
   );
 

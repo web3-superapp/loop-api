@@ -1,4 +1,10 @@
-import { custom, encodeAbiParameters, encodeEventTopics, type Hex } from "viem";
+import {
+  custom,
+  encodeAbiParameters,
+  encodeEventTopics,
+  erc20Abi,
+  type Hex,
+} from "viem";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -267,5 +273,101 @@ describe("launch2 chain reader splits the eth_getLogs address filter", () => {
         blockHash,
       },
     ]);
+  });
+});
+
+describe("launch2 chain reader distrusts a log answer without the deploy-block mint (Decision 0129 §2)", () => {
+  const meme = `0x${"4d".repeat(20)}`;
+  const holder = `0x${"cc".repeat(20)}`;
+  function mintLog(block: number) {
+    return {
+      address: meme,
+      topics: encodeEventTopics({
+        abi: erc20Abi,
+        eventName: "Transfer",
+        args: {
+          from: `0x${"0".repeat(40)}`,
+          to: holder as Hex,
+        },
+      }) as Hex[],
+      data: encodeAbiParameters([{ type: "uint256" }], [1_000n]),
+      blockNumber: `0x${block.toString(16)}`,
+      blockHash,
+      transactionHash: `0x${block.toString(16).padStart(64, "0")}`,
+      transactionIndex: "0x0",
+      logIndex: "0x0",
+      removed: false,
+    };
+  }
+  function endpoint(answer: unknown[] | "fail", calls: string[], name: string) {
+    return custom(
+      {
+        request: ({ method }: { method: string }) => {
+          if (method !== "eth_getLogs") throw new Error(`unexpected ${method}`);
+          calls.push(name);
+          if (answer === "fail") return Promise.reject(new Error("down"));
+          return Promise.resolve(answer);
+        },
+      },
+      { retryCount: 0 },
+    );
+  }
+  const request = {
+    roles: new Map([[meme, "meme" as const]]),
+    fromBlock: 90n,
+    toBlock: 200n,
+    mintAnchors: [{ token: meme, blockNumber: 100n }],
+  };
+
+  it("asks the next endpoint when the first answers [] for a range holding the deploy block", async () => {
+    const calls: string[] = [];
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      endpointTransports: [
+        endpoint([], calls, "silent"),
+        endpoint("fail", calls, "down"),
+        endpoint([mintLog(100)], calls, "archive"),
+      ],
+    });
+    const result = await chain.getLogs(request);
+    expect(result.logs).toMatchObject([
+      {
+        contractAddress: meme,
+        eventName: "Transfer",
+        blockNumber: 100n,
+        args: { from: `0x${"0".repeat(40)}`, to: holder, value: "1000" },
+      },
+    ]);
+    // The fallback answer (silent), then each endpoint in order.
+    expect(calls).toEqual(["silent", "silent", "down", "archive"]);
+  });
+
+  it("throws LAUNCH2_RPC_LOGS_UNTRUSTED when no endpoint has the mint", async () => {
+    const calls: string[] = [];
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      endpointTransports: [
+        endpoint([], calls, "a"),
+        endpoint([mintLog(101)], calls, "b"),
+      ],
+    });
+    await expect(chain.getLogs(request)).rejects.toMatchObject({
+      name: "Launch2ChainRefusedError",
+      reasonCode: "LAUNCH2_RPC_LOGS_UNTRUSTED",
+    });
+  });
+
+  it("ignores anchors outside the range and keeps one request", async () => {
+    const calls: string[] = [];
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      endpointTransports: [endpoint([], calls, "only")],
+    });
+    const result = await chain.getLogs({
+      ...request,
+      mintAnchors: [{ token: meme, blockNumber: 50n }],
+    });
+    expect(result.logs).toEqual([]);
+    expect(calls).toEqual(["only"]);
   });
 });

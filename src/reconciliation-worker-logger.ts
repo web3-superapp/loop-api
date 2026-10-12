@@ -92,6 +92,8 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch2_event lane is idle"
   | "LOOP launch2_event lane enabled"
   | "LOOP launch2_event lane skipped facts"
+  | "LOOP launch2_event MEME transfer coverage incomplete; re-scanning"
+  | "LOOP launch2_event MEME transfer coverage incomplete after 3 re-scans; operator required"
   | "LOOP launch2 snapshot publisher stays idle"
   | "LOOP launch2 snapshot publisher enabled"
   | "LOOP launch2 snapshot publisher step"

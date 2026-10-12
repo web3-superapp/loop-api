@@ -9,6 +9,8 @@ import type {
   Launch2Repository,
   Launch2SnapshotMemberRecord,
 } from "../src/features/launch2/launch2-ports.js";
+import type { Launch2MemeCoverageFacts } from "../src/features/launch2/launch2-meme-coverage.js";
+import { Launch2ChainRefusedError } from "../src/integrations/launch2/launch2-chain.js";
 import {
   createLaunch2Lane,
   pairLaunch2RouterSwaps,
@@ -27,6 +29,7 @@ import {
  */
 
 const hash = (n: bigint) => `0x${n.toString(16).padStart(64, "0")}`;
+const zeroAddress = `0x${"0".repeat(40)}`;
 
 function laneInstance(
   overrides: Partial<Launch2LaneInstance> = {},
@@ -68,6 +71,10 @@ function harness(options: {
     readonly currency0: string;
   };
   readonly poolRouter?: string;
+  /** Decision 0129 §2: what listMemeCoverageChecks returns. */
+  readonly coverageChecks?: Launch2MemeCoverageFacts[];
+  /** Decision 0129 §2: the chain refuses a range missing a mint anchor. */
+  readonly enforceMintAnchors?: boolean;
 }) {
   const commits: Parameters<Launch2Repository["commitSegment"]>[0][] = [];
   const verifications: Parameters<
@@ -83,6 +90,19 @@ function harness(options: {
     roleMap: ReadonlyMap<string, string>;
   }[] = [];
   const warnings: { reasonCode: string; instanceId?: string }[] = [];
+  const coverageQueries: Parameters<
+    Launch2Repository["listMemeCoverageChecks"]
+  >[0][] = [];
+  const coverageRecords: Parameters<
+    Launch2Repository["recordMemeCoverage"]
+  >[0][] = [];
+  const coverageEvents: Parameters<
+    NonNullable<
+      Parameters<typeof createLaunch2Lane>[0]["onMemeCoverageIncomplete"]
+    >
+  >[0][] = [];
+  const anchorsAsked: (readonly { token: string; blockNumber: bigint }[])[] =
+    [];
   let checkpoint = options.checkpoint ?? null;
   let snapshotsToVerify: Awaited<
     ReturnType<Launch2Repository["listSnapshotsToVerify"]>
@@ -102,6 +122,18 @@ function harness(options: {
         updatedAt: new Date().toISOString(),
       };
       return Promise.resolve({ storedCount: input.events.length, touched: 1 });
+    },
+    listMemeCoverageChecks: (
+      input: Parameters<Launch2Repository["listMemeCoverageChecks"]>[0],
+    ) => {
+      coverageQueries.push(input);
+      return Promise.resolve(options.coverageChecks ?? []);
+    },
+    recordMemeCoverage: (
+      input: Parameters<Launch2Repository["recordMemeCoverage"]>[0],
+    ) => {
+      coverageRecords.push(input);
+      return Promise.resolve();
     },
     listSnapshotsToVerify: () => Promise.resolve(snapshotsToVerify),
     nftHoldersAt: () => Promise.resolve(holders),
@@ -142,6 +174,24 @@ function harness(options: {
           : { routerSwaps: input.routerSwaps }),
         roleMap: input.roles,
       });
+      if (input.mintAnchors !== undefined) anchorsAsked.push(input.mintAnchors);
+      if (
+        options.enforceMintAnchors === true &&
+        (input.mintAnchors ?? []).some(
+          (anchor) =>
+            !(options.logs ?? []).some(
+              (log) =>
+                log.contractAddress === anchor.token &&
+                log.blockNumber === anchor.blockNumber &&
+                log.eventName === "Transfer" &&
+                log.args["from"] === zeroAddress,
+            ),
+        )
+      ) {
+        return Promise.reject(
+          new Launch2ChainRefusedError("LAUNCH2_RPC_LOGS_UNTRUSTED"),
+        );
+      }
       return Promise.resolve({
         logs: (options.logs ?? []).filter(
           (log) =>
@@ -180,6 +230,7 @@ function harness(options: {
     pollIntervalMs: 1_000,
     now: () => new Date(1_800_000_000_000),
     onWarning: (warning) => warnings.push(warning),
+    onMemeCoverageIncomplete: (event) => coverageEvents.push(event),
     ...(options.memeAssets === undefined
       ? {}
       : { memeAssets: options.memeAssets }),
@@ -190,6 +241,10 @@ function harness(options: {
   return {
     lane,
     warnings,
+    coverageQueries,
+    coverageRecords,
+    coverageEvents,
+    anchorsAsked,
     commits,
     verifications,
     stageUpdates,
@@ -945,5 +1000,188 @@ describe("launch2_event lane: router attribution (Decision 0126)", () => {
       "Swap",
     ]);
     expect(commits[0]?.events[0]?.args["routerPayer"]).toBeUndefined();
+  });
+});
+
+describe("launch2_event lane MEME coverage integrity (Decision 0129 §2)", () => {
+  const checkpointAt = (block: bigint): Launch2Checkpoint => ({
+    lastBlockNumber: block.toString(10),
+    lastBlockHash: hash(block),
+    startedFromBlockNumber: "100",
+    updatedAt: new Date().toISOString(),
+  });
+  const facts = (
+    instanceId: string,
+    overrides: Partial<Launch2MemeCoverageFacts> = {},
+  ): Launch2MemeCoverageFacts => ({
+    instanceId,
+    deployMintPresent: true,
+    negativeBalanceCount: 0,
+    failedAttempts: 0,
+    ...overrides,
+  });
+
+  it("asks for the deploy-block mint of every instance deployed inside the range", async () => {
+    const inside = laneInstance({ deployBlockNumber: "100" });
+    const later = laneInstance({
+      deployBlockNumber: "5000",
+      launchId: hash(79n),
+    });
+    const { lane, anchorsAsked } = harness({
+      instances: [inside, later],
+      head: 400n,
+    });
+    await lane.runOnce();
+    expect(anchorsAsked[0]).toEqual([
+      { token: inside.addresses.meme, blockNumber: 100n },
+    ]);
+  });
+
+  it("treats a range holding a deploy block without its mint as an untrusted RPC answer: unavailable, nothing committed", async () => {
+    const instance = laneInstance({ deployBlockNumber: "100" });
+    const { lane, commits } = harness({
+      instances: [instance],
+      head: 400n,
+      logs: [],
+      enforceMintAnchors: true,
+    });
+    const result = await lane.runOnce();
+    expect(result).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "LAUNCH2_RPC_LOGS_UNTRUSTED",
+    });
+    expect(commits).toHaveLength(0);
+  });
+
+  it("indexes the range normally when the mint is in the answer", async () => {
+    const instance = laneInstance({ deployBlockNumber: "100" });
+    const mint: Launch2DecodedLog = {
+      contractAddress: instance.addresses.meme,
+      eventName: "Transfer",
+      args: { from: zeroAddress, to: instance.addresses.curve, value: "1000" },
+      transactionHash: hash(1n),
+      logIndex: 0,
+      blockNumber: 100n,
+      blockHash: hash(100n),
+    };
+    const { lane, commits } = harness({
+      instances: [instance],
+      head: 400n,
+      logs: [mint],
+      enforceMintAnchors: true,
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("seeded");
+    expect(commits[0]?.memeTransfers).toHaveLength(1);
+  });
+
+  it("checks coverage through the committed block and marks a proven one complete (no event)", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "2000" });
+    const { lane, coverageQueries, coverageRecords, coverageEvents } = harness({
+      instances: [instance],
+      head: 2_500n,
+      checkpoint: checkpointAt(2_000n),
+      coverageChecks: [facts(instance.instanceId)],
+    });
+    await lane.runOnce();
+    expect(coverageQueries).toEqual([
+      { chainId: "eip155:97", throughBlockNumber: "2500", maxAttempts: 3 },
+    ]);
+    expect(coverageRecords[0]?.verdicts).toEqual([
+      { kind: "complete", instanceId: instance.instanceId },
+    ]);
+    expect(coverageEvents).toEqual([]);
+  });
+
+  it("does not mark complete without the deploy-block mint: one more re-scan and a warning", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "2000" });
+    const { lane, coverageRecords, coverageEvents } = harness({
+      instances: [instance],
+      head: 2_500n,
+      checkpoint: checkpointAt(2_000n),
+      coverageChecks: [
+        facts(instance.instanceId, { deployMintPresent: false }),
+      ],
+    });
+    await lane.runOnce();
+    expect(coverageRecords[0]?.verdicts).toEqual([
+      {
+        kind: "retry",
+        instanceId: instance.instanceId,
+        gaps: ["DEPLOY_MINT_MISSING"],
+        failedAttempts: 1,
+        negativeBalanceCount: 0,
+      },
+    ]);
+    expect(coverageEvents).toEqual([
+      {
+        reasonCode: "LAUNCH2_MEME_COVERAGE_INCOMPLETE",
+        instanceId: instance.instanceId,
+        gaps: ["DEPLOY_MINT_MISSING"],
+        failedAttempts: 1,
+        negativeBalanceCount: 0,
+        stalled: false,
+      },
+    ]);
+  });
+
+  it("does not mark complete with a negative balance", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "2000" });
+    const { lane, coverageRecords, coverageEvents } = harness({
+      instances: [instance],
+      head: 2_500n,
+      checkpoint: checkpointAt(2_000n),
+      coverageChecks: [
+        facts(instance.instanceId, {
+          negativeBalanceCount: 1,
+          failedAttempts: 1,
+        }),
+      ],
+    });
+    await lane.runOnce();
+    expect(coverageRecords[0]?.verdicts[0]).toMatchObject({
+      kind: "retry",
+      gaps: ["NEGATIVE_BALANCE"],
+      failedAttempts: 2,
+    });
+    expect(coverageEvents[0]).toMatchObject({ stalled: false });
+  });
+
+  it("stops re-scanning after the third consecutive failure and reports it as stalled", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "2000" });
+    const { lane, coverageRecords, coverageEvents } = harness({
+      instances: [instance],
+      head: 2_500n,
+      checkpoint: checkpointAt(2_000n),
+      coverageChecks: [
+        facts(instance.instanceId, {
+          deployMintPresent: false,
+          negativeBalanceCount: 2,
+          failedAttempts: 2,
+        }),
+      ],
+    });
+    await lane.runOnce();
+    expect(coverageRecords[0]?.verdicts[0]).toMatchObject({
+      kind: "stalled",
+      gaps: ["DEPLOY_MINT_MISSING", "NEGATIVE_BALANCE"],
+      failedAttempts: 3,
+    });
+    expect(coverageEvents[0]).toMatchObject({
+      stalled: true,
+      failedAttempts: 3,
+      negativeBalanceCount: 2,
+    });
+  });
+
+  it("records nothing when no re-scan reached its target", async () => {
+    const instance = laneInstance({ memeTransfersTargetBlock: "2000" });
+    const { lane, coverageRecords } = harness({
+      instances: [instance],
+      head: 2_500n,
+      checkpoint: checkpointAt(2_000n),
+    });
+    await lane.runOnce();
+    expect(coverageRecords).toEqual([]);
   });
 });

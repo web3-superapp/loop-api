@@ -1369,8 +1369,14 @@ export function createLaunch2Service(
     }
     const perGas = fee.type === "eip1559" ? fee.maxFeePerGas : fee.gasPrice;
     const totalGas = gasLimit + (approvalTarget === null ? 0n : approvalGas);
-    if (totalGas * perGas > native) {
-      refuse("INSUFFICIENT_BALANCE", launch2ReasonCodes.gasInsufficient);
+    const requiredNative = totalGas * perGas;
+    if (requiredNative > native) {
+      // S157: the numbers behind the refusal (gas ceiling = gas limit(s)
+      // x maxFeePerGas / gasPrice, and the wallet's BNB at the same read).
+      refuse("INSUFFICIENT_BALANCE", launch2ReasonCodes.gasInsufficient, {
+        requiredBnb: formatLaunch2Amount(requiredNative),
+        balanceBnb: formatLaunch2Amount(native),
+      });
     }
     const chainReference = client.chainReference;
     let approval: Record<string, unknown> | null = null;
@@ -1795,6 +1801,9 @@ export function createLaunch2Service(
               {
                 maxAmountIn: formatLaunch2Amount(inputBalance),
                 requiredAmountIn: formatLaunch2Amount(numbers.maxIn),
+                ...(body.side === "buy"
+                  ? { balanceUsd1: formatLaunch2Amount(state.usd1Balance) }
+                  : { balanceMeme: formatLaunch2Amount(state.memeBalance) }),
               },
             );
           }
@@ -2485,6 +2494,7 @@ export function createLaunch2Service(
               launch2ReasonCodes.usd1Insufficient,
               {
                 requiredUsd1: formatLaunch2Amount(price),
+                balanceUsd1: formatLaunch2Amount(state.usd1Balance ?? 0n),
               },
             );
           }
@@ -2564,7 +2574,20 @@ export function createLaunch2Service(
                 body.side === "buy"
                   ? launch2ReasonCodes.usd1Insufficient
                   : launch2ReasonCodes.memeInsufficient,
-                { maxAmountIn: formatLaunch2Amount(numbers.max.amountIn) },
+                {
+                  maxAmountIn: formatLaunch2Amount(numbers.max.amountIn),
+                  ...(body.side === "buy"
+                    ? {
+                        balanceUsd1: formatLaunch2Amount(
+                          state.usd1Balance ?? 0n,
+                        ),
+                      }
+                    : {
+                        balanceMeme: formatLaunch2Amount(
+                          state.memeBalance ?? 0n,
+                        ),
+                      }),
+                },
               );
             }
             refuse("VALIDATION_FAILED", launch2ReasonCodes.amountAboveMax, {

@@ -167,7 +167,10 @@ import {
 } from "./database/database.js";
 import type { ControlPlaneRepository } from "./database/control-plane-repository.js";
 import { createMiningRewardsService } from "./features/mining/hourly-rewards-service.js";
-import { miningSettlementLane } from "./features/mining/hourly-settlement-contract.js";
+import {
+  miningSettlementFailureLogLevel,
+  miningSettlementLane,
+} from "./features/mining/hourly-settlement-contract.js";
 import type { MiningSettlementRepository } from "./features/mining/hourly-settlement-ports.js";
 import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
@@ -853,6 +856,30 @@ export async function runReconciliationWorker(
                 "LOOP launch2_event lane is idle",
               );
             },
+            // Decision 0129 §2: warn per failed coverage check; the third
+            // consecutive one stops the re-scans and is an error.
+            onMemeCoverageIncomplete: (event) => {
+              const fields = {
+                ...logFields(),
+                lane: "launch2_event",
+                reasonCode: event.reasonCode,
+                instanceId: event.instanceId,
+                detailReasonCode: event.gaps.join("."),
+                attempts: event.failedAttempts,
+                count: event.negativeBalanceCount,
+              };
+              if (event.stalled) {
+                options.logger.error(
+                  fields,
+                  "LOOP launch2_event MEME transfer coverage incomplete after 3 re-scans; operator required",
+                );
+              } else {
+                options.logger.warn(
+                  fields,
+                  "LOOP launch2_event MEME transfer coverage incomplete; re-scanning",
+                );
+              }
+            },
             onInfrastructureBackoff: (event) => {
               options.logger.warn(
                 { ...logFields(), ...event },
@@ -1208,18 +1235,30 @@ export async function runReconciliationWorker(
                 event.outcome === "failed" ||
                 event.reasonCode === "MINING_SETTLEMENT_INDEXER_BEHIND"
               ) {
-                options.logger.warn(
-                  {
-                    ...logFields(),
-                    lane: miningSettlementLane,
-                    hourStart: event.hourStart,
-                    outcome: event.outcome,
-                    ...(event.reasonCode === null
-                      ? {}
-                      : { reasonCode: event.reasonCode }),
-                  },
-                  "LOOP mining hour not settled",
-                );
+                // Decision 0129 §3: a failed hour is logged once per real
+                // attempt (the backoff skips are silent); from the 10th
+                // consecutive failure on, as an error.
+                const fields = {
+                  ...logFields(),
+                  lane: miningSettlementLane,
+                  hourStart: event.hourStart,
+                  outcome: event.outcome,
+                  ...(event.reasonCode === null
+                    ? {}
+                    : { reasonCode: event.reasonCode }),
+                  ...(event.attemptCount === null
+                    ? {}
+                    : { attempts: event.attemptCount }),
+                };
+                if (
+                  event.outcome === "failed" &&
+                  miningSettlementFailureLogLevel(event.attemptCount) ===
+                    "error"
+                ) {
+                  options.logger.error(fields, "LOOP mining hour not settled");
+                } else {
+                  options.logger.warn(fields, "LOOP mining hour not settled");
+                }
               }
             },
             onError: (error) => {

@@ -1,6 +1,6 @@
 # Decision 0037: V2 device sessions, security centre, account settings, support tickets, and public about
 
-- Status: Accepted (backend); Privy security-method evidence open
+- Status: Accepted (backend); Privy security-method evidence open. Revised by Decision 0129 §4 (S157-api, 2026-10-12): `GET /v2/security/capabilities?projection=current` reports `mfa` / `autoRecovery` (and `passkey` while a relying-party association is published) as `available` with `confirmed` evidence; the default response keeps the bytes below.
 - Date: 2026-09-09
 - Scope: S8 backend (D20 `security devices key-export social-recovery
 settings about support`). The main-agent rulings of 2026-09-08 in

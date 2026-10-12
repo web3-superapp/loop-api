@@ -488,7 +488,8 @@ describe("Decision 0125: MEME ERC-20 transfers and post-graduation balances", ()
     await segment(
       "200",
       [
-        transfer(zero, holderA, "1000", 150, hour - 3_600n),
+        // The deploy-block mint (deploy_block_number = 100).
+        transfer(zero, holderA, "1000", 100, hour - 3_600n),
         transfer(holderA, holderB, "400", 190, hour + 2_700n),
       ],
       {
@@ -517,6 +518,27 @@ describe("Decision 0125: MEME ERC-20 transfers and post-graduation balances", ()
     });
     expect(await coverage()).toEqual({ target: "300", complete: false });
     await segment("300", []);
+    // Decision 0129 §2: the checkpoint alone no longer completes it.
+    expect(await coverage()).toEqual({ target: "300", complete: false });
+    const checks = (
+      await launch2.listMemeCoverageChecks({
+        chainId,
+        throughBlockNumber: "300",
+        maxAttempts: 3,
+      })
+    ).filter((entry) => entry.instanceId === target.instanceId);
+    expect(checks).toEqual([
+      {
+        instanceId: target.instanceId,
+        deployMintPresent: true,
+        negativeBalanceCount: 0,
+        failedAttempts: 0,
+      },
+    ]);
+    await launch2.recordMemeCoverage({
+      chainId,
+      verdicts: [{ kind: "complete", instanceId: target.instanceId }],
+    });
     expect(await coverage()).toEqual({ target: "300", complete: true });
 
     // A reorg from block 190 marks the later transfer removed.
@@ -772,5 +794,153 @@ describe("Decision 0125: catalog material approval and community ownership", () 
       },
     });
     expect(cleared.communityId).toBeNull();
+  });
+});
+
+describe("Decision 0129 §2: MEME transfer coverage integrity", () => {
+  const transferAt = (
+    instanceId: string,
+    from: string,
+    to: string,
+    amount: string,
+    block: number,
+  ) => ({
+    instanceId,
+    from,
+    to,
+    amount,
+    transactionHash: hex(32),
+    logIndex: 0,
+    blockNumber: String(block),
+    blockHash: hex(32),
+    at: "1900000000",
+  });
+  const commitWith = (
+    instanceId: string,
+    memeTransfers: ReturnType<typeof transferAt>[],
+  ) =>
+    launch2.commitSegment({
+      chainId,
+      events: [],
+      checkpoint: {
+        lastBlockNumber: "500",
+        lastBlockHash: hex(32),
+        startedFromBlockNumber: "1",
+      },
+      activationGraceBlocks: 15,
+      memeTransfers,
+      memeTransferCoverage: {
+        instanceIds: [instanceId],
+        targetBlockNumber: "500",
+      },
+    });
+  const state = async (instanceId: string) =>
+    (
+      await pool.query<{
+        target: string | null;
+        complete: boolean;
+        failures: number;
+      }>(
+        `select meme_transfers_target_block::text as target,
+           meme_transfers_complete_at is not null as complete,
+           meme_transfers_coverage_failures as failures
+         from public.launch2_instances where instance_id = $1`,
+        [instanceId],
+      )
+    ).rows[0];
+  const checkOf = async (instanceId: string) =>
+    (
+      await launch2.listMemeCoverageChecks({
+        chainId,
+        throughBlockNumber: "500",
+        maxAttempts: 3,
+      })
+    ).find((entry) => entry.instanceId === instanceId);
+
+  it("reads a missing deploy-block mint and negative balances; retry clears the target, stalled keeps it and leaves the list", async () => {
+    const target = await instance();
+    const holder = hex(20);
+    const pm = hex(20);
+    // No mint at block 100; the PoolManager sends what it never received.
+    await commitWith(target.instanceId, [
+      transferAt(target.instanceId, zero, holder, "10", 150),
+      transferAt(target.instanceId, pm, holder, "5", 200),
+    ]);
+    expect(await checkOf(target.instanceId)).toEqual({
+      instanceId: target.instanceId,
+      deployMintPresent: false,
+      negativeBalanceCount: 1,
+      failedAttempts: 0,
+    });
+    await launch2.recordMemeCoverage({
+      chainId,
+      verdicts: [
+        {
+          kind: "retry",
+          instanceId: target.instanceId,
+          gaps: ["DEPLOY_MINT_MISSING", "NEGATIVE_BALANCE"],
+          failedAttempts: 1,
+          negativeBalanceCount: 1,
+        },
+      ],
+    });
+    expect(await state(target.instanceId)).toEqual({
+      target: null,
+      complete: false,
+      failures: 1,
+    });
+    // The lane re-scans (a new target); still failing, the third failure stalls.
+    await commitWith(target.instanceId, []);
+    await launch2.recordMemeCoverage({
+      chainId,
+      verdicts: [
+        {
+          kind: "stalled",
+          instanceId: target.instanceId,
+          gaps: ["DEPLOY_MINT_MISSING"],
+          failedAttempts: 3,
+          negativeBalanceCount: 1,
+        },
+      ],
+    });
+    expect(await state(target.instanceId)).toEqual({
+      target: "500",
+      complete: false,
+      failures: 3,
+    });
+    expect(await checkOf(target.instanceId)).toBeUndefined();
+    // The re-scan is not triggered again (target kept).
+    const lane = (await launch2.listLaneInstances(chainId)).find(
+      (entry) => entry.instanceId === target.instanceId,
+    );
+    expect(lane?.memeTransfersTargetBlock).toBe("500");
+  });
+
+  it("reads a complete history as proven and completing resets the counter", async () => {
+    const target = await instance();
+    const holder = hex(20);
+    await pool.query(
+      "update public.launch2_instances set meme_transfers_coverage_failures = 2 where instance_id = $1",
+      [target.instanceId],
+    );
+    await commitWith(target.instanceId, [
+      transferAt(target.instanceId, zero, holder, "10", 100),
+      transferAt(target.instanceId, holder, zero, "4", 200),
+    ]);
+    expect(await checkOf(target.instanceId)).toEqual({
+      instanceId: target.instanceId,
+      deployMintPresent: true,
+      negativeBalanceCount: 0,
+      failedAttempts: 2,
+    });
+    await launch2.recordMemeCoverage({
+      chainId,
+      verdicts: [{ kind: "complete", instanceId: target.instanceId }],
+    });
+    expect(await state(target.instanceId)).toEqual({
+      target: "500",
+      complete: true,
+      failures: 0,
+    });
   });
 });

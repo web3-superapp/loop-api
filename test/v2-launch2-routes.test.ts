@@ -102,6 +102,7 @@ describe("V2 launch2 routes (Decision 0114)", () => {
       readonly chain?: FakeLaunch2ChainState;
       readonly unconfigured?: boolean;
       readonly writes?: boolean;
+      readonly nativeBalance?: bigint;
     } = {},
   ) {
     const repository = options.repository ?? createInMemoryLaunch2Repository();
@@ -125,7 +126,12 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         ? {}
         : { launch2Chain: createFakeLaunch2Chain(chain) }),
       launchChainReadClient: createFakeMemeSlotClient(
-        defaultMemeFunds({ usd1Allowance: 0n }),
+        defaultMemeFunds({
+          usd1Allowance: 0n,
+          ...(options.nativeBalance === undefined
+            ? {}
+            : { nativeBalance: options.nativeBalance }),
+        }),
       ),
       walletIntentNow: () => new Date(Number(launch2NowSeconds) * 1000),
       logger: false,
@@ -832,7 +838,68 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(poor.statusCode).toBe(409);
     expect(poor.json()).toMatchObject({
       code: "INSUFFICIENT_BALANCE",
-      detailsSafe: { reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT" },
+      detailsSafe: {
+        reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+        requiredUsd1: "100",
+        balanceUsd1: "99",
+      },
+    });
+  });
+
+  it("carries the gas ceiling and the BNB balance on LAUNCH2_GAS_INSUFFICIENT (S157)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const instance = instanceFixture();
+    repository.instances.set(instance.instanceId, instance);
+    const chain = defaultChainState();
+    chain.viewer.curve = { earlyRoundEndsAt: 0n };
+    const { app } = await createApp({
+      repository,
+      chain,
+      nativeBalance: 10n ** 14n,
+    });
+    const poor = await post(
+      app,
+      `/v2/launch2/instances/${instance.instanceId}/nft/prepare`,
+      { walletId },
+    );
+    expect(poor.statusCode).toBe(409);
+    // (250,000 mint fallback + 80,000 approve) x 1 gwei = 0.00033 BNB.
+    expect(poor.json()).toMatchObject({
+      code: "INSUFFICIENT_BALANCE",
+      detailsSafe: {
+        reasonCode: "LAUNCH2_GAS_INSUFFICIENT",
+        requiredBnb: "0.00033",
+        balanceBnb: "0.0001",
+      },
+    });
+  });
+
+  it("carries the wallet balance when the balance bounds a curve trade (S157)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const instance = priorityInstance();
+    repository.instances.set(instance.instanceId, instance);
+    seedMember(repository, instance.instanceId);
+    const chain = defaultChainState({ usd1Balance: 5n * wad });
+    const { app } = await createApp({ repository, chain });
+    const short = await post(
+      app,
+      `/v2/launch2/instances/${instance.instanceId}/trade/prepare`,
+      {
+        walletId,
+        side: "buy",
+        amount: "10",
+        minOut: "1",
+        deadline: iso(launch2NowSeconds + 60n),
+      },
+    );
+    expect(short.statusCode).toBe(409);
+    expect(short.json()).toMatchObject({
+      code: "INSUFFICIENT_BALANCE",
+      detailsSafe: {
+        reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+        maxAmountIn: "5",
+        balanceUsd1: "5",
+      },
     });
   });
 

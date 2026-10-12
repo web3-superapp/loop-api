@@ -211,6 +211,8 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
     listLaneInstances: unused,
     getCheckpoint: unused,
     commitSegment: unused,
+    listMemeCoverageChecks: unused,
+    recordMemeCoverage: unused,
     listSnapshotsToVerify: unused,
     nftHoldersAt: unused,
     recordSnapshotVerification: unused,

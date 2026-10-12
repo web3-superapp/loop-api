@@ -54,6 +54,11 @@ export const miningSettlementReasonCodes = Object.freeze({
   indexerBehind: "MINING_SETTLEMENT_INDEXER_BEHIND",
   outsideRelease: "MINING_SETTLEMENT_OUTSIDE_RELEASE",
   hourNotComplete: "MINING_SETTLEMENT_HOUR_NOT_COMPLETE",
+  /**
+   * Decision 0129 §3: a failed hour waits out its exponential backoff
+   * before the scheduled lane tries it again (not an attempt, not logged).
+   */
+  retryBackoff: "MINING_SETTLEMENT_RETRY_BACKOFF",
   inputInvalid: "MINING_SETTLEMENT_INPUT_INVALID",
   assetSourceUnknown: "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
   priceMissing: "MINING_SETTLEMENT_PRICE_MISSING",
@@ -401,3 +406,46 @@ export const miningDefaultParameterDocument = Object.freeze({
 /** Contract caps the defaults are sized to (LoopRewardClaim, S138-contracts). */
 export const miningClaimDailyCapRaw = 1_000_000n * miningFixedScale;
 export const miningClaimTotalCapRaw = 900_000_000n * miningFixedScale;
+
+/**
+ * Decision 0129 §3: a failed hour (`mining_epochs.status = 'failed'`) is
+ * retried by the scheduled lane after 1, 2, 4, 8, … minutes, capped at 60,
+ * counted from its last failure (`updated_at`) by `attempt_count`.
+ */
+export const miningSettlementRetryCapSeconds = 3_600;
+
+export function miningSettlementRetryDelaySeconds(
+  attemptCount: number,
+): number {
+  if (!Number.isSafeInteger(attemptCount) || attemptCount <= 0) return 0;
+  // 2^(n−1) minutes; past 2^6 = 64 the cap holds (and avoids overflow).
+  const minutes = attemptCount >= 7 ? 64 : 2 ** (attemptCount - 1);
+  return Math.min(minutes * 60, miningSettlementRetryCapSeconds);
+}
+
+/** The earliest time (ms since epoch) a failed hour may be tried again. */
+export function miningSettlementNextAttemptAt(epoch: {
+  readonly attemptCount: number;
+  readonly updatedAt: string;
+}): number {
+  return (
+    Date.parse(epoch.updatedAt) +
+    miningSettlementRetryDelaySeconds(epoch.attemptCount) * 1_000
+  );
+}
+
+/**
+ * Decision 0129 §3: each real failed attempt is one warn; from the 10th
+ * consecutive failure on it is an error (one per hour per failing hour, as
+ * the backoff is then at its 60-minute cap).
+ */
+export const miningSettlementFailureErrorThreshold = 10;
+
+export function miningSettlementFailureLogLevel(
+  attemptCount: number | null,
+): "warn" | "error" {
+  return attemptCount !== null &&
+    attemptCount >= miningSettlementFailureErrorThreshold
+    ? "error"
+    : "warn";
+}

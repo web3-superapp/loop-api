@@ -139887,8 +139887,15 @@
         "operationId": "listV2SecurityCapabilities",
         "summary": "List MFA, passkey, recovery, and key-export availability",
         "tags": ["security"],
-        "description": "Every item is unavailable with a PRIVY_<X>_EVIDENCE_PENDING reason until Privy Go/No-Go evidence exists. No local simulation; the key-export page shows an explanation and a non-executable button.",
+        "description": "Default (no query, Decision 0037 bytes): every item is unavailable with a PRIVY_<X>_EVIDENCE_PENDING reason. Decision 0129 §4: ?projection=current reports what the client wired through privy_flutter — mfa (TOTP, S60a) and autoRecovery (Privy embedded-wallet default) available with confirmed evidence, passkey (S64) available while the API publishes a relying-party association (Decision 0063) and otherwise unavailable / PASSKEY_RELYING_PARTY_NOT_CONFIGURED; recoveryPassword, socialRecovery and keyExport stay unavailable with their pending reason. Apps whose codec accepts only unavailable must not send projection=current. No local simulation; the key-export page shows an explanation and a non-executable button.",
         "parameters": [
+          {
+            "schema": { "type": "string", "enum": ["pendingOnly", "current"] },
+            "in": "query",
+            "name": "projection",
+            "required": false,
+            "description": "pendingOnly (default) or current (Decision 0129 §4)."
+          },
           {
             "schema": {
               "type": "string",
@@ -139956,12 +139963,18 @@
                           },
                           "status": {
                             "type": "string",
-                            "description": "Never available in this step: Privy plan/SDK/device evidence is pending for every method (03 §5.2). The client shows the reason and the how-to-enable guide only.",
-                            "enum": ["unavailable"]
+                            "enum": ["unavailable", "available"],
+                            "description": "Default projection (pendingOnly, Decision 0037): always unavailable with pending evidence. Decision 0129 §4, projection=current: mfa and autoRecovery are available (confirmed evidence), passkey is available while the API publishes a relying-party association (else unavailable / PASSKEY_RELYING_PARTY_NOT_CONFIGURED), recoveryPassword / socialRecovery / keyExport stay unavailable."
                           },
                           "reasonCode": {
-                            "type": "string",
-                            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "The unavailability reason; null when available."
                           },
                           "evidence": {
                             "type": "object",
@@ -139970,11 +139983,18 @@
                             "properties": {
                               "status": {
                                 "type": "string",
-                                "enum": ["pending"]
+                                "enum": ["pending", "confirmed"],
+                                "description": "pending with an unavailable item; confirmed with an available one (projection=current only)."
                               },
                               "reasonCode": {
                                 "type": "string",
                                 "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              },
+                              "reference": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120,
+                                "description": "Decision 0129 §4: present with confirmed evidence only — where the evidence is recorded (the client step and decision)."
                               }
                             }
                           },
@@ -156470,7 +156490,7 @@
         "operationId": "prepareV2Launch2NftMint",
         "summary": "Prepare the 100 USD1 project NFT mint",
         "tags": ["launch2"],
-        "description": "Pre-checks at one block what ProjectNFT.mint enforces (activated, sale open by block time, one mint per address for life, 100 USD1 balance) and returns the unsigned mint() transaction for the device signing exit, preceded by an exact 100 USD1 approve to the NFT contract when the allowance is short (nonce N, the mint N+1). 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH | LAUNCH2_NFT_ALREADY_MINTED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 403 POLICY_BLOCKED (Decision 0065 canary asset and ceilings, USD1 at par; Decision 0117: the NFT and the USD1 must be the activated instance's registered contracts, else LAUNCH2_COUNTERPARTY_NOT_INSTANCE); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Pre-checks at one block what ProjectNFT.mint enforces (activated, sale open by block time, one mint per address for life, 100 USD1 balance) and returns the unsigned mint() transaction for the device signing exit, preceded by an exact 100 USD1 approve to the NFT contract when the allowance is short (nonce N, the mint N+1). 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH | LAUNCH2_NFT_ALREADY_MINTED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (detailsSafe.requiredUsd1, balanceUsd1) | LAUNCH2_GAS_INSUFFICIENT (detailsSafe.requiredBnb = the gas fee ceiling, balanceBnb); 403 POLICY_BLOCKED (Decision 0065 canary asset and ceilings, USD1 at par; Decision 0117: the NFT and the USD1 must be the activated instance's registered contracts, else LAUNCH2_COUNTERPARTY_NOT_INSTANCE); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -157406,7 +157426,7 @@
         "operationId": "prepareV2Launch2Trade",
         "summary": "Prepare a MEME v2 curve buy or sell",
         "tags": ["launch2"],
-        "description": "Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the deadline encoded in buy / sell (and the intent's deadline / expiresAt) is max(the quote's deadline, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s). Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound; a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Takes the quote's amount, minOut, and deadline. A deadline in the past is 409 QUOTE_EXPIRED / LAUNCH2_QUOTE_EXPIRED (re-quote); more than 600 s ahead is 422 LAUNCH2_DEADLINE_TOO_FAR. Decision 0126: the deadline encoded in buy / sell (and the intent's deadline / expiresAt) is max(the quote's deadline, prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s). Re-quotes at one block: an amount above the executable MAX is 422 LAUNCH2_AMOUNT_ABOVE_MAX (detailsSafe.maxAmountIn, limitedBy) or 409 INSUFFICIENT_BALANCE when the balance is the bound (LAUNCH2_USD1_BALANCE_INSUFFICIENT with detailsSafe.maxAmountIn, balanceUsd1 | LAUNCH2_MEME_BALANCE_INSUFFICIENT with maxAmountIn, balanceMeme; LAUNCH2_GAS_INSUFFICIENT with requiredBnb = the gas fee ceiling, balanceBnb); a fresh expectedOut below minOut (another order filled first) is 409 DATA_STALE / LAUNCH2_PRICE_MOVED (detailsSafe.expectedOut) — refresh the quote in place. In the priority hour a buy carries the wallet's Merkle proof from the verified snapshot (403 POLICY_BLOCKED / LAUNCH2_NOT_IN_SNAPSHOT; 503 LAUNCH2_SNAPSHOT_UNVERIFIED when the lane could not reproduce the published root). Returns buy(amountInMax, minMemeOut, deadline, proof) / sell(memeIn, minUsd1Out, deadline) unsigned, with an exact approve first when the allowance is short. The contract still enforces minOut / deadline and refunds the unused USD1. Decision 0117: the curve, the USD1 and the MEME must be the activated instance's registered contracts, else 403 POLICY_BLOCKED / LAUNCH2_COUNTERPARTY_NOT_INSTANCE; the Decision 0065 canary asset and ceilings still apply. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -159167,7 +159187,7 @@
         "operationId": "prepareV2Launch2PoolTrade",
         "summary": "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
         "tags": ["launch2"],
-        "description": "Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT | LAUNCH2_MEME_BALANCE_INSUFFICIENT | LAUNCH2_GAS_INSUFFICIENT; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (detailsSafe.maxAmountIn = the balance, requiredAmountIn, balanceUsd1) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (maxAmountIn, requiredAmountIn, balanceMeme) | LAUNCH2_GAS_INSUFFICIENT (requiredBnb = the gas fee ceiling, balanceBnb); 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "requestBody": {
           "required": true,
           "content": {

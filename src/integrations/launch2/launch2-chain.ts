@@ -102,6 +102,26 @@ function lower(value: string): string {
   return value.toLowerCase();
 }
 
+const transferTopic =
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const zeroTopic = `0x${"0".repeat(64)}`;
+
+/** Decision 0129 §2: every anchor's mint is among the logs. */
+function mintAnchorsMet(
+  logs: readonly Log<bigint, number, false>[],
+  anchors: readonly { readonly token: string; readonly blockNumber: bigint }[],
+): boolean {
+  return anchors.every((anchor) =>
+    logs.some(
+      (log) =>
+        lower(log.address) === lower(anchor.token) &&
+        log.blockNumber === anchor.blockNumber &&
+        lower(log.topics[0] ?? "") === transferTopic &&
+        lower(log.topics[1] ?? "") === zeroTopic,
+    ),
+  );
+}
+
 function stringify(value: unknown): string {
   if (typeof value === "bigint") return value.toString(10);
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -123,11 +143,21 @@ export function createLaunch2Chain(input: {
   readonly rpcUrls: readonly string[];
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
+  /**
+   * Test seam: one transport per endpoint instead of the RPC URL list
+   * (the fallback runs over them, and Decision 0129 §2 asks them one by
+   * one when an answer misses a mint anchor).
+   */
+  readonly endpointTransports?: readonly Transport[];
   readonly expectedChainId?: number;
   /** Address-filter batch size per `eth_getLogs`; default 8. */
   readonly maxAddressesPerLogQuery?: number;
 }): Launch2Chain {
-  if (input.rpcUrls.length === 0 && input.transport === undefined) {
+  if (
+    input.rpcUrls.length === 0 &&
+    input.transport === undefined &&
+    (input.endpointTransports ?? []).length === 0
+  ) {
     throw new Launch2ChainRefusedError("LAUNCH2_CHAIN_NOT_CONFIGURED");
   }
   const expectedChainId = input.expectedChainId ?? 97;
@@ -137,15 +167,23 @@ export function createLaunch2Chain(input: {
       input.maxAddressesPerLogQuery ?? launch2DefaultMaxAddressesPerLogQuery,
     ),
   );
-  const transport =
-    input.transport ??
-    fallback(
-      input.rpcUrls.map((url) =>
-        http(url, { timeout: 10_000, retryCount: 1, batch: { batchSize: 32 } }),
-      ),
-      { retryCount: 0 },
+  const endpoints =
+    input.endpointTransports ??
+    input.rpcUrls.map((url) =>
+      http(url, { timeout: 10_000, retryCount: 1, batch: { batchSize: 32 } }),
     );
+  const transport =
+    input.transport ?? fallback([...endpoints], { retryCount: 0 });
   const client = createPublicClient({ chain: bscTestnet, transport });
+  // Decision 0129 §2: one client per endpoint, asked in order when the
+  // fallback's answer misses a mint anchor (an empty answer is a success to
+  // the fallback transport, so it never moves on by itself).
+  const singles =
+    input.transport !== undefined
+      ? []
+      : endpoints.map((endpoint) =>
+          createPublicClient({ chain: bscTestnet, transport: endpoint }),
+        );
 
   async function read<T>(
     address: string,
@@ -190,7 +228,14 @@ export function createLaunch2Chain(input: {
       }
     },
 
-    async getLogs({ roles, fromBlock, toBlock, poolSwaps, routerSwaps }) {
+    async getLogs({
+      roles,
+      fromBlock,
+      toBlock,
+      poolSwaps,
+      routerSwaps,
+      mintAnchors,
+    }) {
       const pools = [...(poolSwaps ?? new Map<string, readonly string[]>())];
       const routerIds = routerSwaps?.poolIds ?? [];
       if (
@@ -201,17 +246,45 @@ export function createLaunch2Chain(input: {
         return { logs: [], ignored: 0 };
       }
       const addresses = [...roles.keys()] as Address[];
-      const raw: Log<bigint, number, false>[] = [];
       let queries = 0;
-      for (let i = 0; i < addresses.length; i += maxAddresses) {
-        queries += 1;
-        raw.push(
-          ...(await client.getLogs({
-            address: addresses.slice(i, i + maxAddresses),
-            fromBlock,
-            toBlock,
-          })),
-        );
+      const addressLogs = async (
+        reader: typeof client,
+      ): Promise<Log<bigint, number, false>[]> => {
+        const found: Log<bigint, number, false>[] = [];
+        for (let i = 0; i < addresses.length; i += maxAddresses) {
+          found.push(
+            ...(await reader.getLogs({
+              address: addresses.slice(i, i + maxAddresses),
+              fromBlock,
+              toBlock,
+            })),
+          );
+        }
+        return found;
+      };
+      queries += Math.ceil(addresses.length / maxAddresses);
+      let raw = await addressLogs(client);
+      const anchors = (mintAnchors ?? []).filter(
+        (anchor) =>
+          anchor.blockNumber >= fromBlock && anchor.blockNumber <= toBlock,
+      );
+      if (!mintAnchorsMet(raw, anchors)) {
+        let trusted: Log<bigint, number, false>[] | null = null;
+        for (const single of singles) {
+          try {
+            const answer = await addressLogs(single);
+            if (mintAnchorsMet(answer, anchors)) {
+              trusted = answer;
+              break;
+            }
+          } catch {
+            // This endpoint refused or failed; ask the next one.
+          }
+        }
+        if (trusted === null) {
+          throw new Launch2ChainRefusedError("LAUNCH2_RPC_LOGS_UNTRUSTED");
+        }
+        raw = trusted;
       }
       // Decision 0124: the PoolManager serves every v4 pool on the chain, so
       // its Swap logs are asked for by pool id (topic1), never by address

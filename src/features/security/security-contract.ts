@@ -1,11 +1,15 @@
 /**
- * D20 security contract (Decision 0037).
+ * D20 security contract (Decision 0037, revised by Decision 0129 §4).
  *
- * Every Privy-side security method is reported as `unavailable` with a
- * pending-evidence reason: MFA, passkey, recovery password, automatic
- * recovery, social recovery, and private-key export all need Privy plan,
- * platform, SDK, and physical-device evidence before the backend may say
- * anything else (03 §5.2, §19). Nothing here simulates them locally.
+ * The default projection (`pendingOnly`, the frozen 0037 bytes) reports every
+ * Privy-side security method as `unavailable` with a pending-evidence reason.
+ * Decision 0129 §4: the `current` projection (opt-in, `?projection=current`)
+ * reports what the client has actually wired through privy_flutter — MFA
+ * (TOTP, S60a), passkey (S64; only while the API publishes a relying-party
+ * association, Decision 0063), and automatic recovery (Privy's embedded
+ * wallet default, user ruling 2026-09-21) — as `available` with `confirmed`
+ * evidence. Recovery password, social recovery, and key export stay
+ * `unavailable` with their pending reason. Nothing here simulates them.
  */
 
 export const securityCapabilityIds = Object.freeze([
@@ -66,3 +70,41 @@ export const securityReasonCodes = Object.freeze({
 
 export const deviceSessionRevokeDigestDomain =
   "loop:v2:device-session-command:v1";
+
+/**
+ * Decision 0129 §4: `pendingOnly` (default) keeps the Decision 0037 bytes the
+ * App at loop-mobile 2825f1d parses (its codec refuses any other status);
+ * `current` is the projection a client opts into once it reads `available`.
+ */
+export const securityCapabilityProjections = Object.freeze([
+  "pendingOnly",
+  "current",
+] as const);
+export type SecurityCapabilityProjectionMode =
+  (typeof securityCapabilityProjections)[number];
+
+/** Decision 0129 §4: passkey without a published relying-party association. */
+export const securityPasskeyRelyingPartyNotConfiguredReasonCode =
+  "PASSKEY_RELYING_PARTY_NOT_CONFIGURED" as const;
+
+/**
+ * Decision 0129 §4: the evidence of the three methods the client wired. The
+ * reference is an operational pointer (1–120 characters), never a secret.
+ */
+export const securityCapabilityConfirmedEvidence = Object.freeze({
+  mfa: Object.freeze({
+    reasonCode: "PRIVY_MFA_CLIENT_TOTP",
+    reference:
+      "S60a: privy_flutter TOTP enrolment in 安全设置 (docs/modules/S2-identity-account.md)",
+  }),
+  passkey: Object.freeze({
+    reasonCode: "PRIVY_PASSKEY_CLIENT_ENROLLMENT",
+    reference:
+      "S64: privy_flutter passkey link/enroll; RP = the API domain (loop-api Decision 0063)",
+  }),
+  autoRecovery: Object.freeze({
+    reasonCode: "PRIVY_EMBEDDED_WALLET_DEFAULT_RECOVERY",
+    reference:
+      "S60a: Privy 内置钱包默认由登录方式恢复；换设备后用同一邮箱登录即可（来源：Privy）",
+  }),
+} as const);

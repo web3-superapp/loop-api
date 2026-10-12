@@ -881,6 +881,42 @@ are never attributed to anyone.
 | 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`; pool (0124): `POOL_NOT_GRADUATED` (`stage`), `POOL_QUOTE_UNAVAILABLE` (`revertReason`: contract error name, `UNKNOWN`, or `STATE_OVERRIDE_UNSUPPORTED`), `POOL_INSUFFICIENT_LIQUIDITY`, `POOL_QUOTE_ZERO`                                                                       |
 | 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED`; pool (0124): `POOL_ROUTER_NOT_CONFIGURED`, `POOL_ROUTER_CODE_MISMATCH`, `POOL_ROUTER_MANAGER_MISMATCH`, `POOL_KEY_MISMATCH` |
 
+### 4.1 `INSUFFICIENT_BALANCE` numbers (S157, Decision 0129 §1)
+
+Every `409 INSUFFICIENT_BALANCE` carries the numbers behind the refusal next to `reasonCode`.
+All values are decimal strings in whole units (18 decimals, e.g. `"99.5"`), read at the same
+block as the check. Keys that existed before S157 are unchanged; the `balance*` / `requiredBnb`
+keys are additive.
+
+- `POST …/nft/prepare`, `LAUNCH2_USD1_BALANCE_INSUFFICIENT`: `requiredUsd1` (the NFT price),
+  `balanceUsd1` (the wallet's USD1).
+- `POST …/trade/prepare` (curve), balance-bound: `maxAmountIn` (the executable max) plus
+  `balanceUsd1` (buy, `LAUNCH2_USD1_BALANCE_INSUFFICIENT`) or `balanceMeme` (sell,
+  `LAUNCH2_MEME_BALANCE_INSUFFICIENT`).
+- `POST …/pool/prepare` (official pool): `maxAmountIn` (= the input-token balance),
+  `requiredAmountIn` (the trade's maxIn) plus `balanceUsd1` (buy) or `balanceMeme` (sell).
+- `LAUNCH2_GAS_INSUFFICIENT` (every launch2 prepare): `requiredBnb` = the gas fee ceiling
+  (gas limit of the call, plus the approve when one is needed, × maxFeePerGas or gasPrice),
+  `balanceBnb` = the wallet's BNB.
+
+Example:
+
+```json
+{
+  "code": "INSUFFICIENT_BALANCE",
+  "category": "conflict",
+  "retryable": false,
+  "userMessageKey": "errors.balance.insufficient",
+  "correlationId": "…",
+  "detailsSafe": {
+    "reasonCode": "LAUNCH2_GAS_INSUFFICIENT",
+    "requiredBnb": "0.000412",
+    "balanceBnb": "0.0001"
+  },
+  "providerReferenceSafe": null
+}
+```
+
 ## 5. Unavailable behaviour
 
 Never fabricate a stage, price, or list: a 503 shows the module unavailable with retry; an

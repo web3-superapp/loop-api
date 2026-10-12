@@ -519,6 +519,19 @@ describe.skipIf(skipReason !== null)(
       const first = await lane.runOnce();
       expect(first.registered).toBe(1);
       expect(first.kind).toBe("seeded");
+      // Decision 0129 §2: the real MEME mints at its deploy block — the
+      // anchor the reader requires was found and indexed.
+      const mints = await pool.query<{ count: string }>(
+        `select count(*)::text as count
+         from public.launch2_meme_transfers t
+         join public.launch2_instances i on i.instance_id = t.instance_id
+         where not t.removed
+           and t.from_address = '0x0000000000000000000000000000000000000000'
+           and t.block_number = i.deploy_block_number
+           and i.instance_id = (select instance_id from public.launch2_instances
+             order by registered_at desc limit 1)`,
+      );
+      expect(mints.rows[0]?.count).not.toBe("0");
       const holderKey = anvilPrivateKey(12);
       const secondKey = anvilPrivateKey(13);
       const outsiderKey = anvilPrivateKey(14);

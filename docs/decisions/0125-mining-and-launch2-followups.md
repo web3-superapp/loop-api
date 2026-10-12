@@ -1,6 +1,6 @@
 # Decision 0125: Mining and launch2 follow-ups of the S138 run (S148-api)
 
-- Status: Accepted (S148-api), Development / BSC Testnet only
+- Status: Accepted (S148-api), Development / BSC Testnet only. Patched by Decision 0129 §2 (S157-api, 2026-10-12): `meme_transfers_complete_at` is set only after the deploy-block mint and non-negative balances are verified; a log answer without a deploy-block mint is `LAUNCH2_RPC_LOGS_UNTRUSTED`.
 - Date: 2026-10-11
 - Baseline: `integration/v2` = `1b2b426`
 - Inputs: `docs/integration/S138/report.md` (defects D1 / D2 / D3, observations ② ③),

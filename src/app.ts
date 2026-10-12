@@ -2361,6 +2361,11 @@ export async function buildApp(
         : null,
       approvalsRuntimeAvailable: walletIntentRuntimeAvailable,
       notifications: database.notifications ?? null,
+      // Decision 0129 §4: passkey is available only while an association
+      // file is published (Decision 0063).
+      passkeyRelyingPartyConfigured:
+        config.passkeyRelyingParty.android !== null ||
+        config.passkeyRelyingParty.ios !== null,
       now: securityNow,
     });
   const settingsService =

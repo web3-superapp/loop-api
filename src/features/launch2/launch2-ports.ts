@@ -1,4 +1,8 @@
 import type {
+  Launch2MemeCoverageFacts,
+  Launch2MemeCoverageVerdict,
+} from "./launch2-meme-coverage.js";
+import type {
   Launch2HoldReason,
   Launch2IntentKind,
   Launch2Stage,
@@ -143,6 +147,18 @@ export interface Launch2Chain {
       readonly router: string;
       readonly poolIds: readonly string[];
     };
+    /**
+     * Decision 0129 §2: ERC-20 mints that must be in the answer (a MEME's
+     * `Transfer` from the zero address at its instance's deploy block,
+     * for every deploy block inside the range). An answer without one is
+     * untrusted (a public endpoint that silently returns `[]` for old
+     * blocks): the reader asks the next endpoint, and throws
+     * `LAUNCH2_RPC_LOGS_UNTRUSTED` (`reasonCode`) when none has it.
+     */
+    readonly mintAnchors?: readonly {
+      readonly token: string;
+      readonly blockNumber: bigint;
+    }[];
   }): Promise<{
     readonly logs: readonly Launch2DecodedLog[];
     readonly ignored: number;
@@ -686,6 +702,25 @@ export interface Launch2Repository {
       readonly targetBlockNumber: string;
     };
   }): Promise<{ readonly storedCount: number; readonly touched: number }>;
+  /**
+   * Decision 0129 §2: instances whose MEME re-scan reached its target
+   * (target ≤ `throughBlockNumber`), not complete, with fewer than
+   * `maxAttempts` failed checks, and the facts the coverage check needs.
+   */
+  listMemeCoverageChecks(input: {
+    readonly chainId: string;
+    readonly throughBlockNumber: string;
+    readonly maxAttempts: number;
+  }): Promise<readonly Launch2MemeCoverageFacts[]>;
+  /**
+   * Decision 0129 §2: complete marks `meme_transfers_complete_at`; retry
+   * records the failure and clears the target (one more re-scan); stalled
+   * records the failure and keeps the target (no automatic re-scan).
+   */
+  recordMemeCoverage(input: {
+    readonly chainId: string;
+    readonly verdicts: readonly Launch2MemeCoverageVerdict[];
+  }): Promise<void>;
   listSnapshotsToVerify(chainId: string): Promise<
     readonly {
       readonly instanceId: string;

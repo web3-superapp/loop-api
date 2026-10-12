@@ -178,6 +178,79 @@ POST /v2/devices/{sessionId}/revoke
 只有说明与**不可执行**按钮；`social-recovery` 页只有 2-of-3 说明 + unavailable，
 不渲染守护人列表。原型里的"已开启 / 3 项保护已开启 / 已导出态"在本步都不存在。
 
+#### 3.1.1 `?projection=current`（决策 0129 §4，S157）
+
+不带 query（或 `?projection=pendingOnly`）时响应与上面完全一致（决策 0037 字节不变），
+因为 loop-mobile `2825f1d` 的 codec 只接受 `unavailable` + `pending`、多一个键就整页失败。
+新客户端在 codec 放宽后改发 `GET /v2/security/capabilities?projection=current`：
+
+```json
+{
+  "items": [
+    {
+      "capabilityId": "mfa",
+      "status": "available",
+      "reasonCode": null,
+      "evidence": {
+        "status": "confirmed",
+        "reasonCode": "PRIVY_MFA_CLIENT_TOTP",
+        "reference": "S60a: privy_flutter TOTP enrolment in 安全设置 (docs/modules/S2-identity-account.md)"
+      },
+      "guideKey": "security.capability.mfa.howToEnable"
+    },
+    {
+      "capabilityId": "passkey",
+      "status": "available",
+      "reasonCode": null,
+      "evidence": {
+        "status": "confirmed",
+        "reasonCode": "PRIVY_PASSKEY_CLIENT_ENROLLMENT",
+        "reference": "S64: privy_flutter passkey link/enroll; RP = the API domain (loop-api Decision 0063)"
+      },
+      "guideKey": "security.capability.passkey.howToEnable"
+    },
+    {
+      "capabilityId": "recoveryPassword",
+      "status": "unavailable",
+      "reasonCode": "PRIVY_RECOVERY_PASSWORD_EVIDENCE_PENDING",
+      "evidence": {
+        "status": "pending",
+        "reasonCode": "PRIVY_RECOVERY_PASSWORD_EVIDENCE_PENDING"
+      },
+      "guideKey": "security.capability.recoveryPassword.howToEnable"
+    },
+    {
+      "capabilityId": "autoRecovery",
+      "status": "available",
+      "reasonCode": null,
+      "evidence": {
+        "status": "confirmed",
+        "reasonCode": "PRIVY_EMBEDDED_WALLET_DEFAULT_RECOVERY",
+        "reference": "S60a: Privy 内置钱包默认由登录方式恢复；换设备后用同一邮箱登录即可（来源：Privy）"
+      },
+      "guideKey": "security.capability.autoRecovery.howToEnable"
+    }
+  ],
+  "contractVersion": "2.0"
+}
+```
+
+（示例省略 `socialRecovery`、`keyExport`，它们与默认响应相同：`unavailable` +
+`PRIVY_<X>_EVIDENCE_PENDING`。实际响应仍是固定六项、固定顺序。）
+
+- `status`：`available` | `unavailable`；`available` 时 `reasonCode` 为 `null`，
+  `evidence.status` 为 `confirmed` 且带 `evidence.reference`（1–120 字符，只作出处说明，
+  不要展示成按钮）；`unavailable` 时与默认相同（`pending`，无 `reference`）。
+- `passkey` 只有在 API 发布了 Passkey RP 关联文件（`PASSKEY_ANDROID_CERT_SHA256` 或
+  `PASSKEY_IOS_TEAM_ID`，决策 0063）时才是 `available`；否则 `unavailable` +
+  `PASSKEY_RELYING_PARTY_NOT_CONFIGURED`。
+- `available` 表示该方式可用（客户端已经接了 Privy 的流程），**不代表**当前账号已开启；
+  是否已开启仍以客户端读到的 Privy `user.mfaMethods` / passkey 列表为准。
+- query 只允许 `projection`，值只能是 `pendingOnly` / `current`；其他一律
+  `400 INVALID_REQUEST`。
+- 前端跟进：codec 接受 `available` / `confirmed` / `reference` / `reasonCode: null` 之后再发
+  `projection=current`；旧 codec 不要发。
+
 ### 3.2 `GET /v2/security/summary` → `security` 页汇总
 
 ```json
@@ -430,13 +503,13 @@ POST /v2/devices/{sessionId}/revoke
 
 ## 8. 本步明确 unavailable 的产品项
 
-| 项目                                                 | 来源 / reasonCode                                             |
-| ---------------------------------------------------- | ------------------------------------------------------------- |
-| MFA、Passkey、恢复密码、自动恢复、社交恢复、私钥导出 | `GET /v2/security/capabilities`：`PRIVY_<X>_EVIDENCE_PENDING` |
-| 撤销当前设备 / 下线所有设备                          | `AUTH_STEP_UP_REQUIRED`                                       |
-| 设备名称、地理位置、持续活跃时间                     | 无后端字段，不渲染                                            |
-| 安全评分 / "3 项保护已开启"                          | 不存在，不渲染                                                |
-| 用户协议 / 隐私政策 / 风险披露 URL                   | `termsGate` 只有版本槽位                                      |
-| 工单附件                                             | `SUPPORT_ATTACHMENTS_UNAVAILABLE`                             |
-| 客服在线状态、社区成员数                             | 无后端字段（社区数据走 community 模块）                       |
-| 数据用量、主题、reduceMotion                         | 本地（`policy.localOnly`）                                    |
+| 项目                                                 | 来源 / reasonCode                                                                                                                                                                                                             |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MFA、Passkey、恢复密码、自动恢复、社交恢复、私钥导出 | 默认 `GET /v2/security/capabilities`：`PRIVY_<X>_EVIDENCE_PENDING`；`?projection=current`（0129）：恢复密码、社交恢复、私钥导出仍是 `PRIVY_<X>_EVIDENCE_PENDING`，Passkey 无 RP 关联时 `PASSKEY_RELYING_PARTY_NOT_CONFIGURED` |
+| 撤销当前设备 / 下线所有设备                          | `AUTH_STEP_UP_REQUIRED`                                                                                                                                                                                                       |
+| 设备名称、地理位置、持续活跃时间                     | 无后端字段，不渲染                                                                                                                                                                                                            |
+| 安全评分 / "3 项保护已开启"                          | 不存在，不渲染                                                                                                                                                                                                                |
+| 用户协议 / 隐私政策 / 风险披露 URL                   | `termsGate` 只有版本槽位                                                                                                                                                                                                      |
+| 工单附件                                             | `SUPPORT_ATTACHMENTS_UNAVAILABLE`                                                                                                                                                                                             |
+| 客服在线状态、社区成员数                             | 无后端字段（社区数据走 community 模块）                                                                                                                                                                                       |
+| 数据用量、主题、reduceMotion                         | 本地（`policy.localOnly`）                                                                                                                                                                                                    |

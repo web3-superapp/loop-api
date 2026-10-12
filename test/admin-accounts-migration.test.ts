@@ -64,7 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000074_testnet_faucet_usd1_comment");
+    expect(latestMigrationName).toBe("000075_launch2_meme_coverage_integrity");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

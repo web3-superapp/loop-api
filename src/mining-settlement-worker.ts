@@ -15,13 +15,21 @@ import type {
  * hours of the catch-up window (oldest first, a bounded number per tick)
  * and re-checks open claims against the chain. A hour that is not ready
  * (indexer behind, no parameters) is retried on a later tick; a failed
- * hour keeps its reason and is retried too. It never signs anything.
+ * hour keeps its reason and is retried too — Decision 0129 §3: after 1, 2,
+ * 4, 8, … minutes (cap 60) from its last failure, so a failed hour is
+ * tried (and logged) only when its backoff has run out. It never signs
+ * anything.
  */
 
 export interface MiningSettlementLaneEvent {
   readonly hourStart: string;
   readonly outcome: MiningSettleOutcome["kind"];
   readonly reasonCode: string | null;
+  /**
+   * Decision 0129 §3: a failed outcome's `attempt_count` (consecutive
+   * failures of that hour); null otherwise.
+   */
+  readonly attemptCount: number | null;
 }
 
 export interface MiningSettlementLane {
@@ -75,6 +83,10 @@ export function createMiningSettlementLane(options: {
         reasonCode:
           outcome.kind === "skipped" || outcome.kind === "failed"
             ? outcome.reasonCode
+            : null,
+        attemptCount:
+          outcome.kind === "failed"
+            ? (outcome.epoch?.attemptCount ?? null)
             : null,
       });
       if (outcome.kind !== "skipped") attempts += 1;

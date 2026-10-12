@@ -1,4 +1,4 @@
-export const latestMigrationName = "000074_testnet_faucet_usd1_comment";
+export const latestMigrationName = "000075_launch2_meme_coverage_integrity";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

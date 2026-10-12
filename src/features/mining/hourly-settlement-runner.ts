@@ -15,6 +15,7 @@ import {
 import {
   formatMiningDecimal,
   miningHourSeconds,
+  miningSettlementNextAttemptAt,
   miningSettlementReasonCodes,
   parseMiningDecimal,
 } from "./hourly-settlement-contract.js";
@@ -621,6 +622,18 @@ export function createMiningSettlementRunner(dependencies: {
       const existing = await repository.getEpochByHour(iso(hourStart));
       if (existing?.status === "settled") {
         return { kind: "already_settled", epoch: existing };
+      }
+      // Decision 0129 §3: the scheduled lane waits out a failed hour's
+      // backoff; an operator test trigger is not held back.
+      if (
+        trigger === "scheduled" &&
+        existing?.status === "failed" &&
+        now().getTime() < miningSettlementNextAttemptAt(existing)
+      ) {
+        return {
+          kind: "skipped",
+          reasonCode: miningSettlementReasonCodes.retryBackoff,
+        };
       }
       const nowSeconds = BigInt(Math.floor(now().getTime() / 1000));
       const readyAt = hourEnd + BigInt(dependencies.indexerGraceSeconds);

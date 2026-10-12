@@ -940,6 +940,114 @@ describe("LOOP API V2 security, settings, and support modules", () => {
       );
     });
 
+    it("keeps the Decision 0037 bytes by default and projects the client-wired methods with ?projection=current (Decision 0129 §4)", async () => {
+      const fingerprint = Array.from({ length: 32 }, () => "AB").join(":");
+      const read = async (
+        app: Awaited<ReturnType<typeof createApp>>["app"],
+        query: string,
+      ) =>
+        app.inject({
+          method: "GET",
+          url: `/v2/security/capabilities${query}`,
+          headers: readHeaders,
+        });
+      const withPasskey = await createApp(fakes(), {
+        PASSKEY_ANDROID_CERT_SHA256: fingerprint,
+      });
+      // Default: identical to the pendingOnly projection, no new keys.
+      const plain = await read(withPasskey.app, "");
+      const pendingOnly = await read(
+        withPasskey.app,
+        "?projection=pendingOnly",
+      );
+      expect(plain.statusCode).toBe(200);
+      expect(pendingOnly.json()).toEqual(plain.json());
+      for (const item of plain.json<{
+        items: { status: string; evidence: object }[];
+      }>().items) {
+        expect(item.status).toBe("unavailable");
+        expect(Object.keys(item.evidence).sort()).toEqual([
+          "reasonCode",
+          "status",
+        ]);
+      }
+      const current = await read(withPasskey.app, "?projection=current");
+      expect(current.statusCode).toBe(200);
+      const items = current.json<{
+        items: {
+          capabilityId: string;
+          status: string;
+          reasonCode: string | null;
+          evidence: { status: string; reasonCode: string; reference?: string };
+        }[];
+      }>().items;
+      expect(items.map((item) => [item.capabilityId, item.status])).toEqual([
+        ["mfa", "available"],
+        ["passkey", "available"],
+        ["recoveryPassword", "unavailable"],
+        ["autoRecovery", "available"],
+        ["socialRecovery", "unavailable"],
+        ["keyExport", "unavailable"],
+      ]);
+      expect(items[0]).toMatchObject({
+        reasonCode: null,
+        evidence: { status: "confirmed", reasonCode: "PRIVY_MFA_CLIENT_TOTP" },
+      });
+      expect(items[0]?.evidence.reference).toContain("S60a");
+      expect(items[1]?.evidence).toMatchObject({
+        status: "confirmed",
+        reasonCode: "PRIVY_PASSKEY_CLIENT_ENROLLMENT",
+      });
+      expect(items[1]?.evidence.reference).toContain("Decision 0063");
+      expect(items[3]?.evidence).toMatchObject({
+        status: "confirmed",
+        reasonCode: "PRIVY_EMBEDDED_WALLET_DEFAULT_RECOVERY",
+      });
+      expect(items[3]?.evidence.reference).toContain(
+        "Privy 内置钱包默认由登录方式恢复",
+      );
+      for (const index of [2, 4, 5]) {
+        expect(items[index]?.reasonCode).toMatch(
+          /^PRIVY_[A-Z_]+_EVIDENCE_PENDING$/,
+        );
+        expect(items[index]?.evidence).toEqual({
+          status: "pending",
+          reasonCode: items[index]?.reasonCode,
+        });
+      }
+      for (const item of items) {
+        if (item.evidence.reference !== undefined) {
+          expect(item.evidence.reference.length).toBeLessThanOrEqual(120);
+        }
+      }
+
+      // No published relying-party association: passkey stays unavailable.
+      const noPasskey = await createApp();
+      const closed = await read(noPasskey.app, "?projection=current");
+      expect(
+        closed.json<{ items: { capabilityId: string }[] }>().items[1],
+      ).toEqual({
+        capabilityId: "passkey",
+        status: "unavailable",
+        reasonCode: "PASSKEY_RELYING_PARTY_NOT_CONFIGURED",
+        evidence: {
+          status: "pending",
+          reasonCode: "PASSKEY_RELYING_PARTY_NOT_CONFIGURED",
+        },
+        guideKey: "security.capability.passkey.howToEnable",
+      });
+
+      for (const query of [
+        "?projection=all",
+        "?projection=current&x=1",
+        "?x=1",
+      ]) {
+        const refused = await read(noPasskey.app, query);
+        expect(refused.statusCode).toBe(400);
+        expect(refused.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
+
     it("summarises devices, the mandatory security category, and recent security events without a score", async () => {
       const events = [notification(), notification({ type: "trade.result" })];
       const { app } = await createApp(

@@ -24,6 +24,12 @@ import {
 } from "./features/launch2/launch2-meme-assets.js";
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
+import {
+  assessLaunch2MemeCoverage,
+  launch2MemeCoverageMaxAttempts,
+  launch2MemeCoverageReasonCode,
+  type Launch2MemeCoverageGap,
+} from "./features/launch2/launch2-meme-coverage.js";
 
 /**
  * Decision 0114: the `launch2_event` lane (default off,
@@ -51,11 +57,21 @@ import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
  *    started re-scans once from its deploy block, like a late-registered
  *    one), and registers each deployed MEME in the Asset Registry with the
  *    project's community binding (`memeAssets`, retried every tick).
+ * 6. Decision 0129 §2: a segment that contains an instance's deploy block
+ *    must return that MEME's deploy-block mint (`mintAnchors`; the reader
+ *    asks the next endpoint, else the tick is `unavailable` with
+ *    `LAUNCH2_RPC_LOGS_UNTRUSTED`), and a re-scan that reached its target
+ *    is marked complete only when the indexed transfers hold the mint and
+ *    no negative balance (else one more re-scan; after three failures the
+ *    lane stops re-scanning that instance and reports it as an error).
  *
  * It never signs or sends.
  */
 
 export const launch2DefaultMaxLogRange = 2_000n;
+
+/** Decision 0129 §2: no endpoint returned an instance's deploy-block mint. */
+const rpcLogsUntrustedReasonCode = "LAUNCH2_RPC_LOGS_UNTRUSTED";
 
 export type Launch2LaneResult = {
   readonly kind:
@@ -107,6 +123,19 @@ export interface Launch2LaneOptions {
     readonly instanceId?: string;
   }) => void;
   readonly onIdle?: (reasonCode: string) => void;
+  /**
+   * Decision 0129 §2: a MEME transfer coverage check failed. `stalled`:
+   * the third consecutive failure, the lane stops re-scanning the instance
+   * (operator reset needed).
+   */
+  readonly onMemeCoverageIncomplete?: (event: {
+    readonly reasonCode: typeof launch2MemeCoverageReasonCode;
+    readonly instanceId: string;
+    readonly gaps: readonly Launch2MemeCoverageGap[];
+    readonly failedAttempts: number;
+    readonly negativeBalanceCount: number;
+    readonly stalled: boolean;
+  }) => void;
   readonly onInfrastructureBackoff?: (event: {
     readonly lane: string;
     readonly consecutiveFailureCount: number;
@@ -408,6 +437,35 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
     return pending.length;
   }
 
+  /**
+   * Decision 0129 §2: re-scans whose target the checkpoint reached are
+   * complete only when the indexed transfers prove it.
+   */
+  async function checkMemeCoverage(throughBlock: bigint): Promise<void> {
+    const checks = await options.repository.listMemeCoverageChecks({
+      chainId: options.chainId,
+      throughBlockNumber: throughBlock.toString(10),
+      maxAttempts: launch2MemeCoverageMaxAttempts,
+    });
+    if (checks.length === 0) return;
+    const verdicts = checks.map((facts) => assessLaunch2MemeCoverage(facts));
+    await options.repository.recordMemeCoverage({
+      chainId: options.chainId,
+      verdicts,
+    });
+    for (const verdict of verdicts) {
+      if (verdict.kind === "complete") continue;
+      options.onMemeCoverageIncomplete?.({
+        reasonCode: launch2MemeCoverageReasonCode,
+        instanceId: verdict.instanceId,
+        gaps: verdict.gaps,
+        failedAttempts: verdict.failedAttempts,
+        negativeBalanceCount: verdict.negativeBalanceCount,
+        stalled: verdict.kind === "stalled",
+      });
+    }
+  }
+
   async function refreshStages(): Promise<number> {
     const nowSeconds = BigInt(Math.floor(now().getTime() / 1000));
     const instances = await options.repository.listLaneInstances(
@@ -561,13 +619,34 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         poolRouter === null || ids.size === 0
           ? {}
           : { routerSwaps: { router: poolRouter, poolIds: [...ids.keys()] } };
-      const first = await options.chain.getLogs({
-        roles,
-        fromBlock,
-        toBlock,
-        ...(pools.size === 0 ? {} : { poolSwaps: poolFilter(pools) }),
-        ...routerFilter(pools),
+      // Decision 0129 §2: every MEME mints at its deploy block; an answer
+      // for a range holding that block without the mint is untrusted.
+      const mintAnchors = instances.flatMap((instance) => {
+        const deploy = BigInt(instance.deployBlockNumber);
+        return deploy >= fromBlock && deploy <= toBlock
+          ? [{ token: instance.addresses.meme, blockNumber: deploy }]
+          : [];
       });
+      let first: Awaited<ReturnType<Launch2Chain["getLogs"]>>;
+      try {
+        first = await options.chain.getLogs({
+          roles,
+          fromBlock,
+          toBlock,
+          ...(pools.size === 0 ? {} : { poolSwaps: poolFilter(pools) }),
+          ...routerFilter(pools),
+          ...(mintAnchors.length === 0 ? {} : { mintAnchors }),
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error as { reasonCode?: unknown }).reasonCode ===
+            rpcLogsUntrustedReasonCode
+        ) {
+          return result("unavailable", rpcLogsUntrustedReasonCode);
+        }
+        throw error;
+      }
       const byInstance = new Map(
         instances.map((instance) => [instance.instanceId, instance]),
       );
@@ -739,6 +818,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           count: ignored,
         });
       }
+      await checkMemeCoverage(toBlock);
       scanned = {
         fromBlockNumber: fromBlock.toString(10),
         toBlockNumber: toBlock.toString(10),

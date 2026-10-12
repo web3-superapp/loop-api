@@ -11,11 +11,14 @@ import {
   deviceListLimit,
   deviceRiskPolicy,
   recentSecurityEventLimit,
+  securityCapabilityConfirmedEvidence,
   securityCapabilityEvidenceReasonCodes,
   securityCapabilityGuideKeys,
   securityCapabilityIds,
+  securityPasskeyRelyingPartyNotConfiguredReasonCode,
   securityReasonCodes,
   type SecurityCapabilityId,
+  type SecurityCapabilityProjectionMode,
 } from "./security-contract.js";
 
 /**
@@ -25,16 +28,29 @@ import {
  * an existing module or an explicit `unavailable` with its reason.
  */
 
-export interface SecurityCapabilityProjection {
-  readonly capabilityId: SecurityCapabilityId;
-  readonly status: "unavailable";
-  readonly reasonCode: string;
-  readonly evidence: {
-    readonly status: "pending";
-    readonly reasonCode: string;
-  };
-  readonly guideKey: string;
-}
+export type SecurityCapabilityProjection =
+  | {
+      readonly capabilityId: SecurityCapabilityId;
+      readonly status: "unavailable";
+      readonly reasonCode: string;
+      readonly evidence: {
+        readonly status: "pending";
+        readonly reasonCode: string;
+      };
+      readonly guideKey: string;
+    }
+  | {
+      /** Decision 0129 §4: `current` projection only. */
+      readonly capabilityId: SecurityCapabilityId;
+      readonly status: "available";
+      readonly reasonCode: null;
+      readonly evidence: {
+        readonly status: "confirmed";
+        readonly reasonCode: string;
+        readonly reference: string;
+      };
+      readonly guideKey: string;
+    };
 
 export interface SecurityCapabilitiesResource {
   readonly items: readonly SecurityCapabilityProjection[];
@@ -89,7 +105,9 @@ export interface SecuritySummaryResource {
 }
 
 export interface SecurityService {
-  listCapabilities(): SecurityCapabilitiesResource;
+  listCapabilities(input?: {
+    readonly projection?: SecurityCapabilityProjectionMode;
+  }): SecurityCapabilitiesResource;
   getSummary(input: {
     readonly principal: AuthenticatedLoopPrincipal;
   }): Promise<SecuritySummaryResource>;
@@ -105,26 +123,79 @@ export interface CreateSecurityServiceInput {
   readonly approvalsRuntimeAvailable: boolean;
   /** `null` when the notification repository is not composed. */
   readonly notifications: NotificationRepository | null;
+  /**
+   * Decision 0129 §4: the API publishes a passkey relying-party association
+   * (Decision 0063: Android fingerprints or an Apple Team ID). Without one
+   * the `current` projection keeps passkey unavailable. Default false.
+   */
+  readonly passkeyRelyingPartyConfigured?: boolean;
   readonly now?: () => Date;
 }
 
-const capabilities: SecurityCapabilitiesResource = Object.freeze({
+function pendingCapability(
+  capabilityId: SecurityCapabilityId,
+  reasonCode: string = securityCapabilityEvidenceReasonCodes[capabilityId],
+): SecurityCapabilityProjection {
+  return Object.freeze({
+    capabilityId,
+    status: "unavailable" as const,
+    reasonCode,
+    evidence: Object.freeze({ status: "pending" as const, reasonCode }),
+    guideKey: securityCapabilityGuideKeys[capabilityId],
+  });
+}
+
+/** Decision 0037 bytes: the default `pendingOnly` projection. */
+const pendingOnlyCapabilities: SecurityCapabilitiesResource = Object.freeze({
   items: Object.freeze(
     securityCapabilityIds.map((capabilityId) =>
-      Object.freeze({
-        capabilityId,
-        status: "unavailable" as const,
-        reasonCode: securityCapabilityEvidenceReasonCodes[capabilityId],
-        evidence: Object.freeze({
-          status: "pending" as const,
-          reasonCode: securityCapabilityEvidenceReasonCodes[capabilityId],
-        }),
-        guideKey: securityCapabilityGuideKeys[capabilityId],
-      }),
+      pendingCapability(capabilityId),
     ),
   ),
   contractVersion: v2ContractVersion,
 });
+
+/** Decision 0129 §4: the `current` projection. */
+function currentCapabilities(
+  passkeyRelyingPartyConfigured: boolean,
+): SecurityCapabilitiesResource {
+  const confirmed = (
+    capabilityId: keyof typeof securityCapabilityConfirmedEvidence,
+  ): SecurityCapabilityProjection =>
+    Object.freeze({
+      capabilityId,
+      status: "available" as const,
+      reasonCode: null,
+      evidence: Object.freeze({
+        status: "confirmed" as const,
+        reasonCode:
+          securityCapabilityConfirmedEvidence[capabilityId].reasonCode,
+        reference: securityCapabilityConfirmedEvidence[capabilityId].reference,
+      }),
+      guideKey: securityCapabilityGuideKeys[capabilityId],
+    });
+  return Object.freeze({
+    items: Object.freeze(
+      securityCapabilityIds.map((capabilityId) => {
+        switch (capabilityId) {
+          case "mfa":
+          case "autoRecovery":
+            return confirmed(capabilityId);
+          case "passkey":
+            return passkeyRelyingPartyConfigured
+              ? confirmed(capabilityId)
+              : pendingCapability(
+                  capabilityId,
+                  securityPasskeyRelyingPartyNotConfiguredReasonCode,
+                );
+          default:
+            return pendingCapability(capabilityId);
+        }
+      }),
+    ),
+    contractVersion: v2ContractVersion,
+  });
+}
 
 function unavailable(reasonCode: string): UnavailableBlock {
   return Object.freeze({ status: "unavailable", reasonCode });
@@ -160,6 +231,9 @@ export function createSecurityService(
   input: CreateSecurityServiceInput,
 ): SecurityService {
   const now = input.now ?? ((): Date => new Date());
+  const current = currentCapabilities(
+    input.passkeyRelyingPartyConfigured ?? false,
+  );
 
   async function devicesBlock(
     principal: AuthenticatedLoopPrincipal,
@@ -260,7 +334,8 @@ export function createSecurityService(
   }
 
   const service: SecurityService = {
-    listCapabilities: () => capabilities,
+    listCapabilities: (request) =>
+      request?.projection === "current" ? current : pendingOnlyCapabilities,
 
     async getSummary({ principal }) {
       const observedAt = now();

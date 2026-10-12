@@ -1204,6 +1204,91 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           });
     },
 
+    async listMemeCoverageChecks(input) {
+      const rows = await query<Row>(
+        `
+          select i.instance_id::text as instance_id,
+            i.meme_transfers_coverage_failures as failures,
+            exists (
+              select 1 from public.launch2_meme_transfers t
+              where t.instance_id = i.instance_id and not t.removed
+                and t.from_address = $4
+                and t.block_number = i.deploy_block_number
+            ) as deploy_mint_present,
+            (
+              select count(*) from (
+                select flow.address
+                from (
+                  select t.to_address as address, t.amount as delta
+                  from public.launch2_meme_transfers t
+                  where t.instance_id = i.instance_id and not t.removed
+                  union all
+                  select t.from_address, -t.amount
+                  from public.launch2_meme_transfers t
+                  where t.instance_id = i.instance_id and not t.removed
+                ) flow
+                where flow.address <> $4
+                group by flow.address
+                having sum(flow.delta) < 0
+              ) negative
+            )::int as negative_count
+          from public.launch2_instances i
+          where i.chain_id = $1 and i.meme_transfers_complete_at is null
+            and i.meme_transfers_target_block is not null
+            and i.meme_transfers_target_block <= $2::numeric
+            and i.meme_transfers_coverage_failures < $3
+          order by i.instance_id
+        `,
+        [
+          input.chainId,
+          input.throughBlockNumber,
+          input.maxAttempts,
+          zeroAddress,
+        ],
+      );
+      return rows.map((row) =>
+        Object.freeze({
+          instanceId: text(row, "instance_id"),
+          deployMintPresent: row["deploy_mint_present"] === true,
+          negativeBalanceCount: Number(row["negative_count"]),
+          failedAttempts: Number(row["failures"]),
+        }),
+      );
+    },
+
+    async recordMemeCoverage(input) {
+      for (const verdict of input.verdicts) {
+        if (verdict.kind === "complete") {
+          await query(
+            `update public.launch2_instances
+             set meme_transfers_complete_at = clock_timestamp(),
+               meme_transfers_coverage_failures = 0
+             where chain_id = $1 and instance_id = $2::uuid
+               and meme_transfers_complete_at is null
+               and meme_transfers_target_block is not null`,
+            [input.chainId, verdict.instanceId],
+          );
+        } else {
+          // retry: clear the target so the lane re-scans from the deploy
+          // block; stalled: keep it (no re-scan) until an operator resets.
+          await query(
+            `update public.launch2_instances
+             set meme_transfers_coverage_failures = $3::integer,
+               meme_transfers_target_block = case when $4::boolean
+                 then null else meme_transfers_target_block end
+             where chain_id = $1 and instance_id = $2::uuid
+               and meme_transfers_complete_at is null`,
+            [
+              input.chainId,
+              verdict.instanceId,
+              verdict.failedAttempts,
+              verdict.kind === "retry",
+            ],
+          );
+        }
+      }
+    },
+
     async commitSegment(input) {
       try {
         return await withV2Transaction(pool, unavailable, async (client) => {
@@ -1309,16 +1394,10 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             `,
             values: [input.chainId, input.checkpoint.lastBlockNumber],
           });
-          await client.query({
-            text: `
-              update public.launch2_instances
-              set meme_transfers_complete_at = clock_timestamp()
-              where chain_id = $1 and meme_transfers_complete_at is null
-                and meme_transfers_target_block is not null
-                and meme_transfers_target_block <= $2::numeric
-            `,
-            values: [input.chainId, input.checkpoint.lastBlockNumber],
-          });
+          // Decision 0129 §2: the MEME transfer coverage is no longer
+          // marked complete by the checkpoint position alone; the lane
+          // checks the indexed facts (listMemeCoverageChecks) and records
+          // the verdict (recordMemeCoverage).
           // An activation the lane should have seen by now (its block plus
           // the grace) and did not: re-checked although no fact changed.
           const overdue = await client.query<{ instance_id: string }>({

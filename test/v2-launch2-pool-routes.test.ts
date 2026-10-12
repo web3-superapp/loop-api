@@ -627,6 +627,8 @@ describe("V2 launch2 official-pool routes (Decision 0124)", () => {
       detailsSafe: {
         reasonCode: "LAUNCH2_MEME_BALANCE_INSUFFICIENT",
         maxAmountIn: "2000000",
+        requiredAmountIn: "3000000",
+        balanceMeme: "2000000",
       },
     });
     // The quote passes, the prepare's own simulation (real balance,
