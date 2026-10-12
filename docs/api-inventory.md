@@ -661,8 +661,9 @@ Not a `V2_MODULES_ENABLED` module: both routes are always registered and answer
 503 with the `testnetFaucet` capability reason until `TESTNET_FAUCET_ENABLED=true`
 on `LAUNCH_CHAIN_ID=97` (any other chain refuses boot) with an operator key
 (`TESTNET_FAUCET_OPERATOR_PRIVATE_KEY`, falling back to `MEME_OPERATOR_PRIVATE_KEY`),
-`LAUNCH_USD1_ADDRESS`, and `LAUNCH_BSC_RPC_URLS`. The API signs a tBNB transfer
-and `MockUSD1.mint(address, amount)`; migration 000073 `testnet_faucet_grants`
+a USD1 (S156b: `TESTNET_FAUCET_USD1_ADDRESS`, else the Hooks Factory's `usd1()` —
+the MEME v2 USD1 — else `LAUNCH_USD1_ADDRESS`), and `LAUNCH_BSC_RPC_URLS`. The API
+signs a tBNB transfer and `MockUSD1.mint(address, amount)`; migration 000073 `testnet_faucet_grants`
 holds the per-address cooldown. Contract: `docs/frontend-v2-testnet-faucet-api.md`.
 
 | Method and path           | Request                                             | Success projection                                                                                                                             | Interface     | Capability                                                                                                  |

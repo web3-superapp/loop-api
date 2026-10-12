@@ -23,6 +23,8 @@ import {
   createFakeFaucetChain,
   defaultFaucetChainState,
   faucetUsd1,
+  hooksFactory,
+  legacyLaunchUsd1,
   usd1Hash,
 } from "./helpers/testnet-faucet-fakes.js";
 
@@ -314,7 +316,8 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
         TESTNET_FAUCET_USD1_AMOUNT: "500",
         TESTNET_FAUCET_COOLDOWN_SECONDS: 86_400,
         TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: "ab".repeat(32),
-        LAUNCH_USD1_ADDRESS: faucetUsd1,
+        LAUNCH_USD1_ADDRESS: legacyLaunchUsd1,
+        HOOKS_LAUNCH_FACTORY_ADDRESS: hooksFactory,
       }),
       launchChainId: "eip155:97",
       rpcConfigured: true,
@@ -345,13 +348,27 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
       status: string;
       bnb_tx: string;
       usd1_tx: string;
+      usd1_token_address: string;
     }>(
-      "select status, bnb_tx, usd1_tx from public.testnet_faucet_grants where wallet_id = $1",
+      "select status, bnb_tx, usd1_tx, usd1_token_address from public.testnet_faucet_grants where wallet_id = $1",
       [owner.walletId],
     );
+    // S156b: the row records the MEME v2 USD1 that was actually minted.
     expect(stored.rows).toEqual([
-      { status: "partial", bnb_tx: bnbHash, usd1_tx: usd1Hash },
+      {
+        status: "partial",
+        bnb_tx: bnbHash,
+        usd1_tx: usd1Hash,
+        usd1_token_address: faucetUsd1,
+      },
     ]);
+    const comment = await pool.query<{ comment: string | null }>(
+      `select col_description('public.testnet_faucet_grants'::regclass,
+         (select attnum from pg_attribute
+          where attrelid = 'public.testnet_faucet_grants'::regclass
+            and attname = 'usd1_token_address')::int) as comment`,
+    );
+    expect(comment.rows[0]?.comment).toMatch(/actually called mint/);
     expect(
       await service.status({ principal, query: { walletId: owner.walletId } }),
     ).toMatchObject({

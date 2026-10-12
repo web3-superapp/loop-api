@@ -19,7 +19,8 @@
   `testnet_faucet_grant_v1`, scope `testnet_faucet_grant`), `wallet_id` (the opaque
   `account_wallets.wallet_id` of the session user's embedded wallet), `address` (lower-case;
   the cooldown key, never a primary or foreign key), `chain_id` (`eip155:97`), the two raw
-  amounts, the USD1 token and operator addresses, `bnb_tx` / `usd1_tx` (0x-64-hex or null),
+  amounts, `usd1_token_address` (the USD1 contract this grant actually called `mint` on; see §8 —
+  rows before S156b recorded `LAUNCH_USD1_ADDRESS`), the operator address, `bnb_tx` / `usd1_tx` (0x-64-hex or null),
   `status`, `failure_reason_code`, `granted_at` (the instant the grant was reserved), `completed_at`.
 - `grantId` is not published; the client addresses the resource by `walletId`.
 - Index `(address, granted_at desc)` answers the cooldown and `lastGrant` reads.
@@ -98,8 +99,9 @@ A replay of the same Idempotency-Key answers the stored outcome: `granted` → t
 | `TESTNET_FAUCET_USD1_AMOUNT`          | `500`                               | decimal, > 0, ≤ 1 000 000, ≤ 18 fraction digits |
 | `TESTNET_FAUCET_COOLDOWN_SECONDS`     | `86400`                             | integer 60 … 2 592 000                          |
 | `TESTNET_FAUCET_OPERATOR_PRIVATE_KEY` | blank → `MEME_OPERATOR_PRIVATE_KEY` | malformed refuses boot; never logged            |
+| `TESTNET_FAUCET_USD1_ADDRESS`         | blank → Hooks Factory `usd1()`      | malformed refuses boot (S156b, §8)              |
 
-USD1 is `LAUNCH_USD1_ADDRESS`, the RPC list `LAUNCH_BSC_RPC_URLS`. Not bound to `NODE_ENV`
+USD1: see §8 (the MEME v2 USD1). The RPC list is `LAUNCH_BSC_RPC_URLS`. Not bound to `NODE_ENV`
 (staging is `production` on BSC Testnet).
 
 Capability `testnetFaucet` (evidence `notApplicable`), first matching reason wins:
@@ -126,3 +128,29 @@ The key, signed payloads and RPC URLs never reach a log line or an error body.
 - Evidence: `test/v2-testnet-faucet-routes.test.ts` (route contract, all branches with a fake
   chain), `test/testnet-faucet-config.test.ts`, `test/testnet-faucet.integration.test.ts`
   (PostgreSQL reservation, cooldown, idempotency, concurrent reservation). No anvil run.
+
+## 8. Amendment S156b (2026-10-12): the faucet mints the MEME v2 USD1
+
+Finding on staging: the first real grant minted `LAUNCH_USD1_ADDRESS` (`0x17d554fd…ce2b`, the Launch
+v1 IDO MockUSD1), while every MEME v2 / launch2 instance of Factory v3 trades in the S127 MockUSD1
+`0x3a1236E68eCf3225640367c84b6F50A51D0B0195` (NFT 100 USD1, curve buys and sells). The granted USD1
+could not buy an NFT in the app.
+
+Decision: **the faucet grants the USD1 MEME v2 trades in.** Resolution, first match wins
+(`TestnetFaucetConfig.usd1Source`):
+
+1. `TESTNET_FAUCET_USD1_ADDRESS` (explicit override);
+2. with launch2 configured (`HOOKS_LAUNCH_FACTORY_ADDRESS`), `LoopLaunchFactory.usd1()` read on the
+   launch slot at grant time — the same anchor the Hooks executor checks and every instance's
+   `CurveEngine.usd1()` copies; the first successful read is kept for the process (the Factory's
+   `usd1` is immutable). Unreadable → 503 `TESTNET_FAUCET_CHAIN_READ_FAILED`; zero / malformed →
+   503 `TESTNET_FAUCET_USD1_UNAVAILABLE`; nothing is written;
+3. only without a Factory, `LAUNCH_USD1_ADDRESS`.
+
+`TESTNET_FAUCET_USD1_NOT_CONFIGURED` now means none of the three is set. The capability, the GET and
+POST bodies and every error shape are unchanged. `testnet_faucet_grants.usd1_token_address`
+records the contract actually minted (column comment, migration 000074, comment only).
+Evidence: `test/testnet-faucet-config.test.ts` (priority 1/2/3), `test/v2-testnet-faucet-routes.test.ts`
+(mint `to` = the Factory's USD1, never `LAUNCH_USD1_ADDRESS`; explicit override; unreadable
+Factory), `test/testnet-faucet-chain.test.ts` (`usd1()` read), `test/testnet-faucet.integration.test.ts`
+(stored `usd1_token_address`, column comment).

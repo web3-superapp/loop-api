@@ -24,6 +24,8 @@ import {
   externalWalletId,
   faucetUsd1,
   faucetWallets,
+  hooksFactory,
+  legacyLaunchUsd1,
   secondWalletId,
   usd1Hash,
   type FakeFaucetChainState,
@@ -63,7 +65,9 @@ const enabledFaucet: TestnetFaucetConfig = parseTestnetFaucet({
   TESTNET_FAUCET_USD1_AMOUNT: "500",
   TESTNET_FAUCET_COOLDOWN_SECONDS: 86_400,
   TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: operatorKey,
-  LAUNCH_USD1_ADDRESS: faucetUsd1,
+  // S156b: the old IDO USD1 is configured too; the Factory's wins.
+  LAUNCH_USD1_ADDRESS: legacyLaunchUsd1,
+  HOOKS_LAUNCH_FACTORY_ADDRESS: hooksFactory,
 });
 const launchContractUnit = {
   LAUNCH_CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000c0c",
@@ -408,6 +412,50 @@ describe("V2 testnet faucet (Decision 0128)", () => {
           usd1TransactionHash: usd1Hash,
         },
       });
+    });
+
+    it("mints the MEME v2 USD1 read from the Hooks Factory, never LAUNCH_USD1_ADDRESS, and reads the Factory once", async () => {
+      const { app, chain, repository } = await createApp();
+      expect((await claim(app, s7IdempotencyKey("1"))).statusCode).toBe(201);
+      expect(
+        (await claim(app, s7IdempotencyKey("2"), secondWalletId)).statusCode,
+      ).toBe(201);
+      const mints = chain.calls.filter((call) => call.startsWith("mint:"));
+      expect(mints).toHaveLength(2);
+      for (const mint of mints) {
+        expect(mint.endsWith(`:${faucetUsd1}`)).toBe(true);
+        expect(mint).not.toContain(legacyLaunchUsd1);
+      }
+      expect(chain.factoryReads).toEqual([hooksFactory]);
+      expect(repository.usd1Tokens).toEqual([faucetUsd1, faucetUsd1]);
+    });
+
+    it("mints the explicit TESTNET_FAUCET_USD1_ADDRESS without reading the Factory", async () => {
+      const explicit = "0x00000000000000000000000000000000000e0e01";
+      const { app, chain } = await createApp({
+        deps: {
+          config: {
+            ...enabledFaucet,
+            usd1Source: { kind: "explicit", address: explicit },
+          },
+        },
+      });
+      expect((await claim(app)).statusCode).toBe(201);
+      expect(chain.calls[1]?.endsWith(`:${explicit}`)).toBe(true);
+      expect(chain.factoryReads).toEqual([]);
+    });
+
+    it("fails closed when the Factory's usd1() cannot be read", async () => {
+      const { app, chain } = await createApp({
+        chain: defaultFaucetChainState({ factoryUsd1: "throws" }),
+      });
+      expectError(
+        await claim(app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_CHAIN_READ_FAILED",
+      );
+      expect(chain.calls).toEqual([]);
     });
 
     it("scales the USD1 amount by the token's decimals()", async () => {

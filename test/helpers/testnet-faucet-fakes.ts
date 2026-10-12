@@ -14,7 +14,11 @@ import {
 
 /** Decision 0128 fakes: in-memory grants, a scripted operator chain, wallets. */
 
-export const faucetUsd1 = "0x00000000000000000000000000000000000005d1";
+/** The MEME v2 / launch2 USD1 (S127 MockUSD1), returned by Factory.usd1(). */
+export const faucetUsd1 = "0x3a1236e68ecf3225640367c84b6f50a51d0b0195";
+/** The old Launch v1 IDO MockUSD1 behind LAUNCH_USD1_ADDRESS. */
+export const legacyLaunchUsd1 = "0x17d554fd00000000000000000000000000ce2b00";
+export const hooksFactory = "0x00000000000000000000000000000000000fac70";
 export const faucetOperator = "0x00000000000000000000000000000000000000fe";
 export const embeddedWalletId = "d64786bb-408d-415d-8a69-6277d56c921b";
 export const embeddedAddress = "0x000000000000000000000000000000000000000a";
@@ -73,6 +77,8 @@ interface StoredGrant {
 
 export interface InMemoryFaucetRepository extends TestnetFaucetRepository {
   readonly grants: StoredGrant[];
+  /** `usd1_token_address` of each reservation, in order. */
+  readonly usd1Tokens: string[];
   readonly records: Map<
     string,
     { readonly ownerUserId: string; readonly requestSha256: string }
@@ -82,6 +88,7 @@ export interface InMemoryFaucetRepository extends TestnetFaucetRepository {
 /** Mirrors the PostgreSQL repository's rules (Decision 0128 §2). */
 export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
   const grants: StoredGrant[] = [];
+  const usd1Tokens: string[] = [];
   const records = new Map<
     string,
     { readonly ownerUserId: string; readonly requestSha256: string }
@@ -104,6 +111,7 @@ export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
   };
   return {
     grants,
+    usd1Tokens,
     records,
     latestBlockingGrant(address, since) {
       return Promise.resolve(
@@ -169,6 +177,7 @@ export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
       if (blocking !== null) {
         return Promise.resolve({ kind: "cooldown", blocking });
       }
+      usd1Tokens.push(input.usd1TokenAddress);
       records.set(input.idempotencyKey, {
         ownerUserId: input.ownerUserId,
         requestSha256: input.requestSha256,
@@ -219,6 +228,8 @@ export const bnbHash = `0x${"b1".repeat(32)}`;
 export const usd1Hash = `0x${"c2".repeat(32)}`;
 
 export interface FakeFaucetChainState {
+  /** What Factory.usd1() answers; "throws" fails the read. */
+  factoryUsd1: string;
   decimals: number;
   balanceWei: bigint;
   gasPriceWei: bigint;
@@ -230,12 +241,14 @@ export interface FakeFaucetChainState {
   /** Resolves the native send only when released (concurrency tests). */
   nativeGate: Promise<void> | null;
   readonly calls: string[];
+  readonly factoryReads: string[];
 }
 
 export function defaultFaucetChainState(
   overrides: Partial<FakeFaucetChainState> = {},
 ): FakeFaucetChainState {
   return {
+    factoryUsd1: faucetUsd1,
     decimals: 18,
     balanceWei: 10n ** 18n,
     gasPriceWei: 1_000_000_000n,
@@ -246,6 +259,7 @@ export function defaultFaucetChainState(
     mint: "confirmed",
     nativeGate: null,
     calls: [],
+    factoryReads: [],
     ...overrides,
   };
 }
@@ -266,6 +280,12 @@ export function createFakeFaucetChain(
       : Promise.resolve(value);
   return {
     operatorAddress: faucetOperator,
+    readFactoryUsd1: (factory) => {
+      state.factoryReads.push(factory);
+      return state.factoryUsd1 === "throws"
+        ? Promise.reject(new Error("rpc down"))
+        : read(state.factoryUsd1);
+    },
     readUsd1Decimals: () => read(state.decimals),
     estimateMintGas: () => {
       if (state.readsThrow || state.mintEstimate === "throws") {

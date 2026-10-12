@@ -46,6 +46,11 @@ export class TestnetFaucetChainRefusedError extends Error {
   }
 }
 
+/** `LoopLaunchFactory.usd1()` (the MEME v2 / launch2 USD1). */
+export const factoryUsd1Abi = parseAbi([
+  "function usd1() view returns (address)",
+]);
+
 /** Plain transfer gas (no calldata, EOA recipient). */
 export const nativeTransferGas = 21_000n;
 
@@ -134,6 +139,14 @@ export function createTestnetFaucetChain(input: {
 
   const faucetChain: TestnetFaucetChain = {
     operatorAddress: account.address.toLowerCase(),
+    async readFactoryUsd1(factory: string): Promise<string> {
+      const usd1 = await reader.readContract({
+        address: factory as Address,
+        abi: factoryUsd1Abi,
+        functionName: "usd1",
+      });
+      return usd1.toLowerCase();
+    },
     async readUsd1Decimals(usd1: string): Promise<number> {
       const decimals = await reader.readContract({
         address: usd1 as Address,

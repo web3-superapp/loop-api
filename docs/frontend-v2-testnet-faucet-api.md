@@ -4,6 +4,7 @@
 - 机器契约：`openapi/loop-api.v2.json`（`pnpm openapi:generate` 生成，勿手改），operationId `getV2TestnetFaucet` / `claimV2TestnetFaucet`
 - 能力位：`GET /v2/meta/capabilities` 的 `testnetFaucet`（不是 `V2_MODULES_ENABLED` 模块，永远不会是 `deferred`）
 - 只在 BSC Testnet（`LAUNCH_CHAIN_ID=97`）可用；服务端用 operator 热钱包给用户自己的**内嵌钱包**转 tBNB 并调用 MockUSD1 的 `mint(address,uint256)`，用户无需签名
+- 发放的是 **MEME v2 交易用的 USD1**（Hooks 工厂 `usd1()`，即 launch2 实例买 NFT、曲线买卖用的那个 USD1；S156b 修正，之前误发到旧 Launch v1 IDO 的 USD1）
 
 ## 1. Base URL 与请求头
 
@@ -40,14 +41,14 @@ Content-Type: application/json
 
 `availability` 只有 `available` / `unavailable`。`unavailable` 时 `reasonCode` 按下列顺序取第一个命中的：
 
-| reasonCode                               | 含义                                               |
-| ---------------------------------------- | -------------------------------------------------- |
-| `TESTNET_FAUCET_DISABLED`                | `TESTNET_FAUCET_ENABLED` 未开（默认）              |
-| `TESTNET_FAUCET_WRONG_CHAIN`             | 不是 97 链（正常启动下不会出现：服务端会拒绝启动） |
-| `TESTNET_FAUCET_OPERATOR_NOT_CONFIGURED` | 没有 operator 私钥                                 |
-| `TESTNET_FAUCET_USD1_NOT_CONFIGURED`     | 没有 `LAUNCH_USD1_ADDRESS`                         |
-| `TESTNET_FAUCET_RPC_NOT_CONFIGURED`      | 没有 `LAUNCH_BSC_RPC_URLS`                         |
-| `TESTNET_FAUCET_RUNTIME_UNAVAILABLE`     | 数据库 / 钱包仓库未组装                            |
+| reasonCode                               | 含义                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `TESTNET_FAUCET_DISABLED`                | `TESTNET_FAUCET_ENABLED` 未开（默认）                                         |
+| `TESTNET_FAUCET_WRONG_CHAIN`             | 不是 97 链（正常启动下不会出现：服务端会拒绝启动）                            |
+| `TESTNET_FAUCET_OPERATOR_NOT_CONFIGURED` | 没有 operator 私钥                                                            |
+| `TESTNET_FAUCET_USD1_NOT_CONFIGURED`     | 既无 `TESTNET_FAUCET_USD1_ADDRESS`、无 Hooks 工厂、也无 `LAUNCH_USD1_ADDRESS` |
+| `TESTNET_FAUCET_RPC_NOT_CONFIGURED`      | 没有 `LAUNCH_BSC_RPC_URLS`                                                    |
+| `TESTNET_FAUCET_RUNTIME_UNAVAILABLE`     | 数据库 / 钱包仓库未组装                                                       |
 
 **前端行为**：`unavailable` 时不显示「领取测试币」入口（或置灰，文案「测试币暂不可领」），不要调用两个路由。能力位**不读** operator 余额；余额不足只会在 `POST` 时以 503 `TESTNET_FAUCET_OPERATOR_LOW` 出现。
 

@@ -38,7 +38,7 @@ describe("testnet faucet configuration (Decision 0128)", () => {
       usd1Amount: "500",
       cooldownSeconds: 86_400,
       operatorPrivateKey: null,
-      usd1Address: null,
+      usd1Source: null,
     });
   });
 
@@ -113,11 +113,70 @@ describe("testnet faucet configuration (Decision 0128)", () => {
     });
     expect(config.bnbAmount).toBe("0.02");
     expect(config.usd1Amount).toBe("500");
-    expect(config.usd1Address).toBe(
-      "0xabcdef0000000000000000000000000000000001",
-    );
+    expect(config.usd1Source).toEqual({
+      kind: "launch",
+      address: "0xabcdef0000000000000000000000000000000001",
+    });
     expect(faucetDecimalToRaw("500", 18)).toBe(500n * 10n ** 18n);
     expect(faucetDecimalToRaw("0.5", 6)).toBe(500_000n);
     expect(() => faucetDecimalToRaw("0.1234567", 6)).toThrow(RangeError);
+  });
+
+  describe("USD1 source priority (S156b)", () => {
+    const launch2Usd1 = "0x3a1236E68eCf3225640367c84b6F50A51D0B0195";
+    const idoUsd1 = "0x17d554fd00000000000000000000000000Ce2B00";
+    const factory = "0x00000000000000000000000000000000000FAC70";
+
+    it("1. an explicit TESTNET_FAUCET_USD1_ADDRESS wins over the Factory and LAUNCH_USD1_ADDRESS", () => {
+      expect(
+        parse({
+          TESTNET_FAUCET_USD1_ADDRESS: launch2Usd1,
+          HOOKS_LAUNCH_FACTORY_ADDRESS: factory,
+          LAUNCH_USD1_ADDRESS: idoUsd1,
+        }).usd1Source,
+      ).toEqual({ kind: "explicit", address: launch2Usd1.toLowerCase() });
+    });
+
+    it("2. with launch2 configured, the Hooks Factory's usd1() wins over LAUNCH_USD1_ADDRESS", () => {
+      expect(
+        parse({
+          HOOKS_LAUNCH_FACTORY_ADDRESS: factory,
+          LAUNCH_USD1_ADDRESS: idoUsd1,
+        }).usd1Source,
+      ).toEqual({ kind: "factory", factoryAddress: factory.toLowerCase() });
+    });
+
+    it("3. only without a Factory does it fall back to LAUNCH_USD1_ADDRESS", () => {
+      expect(parse({ LAUNCH_USD1_ADDRESS: idoUsd1 }).usd1Source).toEqual({
+        kind: "launch",
+        address: idoUsd1.toLowerCase(),
+      });
+      expect(parse({}).usd1Source).toBeNull();
+    });
+
+    it("refuses a malformed TESTNET_FAUCET_USD1_ADDRESS and reads it through loadConfig", () => {
+      expect(() => parse({ TESTNET_FAUCET_USD1_ADDRESS: "0x1234" })).toThrow(
+        /TESTNET_FAUCET_USD1_ADDRESS/,
+      );
+      const config = loadConfig({
+        ...base,
+        LAUNCH_CHAIN_ID: "97",
+        HOOKS_LAUNCH_FACTORY_ADDRESS: factory,
+        HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+      });
+      expect(config.testnetFaucet.usd1Source).toEqual({
+        kind: "factory",
+        factoryAddress: factory.toLowerCase(),
+      });
+      expect(
+        loadConfig({
+          ...base,
+          LAUNCH_CHAIN_ID: "97",
+          HOOKS_LAUNCH_FACTORY_ADDRESS: factory,
+          HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+          TESTNET_FAUCET_USD1_ADDRESS: launch2Usd1,
+        }).testnetFaucet.usd1Source,
+      ).toEqual({ kind: "explicit", address: launch2Usd1.toLowerCase() });
+    });
   });
 });

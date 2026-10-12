@@ -95,7 +95,7 @@ export function testnetFaucetConfigurationReason(input: {
   if (input.config.operatorPrivateKey === null) {
     return reasons.operatorNotConfigured;
   }
-  if (input.config.usd1Address === null) return reasons.usd1NotConfigured;
+  if (input.config.usd1Source === null) return reasons.usd1NotConfigured;
   if (!input.rpcConfigured) return reasons.rpcNotConfigured;
   if (!input.runtimeComposed) return reasons.runtimeUnavailable;
   return null;
@@ -199,7 +199,6 @@ export function createTestnetFaucetService(
       repository: deps.repository as TestnetFaucetRepository,
       wallets: deps.wallets as AccountWalletRepository,
       chain: deps.chain as TestnetFaucetChain,
-      usd1: config.usd1Address as string,
     };
   }
 
@@ -220,6 +219,26 @@ export function createTestnetFaucetService(
       fail("PERMISSION_DENIED", reasons.walletNotOwned);
     }
     return wallet;
+  }
+
+  /**
+   * S156b: the USD1 MEME v2 trades in. The Factory's `usd1()` is immutable,
+   * so the first successful read is kept for the process.
+   */
+  let factoryUsd1: string | null = null;
+  async function resolveUsd1(chain: TestnetFaucetChain): Promise<string> {
+    const source = config.usd1Source;
+    if (source === null) return unavailableWith(reasons.usd1NotConfigured);
+    if (source.kind !== "factory") return source.address;
+    if (factoryUsd1 !== null) return factoryUsd1;
+    const read = await chainRead(() =>
+      chain.readFactoryUsd1(source.factoryAddress),
+    );
+    if (!/^0x[0-9a-f]{40}$/u.test(read) || /^0x0{40}$/u.test(read)) {
+      unavailableWith(reasons.usd1Unavailable);
+    }
+    factoryUsd1 = read;
+    return read;
   }
 
   function nextAvailableAt(grant: TestnetFaucetGrantRecord): string {
@@ -319,8 +338,9 @@ export function createTestnetFaucetService(
       readonly requestSha256: string;
     },
   ): Promise<Resource> {
-    const { repository, chain, usd1 } = rt;
+    const { repository, chain } = rt;
     const address = wallet.address.toLowerCase();
+    const usd1 = await resolveUsd1(chain);
     // Preflight: nothing is written when the chain cannot do the grant.
     const decimals = await chainRead(() => chain.readUsd1Decimals(usd1));
     if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {

@@ -163,6 +163,8 @@ export type TestnetFaucetMintEstimate =
  */
 export interface TestnetFaucetChain {
   readonly operatorAddress: string;
+  /** `LoopLaunchFactory.usd1()` — the USD1 of every MEME v2 instance. */
+  readFactoryUsd1(factory: string): Promise<string>;
   readUsd1Decimals(usd1: string): Promise<number>;
   estimateMintGas(input: {
     readonly usd1: string;

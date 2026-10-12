@@ -753,6 +753,9 @@ const environmentSchema = z
     TESTNET_FAUCET_USD1_AMOUNT: z.string().trim().min(1).max(40),
     TESTNET_FAUCET_COOLDOWN_SECONDS: positiveIntegerString(60, 2_592_000),
     TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    // S156b: explicit override of the USD1 the faucet mints (default: the
+    // Hooks Factory's usd1(), i.e. the MEME v2 / launch2 USD1).
+    TESTNET_FAUCET_USD1_ADDRESS: optionalCredential(64),
     ...miningSettlementEnvironmentShape,
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
@@ -2373,9 +2376,20 @@ export interface TestnetFaucetConfig {
   readonly cooldownSeconds: number;
   /** TESTNET_FAUCET_OPERATOR_PRIVATE_KEY, else MEME_OPERATOR_PRIVATE_KEY; never logged. */
   readonly operatorPrivateKey: `0x${string}` | null;
-  /** LAUNCH_USD1_ADDRESS, lower-case. */
-  readonly usd1Address: string | null;
+  /**
+   * Which USD1 the faucet mints (S156b): `explicit` =
+   * TESTNET_FAUCET_USD1_ADDRESS; `factory` = `usd1()` of the Hooks Factory
+   * (HOOKS_LAUNCH_FACTORY_ADDRESS), the USD1 every MEME v2 / launch2
+   * instance trades in, read on chain at grant time; `launch` =
+   * LAUNCH_USD1_ADDRESS, only while launch2 has no Factory. Null = none.
+   */
+  readonly usd1Source: TestnetFaucetUsd1Source | null;
 }
+
+export type TestnetFaucetUsd1Source =
+  | { readonly kind: "explicit"; readonly address: string }
+  | { readonly kind: "factory"; readonly factoryAddress: string }
+  | { readonly kind: "launch"; readonly address: string };
 
 const faucetDecimalPattern = /^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$/u;
 
@@ -2430,6 +2444,8 @@ export function parseTestnetFaucet(data: {
   readonly TESTNET_FAUCET_OPERATOR_PRIVATE_KEY?: string | undefined;
   readonly MEME_OPERATOR_PRIVATE_KEY?: string | undefined;
   readonly LAUNCH_USD1_ADDRESS?: string | undefined;
+  readonly TESTNET_FAUCET_USD1_ADDRESS?: string | undefined;
+  readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
 }): TestnetFaucetConfig {
   const issues: string[] = [];
   const bnbAmount = parseFaucetAmount(
@@ -2450,13 +2466,29 @@ export function parseTestnetFaucet(data: {
       "TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: must be a 32-byte hex key",
     );
   }
+  const explicitUsd1 = data.TESTNET_FAUCET_USD1_ADDRESS?.trim() ?? "";
+  if (explicitUsd1 !== "" && !/^0x[0-9a-fA-F]{40}$/u.test(explicitUsd1)) {
+    issues.push(
+      "TESTNET_FAUCET_USD1_ADDRESS: must be a 0x-prefixed 20-byte address",
+    );
+  }
   if (issues.length > 0) {
     throw new ConfigurationError(issues);
   }
   // The fallback key is validated by parseMemeOperator.
   const key =
     ownKey !== "" ? ownKey : (data.MEME_OPERATOR_PRIVATE_KEY?.trim() ?? "");
-  const usd1 = data.LAUNCH_USD1_ADDRESS?.trim() ?? "";
+  const launchUsd1 = data.LAUNCH_USD1_ADDRESS?.trim() ?? "";
+  const factory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
+  const evm = /^0x[0-9a-fA-F]{40}$/u;
+  const usd1Source: TestnetFaucetUsd1Source | null =
+    explicitUsd1 !== ""
+      ? { kind: "explicit", address: explicitUsd1.toLowerCase() }
+      : evm.test(factory)
+        ? { kind: "factory", factoryAddress: factory.toLowerCase() }
+        : evm.test(launchUsd1)
+          ? { kind: "launch", address: launchUsd1.toLowerCase() }
+          : null;
   return Object.freeze({
     enabled: data.TESTNET_FAUCET_ENABLED,
     bnbAmount,
@@ -2465,7 +2497,7 @@ export function parseTestnetFaucet(data: {
     cooldownSeconds: data.TESTNET_FAUCET_COOLDOWN_SECONDS,
     operatorPrivateKey:
       key !== "" && privateKeyPattern.test(key) ? normalizedKey(key) : null,
-    usd1Address: /^0x[0-9a-fA-F]{40}$/u.test(usd1) ? usd1.toLowerCase() : null,
+    usd1Source: usd1Source === null ? null : Object.freeze(usd1Source),
   });
 }
 
@@ -3406,6 +3438,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["TESTNET_FAUCET_COOLDOWN_SECONDS"] ?? "86400",
     TESTNET_FAUCET_OPERATOR_PRIVATE_KEY:
       environment["TESTNET_FAUCET_OPERATOR_PRIVATE_KEY"],
+    TESTNET_FAUCET_USD1_ADDRESS: environment["TESTNET_FAUCET_USD1_ADDRESS"],
     ...miningSettlementEnvironmentDefaults(environment),
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),

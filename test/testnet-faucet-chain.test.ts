@@ -3,6 +3,7 @@ import {
   decodeFunctionData,
   keccak256,
   parseTransaction,
+  toFunctionSelector,
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -23,7 +24,8 @@ import {
 const key = `0x${"ab".repeat(32)}` as const;
 const operator = privateKeyToAccount(key).address.toLowerCase();
 const recipient = "0x000000000000000000000000000000000000000a";
-const usd1 = "0x00000000000000000000000000000000000005d1";
+const usd1 = "0x3a1236e68ecf3225640367c84b6f50a51d0b0195";
+const usd1Selector = toFunctionSelector("usd1()");
 
 interface Script {
   broadcast: "ok" | "error";
@@ -62,10 +64,15 @@ function rpc(script: Script) {
             gasUsed: "0x0",
             transactions: [],
           });
-        case "eth_call":
+        case "eth_call": {
+          const call = args[0] as { data?: string };
+          // Answer by selector: Factory.usd1() vs ERC-20 decimals().
           return Promise.resolve(
-            "0x0000000000000000000000000000000000000000000000000000000000000012",
+            call.data === usd1Selector
+              ? `0x000000000000000000000000${usd1.slice(2)}`
+              : "0x0000000000000000000000000000000000000000000000000000000000000012",
           );
+        }
         case "eth_estimateGas":
           return script.estimate === "ok"
             ? Promise.resolve("0xea60")
@@ -273,6 +280,9 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
 
   it("reads decimals, gas price, balance, and classifies a reverting mint estimate", async () => {
     const { chain } = setup();
+    expect(
+      await chain.readFactoryUsd1("0x00000000000000000000000000000000000fac70"),
+    ).toBe(usd1);
     expect(await chain.readUsd1Decimals(usd1)).toBe(18);
     expect(await chain.readGasPrice()).toBe(1_000_000_000n);
     expect(await chain.readOperatorBalance()).toBe(10n ** 18n);
