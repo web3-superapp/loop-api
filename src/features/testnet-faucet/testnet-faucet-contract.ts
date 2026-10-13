@@ -23,6 +23,14 @@ export const testnetFaucetReasonCodes = Object.freeze({
   partial: "TESTNET_FAUCET_PARTIAL",
   transferFailed: "TESTNET_FAUCET_TRANSFER_FAILED",
   submissionUnknown: "TESTNET_FAUCET_SUBMISSION_UNKNOWN",
+  /** S169: the global per-UTC-day grant count or tBNB total is reached. */
+  dailyLimit: "TESTNET_FAUCET_DAILY_LIMIT",
+  /**
+   * S169: stored as `failure_reason_code` when the sweep closes a grant
+   * left `pending` whose tBNB never reached the chain. Such a `failed`
+   * row does not count toward the failed-retry cooldown. Never in a body.
+   */
+  pendingExpired: "TESTNET_FAUCET_PENDING_EXPIRED",
 } as const);
 
 export type TestnetFaucetReasonCode =
@@ -72,13 +80,35 @@ export interface TestnetFaucetReserveInput {
   readonly usd1TokenAddress: string;
   readonly operatorAddress: string;
   readonly now: Date;
+  readonly policy: TestnetFaucetCooldownPolicy;
+}
+
+/**
+ * S169: what blocks an address (Decision 0128 §2):
+ * - any grant that is not `failed` within `cooldownSeconds`;
+ * - a `failed` grant with `TESTNET_FAUCET_TRANSFER_FAILED` (the operator
+ *   tried) within `failedCooldownSeconds`;
+ * - `failedDailyLimit` such failed grants of the owner since `dayStart`
+ *   (the UTC day) → blocked until the next UTC day.
+ */
+export interface TestnetFaucetCooldownPolicy {
   readonly cooldownSeconds: number;
+  readonly failedCooldownSeconds: number;
+  readonly failedDailyLimit: number;
 }
 
 export type TestnetFaucetReserveResult =
   | { readonly kind: "reserved"; readonly grant: TestnetFaucetGrantRecord }
   | { readonly kind: "replay"; readonly grant: TestnetFaucetGrantRecord }
-  | { readonly kind: "cooldown"; readonly blocking: TestnetFaucetGrantRecord };
+  /** `nextAvailableAt` is an ISO-8601 instant. */
+  | { readonly kind: "cooldown"; readonly nextAvailableAt: string };
+
+/** S169: totals of one UTC day (status granted / partial / unknown). */
+export interface TestnetFaucetDailyTotals {
+  readonly grants: number;
+  /** Σ bnb_amount_raw, decimal integer string (wei). */
+  readonly bnbRaw: string;
+}
 
 export type TestnetFaucetReplayLookup =
   | { readonly kind: "none" }
@@ -92,13 +122,32 @@ export type TestnetFaucetFinalStatus = Exclude<
 
 export interface TestnetFaucetRepository {
   /**
-   * The newest grant of `address` that is not `failed` and was reserved
-   * after `since` (the cooldown window start); null when none holds it.
+   * S169: when `address` (and its owner) may claim again under `policy`
+   * at `now` (ISO-8601), or null when nothing blocks it.
    */
-  latestBlockingGrant(
-    address: string,
-    since: Date,
-  ): Promise<TestnetFaucetGrantRecord | null>;
+  nextAvailableAt(input: {
+    readonly address: string;
+    readonly ownerUserId: string;
+    readonly now: Date;
+    readonly policy: TestnetFaucetCooldownPolicy;
+  }): Promise<string | null>;
+  /** S169: grants with status granted / partial / unknown since `dayStart`. */
+  dailyTotals(dayStart: Date): Promise<TestnetFaucetDailyTotals>;
+  /** S169: `pending` grants reserved before `before`, oldest first. */
+  listStalePending(
+    before: Date,
+    limit: number,
+  ): Promise<readonly TestnetFaucetGrantRecord[]>;
+  /**
+   * S169: closes a grant that is still `pending`; false when it is not
+   * pending any more (the API finished it meanwhile).
+   */
+  resolveStalePending(input: {
+    readonly grantId: string;
+    readonly status: "unknown" | "failed";
+    readonly failureReasonCode: string;
+    readonly now: Date;
+  }): Promise<boolean>;
   /** The newest grant of `address` whose tBNB transfer was sent. */
   latestSentGrant(address: string): Promise<TestnetFaucetGrantRecord | null>;
   findReplay(input: {
@@ -109,7 +158,7 @@ export interface TestnetFaucetRepository {
   /**
    * One transaction: owner lock, idempotency claim (conflict →
    * `TestnetFaucetIdempotencyConflictError`), replay, address advisory
-   * lock, cooldown re-check, `pending` insert.
+   * lock, cooldown re-check (`policy`), `pending` insert.
    */
   reserve(
     input: TestnetFaucetReserveInput,
@@ -153,8 +202,21 @@ export type TestnetFaucetTransferOutcome =
   /** Never reached the node (prepare / sign / broadcast failed). */
   | { readonly status: "not_sent" };
 
-export type TestnetFaucetMintEstimate =
+export type TestnetFaucetGasEstimate =
   { readonly kind: "ok"; readonly gas: bigint } | { readonly kind: "reverted" };
+
+export type TestnetFaucetMintEstimate = TestnetFaucetGasEstimate;
+
+/** S169: what the node knows about a hash (the pending sweep). */
+export type TestnetFaucetTransactionPresence = "found" | "not_found";
+
+/**
+ * S169: read-only lookup the worker's pending sweep uses; throws on a
+ * transport failure (the grant is left for the next pass).
+ */
+export interface TestnetFaucetTransactionLookup {
+  lookup(transactionHash: string): Promise<TestnetFaucetTransactionPresence>;
+}
 
 /**
  * The operator account on BSC Testnet. Reads throw on transport failure;
@@ -171,11 +233,22 @@ export interface TestnetFaucetChain {
     readonly to: string;
     readonly amountRaw: bigint;
   }): Promise<TestnetFaucetMintEstimate>;
+  /**
+   * S169: `eth_estimateGas` of the plain tBNB transfer (an EIP-7702 or
+   * contract recipient costs more than 21 000 or reverts). A transport
+   * failure throws; anything else is `reverted`.
+   */
+  estimateNativeGas(input: {
+    readonly to: string;
+    readonly valueWei: bigint;
+  }): Promise<TestnetFaucetGasEstimate>;
   readGasPrice(): Promise<bigint>;
   readOperatorBalance(): Promise<bigint>;
   sendNative(input: {
     readonly to: string;
     readonly valueWei: bigint;
+    /** The gas limit (from `estimateNativeGas`). */
+    readonly gas: bigint;
     readonly onSigned: (transactionHash: string) => Promise<void>;
   }): Promise<TestnetFaucetTransferOutcome>;
   sendMint(input: {

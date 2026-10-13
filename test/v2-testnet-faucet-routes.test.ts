@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { hashAdminPassword } from "../src/features/admin/admin-auth.js";
+import type { MemePauseSender } from "../src/integrations/meme/meme-pause-sender.js";
 import { parseTestnetFaucet, type TestnetFaucetConfig } from "../src/config.js";
 import { createUnavailableMiningRepository } from "../src/features/mining/mining-repository.js";
 import {
@@ -92,13 +94,17 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       readonly repository?: InMemoryFaucetRepository;
       readonly deps?: Partial<TestnetFaucetServiceDependencies>;
       readonly composeFromConfig?: Readonly<Record<string, string>>;
+      readonly memePauseSender?: MemePauseSender | null;
+      readonly logLines?: string[];
     } = {},
   ) {
     const chain = options.chain ?? defaultFaucetChainState();
     const repository = options.repository ?? createInMemoryFaucetRepository();
     let clock = NOW;
     const info = vi.fn<TestnetFaucetLogger["info"]>();
-    const logger: TestnetFaucetLogger = { info, warn: vi.fn() };
+    const warn = vi.fn<TestnetFaucetLogger["warn"]>();
+    const error = vi.fn<TestnetFaucetLogger["error"]>();
+    const logger: TestnetFaucetLogger = { info, warn, error };
     const service =
       options.composeFromConfig !== undefined
         ? undefined
@@ -131,7 +137,20 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       ...(options.composeFromConfig !== undefined
         ? { testnetFaucetChain: createFakeFaucetChain(chain) }
         : {}),
-      logger: false,
+      ...(options.memePauseSender === undefined
+        ? {}
+        : { memePauseSender: options.memePauseSender }),
+      logger:
+        options.logLines === undefined
+          ? false
+          : {
+              level: "warn",
+              stream: {
+                write: (line: string) => {
+                  options.logLines?.push(line);
+                },
+              },
+            },
     });
     apps.push(app);
     return {
@@ -139,6 +158,8 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       chain,
       repository,
       info,
+      warn,
+      error,
       advance: (seconds: number) => {
         clock = new Date(clock.getTime() + seconds * 1_000);
       },
@@ -268,7 +289,7 @@ describe("V2 testnet faucet (Decision 0128)", () => {
         repository: createInMemoryFaucetRepository(),
         wallets: faucetWallets(),
         chain: createFakeFaucetChain(defaultFaucetChainState()),
-        logger: { info: vi.fn(), warn: vi.fn() },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       };
       expect(createTestnetFaucetService(base).unavailableReason()).toBeNull();
       expect(
@@ -655,9 +676,9 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       });
     });
 
-    it("treats a tBNB transfer that never left as failed: 502, no cooldown, a new key retries", async () => {
+    it("treats a tBNB transfer that never left as failed: 502, a 300 s retry cooldown, then a new key retries", async () => {
       const state = defaultFaucetChainState({ native: "not_sent" });
-      const { app, chain } = await createApp({ chain: state });
+      const { app, chain, advance } = await createApp({ chain: state });
       expectError(
         await claim(app, s7IdempotencyKey("1")),
         502,
@@ -667,12 +688,26 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       expect(chain.calls).toEqual([
         `native:${embeddedAddress}:20000000000000000`,
       ]);
+      // S169: a failed attempt holds the address for
+      // TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS (300).
       expect((await status(app)).json()).toMatchObject({
-        available: true,
+        available: false,
+        nextAvailableAt: "2026-10-12T08:05:00.000Z",
         lastGrant: null,
       });
       state.native = "confirmed";
-      expect((await claim(app, s7IdempotencyKey("2"))).statusCode).toBe(201);
+      const cooling = expectError(
+        await claim(app, s7IdempotencyKey("2")),
+        429,
+        "RATE_LIMITED",
+        "TESTNET_FAUCET_COOLDOWN",
+      );
+      expect(cooling.detailsSafe["nextAvailableAt"]).toBe(
+        "2026-10-12T08:05:00.000Z",
+      );
+      advance(300);
+      expect((await status(app)).json()).toMatchObject({ available: true });
+      expect((await claim(app, s7IdempotencyKey("3"))).statusCode).toBe(201);
     });
 
     it("answers 503 TESTNET_FAUCET_SUBMISSION_UNKNOWN when the tBNB receipt does not arrive, and holds the cooldown", async () => {
@@ -719,7 +754,9 @@ describe("V2 testnet faucet (Decision 0128)", () => {
           "RESOURCE_CONFLICT",
           "TESTNET_FAUCET_IN_FLIGHT",
         );
-      });
+        // The first request runs more preflight reads since S169; allow
+        // for a loaded test runner.
+      }, 5_000);
       // A different address waits for the lock and gives up.
       expectError(
         await claim(app, s7IdempotencyKey("2"), secondWalletId),
@@ -732,6 +769,276 @@ describe("V2 testnet faucet (Decision 0128)", () => {
       expect(
         (await claim(app, s7IdempotencyKey("3"), secondWalletId)).statusCode,
       ).toBe(201);
+    });
+  });
+
+  describe("S169 review fixes", () => {
+    it("estimates the tBNB gas and signs with it; a code-running recipient gets 20 % headroom", async () => {
+      const plain = await createApp();
+      expect((await claim(plain.app)).statusCode).toBe(201);
+      expect(plain.chain.nativeGasLimits).toEqual([21_000n]);
+      const delegated = await createApp({
+        chain: defaultFaucetChainState({ nativeGas: 30_000n }),
+      });
+      expect((await claim(delegated.app)).statusCode).toBe(201);
+      expect(delegated.chain.nativeGasLimits).toEqual([36_000n]);
+    });
+
+    it("records a reverting tBNB estimate as failed without broadcasting, and a read failure writes nothing", async () => {
+      const reverting = await createApp({
+        chain: defaultFaucetChainState({ nativeEstimate: "reverted" }),
+      });
+      expectError(
+        await claim(reverting.app),
+        502,
+        "PROVIDER_UNREACHABLE",
+        "TESTNET_FAUCET_TRANSFER_FAILED",
+      );
+      expect(reverting.chain.calls).toEqual([]);
+      expect(reverting.repository.grants[0]?.record).toMatchObject({
+        status: "failed",
+        failureReasonCode: "TESTNET_FAUCET_TRANSFER_FAILED",
+        bnbTransactionHash: null,
+      });
+      const down = await createApp({
+        chain: defaultFaucetChainState({ nativeEstimate: "throws" }),
+      });
+      expectError(
+        await claim(down.app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_CHAIN_READ_FAILED",
+      );
+      expect(down.repository.grants).toEqual([]);
+    });
+
+    it("blocks an owner after 5 failed attempts in a UTC day until the next day", async () => {
+      const state = defaultFaucetChainState({ nativeEstimate: "reverted" });
+      const { app, chain, advance } = await createApp({ chain: state });
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        expectError(
+          await claim(app, s7IdempotencyKey(String(attempt))),
+          502,
+          "PROVIDER_UNREACHABLE",
+          "TESTNET_FAUCET_TRANSFER_FAILED",
+        );
+        advance(300);
+      }
+      state.nativeEstimate = "ok";
+      const blocked = expectError(
+        await claim(app, s7IdempotencyKey("6")),
+        429,
+        "RATE_LIMITED",
+        "TESTNET_FAUCET_COOLDOWN",
+      );
+      expect(blocked.detailsSafe["nextAvailableAt"]).toBe(
+        "2026-10-13T00:00:00.000Z",
+      );
+      // The owner's other wallet is held by the same owner limit.
+      expectError(
+        await claim(app, s7IdempotencyKey("7"), secondWalletId),
+        429,
+        "RATE_LIMITED",
+        "TESTNET_FAUCET_COOLDOWN",
+      );
+      expect((await status(app)).json()).toMatchObject({
+        available: false,
+        nextAvailableAt: "2026-10-13T00:00:00.000Z",
+      });
+      expect(chain.calls).toEqual([]);
+      advance(16 * 3_600);
+      expect((await claim(app, s7IdempotencyKey("8"))).statusCode).toBe(201);
+    });
+
+    it("answers 503 TESTNET_FAUCET_DAILY_LIMIT once the UTC day's grant count is used, and reopens the next day", async () => {
+      const { app, chain, advance } = await createApp({
+        deps: { config: { ...enabledFaucet, dailyMaxGrants: 1 } },
+      });
+      expect((await claim(app, s7IdempotencyKey("1"))).statusCode).toBe(201);
+      const limited = expectError(
+        await claim(app, s7IdempotencyKey("2"), secondWalletId),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_DAILY_LIMIT",
+      );
+      expect(limited.detailsSafe).toEqual({
+        reasonCode: "TESTNET_FAUCET_DAILY_LIMIT",
+        nextAvailableAt: "2026-10-13T00:00:00.000Z",
+      });
+      expect(chain.calls).toHaveLength(2);
+      advance(16 * 3_600);
+      expect(
+        (await claim(app, s7IdempotencyKey("3"), secondWalletId)).statusCode,
+      ).toBe(201);
+    });
+
+    it("counts partial and unknown grants toward the daily tBNB total", async () => {
+      const { app } = await createApp({
+        chain: defaultFaucetChainState({ native: "unconfirmed" }),
+        deps: {
+          config: {
+            ...enabledFaucet,
+            dailyMaxBnb: "0.03",
+            dailyMaxBnbWei: "30000000000000000",
+          },
+        },
+      });
+      expectError(
+        await claim(app, s7IdempotencyKey("1")),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_SUBMISSION_UNKNOWN",
+      );
+      expectError(
+        await claim(app, s7IdempotencyKey("2"), secondWalletId),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_DAILY_LIMIT",
+      );
+    });
+
+    it("keeps the operator reserve on top of the grant when the service is given one", async () => {
+      // 0.02 + 1 gwei × (21 000 + 72 000) × 2 = 0.020186 tBNB; + 0.05 reserve.
+      const low = await createApp({
+        chain: defaultFaucetChainState({ balanceWei: 70_000_000_000_000_000n }),
+        deps: { operatorReserveWei: 50_000_000_000_000_000n },
+      });
+      expectError(
+        await claim(low.app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_OPERATOR_LOW",
+      );
+      expect(low.repository.grants).toEqual([]);
+      expect(low.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "testnet_faucet.operator_low",
+          reserveWei: "50000000000000000",
+        }),
+        expect.any(String),
+      );
+      const enough = await createApp({
+        chain: defaultFaucetChainState({ balanceWei: 70_200_000_000_000_000n }),
+        deps: { operatorReserveWei: 50_000_000_000_000_000n },
+      });
+      expect((await claim(enough.app)).statusCode).toBe(201);
+    });
+
+    it("applies TESTNET_FAUCET_OPERATOR_RESERVE_BNB only when the faucet falls back to the MEME pause key of a composed console, and warns at boot", async () => {
+      const passwordHash = await hashAdminPassword("s169-bootstrap-password");
+      const admin = {
+        ADMIN_USERNAME: "operator",
+        ADMIN_PASSWORD_HASH: passwordHash,
+        ADMIN_SESSION_SECRET: "s169-admin-session-secret-0123456789abcdef",
+      };
+      const pauseSender = {} as MemePauseSender;
+      const balanceWei = 60_000_000_000_000_000n; // covers 0.020186, not + 0.05
+      const shared = {
+        LAUNCH_CHAIN_ID: "97",
+        TESTNET_FAUCET_ENABLED: "true",
+        MEME_OPERATOR_PRIVATE_KEY: "cd".repeat(32),
+        ...launchContractUnit,
+        ...admin,
+      };
+      const lines: string[] = [];
+      const sharedKey = await createApp({
+        composeFromConfig: shared,
+        memePauseSender: pauseSender,
+        chain: defaultFaucetChainState({ balanceWei }),
+        logLines: lines,
+      });
+      expect(
+        lines.some((line) =>
+          line.includes("testnet_faucet.operator_shared_with_meme_pause"),
+        ),
+      ).toBe(true);
+      expect(lines.join("")).not.toContain("cd".repeat(32));
+      expectError(
+        await claim(sharedKey.app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_OPERATOR_LOW",
+      );
+      const ownKey = await createApp({
+        composeFromConfig: {
+          ...shared,
+          TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: "ef".repeat(32),
+        },
+        memePauseSender: pauseSender,
+        chain: defaultFaucetChainState({ balanceWei }),
+      });
+      expect((await claim(ownKey.app)).statusCode).toBe(201);
+      const noPause = await createApp({
+        composeFromConfig: shared,
+        memePauseSender: null,
+        chain: defaultFaucetChainState({ balanceWei }),
+      });
+      expect((await claim(noPause.app)).statusCode).toBe(201);
+    });
+
+    it("logs an error with grantId, address, and hash when the signed hash cannot be stored, and broadcasts nothing", async () => {
+      const repository = createInMemoryFaucetRepository();
+      const failing = {
+        ...repository,
+        recordTransactionHash: () => Promise.reject(new Error("db down")),
+      };
+      const { app, error } = await createApp({
+        repository: Object.assign(failing, {
+          grants: repository.grants,
+          usd1Tokens: repository.usd1Tokens,
+          records: repository.records,
+        }),
+      });
+      expectError(
+        await claim(app),
+        502,
+        "PROVIDER_UNREACHABLE",
+        "TESTNET_FAUCET_TRANSFER_FAILED",
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "testnet_faucet.record_hash_failed",
+          grantId: "00000000-0000-4000-8000-000000000000",
+          address: embeddedAddress,
+          leg: "bnb",
+          transactionHash: bnbHash,
+        }),
+        expect.any(String),
+      );
+    });
+
+    it("logs an error with the hashes when the final write fails, and the row stays pending", async () => {
+      const repository = createInMemoryFaucetRepository();
+      const failing = Object.assign(
+        {
+          ...repository,
+          finalize: () => Promise.reject(new Error("db down")),
+        },
+        {
+          grants: repository.grants,
+          usd1Tokens: repository.usd1Tokens,
+          records: repository.records,
+        },
+      );
+      const { app, error } = await createApp({ repository: failing });
+      expectError(
+        await claim(app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+        "TESTNET_FAUCET_RUNTIME_UNAVAILABLE",
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "testnet_faucet.finalize_failed",
+          grantId: "00000000-0000-4000-8000-000000000000",
+          address: embeddedAddress,
+          status: "granted",
+          bnbTransactionHash: bnbHash,
+          usd1TransactionHash: usd1Hash,
+        }),
+        expect.any(String),
+      );
+      expect(repository.grants[0]?.record.status).toBe("pending");
     });
   });
 });

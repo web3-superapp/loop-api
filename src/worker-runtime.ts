@@ -56,6 +56,12 @@ import {
   createLaunch2SnapshotSigners,
 } from "./integrations/launch2/launch2-snapshot-publisher-chain.js";
 import { createLaunch2SnapshotPublisherLane } from "./launch2-snapshot-publisher-worker.js";
+import type { TestnetFaucetRepository } from "./features/testnet-faucet/testnet-faucet-contract.js";
+import {
+  TestnetFaucetChainRefusedError,
+  createTestnetFaucetTransactionLookup,
+} from "./integrations/bsc/testnet-faucet-chain.js";
+import { createTestnetFaucetSweepLane } from "./testnet-faucet-sweep-worker.js";
 import {
   launch2BuybackKeeperDefaults,
   launch2KeeperReasonCodes,
@@ -262,6 +268,8 @@ export interface ReconciliationWorkerDatabase {
   readonly streamUserIdentities?: StreamUserIdentityRepository;
   /** `voice_room_reaper` lane (Decision 0094); absent keeps it off. */
   readonly voiceRoomReaper?: VoiceRoomReaperRepository;
+  /** S169 `testnet_faucet_pending_sweep` lane; absent keeps it off. */
+  readonly testnetFaucet?: TestnetFaucetRepository;
   /** `community_member_buy_feed` lane (Decision 0097); absent keeps it off. */
   readonly memberBuyFeed?: MemberBuyFeedRepository;
   readonly ping: () => Promise<void>;
@@ -354,6 +362,9 @@ export interface RunReconciliationWorkerOptions {
   /** Test seams for the buyback keeper's chain client and lane (Decision 0121). */
   readonly createLaunch2BuybackKeeperChain?: typeof createLaunch2BuybackKeeperChain;
   readonly createLaunch2BuybackKeeperLane?: typeof createLaunch2BuybackKeeperLane;
+  /** S169 test seam: the faucet sweep's hash lookup. */
+  readonly createTestnetFaucetTransactionLookup?: typeof createTestnetFaucetTransactionLookup;
+  readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -692,6 +703,76 @@ export async function runReconciliationWorker(
     // MEME_INDEXER_ENABLED; the graduation fallback signs only behind
     // MEME_GRADUATION_EXECUTOR_ENABLED, on the testnet slot.
     const memeLanes: PeriodicLane[] = [];
+    // S169 (Decision 0128 §9): close faucet grants left `pending`, from the
+    // chain, read-only. On with TESTNET_FAUCET_ENABLED on chain 97.
+    const faucetSweepConfig = options.config.testnetFaucetSweep ?? null;
+    if (faucetSweepConfig !== null && database.testnetFaucet !== undefined) {
+      const lane = "testnet_faucet_pending_sweep";
+      try {
+        const lookup = (
+          options.createTestnetFaucetTransactionLookup ??
+          createTestnetFaucetTransactionLookup
+        )({
+          chainReference: launchChainConfig.chainReference,
+          rpcUrls: launchChainConfig.rpcUrls,
+        });
+        memeLanes.push(
+          (
+            options.createTestnetFaucetSweepLane ?? createTestnetFaucetSweepLane
+          )({
+            repository: database.testnetFaucet,
+            lookup,
+            pendingTimeoutSeconds: faucetSweepConfig.pendingTimeoutSeconds,
+            intervalMs: faucetSweepConfig.intervalMs,
+            onEvent: (event) => {
+              if (event.kind === "resolved") {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    lane,
+                    testnetFaucetGrantId: event.grantId,
+                    testnetFaucetStatus: event.status,
+                    ...(event.bnbTransactionHash === null
+                      ? {}
+                      : { transactionHash: event.bnbTransactionHash }),
+                  },
+                  "LOOP testnet faucet sweep closed a pending grant",
+                );
+              } else {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    lane,
+                    testnetFaucetGrantId: event.grantId,
+                    transactionHash: event.bnbTransactionHash,
+                    errorClass: event.errorClass,
+                  },
+                  "LOOP testnet faucet sweep could not look up a hash; kept",
+                );
+              }
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+      } catch (error) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane,
+            reasonCode:
+              error instanceof TestnetFaucetChainRefusedError
+                ? error.reasonCode
+                : "TESTNET_FAUCET_RUNTIME_UNAVAILABLE",
+          },
+          "LOOP testnet faucet sweep stays idle",
+        );
+      }
+    }
     // Hooks deployment executor (Decision 0112), default off. Config load
     // already refused boot for `on` without a key / Factory / chain 97.
     const hooksExecutorConfig = options.config.hooksLaunchExecutor;

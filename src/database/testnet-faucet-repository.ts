@@ -4,6 +4,8 @@ import {
   TestnetFaucetIdempotencyConflictError,
   TestnetFaucetRepositoryUnavailableError,
   testnetFaucetGrantStatuses,
+  testnetFaucetReasonCodes,
+  type TestnetFaucetCooldownPolicy,
   type TestnetFaucetGrantRecord,
   type TestnetFaucetGrantStatus,
   type TestnetFaucetRepository,
@@ -89,9 +91,77 @@ function mapGrant(row: Row): TestnetFaucetGrantRecord {
 const unavailable = (): Error => new TestnetFaucetRepositoryUnavailableError();
 
 class CooldownSignal extends Error {
-  constructor(readonly blocking: TestnetFaucetGrantRecord) {
+  constructor(readonly nextAvailableAt: string) {
     super("cooldown");
   }
+}
+
+type Queryable = Pick<Pool, "query">;
+
+const dayMs = 86_400_000;
+
+/**
+ * S169: when the address / owner may claim again (Decision 0128 §2), or
+ * null. Only `failed` rows the operator attempted
+ * (`TESTNET_FAUCET_TRANSFER_FAILED`) feed the failed-retry rules; the
+ * sweep's `TESTNET_FAUCET_PENDING_EXPIRED` rows never do.
+ */
+async function blockedUntil(
+  executor: Queryable,
+  input: {
+    readonly address: string;
+    readonly ownerUserId: string;
+    readonly now: Date;
+    readonly policy: TestnetFaucetCooldownPolicy;
+  },
+): Promise<string | null> {
+  const at = input.now.getTime();
+  const dayStart = Math.floor(at / dayMs) * dayMs;
+  const result = await executor.query<Row>({
+    text: `
+      select
+        (select max(granted_at) from public.testnet_faucet_grants
+          where address = $1 and status <> 'failed'
+            and granted_at > $2::timestamptz) as cooldown_from,
+        (select max(granted_at) from public.testnet_faucet_grants
+          where address = $1 and status = 'failed'
+            and failure_reason_code = $3
+            and granted_at > $4::timestamptz) as failed_from,
+        (select count(*)::int from public.testnet_faucet_grants
+          where owner_user_id = $5 and status = 'failed'
+            and failure_reason_code = $3
+            and granted_at >= $6::timestamptz) as failed_today`,
+    values: [
+      input.address,
+      new Date(at - input.policy.cooldownSeconds * 1_000).toISOString(),
+      testnetFaucetReasonCodes.transferFailed,
+      new Date(at - input.policy.failedCooldownSeconds * 1_000).toISOString(),
+      input.ownerUserId,
+      new Date(dayStart).toISOString(),
+    ],
+  });
+  const row = result.rows[0] ?? {};
+  const instants: number[] = [];
+  const cooldownFrom = row["cooldown_from"];
+  if (cooldownFrom instanceof Date || typeof cooldownFrom === "string") {
+    instants.push(
+      Date.parse(toIsoString(cooldownFrom)) +
+        input.policy.cooldownSeconds * 1_000,
+    );
+  }
+  const failedFrom = row["failed_from"];
+  if (failedFrom instanceof Date || typeof failedFrom === "string") {
+    instants.push(
+      Date.parse(toIsoString(failedFrom)) +
+        input.policy.failedCooldownSeconds * 1_000,
+    );
+  }
+  if (Number(row["failed_today"] ?? 0) >= input.policy.failedDailyLimit) {
+    instants.push(dayStart + dayMs);
+  }
+  return instants.length === 0
+    ? null
+    : new Date(Math.max(...instants)).toISOString();
 }
 
 export function createPostgresTestnetFaucetRepository(
@@ -106,14 +176,59 @@ export function createPostgresTestnetFaucetRepository(
   }
 
   const repository: TestnetFaucetRepository = {
-    async latestBlockingGrant(address, since) {
+    async nextAvailableAt(input) {
+      try {
+        return await blockedUntil(pool, input);
+      } catch {
+        throw unavailable();
+      }
+    },
+
+    async dailyTotals(dayStart) {
+      const rows = await query(
+        `select count(*)::int as grants,
+           coalesce(sum(bnb_amount_raw), 0)::text as bnb_raw
+         from public.testnet_faucet_grants
+         where status in ('granted', 'partial', 'unknown')
+           and granted_at >= $1::timestamptz
+           and granted_at < $1::timestamptz + interval '1 day'`,
+        [dayStart.toISOString()],
+      );
+      const row = rows[0];
+      const grants = row?.["grants"];
+      const bnbRaw = row?.["bnb_raw"];
+      if (typeof grants !== "number" || typeof bnbRaw !== "string") {
+        throw unavailable();
+      }
+      return Object.freeze({ grants, bnbRaw });
+    },
+
+    async listStalePending(before, limit) {
       const rows = await query(
         `select ${columns} from public.testnet_faucet_grants
-         where address = $1 and status <> 'failed' and granted_at > $2::timestamptz
-         order by granted_at desc, grant_id desc limit 1`,
-        [address, since.toISOString()],
+         where status = 'pending' and granted_at < $1::timestamptz
+         order by granted_at asc, grant_id asc limit $2`,
+        [before.toISOString(), limit],
       );
-      return rows[0] === undefined ? null : mapGrant(rows[0]);
+      return rows.map(mapGrant);
+    },
+
+    async resolveStalePending(input) {
+      const rows = await query(
+        `update public.testnet_faucet_grants
+         set status = $2, failure_reason_code = $3,
+           completed_at = greatest($4::timestamptz, granted_at),
+           updated_at = greatest($4::timestamptz, granted_at)
+         where grant_id = $1 and status = 'pending'
+         returning grant_id`,
+        [
+          input.grantId,
+          input.status,
+          input.failureReasonCode,
+          input.now.toISOString(),
+        ],
+      );
+      return rows.length === 1;
     },
 
     async latestSentGrant(address) {
@@ -185,19 +300,15 @@ export function createPostgresTestnetFaucetRepository(
             text: `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
             values: [`testnet_faucet:${input.address}`],
           });
-          const since = new Date(
-            input.now.getTime() - input.cooldownSeconds * 1_000,
-          );
-          const blocking = await client.query<Row>({
-            text: `select ${columns} from public.testnet_faucet_grants
-                   where address = $1 and status <> 'failed'
-                     and granted_at > $2::timestamptz
-                   order by granted_at desc, grant_id desc limit 1`,
-            values: [input.address, since.toISOString()],
+          const blocked = await blockedUntil(client, {
+            address: input.address,
+            ownerUserId: input.ownerUserId,
+            now: input.now,
+            policy: input.policy,
           });
-          if (blocking.rows[0] !== undefined) {
+          if (blocked !== null) {
             // Thrown so the idempotency claim rolls back: nothing is kept.
-            throw new CooldownSignal(mapGrant(blocking.rows[0]));
+            throw new CooldownSignal(blocked);
           }
           const inserted = await client.query<Row>({
             text: `
@@ -233,7 +344,10 @@ export function createPostgresTestnetFaucetRepository(
         });
       } catch (error) {
         if (error instanceof CooldownSignal) {
-          return { kind: "cooldown" as const, blocking: error.blocking };
+          return {
+            kind: "cooldown" as const,
+            nextAvailableAt: error.nextAvailableAt,
+          };
         }
         if (error instanceof TestnetFaucetIdempotencyConflictError) {
           throw error;
@@ -282,7 +396,10 @@ export function createUnavailableTestnetFaucetRepository(): TestnetFaucetReposit
   const reject = (): Promise<never> =>
     Promise.reject(new TestnetFaucetRepositoryUnavailableError());
   return Object.freeze({
-    latestBlockingGrant: reject,
+    nextAvailableAt: reject,
+    dailyTotals: reject,
+    listStalePending: reject,
+    resolveStalePending: reject,
     latestSentGrant: reject,
     findReplay: reject,
     reserve: reject,
