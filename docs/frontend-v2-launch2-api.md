@@ -1,4 +1,13 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131)
+
+> **S166 / 决策 0131 变化（给 App）**：新增可选外盘 Hook 种类 **`loopDynamic`**（需求方 loop_hook_v1，
+> 买卖各 2 % + 动态卖出税 + 奖励轮次），**服务端默认关闭**，现有实例全是 `officialTax`，行为不变。
+> ① 新路由 `GET …/dynamic-pool`（§3.12）对**任何**实例都回答 `hookKind`：`officialTax` → 走原外盘面板；
+> `loopDynamic` → 新面板。**不要**从详情里找 `hookKind`（详情 / `pool` 键集合不变，旧包严格解码不受影响）。
+> ② `loopDynamic` 实例的 `…/pool/quote` / `…/pool/trade/prepare` 只支持 `mode=exactIn`（隐藏「按买入数量」），
+> 报价多一个 `quote.dynamic` 对象；授权对象与 `to` 是 `LoopRouter`。③ 新增奖励列表与领取
+> （`…/dynamic-pool/rewards`、`…/dynamic-pool/claim/prepare`、`…/dynamic-pool/claim/report`），新意图种类
+> `dynamic_claim`。④ `quote.taxBps` 的 schema 从常量 200 放宽为 0..10000（值仍是 200）。
 
 > **S151 / 决策 0127 变化（给 App）**：`instance.pool` 新增三个**必带**键 `userTradeCount` /
 > `userBuyVolumeUsd1` / `userSellVolumeUsd1`（§3.10）：与 `tradeCount` / `buyVolumeUsd1` / `sellVolumeUsd1`
@@ -866,6 +875,256 @@ are never attributed to anyone.
   by its one-time re-scan from the graduation block once the worker runs with
   `LAUNCH2_POOL_ROUTER_*`; until then they are missing here (never guessed).
 
+### 3.12 外盘 Hook 种类 = `loopDynamic`（Decision 0131，S166）
+
+**What it is.** A `loopDynamic` instance graduates into a Uniswap v4 pool whose per-project Hook
+(`LoopDynamicHook`, bound in the graduation transaction) charges **2 % on buys (in MEME, from the
+output) and 2 % on sells (in USD1)**, plus a **dynamic sell fee** while a reward round is armed: a
+5-minute candle that closes more than 10 % down arms a round; while armed, sells pay the current
+candle's drop (`POST_SWAP`: the drop after the sell) on top of the 2 %, that extra goes to the
+round's pot; buys during the round earn **reward weight = USD1 spent**; the first green candle
+closes the round and half the pot (carry + dynamic fees) is split by weight, the other half carries
+over. Buybacks earn no weight and pay no buy fee. Trades go through **LoopRouter**, exact input
+only. Base URL, headers, auth, the seven-field error envelope and `X-Loop-Contract-Version: 2.0`
+as §1; every route needs the session.
+
+**How the App decides.** Call `GET …/dynamic-pool` for the instance (any stage). `hookKind`
+`officialTax` + `status: not_applicable` → keep the existing panel (§3.8–§3.11) and ignore the
+rest. `loopDynamic` + `not_graduated` → curve panel as before; after graduation `active` → the
+LoopDynamic panel below. 503 on this route (any reason) for a `loopDynamic` instance → show
+「外盘暂不可用」 with retry; never fall back to the OfficialTax panel or the old router.
+
+#### 3.12.1 `GET /v2/launch2/instances/{instanceId}/dynamic-pool?walletId=`
+
+`walletId` optional (default: the active wallet; `viewer: null` without one).
+
+```json
+{
+  "dynamicPool": {
+    "instanceId": "4f3c…",
+    "hookKind": "loopDynamic",
+    "status": "active",
+    "hook": "0xcccc…10c4",
+    "poolId": "0x…",
+    "router": "0x7777…7777",
+    "routerRegistry": "0x4444…4444",
+    "routingPolicy": "open",
+    "priceTiming": "POST_SWAP",
+    "buyTaxBps": 200,
+    "baseSellTaxBps": 200,
+    "excludeBuybackFromRewards": true,
+    "armed": true,
+    "currentRoundId": "3",
+    "candleId": "6000000",
+    "candleSeconds": 300,
+    "candleEndsAt": "2027-01-15T08:05:00.000Z",
+    "rollPending": false,
+    "currentDropWad": "0.3",
+    "currentDropBps": 3000,
+    "potUsd1": "45",
+    "carryUsd1": "40",
+    "roundExtraFeesUsd1": "5",
+    "roundTotalBuyWeightUsd1": "100",
+    "reservedRewardsUsd1": "10",
+    "priceUsd1": "0.000625",
+    "viewer": { "walletId": "d647…", "currentRoundWeightUsd1": "25" },
+    "summary": {
+      "roundCount": 3,
+      "closedRoundCount": 2,
+      "allocatedUsd1": "30",
+      "claimedUsd1": "12",
+      "dynamicFeesUsd1": "70",
+      "baseSellFeesUsd1": "4",
+      "buyFeesMeme": "1000"
+    },
+    "basis": { "blockNumber": "6000", "blockHash": "0x…" }
+  },
+  "contractVersion": "2.0"
+}
+```
+
+- `not_applicable` / `not_graduated`: every field except `instanceId`, `hookKind`, `status`,
+  `candleSeconds` is `null`.
+- 本轮状态卡: `armed`（激活中 / 未激活）、`currentDropBps`（当前跌幅，`30.00 %`）、`potUsd1`（奖金池）、
+  `viewer.currentRoundWeightUsd1`（我的本轮权重，占比 = 它 / `roundTotalBuyWeightUsd1`）、`candleEndsAt`
+  （本根 K 线结束时间；出现一根收绿的 K 线本轮结束）。`rollPending: true` = the candle already ended
+  and the next trade / `poke` closes it (the keeper pokes armed Hooks on time when enabled).
+- `currentDropWad` is `0` while not armed or while a roll is pending (the Hook's own view).
+- Amounts are decimal strings (18 decimals); ids are strings; never parse to `double`.
+
+#### 3.12.2 Trading a `loopDynamic` pool (`…/pool/quote`, `…/pool/trade/prepare`)
+
+Same routes, query and body as §3.8 / §3.9, with these differences:
+
+- **`mode=exactIn` only.** `exactOut` → `422 VALIDATION_FAILED / LAUNCH2_EXACT_OUT_UNSUPPORTED`
+  before any chain read. Hide 「按买入数量」.
+- `router` (and the prepare's `contractAddress`, `calldata.to`, `approval.spender`) is
+  **LoopRouter**; the call is `swapExactInput(key, zeroForOne, amountIn, minOut, limit, deadline)`;
+  `poolKey.hooks` is the LoopDynamic Hook. Kinds stay `pool_buy` / `pool_sell`.
+- `taxBps` = the base rate (buy 200 in MEME, sell 200 in USD1); `taxAmount` = everything the Hook
+  takes (sell: base + dynamic). The quote adds:
+
+```json
+"dynamic": {
+  "hookKind": "loopDynamic",
+  "hook": "0xcccc…10c4",
+  "priceTiming": "POST_SWAP",
+  "baseTaxBps": 200,
+  "baseTaxAmount": "2",
+  "dynamicTaxBps": 3000,
+  "dynamicTaxAmount": "29.4",
+  "armed": true,
+  "roundId": "3",
+  "rewardWeight": "0"
+}
+```
+
+卖出面板展示「基础税 2 % + 当前动态税 {dynamicTaxBps/100} %」（`dynamicTaxAmount` 是本笔将被收的动态税 USD1，
+按成交后跌幅精确模拟）；买入面板展示「本笔计入奖励权重 {rewardWeight} USD1」（未激活时为 0：「当前未激活，
+不计奖励」）。`dynamic` is absent on OfficialTax quotes.
+
+- Additional errors on this branch: 422 `LAUNCH2_DYNAMIC_ROUTER_UNAUTHORIZED` (池子拒绝了这个交易入口),
+  `LAUNCH2_DYNAMIC_SWAP_UNSUPPORTED`; 409 `DATA_STALE / LAUNCH2_DYNAMIC_HOOK_BUSY` (池子正忙，请稍后重试);
+  503 `LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED`, `LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH`,
+  `LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED`, `LAUNCH2_DYNAMIC_HOOK_MISMATCH`,
+  `LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED`. All §3.8 / §3.9 codes still apply.
+- `…/pool/trades` is empty for `loopDynamic` instances (LoopRouter emits no event; trades are not
+  attributed to wallets in this batch). The detail's `pool` statistics (counts, volumes, `taxUsd1`
+  = real base + dynamic sell fees, `taxMeme` = buy fees) are correct.
+
+#### 3.12.3 `GET /v2/launch2/instances/{instanceId}/dynamic-pool/rewards?walletId=&limit=`
+
+`walletId` required (`400` without, `404` when not the caller's); `limit` ≤ 100 (default 50).
+
+```json
+{
+  "instanceId": "4f3c…",
+  "walletId": "d647…",
+  "hookKind": "loopDynamic",
+  "claimableUsd1": "10",
+  "claimedUsd1": "5",
+  "rounds": [
+    {
+      "roundId": "2",
+      "status": "claimable",
+      "weightUsd1": "100",
+      "totalBuyWeightUsd1": "300",
+      "allocationUsd1": "30",
+      "claimableUsd1": "10",
+      "claimedUsd1": null,
+      "claimTransactionHash": null,
+      "claimedAt": null,
+      "startCandle": "100",
+      "endCandle": "104",
+      "activatedAt": "…",
+      "closedAt": "…"
+    }
+  ],
+  "contractVersion": "2.0"
+}
+```
+
+`status`: `open`（本轮进行中，结束后可领）/ `claimable`（可领取）/ `claimed`（已领取，带交易哈希）/
+`no_reward`（本轮无可领金额）. Only rounds in which the wallet has weight are listed, newest first.
+An OfficialTax instance answers `hookKind: "officialTax"` with `rounds: []`.
+
+#### 3.12.4 `POST /v2/launch2/instances/{instanceId}/dynamic-pool/claim/prepare`
+
+Headers: command headers (§1, `Idempotency-Key` UUIDv4). Body `{ "walletId": "…", "roundId": "2" }`.
+`201`:
+
+```json
+{
+  "launch2Intent": {
+    "intentId": "…",
+    "kind": "dynamic_claim",
+    "contractAddress": "0xcccc…10c4",
+    "calldata": { "to": "0xcccc…10c4", "data": "0x379607f5…", "value": "0" },
+    "approval": null,
+    "expectedOut": "12",
+    "signing": {
+      "mode": "device_eth_send_transaction",
+      "allowed": true,
+      "reasonCode": null
+    },
+    "…": "same shape as every launch2 intent (§3.4)"
+  },
+  "claim": { "roundId": "2", "hook": "0xcccc…10c4", "claimableUsd1": "12" },
+  "contractVersion": "2.0"
+}
+```
+
+The server simulates `claim(roundId)` from the wallet first (`claim` closes an ended candle before
+paying, so a round that is closing becomes claimable in the same transaction). Errors:
+422 `LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE` (OfficialTax), `POOL_NOT_GRADUATED`,
+`LAUNCH2_DYNAMIC_ROUND_INVALID` (roundId beyond the current round), `LAUNCH2_WALLET_NOT_EMBEDDED`;
+409 `DATA_STALE / LAUNCH2_DYNAMIC_ROUND_NOT_CLOSED` (本轮还没有结束), `DATA_STALE / LAUNCH2_DYNAMIC_HOOK_BUSY`;
+409 `RESOURCE_CONFLICT / LAUNCH2_DYNAMIC_ALREADY_CLAIMED` (本轮奖励已经领取过);
+409 `INSUFFICIENT_BALANCE / LAUNCH2_DYNAMIC_NOTHING_TO_CLAIM` (本轮没有可领取的奖励) or
+`LAUNCH2_GAS_INSUFFICIENT` (§4.1); 403 `POLICY_BLOCKED` (canary); 503 `LAUNCH2_WRITES_DISABLED`,
+`LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED`, `LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED`,
+`LAUNCH2_DYNAMIC_HOOK_MISMATCH`. Same `Idempotency-Key` + body replays the same intent.
+
+#### 3.12.5 `POST /v2/launch2/instances/{instanceId}/dynamic-pool/claim/report`
+
+After the device sends the claim: body `{ "intentId": "…", "transactionHash": "0x…" }` (command
+headers; optional `walletId` / `roundId` echoes must match the intent, else 404). `200`:
+
+```json
+{
+  "dynamicClaimReport": {
+    "intentId": "…",
+    "instanceId": "…",
+    "walletId": "…",
+    "roundId": "2",
+    "transactionHash": "0x…",
+    "status": "confirmed",
+    "amountUsd1": "12",
+    "claimedAt": "…",
+    "blockNumber": "6010",
+    "reportedAt": "…"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+`status: submitted` until the indexer has the transaction's `RewardClaimed` for that round and
+wallet (then `confirmed` with the amount); report again (same hash is idempotent) or re-read
+`…/rewards`. A different hash for the same intent → 409 `RESOURCE_CONFLICT /
+LAUNCH2_DYNAMIC_CLAIM_TRANSACTION_CONFLICT`; an unknown / foreign intent → 404
+`LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND`. A success toast is not chain confirmation; show
+「领取已提交」 until `confirmed`.
+
+#### 3.12.6 Unavailable behaviour and copy
+
+Every LoopDynamic reason code has zh-CN copy in `launch2DynamicReasonMessagesZh`
+(`src/features/launch2/launch2-dynamic.ts`):
+
+| reasonCode                                   | 文案                             |
+| -------------------------------------------- | -------------------------------- |
+| `LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED`      | 外盘路由未配置，暂不可交易       |
+| `LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH`       | 外盘路由校验未通过，暂不可交易   |
+| `LAUNCH2_DYNAMIC_ROUTER_MANAGER_MISMATCH`    | 外盘路由与池子不匹配，暂不可交易 |
+| `LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED`           | 外盘池子正在同步，请稍后再试     |
+| `LAUNCH2_DYNAMIC_HOOK_MISMATCH`              | 外盘池子校验未通过，暂不可交易   |
+| `LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED`       | 外盘池子尚未初始化               |
+| `LAUNCH2_EXACT_OUT_UNSUPPORTED`              | 该池子只支持按支付金额交易       |
+| `LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE`        | 该项目的外盘没有奖励轮次         |
+| `LAUNCH2_DYNAMIC_ROUND_INVALID`              | 轮次编号无效                     |
+| `LAUNCH2_DYNAMIC_ROUTER_UNAUTHORIZED`        | 池子拒绝了这个交易入口           |
+| `LAUNCH2_DYNAMIC_SWAP_UNSUPPORTED`           | 池子不支持这种交易方式           |
+| `LAUNCH2_DYNAMIC_HOOK_BUSY`                  | 池子正忙，请稍后重试             |
+| `LAUNCH2_DYNAMIC_ROUND_NOT_CLOSED`           | 本轮还没有结束，结束后才能领取   |
+| `LAUNCH2_DYNAMIC_ALREADY_CLAIMED`            | 本轮奖励已经领取过               |
+| `LAUNCH2_DYNAMIC_CLAIM_TRANSACTION_CONFLICT` | 这次领取已经记录了另一笔交易     |
+| `LAUNCH2_DYNAMIC_NOTHING_TO_CLAIM`           | 本轮没有可领取的奖励             |
+| `LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND`     | 找不到这次领取请求               |
+
+Server switches (all default off): `HOOKS_LAUNCH_HOOK_KIND` (officialTax),
+`LAUNCH2_DYNAMIC_ROUTER_ADDRESS` / `_CODE_HASH`, `LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS` (API);
+`LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `_CODE_HASH`, `LAUNCH2_DYNAMIC_POKE_*` (worker). With them
+unset there are no `loopDynamic` instances and every `…/dynamic-pool` answer is `not_applicable`.
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
 | HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -873,7 +1132,7 @@ are never attributed to anyone.
 | 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                                                                                                                                                          |
 | 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2                                                                                                                                 |
-| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason                                                                                                                                                                                                                                                                                                                                                         |
+| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason; 0131: `LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND`                                                                                                                                                                                                                                                                                                         |
 | 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                                                                           |
 | 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                                                                                                                                                |
 | 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                                                                                                                                                   |

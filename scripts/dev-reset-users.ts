@@ -199,6 +199,14 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_buyback_attempts: "user",
     // Official-pool swaps (Decision 0124): rooted in a launch2 instance
     launch2_pool_swaps: "user",
+    // Decision 0131: LoopDynamic facts / projections of a launch2 instance
+    launch2_dynamic_hook_bindings: "user",
+    launch2_dynamic_fees: "user",
+    launch2_dynamic_candles: "user",
+    launch2_dynamic_claims: "user",
+    launch2_dynamic_rounds: "user",
+    launch2_dynamic_buy_weights: "user",
+    launch2_dynamic_claim_reports: "user",
     // Decision 0120: no-holder closures and retry grants of those instances
     launch2_snapshot_closures: "user",
     launch2_snapshot_publication_releases: "user",
@@ -361,6 +369,11 @@ export const mixedSteps: readonly ResetStep[] = Object.freeze([
 /** Child before parent along every foreign key. */
 export const deleteSteps: readonly ResetStep[] = Object.freeze([
   // MEME v2 read model of the doomed deployment tasks (Decision 0114)
+  // Decision 0131: claim reports reference intents and instances.
+  del(
+    "launch2_dynamic_claim_reports",
+    `${ownedBy()} or instance_id in ${doomedLaunch2Instances}`,
+  ),
   del(
     "launch2_intents",
     `${ownedBy()} or instance_id in ${doomedLaunch2Instances}
@@ -377,6 +390,18 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
   ),
   del("launch2_buyback_attempts", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_pool_swaps", `instance_id in ${doomedLaunch2Instances}`),
+  del(
+    "launch2_dynamic_hook_bindings",
+    `instance_id in ${doomedLaunch2Instances}`,
+  ),
+  del("launch2_dynamic_fees", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_dynamic_candles", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_dynamic_claims", `instance_id in ${doomedLaunch2Instances}`),
+  del("launch2_dynamic_rounds", `instance_id in ${doomedLaunch2Instances}`),
+  del(
+    "launch2_dynamic_buy_weights",
+    `instance_id in ${doomedLaunch2Instances}`,
+  ),
   del("launch2_positions", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_snapshot_members", `instance_id in ${doomedLaunch2Instances}`),
   del("launch2_buybacks", `instance_id in ${doomedLaunch2Instances}`),

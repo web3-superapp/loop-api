@@ -1,5 +1,6 @@
 /**
- * `pnpm hooks:abi-sync [--check] [--protocol <dir>] [--out <forgeOutDir>]`
+ * `pnpm hooks:abi-sync [--check] [--protocol <dir>] [--out <forgeOutDir>]
+ *   [--source-commit <sha>]`
  * (Decision 0112): copies the ABI items the Hooks deployment executor uses
  * out of the loop-contracts Foundry build (`protocol/out/<C>.sol/<C>.json`)
  * into `src/integrations/launch/hooks-launch-protocol-abi.generated.ts`.
@@ -57,14 +58,21 @@ try {
   const outDir = path.resolve(
     argument("--out") ?? path.join(protocolDir, "out"),
   );
-  let sourceCommit = "unknown";
-  try {
-    sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: protocolDir,
-      encoding: "utf8",
-    }).trim();
-  } catch {
-    // A tarball checkout has no git metadata; the ABI content is still checked.
+  // Decision 0131: a build exported with `git archive` (no git metadata)
+  // names its commit explicitly.
+  let sourceCommit = argument("--source-commit") ?? "unknown";
+  if (!/^(unknown|[0-9a-f]{7,40})$/u.test(sourceCommit)) {
+    throw new Error("--source-commit must be a hex commit id");
+  }
+  if (sourceCommit === "unknown") {
+    try {
+      sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: protocolDir,
+        encoding: "utf8",
+      }).trim();
+    } catch {
+      // A tarball checkout has no git metadata; the ABI content is still checked.
+    }
   }
   const artifacts: Record<string, unknown> = {};
   for (const contract of Object.keys(hooksLaunchAbiSelection)) {

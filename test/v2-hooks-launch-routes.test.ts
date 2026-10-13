@@ -700,6 +700,24 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(failed.body).not.toContain("rpc");
   });
 
+  it("keeps saves and signing unavailable with HOOKS_LAUNCH_HOOK_KIND=loopDynamic (Decision 0131)", async () => {
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+      overrides: { ...enabled, HOOKS_LAUNCH_HOOK_KIND: "loopDynamic" },
+    });
+    const unsaved = await app.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: draftBody },
+    });
+    expect(unsaved.statusCode).toBe(503);
+    expect(unsaved.json()).toMatchObject({
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
+    });
+  });
+
   it("binds the draft to the Factory sale period and refuses a config hashed for another Factory (Decision 0119)", async () => {
     const configs = configRepositoryFake();
     const hourly: HooksLaunchFactoryReader = {

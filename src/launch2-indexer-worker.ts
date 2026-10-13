@@ -24,6 +24,7 @@ import {
 } from "./features/launch2/launch2-meme-assets.js";
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
+import { launch2HookKindOf } from "./features/launch2/launch2-dynamic.js";
 import {
   assessLaunch2MemeCoverage,
   launch2MemeCoverageMaxAttempts,
@@ -64,6 +65,15 @@ import {
  *    is marked complete only when the indexed transfers hold the mint and
  *    no negative balance (else one more re-scan; after three failures the
  *    lane stops re-scanning that instance and reports it as an error).
+ *
+ * 7. Decision 0131: a LoopDynamic instance (registry hook = 0) also has its
+ *    graduation adapter read for `LoopHookBound(hook, poolId)`, and once the
+ *    Hook is known (indexed, or bound in this very segment: a second pass
+ *    over the same range) the Hook's fee / candle / round / reward logs.
+ *    Its pool swaps are read like the OfficialTax ones (PoolManager `Swap`
+ *    by pool id, PoolManager and currency0 from the Hook); each swap's fee
+ *    is the Hook's `BuyFeeCharged` / `SellFeeCharged` of the same swap
+ *    (`pairLaunch2DynamicFees`). OfficialTax instances are unaffected.
  *
  * It never signs or sends.
  */
@@ -176,6 +186,15 @@ function rolesOf(
       // Decision 0125: MEME ERC-20 transfers (post-graduation balances).
       [instance.addresses.meme, "meme"],
     ];
+    // Decision 0131: LoopDynamic — the adapter's Hook binding, then the Hook.
+    if (launch2HookKindOf(instance.addresses.hook) === "loopDynamic") {
+      entries.push([
+        instance.addresses.graduationAdapter,
+        "dynamicGraduationAdapter",
+      ]);
+      const hook = instance.dynamicHook ?? null;
+      if (hook !== null) entries.push([hook, "dynamicHook"]);
+    }
     for (const [address, role] of entries) {
       roles.set(address, role);
       owners.set(address, instance.instanceId);
@@ -206,6 +225,8 @@ interface PoolOwner {
   readonly instanceId: string;
   readonly poolManager: string;
   readonly memeIsCurrency0: boolean;
+  /** Decision 0131: the LoopDynamic Hook of the pool (null: OfficialTax). */
+  readonly dynamicHook: string | null;
 }
 
 /** PoolManager → the pool ids it serves (lane → chain filter). */
@@ -296,6 +317,55 @@ export function pairLaunch2RouterSwaps(
   return paired;
 }
 
+/**
+ * Decision 0131: pairs each LoopDynamic Hook fee log with the PoolManager
+ * `Swap` it charged — same transaction and block, the Hook's pool, the
+ * newest such swap before the fee log, not paired yet (the PoolManager
+ * emits `Swap` before it calls `afterSwap`, where the Hook takes the fee).
+ * `BuyFeeCharged.fee` is MEME; `SellFeeCharged` is `baseFee + extraFee`
+ * USD1. Returns PoolManager log key → the fee (raw integer string).
+ */
+export function pairLaunch2DynamicFees(
+  logs: readonly Launch2DecodedLog[],
+  hookPools: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const paired = new Map<string, string>();
+  const keyOf = (log: Launch2DecodedLog): string =>
+    `${log.transactionHash}:${log.logIndex}`;
+  for (const charged of logs) {
+    if (
+      charged.eventName !== "BuyFeeCharged" &&
+      charged.eventName !== "SellFeeCharged"
+    ) {
+      continue;
+    }
+    const poolId = hookPools.get(charged.contractAddress);
+    if (poolId === undefined) continue;
+    let match: Launch2DecodedLog | null = null;
+    for (const swap of logs) {
+      if (
+        swap.eventName === "Swap" &&
+        swap.transactionHash === charged.transactionHash &&
+        swap.blockHash === charged.blockHash &&
+        swap.logIndex < charged.logIndex &&
+        swap.args["id"] === poolId &&
+        !paired.has(keyOf(swap)) &&
+        (match === null || swap.logIndex > match.logIndex)
+      ) {
+        match = swap;
+      }
+    }
+    if (match === null) continue;
+    const fee =
+      charged.eventName === "BuyFeeCharged"
+        ? BigInt(charged.args["fee"] ?? "0")
+        : BigInt(charged.args["baseFee"] ?? "0") +
+          BigInt(charged.args["extraFee"] ?? "0");
+    paired.set(keyOf(match), fee.toString(10));
+  }
+  return paired;
+}
+
 function result(
   kind: Launch2LaneResult["kind"],
   reasonCode: string | null,
@@ -341,19 +411,28 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
     entries: readonly {
       readonly instance: Launch2LaneInstance;
       readonly poolId: string;
+      /** Decision 0131: the LoopDynamic Hook (null: OfficialTax). */
+      readonly dynamicHook?: string | null;
     }[],
   ): Promise<void> {
-    for (const { instance, poolId } of entries) {
-      const hook = instance.addresses.hook;
+    for (const { instance, poolId, dynamicHook } of entries) {
+      const dynamic =
+        launch2HookKindOf(instance.addresses.hook) === "loopDynamic";
+      const hook = dynamic ? (dynamicHook ?? null) : instance.addresses.hook;
+      // A LoopDynamic pool whose Hook binding is not indexed yet waits.
+      if (hook === null) continue;
       let facts = hookPools.get(hook);
       if (facts === undefined) {
-        facts = await options.chain.readHookPool(hook);
+        facts = dynamic
+          ? await options.chain.readDynamicHookPool(hook)
+          : await options.chain.readHookPool(hook);
         hookPools.set(hook, facts);
       }
       into.set(poolId.toLowerCase(), {
         instanceId: instance.instanceId,
         poolManager: facts.poolManager,
         memeIsCurrency0: facts.currency0 === instance.addresses.meme,
+        dynamicHook: dynamic ? hook : null,
       });
     }
   }
@@ -610,7 +689,13 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const known = instances.flatMap((instance) =>
         instance.officialPoolId === null
           ? []
-          : [{ instance, poolId: instance.officialPoolId }],
+          : [
+              {
+                instance,
+                poolId: instance.officialPoolId,
+                dynamicHook: instance.dynamicHook ?? null,
+              },
+            ],
       );
       await addPools(pools, known);
       const routerFilter = (
@@ -650,6 +735,29 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const byInstance = new Map(
         instances.map((instance) => [instance.instanceId, instance]),
       );
+      // Decision 0131: Hooks bound in this segment (LoopHookBound of a
+      // LoopDynamic instance's own graduation adapter) join the roles.
+      const boundHooks = new Map<string, string>();
+      const freshHookRoles = new Map<string, Launch2ContractRole>();
+      for (const log of first.logs) {
+        const owner = owners.get(log.contractAddress);
+        const hook = log.args["hook"];
+        if (
+          log.eventName !== "LoopHookBound" ||
+          owner === undefined ||
+          roles.get(log.contractAddress) !== "dynamicGraduationAdapter" ||
+          hook === undefined ||
+          boundHooks.has(owner)
+        ) {
+          continue;
+        }
+        boundHooks.set(owner, hook);
+        if (!roles.has(hook)) {
+          freshHookRoles.set(hook, "dynamicHook");
+          roles.set(hook, "dynamicHook");
+          owners.set(hook, owner);
+        }
+      }
       const fresh = new Map<string, PoolOwner>();
       await addPools(
         fresh,
@@ -662,18 +770,27 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
             instance !== undefined &&
             poolId !== undefined &&
             !pools.has(poolId)
-            ? [{ instance, poolId }]
+            ? [
+                {
+                  instance,
+                  poolId,
+                  dynamicHook:
+                    instance.dynamicHook ??
+                    boundHooks.get(instance.instanceId) ??
+                    null,
+                },
+              ]
             : [];
         }),
       );
       const second =
-        fresh.size === 0
+        fresh.size === 0 && freshHookRoles.size === 0
           ? null
           : await options.chain.getLogs({
-              roles: new Map(),
+              roles: freshHookRoles,
               fromBlock,
               toBlock,
-              poolSwaps: poolFilter(fresh),
+              ...(fresh.size === 0 ? {} : { poolSwaps: poolFilter(fresh) }),
               ...routerFilter(fresh),
             });
       for (const [poolId, owner] of fresh) pools.set(poolId, owner);
@@ -692,6 +809,17 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         poolRouter === null
           ? new Map<string, never>()
           : pairLaunch2RouterSwaps(decoded.logs, poolRouter);
+      // Decision 0131: each LoopDynamic swap's fee from its Hook's log.
+      const dynamicHookPools = new Map<string, string>();
+      for (const [poolId, owner] of pools) {
+        if (owner.dynamicHook !== null) {
+          dynamicHookPools.set(owner.dynamicHook, poolId);
+        }
+      }
+      const dynamicFees =
+        dynamicHookPools.size === 0
+          ? new Map<string, string>()
+          : pairLaunch2DynamicFees(decoded.logs, dynamicHookPools);
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
       const memeTransfers: Launch2MemeTransferRecord[] = [];
@@ -752,14 +880,31 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           args:
             swapPool === undefined || log.eventName !== "Swap"
               ? log.args
-              : Object.freeze({
-                  ...log.args,
-                  memeIsCurrency0: swapPool.memeIsCurrency0 ? "true" : "false",
-                  // Decision 0126: the router's payer / recipient, if paired.
-                  ...attributionArgs(
-                    attributions.get(`${log.transactionHash}:${log.logIndex}`),
-                  ),
-                }),
+              : swapPool.dynamicHook !== null
+                ? Object.freeze({
+                    ...log.args,
+                    memeIsCurrency0: swapPool.memeIsCurrency0
+                      ? "true"
+                      : "false",
+                    // Decision 0131: the Hook's fee of this swap, if paired.
+                    poolHookKind: "loopDynamic",
+                    dynamicFee:
+                      dynamicFees.get(
+                        `${log.transactionHash}:${log.logIndex}`,
+                      ) ?? "0",
+                  })
+                : Object.freeze({
+                    ...log.args,
+                    memeIsCurrency0: swapPool.memeIsCurrency0
+                      ? "true"
+                      : "false",
+                    // Decision 0126: the router's payer / recipient, if paired.
+                    ...attributionArgs(
+                      attributions.get(
+                        `${log.transactionHash}:${log.logIndex}`,
+                      ),
+                    ),
+                  }),
           transactionHash: log.transactionHash,
           logIndex: log.logIndex,
           blockNumber: log.blockNumber.toString(10),

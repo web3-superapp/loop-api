@@ -1,4 +1,4 @@
-export const latestMigrationName = "000075_launch2_meme_coverage_integrity";
+export const latestMigrationName = "000076_launch2_loop_dynamic";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -168,4 +168,11 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.mining_reward_ledger_events",
   "public.mining_reward_balances",
   "public.testnet_faucet_grants",
+  "public.launch2_dynamic_hook_bindings",
+  "public.launch2_dynamic_fees",
+  "public.launch2_dynamic_candles",
+  "public.launch2_dynamic_claims",
+  "public.launch2_dynamic_rounds",
+  "public.launch2_dynamic_buy_weights",
+  "public.launch2_dynamic_claim_reports",
 ] as const);

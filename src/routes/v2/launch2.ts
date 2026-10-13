@@ -18,6 +18,15 @@ import {
   launch2BuybacksResourceSchema,
   launch2CommandErrors,
   launch2DetailQuerySchema,
+  launch2DynamicClaimIntentResourceSchema,
+  launch2DynamicClaimPrepareRequestSchema,
+  launch2DynamicClaimReportRequestSchema,
+  launch2DynamicClaimReportResourceSchema,
+  launch2DynamicCommandErrors,
+  launch2DynamicPoolQuerySchema,
+  launch2DynamicPoolResourceSchema,
+  launch2DynamicRewardsQuerySchema,
+  launch2DynamicRewardsResourceSchema,
   launch2ErrorDescription,
   launch2InstanceDetailResourceSchema,
   launch2InstanceListResourceSchema,
@@ -243,7 +252,7 @@ export function registerV2Launch2Routes(
         operationId: "getV2Launch2PoolQuote",
         summary:
           "Quote a graduated MEME v2 buy or sell on the official v4 pool",
-        description: `Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS (the quote's freshness; Decision 0126: the prepare re-simulates and encodes its own, longer deadline). 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. ${unavailableNote}`,
+        description: `Decision 0124. Graduated instances only: simulates OfficialPoolRouter.swapExactIn (minAmountOut 0) / swapExactOut (maxAmountIn unbounded) with eth_call from the wallet at one block (input-token balance and allowance overridden in the call only), on the PoolKey (min/max(USD1, MEME), fee 2500, tickSpacing 60, the instance hook) verified against officialPoolId. buy = USD1 → MEME, sell = MEME → USD1; the 2 % OfficialTaxHook tax is taken from the output (taxToken). minOut / maxIn apply slippageBps (default LAUNCH2_DEFAULT_SLIPPAGE_BPS); deadline = expiresAt = now + LAUNCH2_QUOTE_TTL_SECONDS (the quote's freshness; Decision 0126: the prepare re-simulates and encodes its own, longer deadline). 422 VALIDATION_FAILED / POOL_NOT_GRADUATED (detailsSafe.stage) | POOL_QUOTE_UNAVAILABLE (simulation reverted; detailsSafe.revertReason) | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID; 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 503 CAPABILITY_UNAVAILABLE / POOL_ROUTER_NOT_CONFIGURED | POOL_ROUTER_CODE_MISMATCH | POOL_ROUTER_MANAGER_MISMATCH | POOL_KEY_MISMATCH | LAUNCH2_CHAIN_READ_FAILED. Decision 0131 — a LoopDynamic instance (no Hook at deployLaunch; the per-project LoopDynamicHook bound at graduation) quotes through LoopRouter.swapExactInput instead: exactIn only (exactOut is 422 LAUNCH2_EXACT_OUT_UNSUPPORTED); taxBps = the Hook's buy fee (MEME) / base sell fee (USD1); quote.dynamic carries the dynamic sell fee (dynamicTaxBps / dynamicTaxAmount, from a second base-fee-only simulation), armed / roundId after the candle roll, and rewardWeight (a buy's USD1 while armed); router = LoopRouter. Its 503 reasons are LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED; contract errors map to 422 LAUNCH2_DYNAMIC_ROUTER_UNAUTHORIZED | LAUNCH2_DYNAMIC_SWAP_UNSUPPORTED, 409 DATA_STALE / LAUNCH2_DYNAMIC_HOOK_BUSY. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -284,7 +293,7 @@ export function registerV2Launch2Routes(
         operationId: "prepareV2Launch2PoolTrade",
         summary:
           "Prepare a graduated MEME v2 buy or sell on the official v4 pool",
-        description: `Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (detailsSafe.maxAmountIn = the balance, requiredAmountIn, balanceUsd1) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (maxAmountIn, requiredAmountIn, balanceMeme) | LAUNCH2_GAS_INSUFFICIENT (requiredBnb = the gas fee ceiling, balanceBnb); 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. ${unavailableNote}`,
+        description: `Decision 0124. Re-quotes like GET …/pool/quote at one block (Decision 0126: a fresh simulation at the prepare block, basis = that block; the encoded deadline and the intent's deadline / expiresAt = prepare time + LAUNCH2_POOL_TRADE_DEADLINE_SECONDS, default 180 s, so the approve and the trade can both be signed) and returns the unsigned OfficialPoolRouter call for the device signing exit (to = the router, value 0, recipient = the wallet): swapExactIn(key, zeroForOne, amountIn, minOut, wallet, deadline) or swapExactOut(key, zeroForOne, amountOut, maxIn, wallet, deadline); kind pool_buy / pool_sell. approval = an exact approve of the input token (buy: USD1, sell: MEME) to the router for amountIn (exactIn) or maxIn (exactOut), null when the allowance already covers it (then the call is nonce N, else N+1). simulation = eth_call of the router call (allowance overridden while the approve is pending) and gas = its estimate × 1.2. The response carries the quote it was built from. 422 VALIDATION_FAILED / POOL_NOT_GRADUATED | POOL_QUOTE_UNAVAILABLE | POOL_INSUFFICIENT_LIQUIDITY | POOL_QUOTE_ZERO | LAUNCH2_AMOUNT_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (detailsSafe.maxAmountIn = the balance, requiredAmountIn, balanceUsd1) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (maxAmountIn, requiredAmountIn, balanceMeme) | LAUNCH2_GAS_INSUFFICIENT (requiredBnb = the gas fee ceiling, balanceBnb); 409 DATA_STALE / LAUNCH2_INSTANCE_PAUSED; 403 POLICY_BLOCKED (Decision 0065 canary asset / ceilings; Decision 0117 counterparties: the instance's MEME / USD1 and the code-hash-verified router only); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off and the pool quote 503 reasons. Idempotency-Key replays the same Intent. Decision 0131: a LoopDynamic instance prepares LoopRouter.swapExactInput(key, zeroForOne, amountIn, minOut, MIN/MAX_SQRT_PRICE±1, deadline) instead (exactIn only, 422 LAUNCH2_EXACT_OUT_UNSUPPORTED; the approve spender is LoopRouter; the trade pays and receives for the signing wallet); same kinds pool_buy / pool_sell and the quote's dynamic block. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -342,6 +351,149 @@ export function registerV2Launch2Routes(
         instanceId: params.instanceId,
         walletId: query["walletId"],
         ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/dynamic-pool",
+    {
+      schema: {
+        operationId: "getV2Launch2DynamicPool",
+        summary:
+          "Get the LoopDynamic pool and reward-round state of a MEME v2 instance",
+        description: `Decision 0131. Every instance answers its hookKind: an OfficialTax instance is status not_applicable (every other field null); a LoopDynamic instance before graduation is not_graduated. A graduated LoopDynamic instance reads its indexed Hook (LoopHookBound) at one block, cross-checked against the configured LoopRouter (trustedRouter, PoolManager) and the indexed pool id: armed, currentRoundId, candle (5 min) and whether a roll is pending, currentDropWad, the pot (carry + the armed round's dynamic fees), the round's total buy weight, the viewer's weight (walletId query or the active wallet; null without one), the fee rates, routingPolicy / priceTiming, and the indexed round summary. 503 CAPABILITY_UNAVAILABLE / LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED | LAUNCH2_CHAIN_READ_FAILED. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2DynamicPoolQuerySchema,
+        response: {
+          200: launch2DynamicPoolResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.getDynamicPool({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        ...(query["walletId"] === undefined
+          ? {}
+          : { walletId: query["walletId"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/dynamic-pool/rewards",
+    {
+      schema: {
+        operationId: "listV2Launch2DynamicRewards",
+        summary: "List one wallet's LoopDynamic reward rounds",
+        description: `Decision 0131. The caller's wallet (walletId, required; 404 when it is not one of the caller's wallets): every round in which it has buy weight (indexed BuyCredited), newest first, limit <= 100 (default 50). status: open (round not closed yet), claimable (closed, allocation × weight / totalBuyWeight > 0, not claimed), claimed (indexed RewardClaimed), no_reward. claimableUsd1 is the projection's floor(allocation × weight / totalBuyWeight) — claim/prepare re-checks on chain. An OfficialTax instance answers hookKind officialTax with no rounds. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2DynamicRewardsQuerySchema,
+        response: {
+          200: launch2DynamicRewardsResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.listDynamicRewards({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        walletId: query["walletId"],
+        ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch2/instances/:instanceId/dynamic-pool/claim/prepare",
+    {
+      schema: {
+        operationId: "prepareV2Launch2DynamicClaim",
+        summary:
+          "Prepare a LoopDynamic reward claim (claim(roundId) on the Hook)",
+        description: `Decision 0131. Simulates hook.claim(roundId) from the wallet at one block (claim rolls the 5-minute candle first, so a round the roll closes is claimable in the same transaction) and returns the unsigned claim(roundId) transaction (to = the instance's indexed Hook, value 0, no approval) as a launch2 intent of kind dynamic_claim for the device signing exit; claim = {roundId, hook, claimableUsd1}. 422 VALIDATION_FAILED / LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE (OfficialTax instance) | POOL_NOT_GRADUATED | LAUNCH2_DYNAMIC_ROUND_INVALID | LAUNCH2_WALLET_NOT_EMBEDDED; 409 DATA_STALE / LAUNCH2_DYNAMIC_ROUND_NOT_CLOSED | LAUNCH2_DYNAMIC_HOOK_BUSY; 409 RESOURCE_CONFLICT / LAUNCH2_DYNAMIC_ALREADY_CLAIMED; 409 INSUFFICIENT_BALANCE / LAUNCH2_DYNAMIC_NOTHING_TO_CLAIM | LAUNCH2_GAS_INSUFFICIENT; 403 POLICY_BLOCKED (canary asset / ceilings; the target must be the instance's bound Hook); 503 LAUNCH2_WRITES_DISABLED | LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH. Idempotency-Key replays the same Intent. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launch2DynamicClaimPrepareRequestSchema,
+        response: {
+          201: launch2DynamicClaimIntentResourceSchema,
+          ...launch2DynamicCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const resource = await service.prepareDynamicClaim({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(201).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch2/instances/:instanceId/dynamic-pool/claim/report",
+    {
+      schema: {
+        operationId: "reportV2Launch2DynamicClaim",
+        summary: "Report the hash of a sent LoopDynamic claim transaction",
+        description: `Decision 0131. Records the device's transaction hash for one of the caller's dynamic_claim intents of this instance (once; re-reporting the same hash is idempotent, another hash is 409 RESOURCE_CONFLICT / LAUNCH2_DYNAMIC_CLAIM_TRANSACTION_CONFLICT; an unknown / foreign intent is 404 NOT_FOUND / LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND). status confirmed once the launch2_event lane indexed that transaction's RewardClaimed for (round, wallet) — amountUsd1, claimedAt, blockNumber — else submitted (report again; the indexed log stays the truth, the report never moves money or ledgers). ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launch2DynamicClaimReportRequestSchema,
+        response: {
+          200: launch2DynamicClaimReportResourceSchema,
+          ...launch2DynamicCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const resource = await service.reportDynamicClaim({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

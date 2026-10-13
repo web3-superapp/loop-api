@@ -818,6 +818,48 @@ describe("launch chain slot (Decision 0038)", () => {
     ).toThrow(/LAUNCH2_POOL_ROUTER_ADDRESS/);
   });
 
+  it("parses the Decision 0131 LoopDynamic keys (default off, LoopRouter pair BSC Testnet only)", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    };
+    const plain = loadConfig(environment).launch2;
+    expect(plain.hookKind).toBe("officialTax");
+    expect(plain.dynamicRouter).toBeNull();
+    expect(plain.dynamicRouterRegistry).toBeNull();
+    const configured = {
+      ...environment,
+      HOOKS_LAUNCH_HOOK_KIND: "loopDynamic",
+      LAUNCH2_DYNAMIC_ROUTER_ADDRESS:
+        "0x7777777777777777777777777777777777777777",
+      LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: `0x${"EF".repeat(32)}`,
+      LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS:
+        "0x4444444444444444444444444444444444444444",
+    };
+    expect(loadConfig(configured).launch2).toMatchObject({
+      hookKind: "loopDynamic",
+      dynamicRouter: {
+        address: "0x7777777777777777777777777777777777777777",
+        codeHash: `0x${"ef".repeat(32)}`,
+      },
+      dynamicRouterRegistry: "0x4444444444444444444444444444444444444444",
+    });
+    expect(() =>
+      loadConfig({ ...configured, LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: "" }),
+    ).toThrow(/LAUNCH2_DYNAMIC_ROUTER_CODE_HASH/);
+    expect(() =>
+      loadConfig({ ...configured, HOOKS_LAUNCH_HOOK_KIND: "dynamic" }),
+    ).toThrow(/HOOKS_LAUNCH_HOOK_KIND/);
+    expect(() =>
+      loadConfig({
+        ...configured,
+        LAUNCH_CHAIN_ID: "56",
+        LAUNCH_BSC_RPC_URLS: "",
+      }),
+    ).toThrow(/LAUNCH2_DYNAMIC_ROUTER_ADDRESS/);
+  });
+
   it("parses LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (Decision 0126: default 180, 60..600)", () => {
     expect(loadConfig(validEnvironment()).launch2.tradeDeadlineSeconds).toBe(
       180,

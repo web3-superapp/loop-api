@@ -10,6 +10,7 @@ import {
   keccak256,
   type Abi,
   type Address,
+  type PublicClient,
   type Hex,
   type StateOverride,
   type Transport,
@@ -91,12 +92,12 @@ function lower(value: string): string {
   return value.toLowerCase();
 }
 
-function slotHex(value: bigint): Hex {
+export function slotHex(value: bigint): Hex {
   return `0x${value.toString(16).padStart(64, "0")}`;
 }
 
 /** `keccak256(abi.encode(key, slot))` (Solidity) or `(slot, key)` (Vyper). */
-function mappingSlot(
+export function mappingSlot(
   key: string,
   base: bigint,
   order: "solidity" | "vyper",
@@ -114,7 +115,7 @@ function mappingSlot(
   return BigInt(keccak256(encoded));
 }
 
-function nestedSlot(
+export function nestedSlot(
   owner: string,
   spender: string,
   base: bigint,
@@ -124,14 +125,14 @@ function nestedSlot(
   return mappingSlot(spender, inner, order);
 }
 
-interface TokenLayout {
+export interface TokenLayout {
   readonly balanceBase: bigint;
   readonly allowanceBase: bigint;
   readonly order: "solidity" | "vyper";
 }
 
 /** The revert data of a viem call error, if the node returned any. */
-function revertData(error: unknown): Hex | null {
+export function revertData(error: unknown): Hex | null {
   if (!(error instanceof BaseError)) return null;
   let found: Hex | null = null;
   error.walk((cause) => {
@@ -167,6 +168,86 @@ export function launch2PoolErrorName(data: Hex | null): string | null {
   } catch {
     return null;
   }
+}
+
+/** A `stateDiff` override of one contract's storage slots. */
+export function tokenOverride(
+  token: string,
+  entries: readonly { readonly slot: bigint; readonly value: bigint }[],
+): StateOverride {
+  return [
+    {
+      address: token as Address,
+      stateDiff: entries.map((entry) => ({
+        slot: slotHex(entry.slot),
+        value: slotHex(entry.value),
+      })),
+    },
+  ];
+}
+
+/**
+ * Decision 0124 (shared with Decision 0131): finds an ERC-20's balance and
+ * allowance mapping slots by reading `balanceOf` / `allowance(owner,
+ * spender)` under a probe override (Solidity and Vyper layouts, plain
+ * slots 0..15, OpenZeppelin v5 namespaced storage). Null when not found.
+ */
+export async function probeErc20Layout(
+  client: PublicClient,
+  token: string,
+  owner: string,
+  spender: string,
+  blockNumber: bigint,
+): Promise<TokenLayout | null> {
+  const balanceOf = async (slot: bigint): Promise<bigint | null> => {
+    try {
+      return await client.readContract({
+        address: token as Address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [owner as Address],
+        blockNumber,
+        stateOverride: tokenOverride(token, [{ slot, value: probeValue }]),
+      });
+    } catch {
+      return null;
+    }
+  };
+  const allowanceOf = async (slot: bigint): Promise<bigint | null> => {
+    try {
+      return await client.readContract({
+        address: token as Address,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [owner as Address, spender as Address],
+        blockNumber,
+        stateOverride: tokenOverride(token, [{ slot, value: probeValue }]),
+      });
+    } catch {
+      return null;
+    }
+  };
+  const bases = [...plainSlots, ozErc20NamespacedBase];
+  for (const order of ["solidity", "vyper"] as const) {
+    for (const base of bases) {
+      if ((await balanceOf(mappingSlot(owner, base, order))) !== probeValue) {
+        continue;
+      }
+      const allowanceBases = [
+        base + 1n,
+        base + 2n,
+        ...plainSlots.filter((slot) => slot !== base),
+      ];
+      for (const allowanceBase of allowanceBases) {
+        const slot = nestedSlot(owner, spender, allowanceBase, order);
+        if ((await allowanceOf(slot)) === probeValue) {
+          return { balanceBase: base, allowanceBase, order };
+        }
+      }
+      return null;
+    }
+  }
+  return null;
 }
 
 export function createLaunch2PoolChain(input: {
@@ -245,56 +326,7 @@ export function createLaunch2PoolChain(input: {
     owner: string,
     blockNumber: bigint,
   ): Promise<TokenLayout | null> {
-    const spender = router;
-    const balanceOf = async (slot: bigint): Promise<bigint | null> => {
-      try {
-        return await client.readContract({
-          address: token as Address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [owner as Address],
-          blockNumber,
-          stateOverride: override(token, [{ slot, value: probeValue }]),
-        });
-      } catch {
-        return null;
-      }
-    };
-    const allowanceOf = async (slot: bigint): Promise<bigint | null> => {
-      try {
-        return await client.readContract({
-          address: token as Address,
-          abi: erc20Abi,
-          functionName: "allowance",
-          args: [owner as Address, spender as Address],
-          blockNumber,
-          stateOverride: override(token, [{ slot, value: probeValue }]),
-        });
-      } catch {
-        return null;
-      }
-    };
-    const bases = [...plainSlots, ozErc20NamespacedBase];
-    for (const order of ["solidity", "vyper"] as const) {
-      for (const base of bases) {
-        if ((await balanceOf(mappingSlot(owner, base, order))) !== probeValue) {
-          continue;
-        }
-        const allowanceBases = [
-          base + 1n,
-          base + 2n,
-          ...plainSlots.filter((slot) => slot !== base),
-        ];
-        for (const allowanceBase of allowanceBases) {
-          const slot = nestedSlot(owner, spender, allowanceBase, order);
-          if ((await allowanceOf(slot)) === probeValue) {
-            return { balanceBase: base, allowanceBase, order };
-          }
-        }
-        return null;
-      }
-    }
-    return null;
+    return probeErc20Layout(client, token, owner, router, blockNumber);
   }
 
   async function layoutOf(

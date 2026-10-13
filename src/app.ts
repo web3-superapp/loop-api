@@ -441,10 +441,12 @@ import {
 } from "./features/launch2/launch2-service.js";
 import type {
   Launch2Chain,
+  Launch2DynamicChain,
   Launch2PoolChain,
 } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import { createLaunch2PoolChain } from "./integrations/launch2/launch2-pool-chain.js";
+import { createLaunch2DynamicChain } from "./integrations/launch2/launch2-dynamic-chain.js";
 import {
   createMiningRewardsService,
   type MiningRewardsService,
@@ -612,6 +614,8 @@ export interface BuildAppOptions {
   readonly launch2Chain?: Launch2Chain | null;
   /** Decision 0124: test seam for the official-pool router reader. */
   readonly launch2PoolChain?: Launch2PoolChain | null;
+  /** Decision 0131: test seam for the LoopDynamic (LoopRouter) reader. */
+  readonly launch2DynamicChain?: Launch2DynamicChain | null;
   /** Decision 0116 seams: the LoopRewardClaim reader and the rewards service. */
   readonly miningClaimChain?: MiningClaimChain | null;
   readonly miningRewardsService?: MiningRewardsService;
@@ -1986,8 +1990,11 @@ export async function buildApp(
   // BSC Testnet launch slot with a configured Factory + code hash. Missing
   // pieces leave the services fail-closed (CAPABILITY_UNAVAILABLE).
   const hooksLaunchEnabled = config.hooksLaunch.enabled;
+  // Decision 0131: HOOKS_LAUNCH_HOOK_KIND=loopDynamic keeps config saves,
+  // reviews and signing preparation fail-closed (no Factory reader) until
+  // the deployment executor verifies LoopDynamic launches.
   const hooksFactoryReader: HooksLaunchFactoryReader | null =
-    !hooksLaunchEnabled
+    !hooksLaunchEnabled || config.launch2.hookKind === "loopDynamic"
       ? null
       : (options.hooksLaunchFactoryReader ??
         (config.hooksLaunch.factoryAddress !== null &&
@@ -2186,6 +2193,22 @@ export async function buildApp(
         );
       });
   }
+  // Decision 0131: the LoopDynamic reader exists only with the LoopRouter
+  // pair on the BSC Testnet launch slot (default off).
+  const launch2DynamicChain: Launch2DynamicChain | null =
+    options.launch2DynamicChain !== undefined
+      ? options.launch2DynamicChain
+      : launch2Registered &&
+          launch2UnavailableReason === null &&
+          config.launch2.dynamicRouter !== null &&
+          config.launchChain.chainId === bscTestnetChainId &&
+          config.launchChain.rpcUrls.length > 0
+        ? createLaunch2DynamicChain({
+            rpcUrls: config.launchChain.rpcUrls,
+            router: config.launch2.dynamicRouter.address,
+            expectedRuntimeCodeHash: config.launch2.dynamicRouter.codeHash,
+          })
+        : null;
   const launch2Service =
     options.launch2Service ??
     (launch2Registered
@@ -2202,6 +2225,8 @@ export async function buildApp(
           defaultSlippageBps: config.launch2.defaultSlippageBps,
           tradeDeadlineSeconds: config.launch2.tradeDeadlineSeconds,
           poolChain: launch2PoolChain,
+          dynamicChain: launch2DynamicChain,
+          dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),
         })

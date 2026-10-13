@@ -22,6 +22,8 @@ import {
   Launch2RepositoryUnavailableError,
   type CreateLaunch2IntentRecord,
   type Launch2BuybackRecord,
+  type Launch2DynamicClaimReportRecord,
+  type Launch2DynamicRewardRecord,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
   type Launch2LaneEvent,
@@ -187,6 +189,8 @@ const instanceColumns = `
   coalesce(activated_at, registered_at) as sort_at,
   meme_transfers_target_block::text,
   pool_router_target_block::text,
+  pool_hook_kind, dynamic_hook_address, dynamic_pool_id,
+  dynamic_hook_bound_block::text,
   (select jsonb_build_object(
       'status', p.status, 'txHash', p.tx_hash,
       'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
@@ -421,6 +425,17 @@ function mapInstance(row: Row): Launch2InstanceRecord {
       userBuyVolumeUsd1: text(row, "pool_user_buy_volume_usd1"),
       userSellVolumeUsd1: text(row, "pool_user_sell_volume_usd1"),
     }),
+    // Decision 0131: the registry row's hook kind and the bound Hook.
+    poolHookKind:
+      row["pool_hook_kind"] === "loopDynamic" ? "loopDynamic" : "officialTax",
+    dynamicPool:
+      nullableText(row, "dynamic_hook_address") === null
+        ? null
+        : Object.freeze({
+            hook: text(row, "dynamic_hook_address"),
+            poolId: text(row, "dynamic_pool_id"),
+            boundBlock: text(row, "dynamic_hook_bound_block"),
+          }),
     buybackKeeper: keeperOf(row["buyback_keeper"]),
     registeredAt: iso(row, "registered_at"),
     projectedAt: iso(row, "projected_at"),
@@ -625,7 +640,15 @@ async function insertFact(
           facts.side,
           facts.usd1Amount.toString(10),
           facts.memeAmount.toString(10),
-          facts.taxAmount.toString(10),
+          // Decision 0131: a LoopDynamic pool's fee is the Hook's own log
+          // (BuyFeeCharged / SellFeeCharged of the same swap, paired by the
+          // lane); unpaired = no fee (an exempt buyback).
+          (a["poolHookKind"] === "loopDynamic"
+            ? /^(0|[1-9][0-9]{0,77})$/u.test(a["dynamicFee"] ?? "")
+              ? BigInt(a["dynamicFee"] as string)
+              : 0n
+            : facts.taxAmount
+          ).toString(10),
           facts.taxToken,
           sqrtPrice.toString(10),
           launch2PoolPriceE18(
@@ -637,6 +660,109 @@ async function insertFact(
         ],
       });
     }
+  } else if (event.eventName === "LoopHookBound") {
+    // Decision 0131: the graduation adapter bound the instance's Hook.
+    await client.query({
+      text: `
+        insert into public.launch2_dynamic_hook_bindings (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, hook_address, pool_id, bound_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9::timestamptz)
+        ${upsertTail}
+      `,
+      values: [...base, a["hook"], a["poolId"], at],
+    });
+  } else if (event.eventName === "SellFeeCharged") {
+    await client.query({
+      text: `
+        insert into public.launch2_dynamic_fees (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, hook_address, side, fee_token, round_id,
+          buyer_address, gross_amount, base_fee, extra_fee, drop_wad,
+          charged_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, 'sell', 'usd1',
+          $8::numeric, null, $9::numeric, $10::numeric, $11::numeric,
+          $12::numeric, $13::timestamptz)
+        ${upsertTail}
+      `,
+      values: [
+        ...base,
+        event.contractAddress,
+        a["round"],
+        a["grossQuote"],
+        a["baseFee"],
+        a["extraFee"],
+        a["dropWad"],
+        at,
+      ],
+    });
+  } else if (event.eventName === "BuyFeeCharged") {
+    // loop-contracts S165: 2 % of the MEME output to the fee vault.
+    await client.query({
+      text: `
+        insert into public.launch2_dynamic_fees (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, hook_address, side, fee_token, round_id,
+          buyer_address, gross_amount, base_fee, extra_fee, drop_wad,
+          charged_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, 'buy', 'meme', null,
+          $8, $9::numeric, $10::numeric, 0, 0, $11::timestamptz)
+        ${upsertTail}
+      `,
+      values: [
+        ...base,
+        event.contractAddress,
+        a["buyer"],
+        a["grossMeme"],
+        a["fee"],
+        at,
+      ],
+    });
+  } else if (event.eventName === "CandleClosed") {
+    await client.query({
+      text: `
+        insert into public.launch2_dynamic_candles (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, hook_address, candle_id, open_sqrt_price_x96,
+          close_sqrt_price_x96, closed_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, $8::numeric,
+          $9::numeric, $10::numeric, $11::timestamptz)
+        ${upsertTail}
+      `,
+      values: [
+        ...base,
+        event.contractAddress,
+        a["candle"],
+        a["openSqrtPriceX96"],
+        a["closeSqrtPriceX96"],
+        at,
+      ],
+    });
+  } else if (event.eventName === "RewardClaimed") {
+    await client.query({
+      text: `
+        insert into public.launch2_dynamic_claims (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, hook_address, round_id, buyer_address, amount_usd1,
+          claimed_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, $8::numeric, $9,
+          $10::numeric, $11::timestamptz)
+        ${upsertTail}
+      `,
+      values: [
+        ...base,
+        event.contractAddress,
+        a["round"],
+        a["buyer"],
+        a["amount"],
+        at,
+      ],
+    });
   } else if (event.eventName === "BuybackCompleted") {
     await client.query({
       text: `
@@ -939,6 +1065,127 @@ async function reproject(
     ],
   });
   await reprojectPositions(client, instanceId);
+  await reprojectDynamic(client, instanceId);
+}
+
+/**
+ * Decision 0131: rebuilds a LoopDynamic instance's Hook binding, reward
+ * rounds and buy weights from its non-removed facts (a reorg that removed
+ * any of them is undone here). OfficialTax instances are left untouched.
+ */
+async function reprojectDynamic(
+  client: DatabaseClient,
+  instanceId: string,
+): Promise<void> {
+  const kind = await client.query<{ pool_hook_kind: string }>({
+    text: `select pool_hook_kind from public.launch2_instances where instance_id = $1`,
+    values: [instanceId],
+  });
+  if (kind.rows[0]?.pool_hook_kind !== "loopDynamic") return;
+  await client.query({
+    text: `
+      update public.launch2_instances i
+      set dynamic_hook_address = b.hook_address,
+          dynamic_pool_id = b.pool_id,
+          dynamic_hook_bound_block = b.block_number
+      from (select 1) as one
+      left join lateral (
+        select hook_address, pool_id, block_number
+        from public.launch2_dynamic_hook_bindings
+        where instance_id = $1 and not removed
+        order by block_number, log_index limit 1
+      ) b on true
+      where i.instance_id = $1
+    `,
+    values: [instanceId],
+  });
+  await client.query({
+    text: `delete from public.launch2_dynamic_rounds where instance_id = $1`,
+    values: [instanceId],
+  });
+  await client.query({
+    text: `delete from public.launch2_dynamic_buy_weights where instance_id = $1`,
+    values: [instanceId],
+  });
+  await client.query({
+    text: `
+      with hook as (
+        select dynamic_hook_address as address from public.launch2_instances
+        where instance_id = $1 and dynamic_hook_address is not null
+      ),
+      activated as (
+        select distinct on ((e.payload ->> 'round')::numeric)
+          (e.payload ->> 'round')::numeric as round_id,
+          (e.payload ->> 'startCandle')::numeric as start_candle,
+          (e.payload ->> 'carriedQuote')::numeric as carried_in,
+          e.event_at, e.block_number, e.transaction_hash
+        from public.launch2_events e, hook
+        where e.instance_id = $1 and not e.removed
+          and e.event_name = 'RoundActivated' and e.contract_address = hook.address
+        order by (e.payload ->> 'round')::numeric, e.block_number, e.log_index
+      )
+      insert into public.launch2_dynamic_rounds (
+        instance_id, round_id, hook_address, start_candle, end_candle,
+        carried_in_usd1, extra_fees_usd1, total_buy_weight_usd1,
+        allocation_usd1, next_carry_usd1, claimed_usd1, buyer_count, closed,
+        activated_at, activated_block, activated_transaction_hash,
+        closed_at, closed_block, closed_transaction_hash
+      )
+      select $1, a.round_id, hook.address, a.start_candle,
+        (c.payload ->> 'endCandle')::numeric, a.carried_in,
+        coalesce((select sum(f.extra_fee) from public.launch2_dynamic_fees f
+          where f.instance_id = $1 and not f.removed and f.side = 'sell'
+            and f.hook_address = hook.address and f.round_id = a.round_id), 0),
+        coalesce((select sum((w.payload ->> 'quoteSpent')::numeric)
+          from public.launch2_events w
+          where w.instance_id = $1 and not w.removed
+            and w.event_name = 'BuyCredited' and w.contract_address = hook.address
+            and (w.payload ->> 'round')::numeric = a.round_id), 0),
+        (c.payload ->> 'rewardAllocation')::numeric,
+        (c.payload ->> 'nextCarry')::numeric,
+        coalesce((select sum(k.amount_usd1) from public.launch2_dynamic_claims k
+          where k.instance_id = $1 and not k.removed
+            and k.hook_address = hook.address and k.round_id = a.round_id), 0),
+        (select count(distinct w.payload ->> 'buyer')::integer
+          from public.launch2_events w
+          where w.instance_id = $1 and not w.removed
+            and w.event_name = 'BuyCredited' and w.contract_address = hook.address
+            and (w.payload ->> 'round')::numeric = a.round_id),
+        c.payload is not null,
+        a.event_at, a.block_number, a.transaction_hash,
+        c.event_at, c.block_number, c.transaction_hash
+      from activated a
+      cross join hook
+      left join lateral (
+        select e.payload, e.event_at, e.block_number, e.transaction_hash
+        from public.launch2_events e
+        where e.instance_id = $1 and not e.removed
+          and e.event_name = 'RoundClosed' and e.contract_address = hook.address
+          and (e.payload ->> 'round')::numeric = a.round_id
+        order by e.block_number, e.log_index limit 1
+      ) c on true
+    `,
+    values: [instanceId],
+  });
+  await client.query({
+    text: `
+      insert into public.launch2_dynamic_buy_weights (
+        instance_id, round_id, buyer_address, weight_usd1, credit_count,
+        last_credited_at
+      )
+      select $1, (e.payload ->> 'round')::numeric, e.payload ->> 'buyer',
+        sum((e.payload ->> 'quoteSpent')::numeric), count(*)::integer,
+        max(e.event_at)
+      from public.launch2_events e
+      join public.launch2_instances i on i.instance_id = e.instance_id
+      where e.instance_id = $1 and not e.removed
+        and e.event_name = 'BuyCredited'
+        and e.contract_address = i.dynamic_hook_address
+      group by (e.payload ->> 'round')::numeric, e.payload ->> 'buyer'
+      having sum((e.payload ->> 'quoteSpent')::numeric) > 0
+    `,
+    values: [instanceId],
+  });
 }
 
 async function reprojectPositions(
@@ -1045,6 +1292,8 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     // Decision 0126: the router-attribution re-scan.
     graduationBlockNumber: instance.graduation?.blockNumber ?? null,
     poolRouterTargetBlock: nullableText(row, "pool_router_target_block"),
+    // Decision 0131: the LoopDynamic Hook the lane indexed (graduation).
+    dynamicHook: nullableText(row, "dynamic_hook_address"),
   });
 }
 
@@ -1301,6 +1550,11 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               "launch2_buybacks",
               "launch2_meme_transfers",
               "launch2_pool_swaps",
+              // Decision 0131: LoopDynamic facts (projections rebuilt).
+              "launch2_dynamic_hook_bindings",
+              "launch2_dynamic_fees",
+              "launch2_dynamic_candles",
+              "launch2_dynamic_claims",
             ]) {
               const rewound = await client.query<{ instance_id: string }>({
                 text: `
@@ -1786,6 +2040,194 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           lastAt: nullableIso(row, "last"),
         }),
       );
+    },
+
+    // --- Decision 0131: LoopDynamic reads ---
+    async dynamicRoundSummary(instanceId) {
+      const rows = await query<Row>(
+        `
+          select
+            (select count(*)::int from public.launch2_dynamic_rounds
+              where instance_id = $1) as round_count,
+            (select count(*)::int from public.launch2_dynamic_rounds
+              where instance_id = $1 and closed) as closed_count,
+            (select coalesce(sum(allocation_usd1), 0)::text
+              from public.launch2_dynamic_rounds where instance_id = $1) as allocated,
+            (select coalesce(sum(claimed_usd1), 0)::text
+              from public.launch2_dynamic_rounds where instance_id = $1) as claimed,
+            (select coalesce(sum(extra_fee), 0)::text
+              from public.launch2_dynamic_fees
+              where instance_id = $1 and not removed and side = 'sell') as extra_fees,
+            (select coalesce(sum(base_fee), 0)::text
+              from public.launch2_dynamic_fees
+              where instance_id = $1 and not removed and side = 'sell') as base_sell,
+            (select coalesce(sum(base_fee), 0)::text
+              from public.launch2_dynamic_fees
+              where instance_id = $1 and not removed and side = 'buy') as buy_fees,
+            (select jsonb_build_object('roundId', round_id::text,
+                'closed', closed, 'activatedAt', activated_at,
+                'closedAt', closed_at)
+              from public.launch2_dynamic_rounds where instance_id = $1
+              order by round_id desc limit 1) as last_round
+        `,
+        [instanceId],
+      );
+      const row = rows[0];
+      if (row === undefined) throw new Launch2RepositoryUnavailableError();
+      const last = row["last_round"] as Record<string, unknown> | null;
+      return Object.freeze({
+        roundCount: Number(row["round_count"]),
+        closedRoundCount: Number(row["closed_count"]),
+        allocatedUsd1: text(row, "allocated"),
+        claimedUsd1: text(row, "claimed"),
+        extraFeesUsd1: text(row, "extra_fees"),
+        baseSellFeesUsd1: text(row, "base_sell"),
+        buyFeesMeme: text(row, "buy_fees"),
+        lastRound:
+          last === null
+            ? null
+            : Object.freeze({
+                roundId: String(last["roundId"]),
+                closed: last["closed"] === true,
+                activatedAt: new Date(
+                  String(last["activatedAt"]),
+                ).toISOString(),
+                closedAt:
+                  typeof last["closedAt"] === "string"
+                    ? new Date(last["closedAt"]).toISOString()
+                    : null,
+              }),
+      });
+    },
+
+    async listDynamicRewards(input) {
+      const rows = await query<Row>(
+        `
+          select r.round_id::text, r.hook_address, r.closed,
+            r.start_candle::text, r.end_candle::text,
+            r.carried_in_usd1::text, r.extra_fees_usd1::text,
+            r.total_buy_weight_usd1::text, r.allocation_usd1::text,
+            w.weight_usd1::text, k.amount_usd1::text as claimed_amount,
+            k.transaction_hash as claim_tx, k.claimed_at,
+            r.activated_at, r.closed_at
+          from public.launch2_dynamic_buy_weights w
+          join public.launch2_dynamic_rounds r
+            on r.instance_id = w.instance_id and r.round_id = w.round_id
+          left join lateral (
+            select amount_usd1, transaction_hash, claimed_at
+            from public.launch2_dynamic_claims c
+            where c.instance_id = w.instance_id and not c.removed
+              and c.round_id = w.round_id and c.buyer_address = w.buyer_address
+            order by c.block_number, c.log_index limit 1
+          ) k on true
+          where w.instance_id = $1 and w.buyer_address = $2
+          order by r.round_id desc
+          limit $3
+        `,
+        [input.instanceId, input.walletAddress.toLowerCase(), input.limit],
+      );
+      return rows.map((row): Launch2DynamicRewardRecord =>
+        Object.freeze({
+          roundId: text(row, "round_id"),
+          hook: text(row, "hook_address"),
+          closed: row["closed"] === true,
+          startCandle: text(row, "start_candle"),
+          endCandle: nullableText(row, "end_candle"),
+          carriedInUsd1: text(row, "carried_in_usd1"),
+          extraFeesUsd1: text(row, "extra_fees_usd1"),
+          totalBuyWeightUsd1: text(row, "total_buy_weight_usd1"),
+          allocationUsd1: nullableText(row, "allocation_usd1"),
+          weightUsd1: text(row, "weight_usd1"),
+          claimedAmountUsd1: nullableText(row, "claimed_amount"),
+          claimTransactionHash: nullableText(row, "claim_tx"),
+          claimedAt: nullableIso(row, "claimed_at"),
+          activatedAt: iso(row, "activated_at"),
+          closedAt: nullableIso(row, "closed_at"),
+        }),
+      );
+    },
+
+    async getDynamicClaimIntent(input) {
+      const rows = await query<Row>(
+        `select ${intentColumns} from public.launch2_intents
+         where intent_id = $1 and owner_user_id = $2 and kind = 'dynamic_claim'`,
+        [input.intentId, input.ownerUserId],
+      );
+      return rows[0] === undefined ? null : mapIntent(rows[0]);
+    },
+
+    async recordDynamicClaimReport(input) {
+      const mapReport = (row: Row): Launch2DynamicClaimReportRecord =>
+        Object.freeze({
+          intentId: text(row, "intent_id"),
+          instanceId: text(row, "instance_id"),
+          walletId: text(row, "wallet_id"),
+          walletAddress: text(row, "wallet_address"),
+          roundId: text(row, "round_id"),
+          transactionHash: text(row, "transaction_hash"),
+          reportedAt: iso(row, "reported_at"),
+        });
+      const columns = `intent_id::text, instance_id::text, wallet_id::text,
+        wallet_address, round_id::text, transaction_hash, reported_at`;
+      const inserted = await query<Row>(
+        `insert into public.launch2_dynamic_claim_reports (
+           intent_id, owner_user_id, instance_id, wallet_id, wallet_address,
+           round_id, transaction_hash
+         ) values ($1, $2, $3, $4, $5, $6::numeric, $7)
+         on conflict (intent_id) do nothing
+         returning ${columns}`,
+        [
+          input.intentId,
+          input.ownerUserId,
+          input.instanceId,
+          input.walletId,
+          input.walletAddress.toLowerCase(),
+          input.roundId,
+          input.transactionHash.toLowerCase(),
+        ],
+      );
+      if (inserted[0] !== undefined) {
+        return { outcome: "created", report: mapReport(inserted[0]) };
+      }
+      const existing = await query<Row>(
+        `select ${columns} from public.launch2_dynamic_claim_reports
+         where intent_id = $1`,
+        [input.intentId],
+      );
+      if (existing[0] === undefined)
+        throw new Launch2RepositoryUnavailableError();
+      const report = mapReport(existing[0]);
+      return {
+        outcome:
+          report.transactionHash === input.transactionHash.toLowerCase()
+            ? "same"
+            : "conflict",
+        report,
+      };
+    },
+
+    async findDynamicClaim(input) {
+      const rows = await query<Row>(
+        `select amount_usd1::text, block_number::text, claimed_at
+         from public.launch2_dynamic_claims
+         where instance_id = $1 and transaction_hash = $2
+           and round_id = $3::numeric and buyer_address = $4 and not removed
+         order by log_index limit 1`,
+        [
+          input.instanceId,
+          input.transactionHash.toLowerCase(),
+          input.roundId,
+          input.buyer.toLowerCase(),
+        ],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : Object.freeze({
+            amountUsd1: text(row, "amount_usd1"),
+            blockNumber: text(row, "block_number"),
+            claimedAt: iso(row, "claimed_at"),
+          });
     },
 
     async createIntent(input) {

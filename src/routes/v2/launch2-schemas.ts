@@ -1229,7 +1229,13 @@ export const launch2PoolQuoteSchema = {
         "exactIn: expectedOut × (1 − slippage), the minAmountOut of swapExactIn; exactOut: = expectedOut.",
     },
     slippageBps: { type: "integer", minimum: 0, maximum: 5_000 },
-    taxBps: { type: "integer", const: 200 },
+    taxBps: {
+      type: "integer",
+      minimum: 0,
+      maximum: 10_000,
+      description:
+        "The pool's base tax in bps: 200 (OfficialTaxHook 2 %; Decision 0131 LoopDynamic: buy = buyFeePpm / 100, sell = baseSellFeePpm / 100, 200 at the ruled values). A LoopDynamic sell adds the dynamic fee (dynamic.dynamicTaxBps) on top.",
+    },
     taxAmount: {
       ...decimalSchema,
       description:
@@ -1287,6 +1293,58 @@ export const launch2PoolQuoteSchema = {
       properties: {
         blockNumber: uintStringSchema,
         blockHash: bytes32Schema,
+      },
+    },
+    dynamic: {
+      type: "object",
+      additionalProperties: false,
+      description:
+        "Decision 0131: present only for a LoopDynamic instance (LoopRouter.swapExactInput; exactIn only). Absent for OfficialTax instances (their quote is unchanged).",
+      required: [
+        "hookKind",
+        "hook",
+        "priceTiming",
+        "baseTaxBps",
+        "baseTaxAmount",
+        "dynamicTaxBps",
+        "dynamicTaxAmount",
+        "armed",
+        "roundId",
+        "rewardWeight",
+      ],
+      properties: {
+        hookKind: { type: "string", const: "loopDynamic" },
+        hook: addressSchema,
+        priceTiming: { type: "string", enum: ["PRE_SWAP", "POST_SWAP"] },
+        baseTaxBps: { type: "integer", minimum: 0, maximum: 10_000 },
+        baseTaxAmount: {
+          ...decimalSchema,
+          description:
+            "buy: the 2 % buy fee in MEME (from the net output, ≤ 1 wei off); sell: the base sell fee in USD1.",
+        },
+        dynamicTaxBps: {
+          type: "integer",
+          minimum: 0,
+          maximum: 10_000,
+          description:
+            "sell: the dynamic fee over the post-base output in bps (the candle's drop at the Hook's priceTiming, after this trade for POST_SWAP); buy: 0.",
+        },
+        dynamicTaxAmount: {
+          ...decimalSchema,
+          description:
+            "sell: the dynamic fee in USD1 (exact: real simulation vs a base-fee-only simulation at the same block); buy: 0.",
+        },
+        armed: {
+          type: "boolean",
+          description:
+            "A reward round is armed when this swap runs (after the candle roll the swap performs).",
+        },
+        roundId: { ...nullableUintStringSchema },
+        rewardWeight: {
+          ...decimalSchema,
+          description:
+            "buy: the USD1 this buy credits to the round's reward weight (= amountIn while armed, else 0); sell: 0.",
+        },
       },
     },
   },
@@ -1407,6 +1465,324 @@ export const launch2PoolTradesResourceSchema = {
     poolTradeCount: uintStringSchema,
     lastPoolTradeAt: nullableDateTimeSchema,
     trades: { type: "array", maxItems: 50, items: poolTradeItemSchema },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Decision 0131: LoopDynamic pool, rewards and claims.
+// ---------------------------------------------------------------------------
+
+const nullableAddressSchema = {
+  anyOf: [addressSchema, { type: "null" }],
+} as const;
+const nullableDecimalSchema = {
+  anyOf: [decimalSchema, { type: "null" }],
+} as const;
+const nullableIntegerBpsSchema = {
+  anyOf: [{ type: "integer", minimum: 0, maximum: 10_000 }, { type: "null" }],
+} as const;
+
+export const launch2DynamicCommandErrors = {
+  ...launch2CommandErrors,
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "DATA_STALE",
+    "IDEMPOTENCY_CONFLICT",
+    "INSUFFICIENT_BALANCE",
+    "QUOTE_EXPIRED",
+    "RESOURCE_CONFLICT",
+    "VERSION_CONFLICT",
+  ]),
+} as const;
+
+export const launch2DynamicPoolQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { walletId: opaqueIdSchema },
+} as const;
+
+const dynamicPoolProperties = {
+  instanceId: opaqueIdSchema,
+  hookKind: { type: "string", enum: ["officialTax", "loopDynamic"] },
+  status: {
+    type: "string",
+    enum: ["not_applicable", "not_graduated", "active"],
+    description:
+      "not_applicable: OfficialTax instance (every other field null); not_graduated: LoopDynamic before graduation (no Hook yet); active: the bound Hook read at basis.",
+  },
+  hook: nullableAddressSchema,
+  poolId: nullableBytes32Schema,
+  router: {
+    ...nullableAddressSchema,
+    description: "LoopRouter (the App's swap and approve target).",
+  },
+  routerRegistry: nullableAddressSchema,
+  routingPolicy: {
+    anyOf: [
+      { type: "string", enum: ["loopRouterOnly", "open"] },
+      { type: "null" },
+    ],
+  },
+  priceTiming: {
+    anyOf: [
+      { type: "string", enum: ["PRE_SWAP", "POST_SWAP"] },
+      { type: "null" },
+    ],
+  },
+  buyTaxBps: nullableIntegerBpsSchema,
+  baseSellTaxBps: nullableIntegerBpsSchema,
+  excludeBuybackFromRewards: { type: ["boolean", "null"] },
+  armed: { type: ["boolean", "null"] },
+  currentRoundId: {
+    ...nullableUintStringSchema,
+    description: "The armed round (null while no round is armed).",
+  },
+  candleId: nullableUintStringSchema,
+  candleSeconds: { type: "integer", const: 300 },
+  candleEndsAt: nullableDateTimeSchema,
+  rollPending: {
+    type: ["boolean", "null"],
+    description:
+      "The Hook's candle ended without a swap / poke since; the next swap, poke or claim closes it first.",
+  },
+  currentDropWad: {
+    ...nullableDecimalSchema,
+    description:
+      "currentDropWad() as a decimal fraction (0.3 = 30 % below the candle open); 0 when not armed or a roll is pending.",
+  },
+  currentDropBps: nullableIntegerBpsSchema,
+  potUsd1: {
+    ...nullableDecimalSchema,
+    description: "carry + the armed round's dynamic fees.",
+  },
+  carryUsd1: nullableDecimalSchema,
+  roundExtraFeesUsd1: nullableDecimalSchema,
+  roundTotalBuyWeightUsd1: nullableDecimalSchema,
+  reservedRewardsUsd1: nullableDecimalSchema,
+  priceUsd1: nullableDecimalSchema,
+  viewer: {
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["walletId", "currentRoundWeightUsd1"],
+        properties: {
+          walletId: opaqueIdSchema,
+          currentRoundWeightUsd1: decimalSchema,
+        },
+      },
+      { type: "null" },
+    ],
+  },
+  summary: {
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "roundCount",
+          "closedRoundCount",
+          "allocatedUsd1",
+          "claimedUsd1",
+          "dynamicFeesUsd1",
+          "baseSellFeesUsd1",
+          "buyFeesMeme",
+        ],
+        properties: {
+          roundCount: { type: "integer", minimum: 0 },
+          closedRoundCount: { type: "integer", minimum: 0 },
+          allocatedUsd1: decimalSchema,
+          claimedUsd1: decimalSchema,
+          dynamicFeesUsd1: decimalSchema,
+          baseSellFeesUsd1: decimalSchema,
+          buyFeesMeme: decimalSchema,
+        },
+      },
+      { type: "null" },
+    ],
+  },
+  basis: {
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["blockNumber", "blockHash"],
+        properties: {
+          blockNumber: uintStringSchema,
+          blockHash: bytes32Schema,
+        },
+      },
+      { type: "null" },
+    ],
+  },
+} as const;
+
+export const launch2DynamicPoolResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["dynamicPool", "contractVersion"],
+  properties: {
+    dynamicPool: {
+      type: "object",
+      additionalProperties: false,
+      required: Object.keys(dynamicPoolProperties),
+      properties: dynamicPoolProperties,
+    },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const launch2DynamicRewardsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId"],
+  properties: {
+    walletId: opaqueIdSchema,
+    limit: { type: "string", pattern: "^[1-9][0-9]{0,2}$" },
+  },
+} as const;
+
+const dynamicRewardRoundProperties = {
+  roundId: uintStringSchema,
+  status: {
+    type: "string",
+    enum: ["open", "claimable", "claimed", "no_reward"],
+  },
+  weightUsd1: decimalSchema,
+  totalBuyWeightUsd1: decimalSchema,
+  allocationUsd1: nullableDecimalSchema,
+  claimableUsd1: decimalSchema,
+  claimedUsd1: nullableDecimalSchema,
+  claimTransactionHash: nullableTxHashSchema,
+  claimedAt: nullableDateTimeSchema,
+  startCandle: uintStringSchema,
+  endCandle: nullableUintStringSchema,
+  activatedAt: dateTimeSchema,
+  closedAt: nullableDateTimeSchema,
+} as const;
+
+export const launch2DynamicRewardsResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "instanceId",
+    "walletId",
+    "hookKind",
+    "claimableUsd1",
+    "claimedUsd1",
+    "rounds",
+    "contractVersion",
+  ],
+  properties: {
+    instanceId: opaqueIdSchema,
+    walletId: opaqueIdSchema,
+    hookKind: { type: "string", enum: ["officialTax", "loopDynamic"] },
+    claimableUsd1: decimalSchema,
+    claimedUsd1: decimalSchema,
+    rounds: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: Object.keys(dynamicRewardRoundProperties),
+        properties: dynamicRewardRoundProperties,
+      },
+    },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const launch2DynamicClaimPrepareRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId", "roundId"],
+  properties: {
+    walletId: opaqueIdSchema,
+    roundId: { type: "string", pattern: "^[1-9][0-9]{0,30}$" },
+  },
+} as const;
+
+export const launch2DynamicClaimIntentResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["launch2Intent", "claim", "contractVersion"],
+  properties: {
+    launch2Intent: launch2IntentResourceSchema.properties.launch2Intent,
+    claim: {
+      type: "object",
+      additionalProperties: false,
+      required: ["roundId", "hook", "claimableUsd1"],
+      properties: {
+        roundId: uintStringSchema,
+        hook: addressSchema,
+        claimableUsd1: decimalSchema,
+      },
+    },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const launch2DynamicClaimReportRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intentId", "transactionHash"],
+  properties: {
+    intentId: opaqueIdSchema,
+    transactionHash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+    walletId: {
+      ...opaqueIdSchema,
+      description:
+        "Optional echo of the intent's wallet; a mismatch is 404 LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND.",
+    },
+    roundId: {
+      type: "string",
+      pattern: "^[1-9][0-9]{0,30}$",
+      description:
+        "Optional echo of the intent's round; a mismatch is 404 LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND.",
+    },
+  },
+} as const;
+
+export const launch2DynamicClaimReportResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["dynamicClaimReport", "contractVersion"],
+  properties: {
+    dynamicClaimReport: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "intentId",
+        "instanceId",
+        "walletId",
+        "roundId",
+        "transactionHash",
+        "status",
+        "amountUsd1",
+        "claimedAt",
+        "blockNumber",
+        "reportedAt",
+      ],
+      properties: {
+        intentId: opaqueIdSchema,
+        instanceId: opaqueIdSchema,
+        walletId: opaqueIdSchema,
+        roundId: uintStringSchema,
+        transactionHash: txHashSchema,
+        status: {
+          type: "string",
+          enum: ["submitted", "confirmed"],
+          description:
+            "confirmed: the launch2_event lane indexed this transaction's RewardClaimed for (round, wallet); submitted: not indexed yet (report again later).",
+        },
+        amountUsd1: nullableDecimalSchema,
+        claimedAt: nullableDateTimeSchema,
+        blockNumber: nullableUintStringSchema,
+        reportedAt: dateTimeSchema,
+      },
+    },
     contractVersion: contractVersionSchema,
   },
 } as const;

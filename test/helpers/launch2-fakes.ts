@@ -11,6 +11,9 @@ import {
   type CreateLaunch2IntentRecord,
   type Launch2BuybackRecord,
   type Launch2Chain,
+  type Launch2DynamicClaimReportRecord,
+  type Launch2DynamicRewardRecord,
+  type Launch2DynamicRoundSummary,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
   type Launch2PoolCall,
@@ -185,7 +188,28 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly builds: { count: number };
   /** Decision 0126: attributed pool trades keyed `instanceId|wallet`. */
   readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
+  /** Decision 0131: LoopDynamic projections keyed `instanceId|wallet`. */
+  readonly dynamicRewards: Map<string, Launch2DynamicRewardRecord[]>;
+  readonly dynamicSummaries: Map<string, Launch2DynamicRoundSummary>;
+  readonly dynamicReports: Map<string, Launch2DynamicClaimReportRecord>;
+  /** Indexed claims keyed `instanceId|txHash|roundId|buyer`. */
+  readonly dynamicClaims: Map<
+    string,
+    { amountUsd1: string; blockNumber: string; claimedAt: string }
+  >;
 }
+
+/** Decision 0131: an empty round summary. */
+export const emptyDynamicSummary: Launch2DynamicRoundSummary = Object.freeze({
+  roundCount: 0,
+  closedRoundCount: 0,
+  allocatedUsd1: "0",
+  claimedUsd1: "0",
+  extraFeesUsd1: "0",
+  baseSellFeesUsd1: "0",
+  buyFeesMeme: "0",
+  lastRound: null,
+});
 
 export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const instances = new Map<string, Launch2InstanceRecord>();
@@ -197,9 +221,69 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const keys = new Map<string, { sha: string; intentId: string | null }>();
   const builds = { count: 0 };
   const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
+  const dynamicRewards = new Map<string, Launch2DynamicRewardRecord[]>();
+  const dynamicSummaries = new Map<string, Launch2DynamicRoundSummary>();
+  const dynamicReports = new Map<string, Launch2DynamicClaimReportRecord>();
+  const dynamicClaims = new Map<
+    string,
+    { amountUsd1: string; blockNumber: string; claimedAt: string }
+  >();
   const unused = () => Promise.reject(new Error("not used in route tests"));
   return {
     poolTrades,
+    dynamicRewards,
+    dynamicSummaries,
+    dynamicReports,
+    dynamicClaims,
+    dynamicRoundSummary: (instanceId) =>
+      Promise.resolve(dynamicSummaries.get(instanceId) ?? emptyDynamicSummary),
+    listDynamicRewards: (input) =>
+      Promise.resolve(
+        (
+          dynamicRewards.get(
+            `${input.instanceId}|${input.walletAddress.toLowerCase()}`,
+          ) ?? []
+        ).slice(0, input.limit),
+      ),
+    getDynamicClaimIntent: (input) => {
+      const intent = intents.get(input.intentId);
+      return Promise.resolve(
+        intent !== undefined &&
+          intent.ownerUserId === input.ownerUserId &&
+          intent.kind === "dynamic_claim"
+          ? intent
+          : null,
+      );
+    },
+    recordDynamicClaimReport: (input) => {
+      const existing = dynamicReports.get(input.intentId);
+      if (existing !== undefined) {
+        return Promise.resolve({
+          outcome:
+            existing.transactionHash === input.transactionHash
+              ? ("same" as const)
+              : ("conflict" as const),
+          report: existing,
+        });
+      }
+      const report: Launch2DynamicClaimReportRecord = {
+        intentId: input.intentId,
+        instanceId: input.instanceId,
+        walletId: input.walletId,
+        walletAddress: input.walletAddress,
+        roundId: input.roundId,
+        transactionHash: input.transactionHash,
+        reportedAt: new Date(Number(launch2NowSeconds) * 1000).toISOString(),
+      };
+      dynamicReports.set(input.intentId, report);
+      return Promise.resolve({ outcome: "created" as const, report });
+    },
+    findDynamicClaim: (input) =>
+      Promise.resolve(
+        dynamicClaims.get(
+          `${input.instanceId}|${input.transactionHash}|${input.roundId}|${input.buyer.toLowerCase()}`,
+        ) ?? null,
+      ),
     instances,
     positions,
     members,
@@ -376,6 +460,7 @@ export function createFakeLaunch2Chain(
     readSnapshotPublication: unused,
     recoverSnapshotSigners: unused,
     readHookPool: unused,
+    readDynamicHookPool: unused,
     readWalletBalances: () => {
       state.balanceReads += 1;
       if (state.failBalances) return Promise.reject(new Error("rpc down"));

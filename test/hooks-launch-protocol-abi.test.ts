@@ -26,7 +26,13 @@ const protocolOut = [
 ]
   .filter((entry): entry is string => entry !== undefined)
   .map((entry) => path.join(entry, "out"))
-  .find((entry) => existsSync(path.join(entry, "LoopLaunchFactory.sol")));
+  // Decision 0131: a checkout whose build predates the selection (an
+  // artifact missing) is not the current build; the parity check skips.
+  .find((entry) =>
+    Object.keys(hooksLaunchAbiSelection).every((contract) =>
+      existsSync(path.join(entry, `${contract}.sol`, `${contract}.json`)),
+    ),
+  );
 
 const exportName = (contract: string) =>
   `${contract.charAt(0).toLowerCase()}${contract.slice(1)}Abi`;

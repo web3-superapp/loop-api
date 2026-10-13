@@ -444,6 +444,56 @@ function refineLaunch2PoolRouterEnvironment(
   }
 }
 
+function blankAsUndefined(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === "" ? undefined : value;
+}
+
+/**
+ * Decision 0131: an address + runtime code hash pair (both or neither, BSC
+ * Testnet only, well-formed). Used for the LoopDynamic LoopRouter and
+ * Factory.
+ */
+function refineAddressCodeHashPair(
+  value: Readonly<Record<string, unknown>> & {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+  },
+  context: z.RefinementCtx,
+  addressKey: string,
+  codeHashKey: string,
+): void {
+  const address = value[addressKey] as string | undefined;
+  const codeHash = value[codeHashKey] as string | undefined;
+  if (address === undefined && codeHash === undefined) return;
+  if (address === undefined || codeHash === undefined) {
+    context.addIssue({
+      code: "custom",
+      message: `${addressKey} and ${codeHashKey} must be configured together`,
+      path: [address === undefined ? addressKey : codeHashKey],
+    });
+  }
+  if (value.LAUNCH_CHAIN_ID !== "97") {
+    context.addIssue({
+      code: "custom",
+      message: "is permitted only when LAUNCH_CHAIN_ID=97",
+      path: [addressKey],
+    });
+  }
+  if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 20-byte contract address",
+      path: [addressKey],
+    });
+  }
+  if (codeHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(codeHash)) {
+    context.addIssue({
+      code: "custom",
+      message: "must be a 0x-prefixed 32-byte runtime code hash",
+      path: [codeHashKey],
+    });
+  }
+}
+
 /**
  * MEME curve launchpad keys shared by the API and worker processes
  * (Decision 0101). Every key is optional: while any of the four contract
@@ -808,8 +858,29 @@ const environmentSchema = z
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
     LAUNCH2_POOL_ROUTER_ADDRESS: optionalCredential(64),
     LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
+    // Decision 0131: which official-pool Hook kind new Hooks launches use
+    // (officialTax default). loopDynamic keeps Hooks config saves 503 until
+    // the deployment executor supports the LoopDynamic Factory.
+    HOOKS_LAUNCH_HOOK_KIND: z.enum(["officialTax", "loopDynamic"]),
+    // Decision 0131: the shared LoopRouter of LoopDynamic pools and its
+    // runtime code hash (one unit, BSC Testnet only), plus the optional
+    // trusted-router list every LoopDynamic Hook must point at. Blank keeps
+    // LoopDynamic quotes / prepares / reads 503.
+    LAUNCH2_DYNAMIC_ROUTER_ADDRESS: optionalCredential(64),
+    LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: optionalCredential(66),
+    LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS: z
+      .string()
+      .trim()
+      .regex(/^0x[0-9a-fA-F]{40}$/u, "must be a 0x-prefixed 20-byte address")
+      .optional(),
   })
   .superRefine((value, context) => {
+    refineAddressCodeHashPair(
+      value,
+      context,
+      "LAUNCH2_DYNAMIC_ROUTER_ADDRESS",
+      "LAUNCH2_DYNAMIC_ROUTER_CODE_HASH",
+    );
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
     refineLaunchContractEnvironment(value, context);
@@ -1040,6 +1111,16 @@ const reconciliationWorkerEnvironmentSchema = z
     // through this router's Swap events (same unit as the API's pair).
     LAUNCH2_POOL_ROUTER_ADDRESS: optionalCredential(64),
     LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
+    // Decision 0131: the LoopDynamic Factory the lane indexes beside the
+    // OfficialTax one (one unit, BSC Testnet only), the Hook kind of new
+    // launches (the executor refuses loopDynamic until it supports it),
+    // and the default-off `poke()` keeper of armed LoopDynamic rounds.
+    HOOKS_LAUNCH_HOOK_KIND: z.enum(["officialTax", "loopDynamic"]),
+    LAUNCH2_DYNAMIC_FACTORY_ADDRESS: optionalCredential(64),
+    LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: optionalCredential(66),
+    LAUNCH2_DYNAMIC_POKE_ENABLED: booleanString,
+    LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
+    LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS: positiveIntegerString(15, 3_600),
     MEME_GRADUATION_EXECUTOR_ENABLED: booleanString,
     MEME_GRADUATION_DELAY_SECONDS: positiveIntegerString(0, 600),
     LAUNCH_DEPLOYER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
@@ -1133,6 +1214,12 @@ const reconciliationWorkerEnvironmentSchema = z
     refineLaunchContractEnvironment(value, context);
     refineHooksLaunchFactoryEnvironment(value, context);
     refineLaunch2PoolRouterEnvironment(value, context);
+    refineAddressCodeHashPair(
+      value,
+      context,
+      "LAUNCH2_DYNAMIC_FACTORY_ADDRESS",
+      "LAUNCH2_DYNAMIC_FACTORY_CODE_HASH",
+    );
     // Decision 0061: the seeded holdings are a Development instrument. A
     // production process refuses to start rather than compute a number from
     // a balance nobody observed on chain.
@@ -1592,6 +1679,21 @@ export interface AppConfig {
       readonly address: string;
       readonly codeHash: string;
     } | null;
+    /**
+     * Decision 0131: HOOKS_LAUNCH_HOOK_KIND (default officialTax) — the
+     * official-pool Hook kind of new Hooks launches.
+     */
+    readonly hookKind: "officialTax" | "loopDynamic";
+    /**
+     * Decision 0131: LAUNCH2_DYNAMIC_ROUTER_ADDRESS / _CODE_HASH (LoopRouter,
+     * lower-case); null keeps the LoopDynamic routes / branches 503.
+     */
+    readonly dynamicRouter: {
+      readonly address: string;
+      readonly codeHash: string;
+    } | null;
+    /** Decision 0131: LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS (lower-case). */
+    readonly dynamicRouterRegistry: string | null;
   };
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
@@ -1717,6 +1819,20 @@ export interface ReconciliationWorkerConfig {
      * leaves pool swaps unattributed.
      */
     readonly poolRouterAddress: string | null;
+    /**
+     * Decision 0131: LAUNCH2_DYNAMIC_FACTORY_ADDRESS (lower-case) — the
+     * LoopDynamic Factory indexed beside the current one; null = none.
+     */
+    readonly dynamicFactoryAddress: string | null;
+  } | null;
+  /**
+   * Decision 0131: the LoopDynamic `poke()` keeper. Present only with
+   * `LAUNCH2_DYNAMIC_POKE_ENABLED=true`; enabling it without a well-formed
+   * key or off BSC Testnet refuses boot. The key is never logged.
+   */
+  readonly launch2DynamicPoke: {
+    readonly privateKey: `0x${string}`;
+    readonly intervalSeconds: number;
   } | null;
   /**
    * Present only while the executor is enabled; the key is never logged.
@@ -2554,6 +2670,8 @@ export interface HooksLaunchExecutorConfig {
  */
 export function parseHooksLaunchExecutor(data: {
   readonly LAUNCH_CHAIN_ID: "56" | "97";
+  /** Decision 0131 (absent = officialTax). */
+  readonly HOOKS_LAUNCH_HOOK_KIND?: "officialTax" | "loopDynamic";
   readonly HOOKS_LAUNCH_EXECUTOR_ENABLED: "off" | "on";
   readonly HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
@@ -2587,6 +2705,12 @@ export function parseHooksLaunchExecutor(data: {
   ) {
     issues.push(
       "HOOKS_LAUNCH_EXECUTOR_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH",
+    );
+  }
+  // Decision 0131: the executor verifies OfficialTax modules only.
+  if (data.HOOKS_LAUNCH_HOOK_KIND === "loopDynamic") {
+    issues.push(
+      "HOOKS_LAUNCH_EXECUTOR_ENABLED: not supported with HOOKS_LAUNCH_HOOK_KIND=loopDynamic (the executor verifies OfficialTax launches only; Decision 0131)",
     );
   }
   if (issues.length > 0 || key === undefined) {
@@ -2692,6 +2816,40 @@ export interface Launch2BuybackKeeperConfig {
   /** Tick interval (≥ 10 = `BuybackExecutor.MIN_SUCCESS_INTERVAL`). */
   readonly intervalSeconds: number;
   readonly confirmations: number;
+}
+
+/**
+ * Decision 0131: the LoopDynamic `poke()` keeper (permissionless call; any
+ * funded testnet account). `false` (default) → null; `true` refuses boot
+ * without a 32-byte hex key or off `LAUNCH_CHAIN_ID=97`.
+ */
+export function parseLaunch2DynamicPoke(data: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH2_DYNAMIC_POKE_ENABLED: boolean;
+  readonly LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY?: string | undefined;
+  readonly LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS: number;
+}): {
+  readonly privateKey: `0x${string}`;
+  readonly intervalSeconds: number;
+} | null {
+  if (!data.LAUNCH2_DYNAMIC_POKE_ENABLED) return null;
+  const issues: string[] = [];
+  const key = data.LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY?.trim() ?? "";
+  if (key === "" || !privateKeyPattern.test(key)) {
+    issues.push(
+      "LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY: a 32-byte hex key is required when LAUNCH2_DYNAMIC_POKE_ENABLED=true",
+    );
+  }
+  if (data.LAUNCH_CHAIN_ID !== "97") {
+    issues.push(
+      "LAUNCH2_DYNAMIC_POKE_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
+    );
+  }
+  if (issues.length > 0) throw new ConfigurationError(issues);
+  return Object.freeze({
+    privateKey: normalizedKey(key),
+    intervalSeconds: data.LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS,
+  });
 }
 
 /**
@@ -3477,6 +3635,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["LAUNCH2_POOL_ROUTER_CODE_HASH"]?.trim() === ""
         ? undefined
         : environment["LAUNCH2_POOL_ROUTER_CODE_HASH"],
+    HOOKS_LAUNCH_HOOK_KIND:
+      environment["HOOKS_LAUNCH_HOOK_KIND"]?.trim() || "officialTax",
+    LAUNCH2_DYNAMIC_ROUTER_ADDRESS: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_ROUTER_ADDRESS"],
+    ),
+    LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_ROUTER_CODE_HASH"],
+    ),
+    LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS"],
+    ),
   });
 
   if (!parsed.success) {
@@ -3630,6 +3799,19 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
               address: parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS.toLowerCase(),
               codeHash: parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH.toLowerCase(),
             }),
+      hookKind: parsed.data.HOOKS_LAUNCH_HOOK_KIND,
+      dynamicRouter:
+        parsed.data.LAUNCH2_DYNAMIC_ROUTER_ADDRESS === undefined ||
+        parsed.data.LAUNCH2_DYNAMIC_ROUTER_CODE_HASH === undefined
+          ? null
+          : Object.freeze({
+              address: parsed.data.LAUNCH2_DYNAMIC_ROUTER_ADDRESS.toLowerCase(),
+              codeHash:
+                parsed.data.LAUNCH2_DYNAMIC_ROUTER_CODE_HASH.toLowerCase(),
+            }),
+      dynamicRouterRegistry:
+        parsed.data.LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS?.toLowerCase() ??
+        null,
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     miningSettlement: parseMiningSettlementApi(parsed.data),
@@ -3697,6 +3879,20 @@ export function loadReconciliationWorkerConfig(
       environment["LAUNCH2_POOL_ROUTER_CODE_HASH"]?.trim() === ""
         ? undefined
         : environment["LAUNCH2_POOL_ROUTER_CODE_HASH"],
+    HOOKS_LAUNCH_HOOK_KIND:
+      environment["HOOKS_LAUNCH_HOOK_KIND"]?.trim() || "officialTax",
+    LAUNCH2_DYNAMIC_FACTORY_ADDRESS: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_FACTORY_ADDRESS"],
+    ),
+    LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_FACTORY_CODE_HASH"],
+    ),
+    LAUNCH2_DYNAMIC_POKE_ENABLED:
+      environment["LAUNCH2_DYNAMIC_POKE_ENABLED"] ?? "false",
+    LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY:
+      environment["LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY"],
+    LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS:
+      environment["LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS"] ?? "60",
     MEME_GRADUATION_EXECUTOR_ENABLED:
       environment["MEME_GRADUATION_EXECUTOR_ENABLED"] ?? "false",
     MEME_GRADUATION_DELAY_SECONDS:
@@ -3895,8 +4091,14 @@ export function loadReconciliationWorkerConfig(
             parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined
               ? null
               : parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS.toLowerCase(),
+          dynamicFactoryAddress:
+            parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS === undefined ||
+            parsed.data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
+              ? null
+              : parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS.toLowerCase(),
         })
       : null,
+    launch2DynamicPoke: parseLaunch2DynamicPoke(parsed.data),
     memeGraduationExecutor: parseMemeGraduationExecutor(parsed.data),
     hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
     launch2SnapshotPublisher: parseLaunch2SnapshotPublisher(parsed.data),

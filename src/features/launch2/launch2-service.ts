@@ -71,6 +71,9 @@ import {
   type Launch2BuybackChainState,
   type Launch2BuybackRecord,
   type Launch2Chain,
+  type Launch2DynamicChain,
+  type Launch2DynamicHookState,
+  type Launch2DynamicSwapCall,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
   type Launch2PoolChain,
@@ -100,6 +103,22 @@ import {
   type Launch2PoolSide,
 } from "./launch2-pool.js";
 import { deriveLaunch2Stage, launch2EarlyRoundEnd } from "./launch2-stage.js";
+import {
+  classifyLaunch2DynamicRevert,
+  encodeLaunch2DynamicClaim,
+  encodeLaunch2DynamicSwap,
+  launch2DynamicBps,
+  launch2DynamicCandleSeconds,
+  launch2DynamicClaimable,
+  launch2DynamicGrossOfNet,
+  launch2DynamicPriceTiming,
+  launch2DynamicReasonCodes,
+  launch2DynamicRoll,
+  launch2DynamicRoutingPolicy,
+  launch2DynamicSellSplit,
+  launch2HookKindOf,
+  type Launch2PoolHookKind,
+} from "./launch2-dynamic.js";
 
 /**
  * Decision 0114: the `/v2/launch2/*` service. Lists and details come from
@@ -136,6 +155,17 @@ export interface Launch2ServiceDependencies {
    * quote / prepare 503 POOL_ROUTER_NOT_CONFIGURED.
    */
   readonly poolChain?: Launch2PoolChain | null;
+  /**
+   * Decision 0131: the LoopDynamic reader (LoopRouter verified by code
+   * hash); null keeps LoopDynamic quotes / prepares / reads 503
+   * LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED. OfficialTax is unaffected.
+   */
+  readonly dynamicChain?: Launch2DynamicChain | null;
+  /**
+   * Decision 0131: LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS — when set, a
+   * LoopDynamic Hook must point at this trusted-router list.
+   */
+  readonly dynamicRouterRegistry?: string | null;
   /**
    * Decision 0126: `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS` (default 180): the
    * on-chain deadline a pool or curve prepare encodes, counted from the
@@ -216,6 +246,33 @@ export interface Launch2Service {
     readonly walletId?: unknown;
     readonly limit?: unknown;
   }): Promise<Resource>;
+  /** Decision 0131: the LoopDynamic pool / round state (hookKind for all). */
+  getDynamicPool(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+  }): Promise<Resource>;
+  /** Decision 0131: one wallet's LoopDynamic rewards per round. */
+  listDynamicRewards(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource>;
+  /** Decision 0131: `claim(roundId)` intent for the device signing exit. */
+  prepareDynamicClaim(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource>;
+  /** Decision 0131: the device reports the claim transaction hash. */
+  reportDynamicClaim(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource>;
 }
 
 const maximumDeadlineSeconds = 600;
@@ -229,6 +286,7 @@ const fallbackGas: Readonly<Record<Launch2IntentKind, bigint>> = Object.freeze({
   sell: 250_000n,
   pool_buy: 300_000n,
   pool_sell: 300_000n,
+  dynamic_claim: 200_000n,
 });
 /** The last buy builds the pool atomically; its gas is far above a plain buy. */
 const graduatingBuyGas = 3_000_000n;
@@ -828,6 +886,10 @@ export function createUnavailableLaunch2Service(
     poolQuote: fail,
     preparePoolTrade: fail,
     listPoolTrades: fail,
+    getDynamicPool: fail,
+    listDynamicRewards: fail,
+    prepareDynamicClaim: fail,
+    reportDynamicClaim: fail,
   });
 }
 
@@ -1731,6 +1793,887 @@ export function createLaunch2Service(
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Decision 0131: LoopDynamic official pool
+  // -------------------------------------------------------------------------
+
+  function hookKindOf(record: Launch2InstanceRecord): Launch2PoolHookKind {
+    return record.poolHookKind ?? launch2HookKindOf(record.addresses.hook);
+  }
+
+  function dynamicChain(): Launch2DynamicChain {
+    if (deps.dynamicChain === undefined || deps.dynamicChain === null) {
+      return unavailableWith(launch2DynamicReasonCodes.routerNotConfigured);
+    }
+    return deps.dynamicChain;
+  }
+
+  function dynamicRefuse(
+    errorName: string | null,
+    fallbackCode: string,
+  ): never {
+    const mapped = classifyLaunch2DynamicRevert(errorName);
+    if (mapped === null) {
+      refuse("VALIDATION_FAILED", fallbackCode, {
+        revertReason: errorName ?? "UNKNOWN",
+      });
+    }
+    throw V2ApiError.fromCode(mapped.code, { reasonCode: mapped.reasonCode });
+  }
+
+  /**
+   * The bound Hook of a graduated LoopDynamic instance at one block, with
+   * the router / PoolManager / pool id cross-checked: the Hook must trust
+   * the configured LoopRouter, share its PoolManager, and serve the pool
+   * the lane indexed (`LoopHookBound` = `Graduated.officialPoolId`).
+   */
+  async function dynamicHookAt(
+    record: Launch2InstanceRecord,
+    wallet: string | null,
+    verifyRouter: boolean,
+  ): Promise<{
+    readonly chain: Launch2DynamicChain;
+    readonly hook: string;
+    readonly state: Launch2DynamicHookState;
+  }> {
+    const bound = record.dynamicPool ?? null;
+    if (bound === null) {
+      return unavailableWith(launch2DynamicReasonCodes.hookNotIndexed);
+    }
+    const reader = dynamicChain();
+    let manager: string | null = null;
+    if (verifyRouter) {
+      const check = await chainRead(() => reader.verifyRouter());
+      if (check.status !== "ok") return unavailableWith(check.reasonCode);
+      manager = check.poolManager;
+    }
+    const state = await chainRead(() =>
+      reader.readHookState({ hook: bound.hook, wallet }),
+    );
+    if (
+      state.trustedRouter !== reader.router ||
+      (manager !== null && state.manager !== manager) ||
+      state.poolId !== bound.poolId.toLowerCase() ||
+      (record.graduation !== null &&
+        record.graduation.poolId.toLowerCase() !== state.poolId) ||
+      state.meme !== record.addresses.meme.toLowerCase() ||
+      (deps.dynamicRouterRegistry !== undefined &&
+        deps.dynamicRouterRegistry !== null &&
+        state.routerRegistry !== deps.dynamicRouterRegistry.toLowerCase())
+    ) {
+      return unavailableWith(launch2DynamicReasonCodes.hookMismatch);
+    }
+    if (!state.initialized) {
+      return unavailableWith(launch2DynamicReasonCodes.hookNotInitialized);
+    }
+    return { chain: reader, hook: bound.hook.toLowerCase(), state };
+  }
+
+  /**
+   * Decision 0131: a LoopDynamic quote at one block — exact-input only,
+   * `LoopRouter.swapExactInput` simulated from the wallet (input balance /
+   * allowance overridden in the call). A buy pays the 2 % buy fee in MEME
+   * (S165) and earns reward weight = USD1 spent when the round is armed
+   * after the candle roll the swap performs; a sell pays the base fee plus
+   * the dynamic fee (split from a second, "neutral" simulation).
+   */
+  async function dynamicPoolQuoteAt(
+    record: Launch2InstanceRecord,
+    wallet: AccountWalletRecord,
+    request: PoolRequest,
+    deadlineSeconds: bigint,
+  ): Promise<{
+    readonly resource: Resource;
+    readonly state: Launch2DynamicHookState;
+    readonly key: Launch2PoolKey;
+    readonly zeroForOne: boolean;
+    readonly router: string;
+    readonly numbers: PoolNumbers;
+    readonly chain: Launch2DynamicChain;
+  }> {
+    if (request.mode !== "exactIn") {
+      refuse(
+        "VALIDATION_FAILED",
+        launch2DynamicReasonCodes.exactOutUnsupported,
+      );
+    }
+    if (record.holdReason !== null) {
+      refuse("DATA_STALE", launch2ReasonCodes.instancePaused, {
+        holdReason: record.holdReason,
+      });
+    }
+    const stage = stageOf(record, nowSeconds()).stage;
+    const graduation = record.graduation;
+    if (stage !== "graduated" || graduation === null) {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.notGraduated, {
+        stage,
+      });
+    }
+    const address = wallet.address.toLowerCase();
+    const {
+      chain: reader,
+      hook,
+      state,
+    } = await dynamicHookAt(record, address, true);
+    const meme = record.addresses.meme.toLowerCase();
+    const key = launch2PoolKey({ meme, usd1: state.quote, hook });
+    if (launch2PoolId(key) !== state.poolId) {
+      return unavailableWith(launch2DynamicReasonCodes.hookMismatch);
+    }
+    const zeroForOne = launch2PoolZeroForOne(key, request.side, meme);
+    const chainNow =
+      state.blockTimestamp > nowSeconds() ? state.blockTimestamp : nowSeconds();
+    const deadline = chainNow + deadlineSeconds;
+    const inputToken = request.side === "buy" ? state.quote : meme;
+    const data = encodeLaunch2DynamicSwap({
+      key,
+      zeroForOne,
+      amountIn: request.amount,
+      minOut: 0n,
+      deadline,
+    });
+    const override = {
+      token: inputToken,
+      balance: request.amount,
+      allowance: request.amount,
+    };
+    const simulate = (neutralHook: string | null) =>
+      chainRead(() =>
+        reader.simulateSwap({
+          blockNumber: state.blockNumber,
+          from: address,
+          data,
+          override,
+          neutralHook,
+        }),
+      );
+    const actual = await simulate(null);
+    if (actual.status === "override_unsupported") {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteUnavailable, {
+        revertReason: "STATE_OVERRIDE_UNSUPPORTED",
+      });
+    }
+    if (actual.status === "reverted") {
+      dynamicRefuse(actual.errorName, launch2PoolReasonCodes.quoteUnavailable);
+    }
+    const amountIn = actual.amountSpent;
+    const expectedOut = actual.amountReceived;
+    if (expectedOut === 0n || amountIn === 0n) {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteZero);
+    }
+    const roll = launch2DynamicRoll(state, state.blockTimestamp);
+    let baseFee: bigint;
+    let dynamicFee = 0n;
+    let dynamicTaxBps = 0;
+    let rewardWeight = 0n;
+    if (request.side === "buy") {
+      // S165: the buy fee is taken from the MEME output (gross − fee = net).
+      const gross = launch2DynamicGrossOfNet(expectedOut, state.buyFeePpm);
+      baseFee = gross - expectedOut;
+      if (roll.armed && address !== state.rewardExcludedBuyer) {
+        rewardWeight = amountIn;
+      }
+    } else {
+      const neutral = await simulate(hook);
+      if (neutral.status !== "ok") {
+        refuse("VALIDATION_FAILED", launch2PoolReasonCodes.quoteUnavailable, {
+          revertReason:
+            neutral.status === "reverted"
+              ? (neutral.errorName ?? "UNKNOWN")
+              : "STATE_OVERRIDE_UNSUPPORTED",
+        });
+      }
+      const split = launch2DynamicSellSplit({
+        netActual: expectedOut,
+        netNeutral: neutral.amountReceived,
+        baseSellFeePpm: state.baseSellFeePpm,
+      });
+      baseFee = split.baseFee;
+      dynamicFee = split.dynamicFee;
+      dynamicTaxBps = split.dynamicTaxBps;
+    }
+    const tax = baseFee + dynamicFee;
+    const minOut = launch2PoolMinOut(expectedOut, request.slippageBps);
+    const usd1Side = request.side === "buy" ? amountIn : expectedOut;
+    const memeSide = request.side === "buy" ? expectedOut : amountIn;
+    const inputBalance =
+      request.side === "buy"
+        ? (state.wallet?.usd1Balance ?? 0n)
+        : (state.wallet?.memeBalance ?? 0n);
+    const numbers: PoolNumbers = {
+      amountIn,
+      maxIn: amountIn,
+      expectedOut,
+      minOut,
+      tax,
+      deadline,
+    };
+    const resource = Object.freeze({
+      instanceId: record.instanceId,
+      walletId: wallet.walletId,
+      venue: "official_pool",
+      side: request.side,
+      mode: request.mode,
+      stage: "graduated",
+      requestedAmount: formatLaunch2Amount(request.amount),
+      amountIn: formatLaunch2Amount(amountIn),
+      maxIn: formatLaunch2Amount(amountIn),
+      expectedOut: formatLaunch2Amount(expectedOut),
+      minOut: formatLaunch2Amount(minOut),
+      slippageBps: request.slippageBps,
+      taxBps: launch2DynamicBps(
+        request.side === "buy" ? state.buyFeePpm : state.baseSellFeePpm,
+      ),
+      taxAmount: formatLaunch2Amount(tax),
+      taxToken: request.side === "buy" ? "meme" : "usd1",
+      taxUsd1: formatLaunch2Amount(request.side === "sell" ? tax : 0n),
+      priceBeforeUsd1: formatLaunch2Amount(
+        launch2PoolPriceE18(state.sqrtPriceX96, state.memeIsCurrency0),
+      ),
+      averagePriceUsd1: formatLaunch2Amount(
+        launch2PoolAveragePriceE18(usd1Side, memeSide),
+      ),
+      balance: Object.freeze({
+        usd1: formatLaunch2Amount(state.wallet?.usd1Balance ?? 0n),
+        meme: formatLaunch2Amount(state.wallet?.memeBalance ?? 0n),
+      }),
+      exceedsBalance: amountIn > inputBalance,
+      router: reader.router,
+      poolId: state.poolId,
+      poolKey: key,
+      zeroForOne,
+      deadline: isoOf(deadline),
+      expiresAt: isoOf(deadline),
+      quotedAt: now().toISOString(),
+      quotedAtBlock: state.blockNumber.toString(10),
+      basis: Object.freeze({
+        blockNumber: state.blockNumber.toString(10),
+        blockHash: state.blockHash,
+      }),
+      dynamic: Object.freeze({
+        hookKind: "loopDynamic",
+        hook,
+        priceTiming: launch2DynamicPriceTiming(state.priceTiming),
+        baseTaxBps: launch2DynamicBps(
+          request.side === "buy" ? state.buyFeePpm : state.baseSellFeePpm,
+        ),
+        baseTaxAmount: formatLaunch2Amount(baseFee),
+        dynamicTaxBps,
+        dynamicTaxAmount: formatLaunch2Amount(dynamicFee),
+        armed: roll.armed,
+        roundId: roll.armed ? roll.roundId.toString(10) : null,
+        rewardWeight: formatLaunch2Amount(rewardWeight),
+      }),
+    });
+    return {
+      resource,
+      state,
+      key,
+      zeroForOne,
+      router: reader.router,
+      numbers,
+      chain: reader,
+    };
+  }
+
+  async function prepareDynamicPoolTrade(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly record: Launch2InstanceRecord;
+    readonly body: PoolRequest & { readonly walletId: string };
+    readonly idempotencyKey: string;
+    readonly writes: BscWriteConfig;
+  }): Promise<Resource> {
+    const { record, body, writes } = input;
+    if (body.mode !== "exactIn") {
+      refuse(
+        "VALIDATION_FAILED",
+        launch2DynamicReasonCodes.exactOutUnsupported,
+      );
+    }
+    const wallet = await signingWallet(input.principal, body.walletId);
+    const requestSha256 = requestDigest([
+      record.instanceId,
+      wallet.walletId,
+      "loop_dynamic_pool",
+      body.side,
+      body.mode,
+      body.amount.toString(10),
+      String(body.slippageBps),
+    ]);
+    const intent = await createIntentRecord(
+      input.principal,
+      input.idempotencyKey,
+      requestSha256,
+      writes,
+      async () => {
+        const priced = await dynamicPoolQuoteAt(
+          record,
+          wallet,
+          body,
+          tradeDeadlineSeconds,
+        );
+        const {
+          numbers,
+          state,
+          key,
+          zeroForOne,
+          router,
+          chain: reader,
+        } = priced;
+        const inputBalance =
+          body.side === "buy"
+            ? (state.wallet?.usd1Balance ?? 0n)
+            : (state.wallet?.memeBalance ?? 0n);
+        if (numbers.maxIn > inputBalance) {
+          refuse(
+            "INSUFFICIENT_BALANCE",
+            body.side === "buy"
+              ? launch2ReasonCodes.usd1Insufficient
+              : launch2ReasonCodes.memeInsufficient,
+            {
+              maxAmountIn: formatLaunch2Amount(inputBalance),
+              requiredAmountIn: formatLaunch2Amount(numbers.maxIn),
+              ...(body.side === "buy"
+                ? { balanceUsd1: formatLaunch2Amount(inputBalance) }
+                : { balanceMeme: formatLaunch2Amount(inputBalance) }),
+            },
+          );
+        }
+        const address = wallet.address.toLowerCase();
+        const data = encodeLaunch2DynamicSwap({
+          key,
+          zeroForOne,
+          amountIn: numbers.amountIn,
+          minOut: numbers.minOut,
+          deadline: numbers.deadline,
+        });
+        const inputToken =
+          body.side === "buy" ? state.quote : record.addresses.meme;
+        const overrideFor = (
+          approvalPending: boolean,
+        ): Launch2DynamicSwapCall["override"] =>
+          approvalPending
+            ? { token: inputToken, balance: null, allowance: numbers.maxIn }
+            : null;
+        const kind = body.side === "buy" ? "pool_buy" : "pool_sell";
+        return sealIntent({
+          principal: input.principal,
+          record,
+          wallet,
+          writes,
+          kind,
+          state: {
+            usd1: state.quote,
+            blockNumber: state.blockNumber,
+            blockHash: state.blockHash,
+          },
+          contract: router,
+          data,
+          approval: { token: inputToken, amount: numbers.maxIn },
+          amountIn: numbers.maxIn,
+          expectedOut: numbers.expectedOut,
+          minOut: numbers.minOut,
+          tax: body.side === "sell" ? numbers.tax : 0n,
+          refund: 0n,
+          valueUsd: body.side === "buy" ? numbers.maxIn : numbers.expectedOut,
+          deadline: numbers.deadline,
+          gasHint: fallbackGas[kind],
+          verifiedRouter: router,
+          simulate: async (approvalPending) => {
+            const simulated = await reader.simulateSwap({
+              blockNumber: state.blockNumber,
+              from: address,
+              data,
+              override: overrideFor(approvalPending),
+              neutralHook: null,
+            });
+            if (simulated.status !== "ok") {
+              const reverted = simulated.status === "reverted";
+              return {
+                status: reverted ? "reverted" : "unavailable",
+                reasonCode: reverted
+                  ? (classifyLaunch2DynamicRevert(simulated.errorName)
+                      ?.reasonCode ?? launch2ReasonCodes.simulationReverted)
+                  : launch2ReasonCodes.simulationUnavailable,
+                gas: null,
+              };
+            }
+            const gas = await reader.estimateGas({
+              from: address,
+              to: router,
+              data,
+              override: overrideFor(approvalPending),
+            });
+            return gas === null
+              ? {
+                  status: "unavailable",
+                  reasonCode: launch2ReasonCodes.simulationUnavailable,
+                  gas: null,
+                }
+              : { status: "passed", reasonCode: null, gas };
+          },
+          policyExtra: { poolQuote: priced.resource },
+        });
+      },
+    );
+    return Object.freeze({
+      launch2Intent: intent.resource["launch2Intent"],
+      quote: intent.record.policy["poolQuote"],
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  function notApplicableDynamicPool(
+    record: Launch2InstanceRecord,
+    hookKind: Launch2PoolHookKind,
+    status: "not_applicable" | "not_graduated",
+  ): Resource {
+    return Object.freeze({
+      dynamicPool: Object.freeze({
+        instanceId: record.instanceId,
+        hookKind,
+        status,
+        hook: null,
+        poolId: null,
+        router: null,
+        routerRegistry: null,
+        routingPolicy: null,
+        priceTiming: null,
+        buyTaxBps: null,
+        baseSellTaxBps: null,
+        excludeBuybackFromRewards: null,
+        armed: null,
+        currentRoundId: null,
+        candleId: null,
+        candleSeconds: Number(launch2DynamicCandleSeconds),
+        candleEndsAt: null,
+        rollPending: null,
+        currentDropWad: null,
+        currentDropBps: null,
+        potUsd1: null,
+        carryUsd1: null,
+        roundExtraFeesUsd1: null,
+        roundTotalBuyWeightUsd1: null,
+        reservedRewardsUsd1: null,
+        priceUsd1: null,
+        viewer: null,
+        summary: null,
+        basis: null,
+      }),
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  function parseRoundId(value: unknown): bigint {
+    if (typeof value !== "string" || !/^[1-9][0-9]{0,30}$/u.test(value)) {
+      refuse("VALIDATION_FAILED", launch2DynamicReasonCodes.roundInvalid);
+    }
+    return BigInt(value);
+  }
+
+  async function getDynamicPool(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+  }): Promise<Resource> {
+    const record = await visibleInstance(input.instanceId);
+    const hookKind = hookKindOf(record);
+    if (hookKind !== "loopDynamic") {
+      return notApplicableDynamicPool(record, hookKind, "not_applicable");
+    }
+    if (record.graduation === null) {
+      return notApplicableDynamicPool(record, hookKind, "not_graduated");
+    }
+    const wallet = await walletFor(input.principal, input.walletId, false);
+    const {
+      chain: reader,
+      hook,
+      state,
+    } = await dynamicHookAt(
+      record,
+      wallet === null ? null : wallet.address.toLowerCase(),
+      true,
+    );
+    const summary = await repository()
+      .dynamicRoundSummary(record.instanceId)
+      .catch(translate);
+    const roll = launch2DynamicRoll(state, state.blockTimestamp);
+    const roundExtra =
+      state.armed && state.currentRound !== null
+        ? state.currentRound.extraFees
+        : 0n;
+    const roundWeight =
+      state.armed && state.currentRound !== null
+        ? state.currentRound.totalBuyWeight
+        : 0n;
+    return Object.freeze({
+      dynamicPool: Object.freeze({
+        instanceId: record.instanceId,
+        hookKind,
+        status: "active",
+        hook,
+        poolId: state.poolId,
+        router: reader.router,
+        routerRegistry:
+          state.routerRegistry === "0x0000000000000000000000000000000000000000"
+            ? null
+            : state.routerRegistry,
+        routingPolicy: launch2DynamicRoutingPolicy(state.routingPolicy),
+        priceTiming: launch2DynamicPriceTiming(state.priceTiming),
+        buyTaxBps: launch2DynamicBps(state.buyFeePpm),
+        baseSellTaxBps: launch2DynamicBps(state.baseSellFeePpm),
+        excludeBuybackFromRewards: state.excludeBuybackFromRewards,
+        armed: state.armed,
+        currentRoundId:
+          state.armed && state.currentRoundId > 0n
+            ? state.currentRoundId.toString(10)
+            : null,
+        candleId: state.candleId.toString(10),
+        candleSeconds: Number(launch2DynamicCandleSeconds),
+        candleEndsAt: isoOf(
+          (state.candleId + 1n) * launch2DynamicCandleSeconds,
+        ),
+        rollPending: roll.rollPending,
+        currentDropWad: formatLaunch2Amount(state.currentDropWad),
+        currentDropBps: Number((state.currentDropWad * 10_000n) / 10n ** 18n),
+        potUsd1: formatLaunch2Amount(state.carry + roundExtra),
+        carryUsd1: formatLaunch2Amount(state.carry),
+        roundExtraFeesUsd1: formatLaunch2Amount(roundExtra),
+        roundTotalBuyWeightUsd1: formatLaunch2Amount(roundWeight),
+        reservedRewardsUsd1: formatLaunch2Amount(state.reservedRewards),
+        priceUsd1: formatLaunch2Amount(
+          launch2PoolPriceE18(state.sqrtPriceX96, state.memeIsCurrency0),
+        ),
+        viewer:
+          wallet === null || state.wallet === null
+            ? null
+            : Object.freeze({
+                walletId: wallet.walletId,
+                currentRoundWeightUsd1: formatLaunch2Amount(
+                  state.armed ? state.wallet.currentRoundWeight : 0n,
+                ),
+              }),
+        summary: Object.freeze({
+          roundCount: summary.roundCount,
+          closedRoundCount: summary.closedRoundCount,
+          allocatedUsd1: formatLaunch2Amount(BigInt(summary.allocatedUsd1)),
+          claimedUsd1: formatLaunch2Amount(BigInt(summary.claimedUsd1)),
+          dynamicFeesUsd1: formatLaunch2Amount(BigInt(summary.extraFeesUsd1)),
+          baseSellFeesUsd1: formatLaunch2Amount(
+            BigInt(summary.baseSellFeesUsd1),
+          ),
+          buyFeesMeme: formatLaunch2Amount(BigInt(summary.buyFeesMeme)),
+        }),
+        basis: Object.freeze({
+          blockNumber: state.blockNumber.toString(10),
+          blockHash: state.blockHash,
+        }),
+      }),
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  async function listDynamicRewards(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource> {
+    const record = await visibleInstance(input.instanceId);
+    if (input.walletId === undefined) throw V2ApiError.invalidRequest();
+    const limit = parseLimit(input.limit, 50, 100);
+    const wallet = await walletFor(input.principal, input.walletId, true);
+    if (wallet === null) throw V2ApiError.notFound();
+    const hookKind = hookKindOf(record);
+    const rows =
+      hookKind === "loopDynamic"
+        ? await repository()
+            .listDynamicRewards({
+              instanceId: record.instanceId,
+              walletAddress: wallet.address.toLowerCase(),
+              limit,
+            })
+            .catch(translate)
+        : [];
+    let claimableTotal = 0n;
+    let claimedTotal = 0n;
+    const rounds = rows.map((row) => {
+      const claimed =
+        row.claimedAmountUsd1 === null ? null : BigInt(row.claimedAmountUsd1);
+      const claimable =
+        !row.closed || claimed !== null || row.allocationUsd1 === null
+          ? 0n
+          : launch2DynamicClaimable({
+              allocation: BigInt(row.allocationUsd1),
+              weight: BigInt(row.weightUsd1),
+              totalBuyWeight: BigInt(row.totalBuyWeightUsd1),
+            });
+      claimableTotal += claimable;
+      claimedTotal += claimed ?? 0n;
+      return Object.freeze({
+        roundId: row.roundId,
+        status: !row.closed
+          ? "open"
+          : claimed !== null
+            ? "claimed"
+            : claimable > 0n
+              ? "claimable"
+              : "no_reward",
+        weightUsd1: formatLaunch2Amount(BigInt(row.weightUsd1)),
+        totalBuyWeightUsd1: formatLaunch2Amount(BigInt(row.totalBuyWeightUsd1)),
+        allocationUsd1:
+          row.allocationUsd1 === null
+            ? null
+            : formatLaunch2Amount(BigInt(row.allocationUsd1)),
+        claimableUsd1: formatLaunch2Amount(claimable),
+        claimedUsd1: claimed === null ? null : formatLaunch2Amount(claimed),
+        claimTransactionHash: row.claimTransactionHash,
+        claimedAt: row.claimedAt,
+        startCandle: row.startCandle,
+        endCandle: row.endCandle,
+        activatedAt: row.activatedAt,
+        closedAt: row.closedAt,
+      });
+    });
+    return Object.freeze({
+      instanceId: record.instanceId,
+      walletId: wallet.walletId,
+      hookKind,
+      claimableUsd1: formatLaunch2Amount(claimableTotal),
+      claimedUsd1: formatLaunch2Amount(claimedTotal),
+      rounds,
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  async function prepareDynamicClaim(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource> {
+    const writes = writesOrUnavailable();
+    const body = input.body;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body) ||
+      Object.keys(body).some((key) => key !== "walletId" && key !== "roundId")
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const value = body as Record<string, unknown>;
+    if (
+      typeof value["walletId"] !== "string" ||
+      !isOpaqueId(value["walletId"])
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const walletId = value["walletId"];
+    const roundId = parseRoundId(value["roundId"]);
+    const record = await visibleInstance(input.instanceId);
+    if (hookKindOf(record) !== "loopDynamic") {
+      refuse("VALIDATION_FAILED", launch2DynamicReasonCodes.notApplicable);
+    }
+    if (record.graduation === null) {
+      refuse("VALIDATION_FAILED", launch2PoolReasonCodes.notGraduated, {
+        stage: stageOf(record, nowSeconds()).stage,
+      });
+    }
+    const wallet = await signingWallet(input.principal, walletId);
+    const requestSha256 = requestDigest([
+      record.instanceId,
+      wallet.walletId,
+      "dynamic_claim",
+      roundId.toString(10),
+    ]);
+    const intent = await createIntentRecord(
+      input.principal,
+      input.idempotencyKey,
+      requestSha256,
+      writes,
+      async () => {
+        const address = wallet.address.toLowerCase();
+        const {
+          chain: reader,
+          hook,
+          state,
+        } = await dynamicHookAt(record, address, false);
+        if (roundId > launch2DynamicRoll(state, state.blockTimestamp).roundId) {
+          refuse("VALIDATION_FAILED", launch2DynamicReasonCodes.roundInvalid);
+        }
+        // `claim` rolls the candle first: a round the roll closes is
+        // claimable in the same transaction, so the simulation decides.
+        const simulated = await chainRead(() =>
+          reader.simulateClaim({
+            blockNumber: state.blockNumber,
+            hook,
+            roundId,
+            wallet: address,
+          }),
+        );
+        if (simulated.status === "reverted") {
+          dynamicRefuse(
+            simulated.errorName,
+            launch2ReasonCodes.simulationReverted,
+          );
+        }
+        if (simulated.amount === 0n) {
+          refuse(
+            "INSUFFICIENT_BALANCE",
+            launch2DynamicReasonCodes.nothingToClaim,
+          );
+        }
+        return sealIntent({
+          principal: input.principal,
+          record,
+          wallet,
+          writes,
+          kind: "dynamic_claim",
+          state: {
+            usd1: state.quote,
+            blockNumber: state.blockNumber,
+            blockHash: state.blockHash,
+          },
+          contract: hook,
+          data: encodeLaunch2DynamicClaim(roundId),
+          approval: null,
+          amountIn: 0n,
+          expectedOut: simulated.amount,
+          minOut: 0n,
+          tax: 0n,
+          refund: 0n,
+          valueUsd: simulated.amount,
+          deadline: nowSeconds() + tradeDeadlineSeconds,
+          gasHint: fallbackGas.dynamic_claim,
+          // The Hook the instance's own graduation adapter bound (indexed).
+          verifiedRouter: hook,
+          policyExtra: {
+            dynamicClaim: {
+              roundId: roundId.toString(10),
+              hook,
+              claimableUsd1: formatLaunch2Amount(simulated.amount),
+            },
+          },
+        });
+      },
+    );
+    return Object.freeze({
+      launch2Intent: intent.resource["launch2Intent"],
+      claim: intent.record.policy["dynamicClaim"],
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  async function reportDynamicClaim(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource> {
+    const body = input.body;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body) ||
+      Object.keys(body).some(
+        (key) =>
+          key !== "intentId" &&
+          key !== "transactionHash" &&
+          key !== "walletId" &&
+          key !== "roundId",
+      )
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const value = body as Record<string, unknown>;
+    const intentId = value["intentId"];
+    const transactionHash = value["transactionHash"];
+    // Optional echoes (S168-mobile sends them): must match the intent.
+    const echoedWalletId = value["walletId"];
+    const echoedRoundId = value["roundId"];
+    if (
+      (echoedWalletId !== undefined &&
+        (typeof echoedWalletId !== "string" || !isOpaqueId(echoedWalletId))) ||
+      (echoedRoundId !== undefined &&
+        (typeof echoedRoundId !== "string" ||
+          !/^[1-9][0-9]{0,30}$/u.test(echoedRoundId)))
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    if (
+      typeof intentId !== "string" ||
+      !isOpaqueId(intentId) ||
+      typeof transactionHash !== "string" ||
+      !/^0x[0-9a-fA-F]{64}$/u.test(transactionHash)
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const record = await visibleInstance(input.instanceId);
+    const store = repository();
+    const intent = await store
+      .getDynamicClaimIntent({
+        intentId,
+        ownerUserId: input.principal.userId,
+      })
+      .catch(translate);
+    const claim = intent?.policy["dynamicClaim"] as
+      { readonly roundId?: unknown } | undefined;
+    if (
+      intent === null ||
+      intent.instanceId !== record.instanceId ||
+      typeof claim?.roundId !== "string" ||
+      (echoedWalletId !== undefined && echoedWalletId !== intent.walletId) ||
+      (echoedRoundId !== undefined && echoedRoundId !== claim.roundId)
+    ) {
+      throw V2ApiError.fromCode("NOT_FOUND", {
+        reasonCode: launch2DynamicReasonCodes.claimIntentNotFound,
+      });
+    }
+    const recorded = await store
+      .recordDynamicClaimReport({
+        intentId,
+        ownerUserId: input.principal.userId,
+        instanceId: record.instanceId,
+        walletId: intent.walletId,
+        walletAddress: intent.walletAddress,
+        roundId: claim.roundId,
+        transactionHash: transactionHash.toLowerCase(),
+      })
+      .catch(translate);
+    if (recorded.outcome === "conflict") {
+      throw V2ApiError.fromCode("RESOURCE_CONFLICT", {
+        reasonCode: launch2DynamicReasonCodes.claimTransactionConflict,
+      });
+    }
+    const indexed = await store
+      .findDynamicClaim({
+        instanceId: record.instanceId,
+        transactionHash: recorded.report.transactionHash,
+        roundId: claim.roundId,
+        buyer: intent.walletAddress,
+      })
+      .catch(translate);
+    return Object.freeze({
+      dynamicClaimReport: Object.freeze({
+        intentId,
+        instanceId: record.instanceId,
+        walletId: intent.walletId,
+        roundId: claim.roundId,
+        transactionHash: recorded.report.transactionHash,
+        status: indexed === null ? "submitted" : "confirmed",
+        amountUsd1:
+          indexed === null
+            ? null
+            : formatLaunch2Amount(BigInt(indexed.amountUsd1)),
+        claimedAt: indexed?.claimedAt ?? null,
+        blockNumber: indexed?.blockNumber ?? null,
+        reportedAt: recorded.report.reportedAt,
+      }),
+      contractVersion: v2ContractVersion,
+    });
+  }
+
   return Object.freeze<Launch2Service>({
     async poolQuote(input) {
       const record = await visibleInstance(input.instanceId);
@@ -1748,7 +2691,10 @@ export function createLaunch2Service(
       });
       const wallet = await walletFor(input.principal, input.walletId, true);
       if (wallet === null) throw V2ApiError.notFound();
-      const priced = await poolQuoteAt(
+      // Decision 0131: a LoopDynamic instance quotes through LoopRouter.
+      const priced = await (
+        hookKindOf(record) === "loopDynamic" ? dynamicPoolQuoteAt : poolQuoteAt
+      )(
         record,
         wallet,
         request,
@@ -1764,6 +2710,15 @@ export function createLaunch2Service(
       const writes = writesOrUnavailable();
       const body = parsePoolTradeBody(input.body);
       const record = await visibleInstance(input.instanceId);
+      if (hookKindOf(record) === "loopDynamic") {
+        return prepareDynamicPoolTrade({
+          principal: input.principal,
+          record,
+          body,
+          idempotencyKey: input.idempotencyKey,
+          writes,
+        });
+      }
       const wallet = await signingWallet(input.principal, body.walletId);
       const requestSha256 = requestDigest([
         record.instanceId,
@@ -1885,6 +2840,11 @@ export function createLaunch2Service(
         contractVersion: v2ContractVersion,
       });
     },
+
+    getDynamicPool,
+    listDynamicRewards,
+    prepareDynamicClaim,
+    reportDynamicClaim,
 
     async listPoolTrades(input) {
       const record = await visibleInstance(input.instanceId);

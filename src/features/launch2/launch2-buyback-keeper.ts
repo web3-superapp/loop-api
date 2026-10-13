@@ -59,6 +59,12 @@ export const launch2KeeperReasonCodes = Object.freeze({
   /** Decision 0122 (v3): the swap delivered nothing (`NoOutput`). */
   noOutput: "LAUNCH2_BUYBACK_NO_OUTPUT",
   contractReverted: "LAUNCH2_BUYBACK_CONTRACT_REVERTED",
+  /**
+   * Decision 0131 (LoopDynamic buyback through LoopRouter): the Hook is
+   * mid-swap (`Busy`) or refused the router (`UnauthorizedRouter`).
+   */
+  hookBusy: "LAUNCH2_BUYBACK_HOOK_BUSY",
+  routerUnauthorized: "LAUNCH2_BUYBACK_ROUTER_UNAUTHORIZED",
   // Waiting only.
   ledgerPending: "LAUNCH2_BUYBACK_LEDGER_PENDING",
   retryWait: "LAUNCH2_BUYBACK_RETRY_WAIT",
@@ -128,8 +134,14 @@ export function classifyLaunch2BuybackRevert(
       return of(codes.paused, "paused");
     case "Unauthorized":
       return of(codes.notKeeper, "not_keeper");
+    // Decision 0131: `NotGraduated` = LoopDynamicBuybackAdapter.
     case "LaunchNotGraduated":
+    case "NotGraduated":
       return of(codes.notGraduated, "not_graduated");
+    case "Busy":
+      return of(codes.hookBusy, "other");
+    case "UnauthorizedRouter":
+      return of(codes.routerUnauthorized, "other");
     default:
       return of(codes.contractReverted, "other");
   }

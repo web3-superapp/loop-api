@@ -62,6 +62,8 @@ import {
   type Launch2BuybackAttemptRepository,
 } from "./features/launch2/launch2-buyback-keeper.js";
 import { createLaunch2BuybackKeeperLane } from "./features/launch2/launch2-buyback-keeper-worker.js";
+import { createLaunch2DynamicPokeLane } from "./features/launch2/launch2-dynamic-poke.js";
+import { createLaunch2DynamicPokeChain } from "./integrations/launch2/launch2-dynamic-poke-chain.js";
 import {
   Launch2KeeperChainRefusedError,
   createLaunch2BuybackKeeperChain,
@@ -354,6 +356,8 @@ export interface RunReconciliationWorkerOptions {
   /** Test seams for the buyback keeper's chain client and lane (Decision 0121). */
   readonly createLaunch2BuybackKeeperChain?: typeof createLaunch2BuybackKeeperChain;
   readonly createLaunch2BuybackKeeperLane?: typeof createLaunch2BuybackKeeperLane;
+  /** Decision 0131: test seam for the LoopDynamic poke keeper client. */
+  readonly createLaunch2DynamicPokeChain?: typeof createLaunch2DynamicPokeChain;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -827,6 +831,8 @@ export async function runReconciliationWorker(
               current: launch2Config.factoryAddress as string,
               currentCodeHash: launch2Config.factoryCodeHash,
               legacy: launch2Config.legacyFactories,
+              // Decision 0131: the LoopDynamic Factory (v3 modules).
+              dynamic: launch2Config.dynamicFactoryAddress ?? null,
             }),
             reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
             pollIntervalMs: launch2Config.pollIntervalMs,
@@ -1166,6 +1172,78 @@ export async function runReconciliationWorker(
               : { reasonCode: "LAUNCH2_BUYBACK_KEEPER_UNVERIFIED" }),
           },
           "LOOP launch2 buyback keeper enabled",
+        );
+      }
+    }
+    // Decision 0131: LoopDynamic poke() keeper, default off. Config load
+    // already refused boot for `true` without a key or off chain 97.
+    const pokeConfig = options.config.launch2DynamicPoke;
+    if (pokeConfig !== null) {
+      if (
+        database.launch2 === undefined ||
+        launchChainConfig.chainId !== "eip155:97" ||
+        launchChainConfig.rpcUrls.length === 0
+      ) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: "launch2_dynamic_poke",
+            reasonCode:
+              database.launch2 === undefined
+                ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
+                : "LAUNCH2_CHAIN_NOT_CONFIGURED",
+          },
+          "LOOP launch2 dynamic poke keeper stays idle",
+        );
+      } else {
+        const pokeChain = (
+          options.createLaunch2DynamicPokeChain ?? createLaunch2DynamicPokeChain
+        )({
+          privateKey: pokeConfig.privateKey,
+          rpcUrls: launchChainConfig.rpcUrls,
+        });
+        memeLanes.push(
+          createLaunch2DynamicPokeLane({
+            repository: database.launch2,
+            chain: pokeChain,
+            chainId: launchChainConfig.chainId,
+            intervalSeconds: pokeConfig.intervalSeconds,
+            onStep: (step) => {
+              const log =
+                step.outcome === "poked"
+                  ? options.logger.info.bind(options.logger)
+                  : options.logger.warn.bind(options.logger);
+              log(
+                {
+                  ...logFields(),
+                  lane: "launch2_dynamic_poke",
+                  instanceId: step.instanceId,
+                  outcome: step.outcome,
+                  ...(step.transactionHash === null
+                    ? {}
+                    : { transactionHash: step.transactionHash }),
+                  ...(step.reasonCode === null
+                    ? {}
+                    : { reasonCode: step.reasonCode }),
+                },
+                "LOOP launch2 dynamic poke step",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: "launch2_dynamic_poke",
+            executorAddress: pokeChain.pokerAddress,
+          },
+          "LOOP launch2 dynamic poke keeper enabled",
         );
       }
     }

@@ -58,6 +58,7 @@ describe("loadReconciliationWorkerConfig", () => {
       launch2Indexer: null,
       launch2SnapshotPublisher: null,
       launch2BuybackKeeper: null,
+      launch2DynamicPoke: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

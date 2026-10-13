@@ -13,6 +13,7 @@ import type { Launch2MemeCoverageFacts } from "../src/features/launch2/launch2-m
 import { Launch2ChainRefusedError } from "../src/integrations/launch2/launch2-chain.js";
 import {
   createLaunch2Lane,
+  pairLaunch2DynamicFees,
   pairLaunch2RouterSwaps,
 } from "../src/launch2-indexer-worker.js";
 import {
@@ -205,7 +206,15 @@ function harness(options: {
                 ? input.routerSwaps !== undefined &&
                   input.routerSwaps.router === log.contractAddress &&
                   input.routerSwaps.poolIds.includes(log.args["poolId"] ?? "")
-                : input.roles.size > 0),
+                : // Decision 0131: with a Hook role in the query, only the
+                  // asked addresses answer (the second pass re-reads a range).
+                  [...input.roles.values()].some(
+                      (role) =>
+                        role === "dynamicHook" ||
+                        role === "dynamicGraduationAdapter",
+                    )
+                  ? input.roles.has(log.contractAddress)
+                  : input.roles.size > 0),
         ),
         ignored: 0,
       });
@@ -216,6 +225,10 @@ function harness(options: {
     readWalletBalances: () => Promise.reject(new Error("unused")),
     readBuybackState: () => Promise.reject(new Error("unused")),
     readHookPool: () =>
+      options.hookPool === undefined
+        ? Promise.reject(new Error("unused"))
+        : Promise.resolve(options.hookPool),
+    readDynamicHookPool: () =>
       options.hookPool === undefined
         ? Promise.reject(new Error("unused"))
         : Promise.resolve(options.hookPool),
@@ -1183,5 +1196,161 @@ describe("launch2_event lane MEME coverage integrity (Decision 0129 §2)", () =>
     });
     await lane.runOnce();
     expect(coverageRecords).toEqual([]);
+  });
+});
+
+describe("launch2_event lane — LoopDynamic (Decision 0131)", () => {
+  const poolManager = "0x" + "8".repeat(40);
+  const loopRouter = "0x" + "7".repeat(40);
+  const hook = `0x${"c".repeat(36)}10c4`;
+  const poolId = hash(4242n);
+
+  function dynamicInstance(overrides: Partial<Launch2LaneInstance> = {}) {
+    const base = laneInstance();
+    return laneInstance({
+      ...base,
+      addresses: { ...base.addresses, hook: zeroAddress },
+      ...overrides,
+    });
+  }
+
+  it("binds the Hook from LoopHookBound, re-reads the segment for its logs, and pairs each swap's fee", async () => {
+    const instance = dynamicInstance();
+    const adapter = instance.addresses.graduationAdapter;
+    const log = (
+      contractAddress: string,
+      eventName: Launch2DecodedLog["eventName"],
+      args: Record<string, string>,
+      logIndex: number,
+      blockNumber = 300n,
+      tx = hash(9n),
+    ): Launch2DecodedLog => ({
+      contractAddress,
+      eventName,
+      args,
+      transactionHash: tx,
+      logIndex,
+      blockNumber,
+      blockHash: hash(blockNumber),
+    });
+    const logs = [
+      log(adapter, "LoopHookBound", { hook, poolId }, 1),
+      log(
+        instance.addresses.curve,
+        "Graduated",
+        { officialPoolId: poolId, soldSupply: "1", usd1Reserve: "1" },
+        2,
+      ),
+      log(
+        poolManager,
+        "Swap",
+        {
+          id: poolId,
+          sender: loopRouter,
+          amount0: "-100",
+          amount1: "160000",
+          sqrtPriceX96: "1",
+        },
+        3,
+        310n,
+        hash(10n),
+      ),
+      log(
+        hook,
+        "BuyFeeCharged",
+        { buyer: "0x" + "a".repeat(40), grossMeme: "160000", fee: "3200" },
+        5,
+        310n,
+        hash(10n),
+      ),
+      log(
+        hook,
+        "RoundActivated",
+        { round: "1", startCandle: "5", carriedQuote: "0" },
+        6,
+        310n,
+        hash(10n),
+      ),
+    ];
+    const { lane, commits, logQueries } = harness({
+      instances: [instance],
+      head: 400n,
+      logs,
+      hookPool: { poolManager, currency0: "0x" + "2".repeat(40) },
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("seeded");
+    // The first pass asks the adapter; the second asks the bound Hook and
+    // the pool's swaps over the same range.
+    expect(logQueries[0]?.roleMap.get(adapter)).toBe(
+      "dynamicGraduationAdapter",
+    );
+    expect(logQueries[1]?.roleMap.get(hook)).toBe("dynamicHook");
+    expect(logQueries[1]?.poolSwaps?.get(poolManager)).toEqual([poolId]);
+    const events = commits[0]?.events ?? [];
+    expect(events.map((event) => event.eventName)).toEqual([
+      "LoopHookBound",
+      "Graduated",
+      "Swap",
+      "BuyFeeCharged",
+      "RoundActivated",
+    ]);
+    expect(
+      events.every((event) => event.instanceId === instance.instanceId),
+    ).toBe(true);
+    expect(events[2]?.args).toMatchObject({
+      poolHookKind: "loopDynamic",
+      dynamicFee: "3200",
+      memeIsCurrency0: "false",
+    });
+  });
+
+  it("reads an indexed Hook's logs directly once the binding is known", async () => {
+    const instance = dynamicInstance({
+      graduated: true,
+      officialPoolId: poolId,
+      dynamicHook: hook,
+    });
+    const { lane, logQueries } = harness({
+      instances: [instance],
+      head: 400n,
+      logs: [],
+      hookPool: { poolManager, currency0: "0x" + "2".repeat(40) },
+    });
+    await lane.runOnce();
+    expect(logQueries[0]?.roleMap.get(hook)).toBe("dynamicHook");
+    expect(logQueries[0]?.poolSwaps?.get(poolManager)).toEqual([poolId]);
+  });
+
+  it("pairs SellFeeCharged (base + extra) with the newest earlier swap of the Hook's pool", () => {
+    const swap = (logIndex: number): Launch2DecodedLog => ({
+      contractAddress: poolManager,
+      eventName: "Swap",
+      args: { id: poolId },
+      transactionHash: hash(1n),
+      logIndex,
+      blockNumber: 5n,
+      blockHash: hash(5n),
+    });
+    const fee: Launch2DecodedLog = {
+      contractAddress: hook,
+      eventName: "SellFeeCharged",
+      args: {
+        round: "1",
+        grossQuote: "100",
+        baseFee: "2",
+        extraFee: "29",
+        dropWad: "1",
+      },
+      transactionHash: hash(1n),
+      logIndex: 9,
+      blockNumber: 5n,
+      blockHash: hash(5n),
+    };
+    const paired = pairLaunch2DynamicFees(
+      [swap(1), swap(4), fee],
+      new Map([[hook, poolId]]),
+    );
+    expect([...paired.entries()]).toEqual([[`${hash(1n)}:4`, "31"]]);
   });
 });

@@ -73,6 +73,84 @@ export function hooksLaunchFixedEconomicsFor(
   }) as HooksLaunchFixedEconomics;
 }
 
+/**
+ * Decision 0131 (loop-contracts S164 + S165, Decision 0009 §4.2 / §13): the
+ * Hook parameters a LoopDynamic Factory commits in its `TEMPLATE_HASH`
+ * (`LoopDynamicLaunchFactory.loopDynamicTemplateHash`). OfficialTax keeps
+ * the bare `keccak256("hooks_launch_v1")`.
+ */
+export interface HooksLaunchLoopDynamicParams {
+  readonly router: string;
+  readonly baseSellFeePpm: number;
+  readonly baseFeeRecipient: string;
+  /** 0 PRE_SWAP, 1 POST_SWAP (ruled: POST_SWAP). */
+  readonly priceTiming: 0 | 1;
+  /** 0 LoopRouterOnly, 1 Open (ruled: Open). */
+  readonly routingPolicy: 0 | 1;
+  readonly routerRegistryAdmin: string;
+  readonly excludeBuybackFromRewards: boolean;
+  /** S165: buy fee in ppm of the MEME output (ruled: 20,000). */
+  readonly buyFeePpm: number;
+}
+
+/**
+ * `keccak256(abi.encode(keccak256("hooks_launch_v1"), uint8(1), router,
+ * uint24 baseSellFeePpm, baseFeeRecipient, uint8 priceTiming, uint8
+ * routingPolicy, routerRegistryAdmin, excludeBuybackFromRewards, uint24
+ * buyFeePpm))` — the LoopDynamic Factory's `TEMPLATE_HASH`.
+ */
+export function hooksLaunchLoopDynamicTemplateHash(
+  params: HooksLaunchLoopDynamicParams,
+): `0x${string}` {
+  return keccak256(
+    encodeAbiParameters(
+      parseAbiParameters(
+        "bytes32, uint8, address, uint24, address, uint8, uint8, address, bool, uint24",
+      ),
+      [
+        hooksLaunchTemplateHash,
+        1,
+        params.router as `0x${string}`,
+        params.baseSellFeePpm,
+        params.baseFeeRecipient as `0x${string}`,
+        params.priceTiming,
+        params.routingPolicy,
+        params.routerRegistryAdmin as `0x${string}`,
+        params.excludeBuybackFromRewards,
+        params.buyFeePpm,
+      ],
+    ),
+  );
+}
+
+/**
+ * Decision 0131: the `fixedEconomics` of a LoopDynamic template — the
+ * OfficialTax object with the pool tax rates taken from the Hook
+ * parameters and the Hook parameters appended (so the configHash binds
+ * them, `buyFeePpm` included). The OfficialTax object is never changed.
+ */
+export function hooksLaunchLoopDynamicFixedEconomics(
+  base: HooksLaunchFixedEconomics,
+  params: HooksLaunchLoopDynamicParams,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    ...base,
+    officialPoolBuyTaxBps: params.buyFeePpm / 100,
+    officialPoolSellTaxBps: params.baseSellFeePpm / 100,
+    officialPoolHookKind: "loopDynamic",
+    loopDynamic: Object.freeze({
+      router: params.router.toLowerCase(),
+      buyFeePpm: params.buyFeePpm,
+      baseSellFeePpm: params.baseSellFeePpm,
+      baseFeeRecipient: params.baseFeeRecipient.toLowerCase(),
+      priceTiming: params.priceTiming === 1 ? "POST_SWAP" : "PRE_SWAP",
+      routingPolicy: params.routingPolicy === 1 ? "Open" : "LoopRouterOnly",
+      routerRegistryAdmin: params.routerRegistryAdmin.toLowerCase(),
+      excludeBuybackFromRewards: params.excludeBuybackFromRewards,
+    }),
+  });
+}
+
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const unsignedDecimalPattern = /^(0|[1-9][0-9]{0,19})$/;
 const tickerPattern = /^[A-Za-z0-9]{2,12}$/;
@@ -120,6 +198,8 @@ export interface HooksLaunchDraftInput {
 export interface HooksLaunchDraft {
   readonly templateVersion: typeof hooksLaunchTemplateVersion;
   readonly templateHash: string;
+  /** Decision 0131: present only for a LoopDynamic template. */
+  readonly poolHookKind?: "loopDynamic";
   readonly name: string;
   readonly ticker: string;
   readonly logoAssetUrl: string;
@@ -127,7 +207,8 @@ export interface HooksLaunchDraft {
   readonly links: readonly string[];
   readonly nftSaleStartAt: string;
   readonly buybackRecipient: string;
-  readonly fixedEconomics: HooksLaunchFixedEconomics;
+  readonly fixedEconomics:
+    HooksLaunchFixedEconomics | Readonly<Record<string, unknown>>;
   readonly configHash: string;
 }
 
@@ -149,11 +230,28 @@ export function parseHooksLaunchDraft(
     readonly minimumLeadSeconds: number;
     /** The target Factory's `nftSaleDuration()` (Decision 0119). */
     readonly nftSaleDurationSeconds: number;
+    /**
+     * Decision 0131: a LoopDynamic target Factory's Hook parameters. Absent
+     * (default) = OfficialTax: the template hash, fixedEconomics and
+     * configHash are byte-for-byte unchanged.
+     */
+    readonly loopDynamic?: HooksLaunchLoopDynamicParams;
   },
 ): HooksLaunchDraft {
-  const fixedEconomics = hooksLaunchFixedEconomicsFor(
+  const officialEconomics = hooksLaunchFixedEconomicsFor(
     policy.nftSaleDurationSeconds,
   );
+  const fixedEconomics =
+    policy.loopDynamic === undefined
+      ? officialEconomics
+      : hooksLaunchLoopDynamicFixedEconomics(
+          officialEconomics,
+          policy.loopDynamic,
+        );
+  const templateHash =
+    policy.loopDynamic === undefined
+      ? hooksLaunchTemplateHash
+      : hooksLaunchLoopDynamicTemplateHash(policy.loopDynamic);
   if (!Array.isArray(input.links)) throw new InvalidHooksLaunchDraftError();
   const linkValues: readonly unknown[] = input.links;
   if (
@@ -225,7 +323,10 @@ export function parseHooksLaunchDraft(
 
   const normalized = {
     templateVersion: hooksLaunchTemplateVersion,
-    templateHash: hooksLaunchTemplateHash,
+    templateHash,
+    ...(policy.loopDynamic === undefined
+      ? {}
+      : { poolHookKind: "loopDynamic" as const }),
     name: input.name.trim(),
     ticker: input.ticker.toUpperCase(),
     logoAssetUrl: logoUrl.toString(),
@@ -241,7 +342,7 @@ export function parseHooksLaunchDraft(
       "bytes32 templateHash, string name, string ticker, string logoAssetUrl, string description, bytes32 linksHash, uint64 nftSaleStartAt, address buybackRecipient, bytes32 fixedEconomicsHash",
     ),
     [
-      hooksLaunchTemplateHash,
+      templateHash,
       normalized.name,
       normalized.ticker,
       normalized.logoAssetUrl,

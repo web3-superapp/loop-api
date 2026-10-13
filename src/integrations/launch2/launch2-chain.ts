@@ -27,6 +27,8 @@ import {
   buybackExecutorAbi,
   curveEngineAbi,
   launchPublicationGateAbi,
+  loopDynamicGraduationAdapterAbi,
+  loopDynamicHookAbi,
   loopLaunchFactoryAbi,
   memeTokenAbi,
   nftEscrowAbi,
@@ -90,6 +92,26 @@ const roleAbis: Readonly<
   // Decision 0126: the router's own Swap(poolId, payer, recipient, …),
   // renamed RouterSwap after decoding.
   poolRouter: { abi: officialPoolRouterAbi, events: ["Swap"] },
+  // Decision 0131: LoopDynamic — the graduation adapter's Hook binding and
+  // the per-project Hook's fee / candle / round / reward logs.
+  dynamicGraduationAdapter: {
+    abi: loopDynamicGraduationAdapterAbi,
+    events: ["LoopHookBound"],
+  },
+  dynamicHook: {
+    abi: loopDynamicHookAbi,
+    events: [
+      "SellFeeCharged",
+      "BuyFeeCharged",
+      "CandleClosed",
+      "EmptyCandlesSkipped",
+      "RoundActivated",
+      "RoundClosed",
+      "BuyCredited",
+      "BuyNotCredited",
+      "RewardClaimed",
+    ],
+  },
 };
 
 const poolManagerSwapEvent = getAbiItem({ abi: poolManagerAbi, name: "Swap" });
@@ -559,6 +581,32 @@ export function createLaunch2Chain(input: {
         }),
       ]);
       return { poolManager: lower(poolManager), currency0: lower(currency0) };
+    },
+
+    async readDynamicHookPool(hook) {
+      const [manager, meme, quote] = await Promise.all([
+        client.readContract({
+          address: hook as Address,
+          abi: loopDynamicHookAbi,
+          functionName: "manager",
+        }),
+        client.readContract({
+          address: hook as Address,
+          abi: loopDynamicHookAbi,
+          functionName: "meme",
+        }),
+        client.readContract({
+          address: hook as Address,
+          abi: loopDynamicHookAbi,
+          functionName: "quote",
+        }),
+      ]);
+      const a = lower(meme);
+      const b = lower(quote);
+      return {
+        poolManager: lower(manager),
+        currency0: BigInt(a) < BigInt(b) ? a : b,
+      };
     },
 
     async readBuybackState(request): Promise<Launch2BuybackChainState> {

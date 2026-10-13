@@ -25,7 +25,10 @@ import {
 } from "../launch/hooks-launch-executor-chain.js";
 import {
   buybackExecutorAbi,
+  loopDynamicBuybackAdapterAbi,
+  loopDynamicHookAbi,
   loopLaunchFactoryAbi,
+  loopRouterAbi,
   nftEscrowAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
 import { legacyV2BuybackExecutorAbi } from "../launch/hooks-launch-protocol-abi-legacy-v2.js";
@@ -58,7 +61,16 @@ const lower = (value: string): string => value.toLowerCase();
  */
 const executeAbi = [
   ...buybackExecutorAbi,
-  ...[...legacyV2BuybackExecutorAbi, ...nftEscrowAbi].filter(
+  // Decision 0131: a LoopDynamic executor swaps through
+  // LoopDynamicBuybackAdapter → LoopRouter → the Hook; their errors decode
+  // too (the executor's adapter is bound per instance).
+  ...[
+    ...legacyV2BuybackExecutorAbi,
+    ...nftEscrowAbi,
+    ...loopDynamicBuybackAdapterAbi,
+    ...loopRouterAbi,
+    ...loopDynamicHookAbi,
+  ].filter(
     (item, index, all) =>
       item.type === "error" &&
       !buybackExecutorAbi.some(

@@ -192,6 +192,13 @@ describe("database schema readiness contract", () => {
       "public.mining_reward_ledger_events",
       "public.mining_reward_balances",
       "public.testnet_faucet_grants",
+      "public.launch2_dynamic_hook_bindings",
+      "public.launch2_dynamic_fees",
+      "public.launch2_dynamic_candles",
+      "public.launch2_dynamic_claims",
+      "public.launch2_dynamic_rounds",
+      "public.launch2_dynamic_buy_weights",
+      "public.launch2_dynamic_claim_reports",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

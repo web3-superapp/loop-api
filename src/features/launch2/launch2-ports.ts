@@ -8,6 +8,7 @@ import type {
   Launch2Stage,
 } from "./launch2-contract.js";
 import type { Launch2CurveState } from "./launch2-curve-math.js";
+import type { Launch2PoolHookKind } from "./launch2-dynamic.js";
 import type { Launch2FactoryGeneration } from "./launch2-generation.js";
 
 /**
@@ -38,7 +39,14 @@ export type Launch2ContractRole =
    * Decision 0126: `OfficialPoolRouter` (its own `Swap(poolId, payer,
    * recipient, …)`, decoded as `RouterSwap`).
    */
-  | "poolRouter";
+  | "poolRouter"
+  /**
+   * Decision 0131: a LoopDynamic instance's graduation adapter
+   * (`LoopHookBound(hook, poolId)` only).
+   */
+  | "dynamicGraduationAdapter"
+  /** Decision 0131: the per-project `LoopDynamicHook` (rounds, fees, claims). */
+  | "dynamicHook";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -56,6 +64,17 @@ export const launch2EventNames = Object.freeze([
   "Swap",
   /** Decision 0126: the router's `Swap` event (other topic0 than the PoolManager's). */
   "RouterSwap",
+  // Decision 0131: LoopDynamic (graduation adapter + per-project Hook).
+  "LoopHookBound",
+  "SellFeeCharged",
+  "BuyFeeCharged",
+  "CandleClosed",
+  "EmptyCandlesSkipped",
+  "RoundActivated",
+  "RoundClosed",
+  "BuyCredited",
+  "BuyNotCredited",
+  "RewardClaimed",
 ] as const);
 
 export type Launch2EventName = (typeof launch2EventNames)[number];
@@ -215,6 +234,141 @@ export interface Launch2Chain {
     readonly poolManager: string;
     readonly currency0: string;
   }>;
+  /**
+   * Decision 0131 (lane): a `LoopDynamicHook`'s immutable `manager()` and
+   * the pool's currency0 (`min(meme(), quote())`).
+   */
+  readDynamicHookPool(hook: string): Promise<{
+    readonly poolManager: string;
+    readonly currency0: string;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// Decision 0131: the LoopDynamic reader (route-facing)
+// ---------------------------------------------------------------------------
+
+/** One reward round as `rounds(id)` returns it. */
+export interface Launch2DynamicRoundState {
+  readonly startCandle: bigint;
+  readonly endCandle: bigint;
+  readonly extraFees: bigint;
+  readonly totalBuyWeight: bigint;
+  readonly allocation: bigint;
+  readonly claimed: bigint;
+  readonly closed: boolean;
+}
+
+/** Hook, pool and (optionally) wallet facts at one block. */
+export interface Launch2DynamicHookState {
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly blockTimestamp: bigint;
+  readonly manager: string;
+  readonly trustedRouter: string;
+  readonly meme: string;
+  readonly quote: string;
+  readonly memeIsCurrency0: boolean;
+  readonly poolId: string;
+  readonly initialized: boolean;
+  readonly armed: boolean;
+  readonly candleId: bigint;
+  readonly candleOpenSqrtPriceX96: bigint;
+  readonly lastSqrtPriceX96: bigint;
+  readonly currentRoundId: bigint;
+  readonly carry: bigint;
+  readonly reservedRewards: bigint;
+  readonly currentDropWad: bigint;
+  readonly baseSellFeePpm: bigint;
+  /** S165: buy fee in ppm of the MEME output. */
+  readonly buyFeePpm: bigint;
+  /** 0 PRE_SWAP, 1 POST_SWAP. */
+  readonly priceTiming: number;
+  /** 0 LoopRouterOnly, 1 Open. */
+  readonly routingPolicy: number;
+  readonly routerRegistry: string;
+  readonly excludeBuybackFromRewards: boolean;
+  readonly rewardExcludedBuyer: string;
+  /** `rounds(currentRoundId)`; null while no round ever activated. */
+  readonly currentRound: Launch2DynamicRoundState | null;
+  /** PoolManager slot0 of the Hook's pool. */
+  readonly sqrtPriceX96: bigint;
+  /** Present when a wallet was asked about. */
+  readonly wallet: {
+    readonly address: string;
+    readonly currentRoundWeight: bigint;
+    readonly usd1Balance: bigint;
+    readonly memeBalance: bigint;
+  } | null;
+}
+
+export type Launch2DynamicSimulation =
+  | {
+      readonly status: "ok";
+      readonly amountSpent: bigint;
+      readonly amountReceived: bigint;
+    }
+  | { readonly status: "reverted"; readonly errorName: string | null }
+  | { readonly status: "override_unsupported" };
+
+export interface Launch2DynamicSwapCall {
+  readonly blockNumber: bigint;
+  readonly from: string;
+  readonly data: string;
+  /** In-call override of the input token (`balance` null = real balance). */
+  readonly override: {
+    readonly token: string;
+    readonly balance: bigint | null;
+    readonly allowance: bigint;
+  } | null;
+  /**
+   * The Hook to simulate as "initialized, not armed, no candle to roll"
+   * (base fee only; Decision 0131 sell split). Null = the real Hook state.
+   */
+  readonly neutralHook: string | null;
+}
+
+export interface Launch2DynamicChain {
+  /** `LAUNCH2_DYNAMIC_ROUTER_ADDRESS` (LoopRouter, lower-case). */
+  readonly router: string;
+  /** Runtime code hash = `LAUNCH2_DYNAMIC_ROUTER_CODE_HASH`, and `manager()`. */
+  verifyRouter(): Promise<Launch2PoolRouterCheck>;
+  readHookState(input: {
+    readonly hook: string;
+    readonly wallet: string | null;
+  }): Promise<Launch2DynamicHookState>;
+  /** `rounds(id)`, `buyWeight`, `hasClaimed`, `claimable` at one block. */
+  readWalletRound(input: {
+    readonly hook: string;
+    readonly roundId: bigint;
+    readonly wallet: string;
+  }): Promise<{
+    readonly blockNumber: bigint;
+    readonly blockHash: string;
+    readonly round: Launch2DynamicRoundState;
+    readonly weight: bigint;
+    readonly hasClaimed: boolean;
+    readonly claimable: bigint;
+  }>;
+  /** eth_call of `LoopRouter.swapExactInput`. */
+  simulateSwap(call: Launch2DynamicSwapCall): Promise<Launch2DynamicSimulation>;
+  /** eth_call of `hook.claim(roundId)` from the wallet: the amount. */
+  simulateClaim(input: {
+    readonly blockNumber: bigint;
+    readonly hook: string;
+    readonly roundId: bigint;
+    readonly wallet: string;
+  }): Promise<
+    | { readonly status: "ok"; readonly amount: bigint }
+    | { readonly status: "reverted"; readonly errorName: string | null }
+  >;
+  /** eth_estimateGas (swap: with the call's override; null when refused). */
+  estimateGas(call: {
+    readonly from: string;
+    readonly to: string;
+    readonly data: string;
+    readonly override: Launch2DynamicSwapCall["override"];
+  }): Promise<bigint | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +580,17 @@ export interface Launch2InstanceRecord {
     readonly userBuyVolumeUsd1: string;
     readonly userSellVolumeUsd1: string;
   };
+  /**
+   * Decision 0131: `officialTax` unless the registry row has no Hook
+   * (LoopDynamic Factory). Absent = officialTax (pre-0131 fakes).
+   */
+  readonly poolHookKind?: Launch2PoolHookKind;
+  /** Decision 0131: the indexed `LoopHookBound` of a LoopDynamic instance. */
+  readonly dynamicPool?: {
+    readonly hook: string;
+    readonly poolId: string;
+    readonly boundBlock: string;
+  } | null;
   /** Decision 0121: the buyback keeper's newest attempt, if any. */
   readonly buybackKeeper: {
     readonly status:
@@ -503,6 +668,55 @@ export interface Launch2LaneInstance {
    * repository does not track it.
    */
   readonly poolRouterTargetBlock?: string | null;
+  /** Decision 0131: the indexed LoopDynamic Hook (null before graduation). */
+  readonly dynamicHook?: string | null;
+}
+
+/** Decision 0131: one round of a wallet's LoopDynamic rewards (projection). */
+export interface Launch2DynamicRewardRecord {
+  readonly roundId: string;
+  readonly hook: string;
+  readonly closed: boolean;
+  readonly startCandle: string;
+  readonly endCandle: string | null;
+  readonly carriedInUsd1: string;
+  readonly extraFeesUsd1: string;
+  readonly totalBuyWeightUsd1: string;
+  readonly allocationUsd1: string | null;
+  readonly weightUsd1: string;
+  readonly claimedAmountUsd1: string | null;
+  readonly claimTransactionHash: string | null;
+  readonly claimedAt: string | null;
+  readonly activatedAt: string;
+  readonly closedAt: string | null;
+}
+
+/** Decision 0131: the projected round totals of one instance. */
+export interface Launch2DynamicRoundSummary {
+  readonly roundCount: number;
+  readonly closedRoundCount: number;
+  readonly allocatedUsd1: string;
+  readonly claimedUsd1: string;
+  readonly extraFeesUsd1: string;
+  readonly baseSellFeesUsd1: string;
+  readonly buyFeesMeme: string;
+  readonly lastRound: {
+    readonly roundId: string;
+    readonly closed: boolean;
+    readonly activatedAt: string;
+    readonly closedAt: string | null;
+  } | null;
+}
+
+/** Decision 0131: a reported `dynamic_claim` transaction. */
+export interface Launch2DynamicClaimReportRecord {
+  readonly intentId: string;
+  readonly instanceId: string;
+  readonly walletId: string;
+  readonly walletAddress: string;
+  readonly roundId: string;
+  readonly transactionHash: string;
+  readonly reportedAt: string;
 }
 
 /** Decision 0125: one MEME ERC-20 `Transfer` of a launch2 instance. */
@@ -800,6 +1014,42 @@ export interface Launch2Repository {
     readonly instanceId: string | null;
     readonly walletAddresses: readonly string[];
   }): Promise<readonly Launch2PoolTradeStats[]>;
+  // --- Decision 0131: LoopDynamic ---
+  dynamicRoundSummary(instanceId: string): Promise<Launch2DynamicRoundSummary>;
+  /** Rounds in which the wallet has buy weight, newest first. */
+  listDynamicRewards(input: {
+    readonly instanceId: string;
+    readonly walletAddress: string;
+    readonly limit: number;
+  }): Promise<readonly Launch2DynamicRewardRecord[]>;
+  /** The caller's `dynamic_claim` intent (null when not theirs / not one). */
+  getDynamicClaimIntent(input: {
+    readonly intentId: string;
+    readonly ownerUserId: string;
+  }): Promise<Launch2IntentRecord | null>;
+  /**
+   * Records the hash once: `created`, `same` (re-report of the same hash),
+   * or `conflict` (another hash already recorded).
+   */
+  recordDynamicClaimReport(
+    input: Omit<Launch2DynamicClaimReportRecord, "reportedAt"> & {
+      readonly ownerUserId: string;
+    },
+  ): Promise<{
+    readonly outcome: "created" | "same" | "conflict";
+    readonly report: Launch2DynamicClaimReportRecord;
+  }>;
+  /** The indexed `RewardClaimed` of that transaction for (round, buyer). */
+  findDynamicClaim(input: {
+    readonly instanceId: string;
+    readonly transactionHash: string;
+    readonly roundId: string;
+    readonly buyer: string;
+  }): Promise<{
+    readonly amountUsd1: string;
+    readonly blockNumber: string;
+    readonly claimedAt: string;
+  } | null>;
   // --- Intents ---
   createIntent(input: {
     readonly ownerUserId: string;

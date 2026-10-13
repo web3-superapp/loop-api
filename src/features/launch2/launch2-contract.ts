@@ -62,6 +62,8 @@ export const launch2IntentKinds = Object.freeze([
   "sell",
   "pool_buy",
   "pool_sell",
+  /** Decision 0131: `LoopDynamicHook.claim(roundId)`. */
+  "dynamic_claim",
 ] as const);
 
 export type Launch2IntentKind = (typeof launch2IntentKinds)[number];

@@ -135,11 +135,27 @@ export function launch2FactoryEntries(input: {
     readonly address: string;
     readonly generation: Launch2FactoryGeneration;
   }[];
+  /**
+   * Decision 0131: `LAUNCH2_DYNAMIC_FACTORY_ADDRESS`, the LoopDynamic
+   * Factory (current module generation; its instances have no Hook at
+   * deployment). Indexed after the others; must differ from all of them.
+   */
+  readonly dynamic?: string | null;
 }): readonly Launch2FactoryEntry[] {
   const current = input.current.toLowerCase();
   if (input.legacy.some((entry) => entry.address.toLowerCase() === current)) {
     throw new Launch2LegacyFactoriesInvalidError(
       "LAUNCH2_LEGACY_FACTORIES must not list HOOKS_LAUNCH_FACTORY_ADDRESS",
+    );
+  }
+  const dynamic = input.dynamic?.toLowerCase() ?? null;
+  if (
+    dynamic !== null &&
+    (dynamic === current ||
+      input.legacy.some((entry) => entry.address.toLowerCase() === dynamic))
+  ) {
+    throw new Launch2LegacyFactoriesInvalidError(
+      "LAUNCH2_DYNAMIC_FACTORY_ADDRESS must differ from HOOKS_LAUNCH_FACTORY_ADDRESS and LAUNCH2_LEGACY_FACTORIES",
     );
   }
   return Object.freeze([
@@ -155,6 +171,15 @@ export function launch2FactoryEntries(input: {
         current: false,
       }),
     ),
+    ...(dynamic === null
+      ? []
+      : [
+          Object.freeze({
+            address: dynamic,
+            generation: launch2CurrentGeneration,
+            current: false,
+          }),
+        ]),
   ]);
 }
 
