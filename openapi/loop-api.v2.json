@@ -94170,6 +94170,10 @@
                                   "type": "string",
                                   "pattern": "^0x[0-9a-f]{64}$"
                                 },
+                                "poolHookKind": {
+                                  "type": "string",
+                                  "enum": ["loopDynamic"]
+                                },
                                 "name": { "type": "string" },
                                 "ticker": { "type": "string" },
                                 "logoAssetUrl": {
@@ -95327,6 +95331,10 @@
                         "templateHash": {
                           "type": "string",
                           "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "poolHookKind": {
+                          "type": "string",
+                          "enum": ["loopDynamic"]
                         },
                         "name": { "type": "string" },
                         "ticker": { "type": "string" },

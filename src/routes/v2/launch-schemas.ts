@@ -1885,6 +1885,8 @@ export const hooksLaunchProjectConfigResourceSchema = {
       properties: {
         templateVersion: { type: "string", const: "hooks_launch_v1" },
         templateHash: bytes32Schema,
+        // Decision 0131/0132: present only when the template is LoopDynamic.
+        poolHookKind: { type: "string", enum: ["loopDynamic"] },
         name: { type: "string" },
         ticker: { type: "string" },
         logoAssetUrl: { type: "string", format: "uri" },
