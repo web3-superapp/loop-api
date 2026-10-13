@@ -25,6 +25,60 @@ async function withTimeout<T>(
   }
 }
 
+/**
+ * The child gets a fixed environment instead of `...process.env`: the
+ * integration runner loads `.env.local`, so inheriting it made the worker's
+ * lane set (Stream, BSC RPC, Provider keys) depend on the developer's
+ * checkout. Only the process plumbing variables are passed through.
+ */
+function workerEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of ["PATH", "HOME", "TMPDIR", "SystemRoot"]) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return {
+    ...environment,
+    NODE_ENV: "test",
+    LOG_LEVEL: "info",
+    DATABASE_URL: databaseUrl,
+    HYPERLIQUID_RECONCILIATION_READS_ENABLED: "false",
+    HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: "false",
+  };
+}
+
+/**
+ * The worker logger writes `warn` and above to stderr. With optional
+ * Providers unconfigured, lanes that need them log one fail-closed
+ * "stays idle" warn at startup (e.g. `VOICE_ROOM_REAPER_STREAM_NOT_CONFIGURED`);
+ * that is the intended unavailable behaviour, not a failure. Injecting fake
+ * Stream credentials instead would switch those lanes on and let them call
+ * Stream with a bogus key. So stderr may carry only structured `warn` lines
+ * whose reason code ends in `_NOT_CONFIGURED`; any `error`/`fatal` line, any
+ * other warn, or any unstructured output fails the test.
+ */
+function unexpectedStderrLines(stderr: string): string[] {
+  return stderr
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .filter((line) => {
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        return true;
+      }
+      if (typeof entry !== "object" || entry === null) return true;
+      const record = entry as Record<string, unknown>;
+      return !(
+        record["level"] === "warn" &&
+        record["service"] === "loop-reconciliation-worker" &&
+        typeof record["reasonCode"] === "string" &&
+        record["reasonCode"].endsWith("_NOT_CONFIGURED")
+      );
+    });
+}
+
 describe("standalone reconciliation worker process", () => {
   it("starts against PostgreSQL and exits cleanly on SIGTERM", async () => {
     const child = spawn(
@@ -32,14 +86,7 @@ describe("standalone reconciliation worker process", () => {
       ["--import", "tsx", "src/reconciliation-worker.ts"],
       {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          NODE_ENV: "test",
-          LOG_LEVEL: "info",
-          DATABASE_URL: databaseUrl,
-          HYPERLIQUID_RECONCILIATION_READS_ENABLED: "false",
-          HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: "false",
-        },
+        env: workerEnvironment(),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -93,7 +140,7 @@ describe("standalone reconciliation worker process", () => {
 
       expect(exit).toEqual({ code: 0, signal: null });
       expect(stdout).toContain('"msg":"LOOP reconciliation worker stopped"');
-      expect(stderr).toBe("");
+      expect(unexpectedStderrLines(stderr)).toEqual([]);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

@@ -65,7 +65,7 @@ export const testnetFaucetStatusResourceSchema = {
     available: {
       type: "boolean",
       description:
-        "Cooldown only: false while a grant of this address (pending, granted, partial, unknown) is younger than cooldownSeconds. Operator funds are checked by the POST.",
+        "Cooldown only: false while a grant of this address (pending, granted, partial, unknown) is younger than cooldownSeconds, while an attempted failed grant is younger than TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS (S169), or once the owner has 5 attempted failures in the UTC day. Operator funds and the global daily caps are checked by the POST.",
     },
     nextAvailableAt: {
       anyOf: [dateTimeSchema, { type: "null" }],

@@ -59,6 +59,8 @@ describe("loadReconciliationWorkerConfig", () => {
       launch2SnapshotPublisher: null,
       launch2BuybackKeeper: null,
       launch2DynamicPoke: null,
+      // S169: the faucet pending sweep is off while the faucet is.
+      testnetFaucetSweep: null,
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

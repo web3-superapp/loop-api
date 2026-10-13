@@ -806,6 +806,13 @@ const environmentSchema = z
     // S156b: explicit override of the USD1 the faucet mints (default: the
     // Hooks Factory's usd1(), i.e. the MEME v2 / launch2 USD1).
     TESTNET_FAUCET_USD1_ADDRESS: optionalCredential(64),
+    // S169: operator reserve (shared MEME pause key), global daily caps,
+    // failed-retry cooldown, and the pending sweep timeout.
+    TESTNET_FAUCET_OPERATOR_RESERVE_BNB: z.string().trim().min(1).max(40),
+    TESTNET_FAUCET_DAILY_MAX_GRANTS: positiveIntegerString(1, 100_000),
+    TESTNET_FAUCET_DAILY_MAX_BNB: z.string().trim().min(1).max(40),
+    TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS: positiveIntegerString(30, 86_400),
+    TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: positiveIntegerString(120, 86_400),
     ...miningSettlementEnvironmentShape,
     ...launchChainEnvironmentShape,
     ...memeEnvironmentShape,
@@ -1080,6 +1087,9 @@ const environmentSchema = z
 
 const reconciliationWorkerEnvironmentSchema = z
   .object({
+    // S169: the `testnet_faucet_pending_sweep` lane (Decision 0128 §9).
+    TESTNET_FAUCET_ENABLED: booleanString,
+    TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: positiveIntegerString(120, 86_400),
     NODE_ENV: z.enum(["development", "test", "production"]),
     LOG_LEVEL: z.enum([
       "fatal",
@@ -1876,6 +1886,17 @@ export interface ReconciliationWorkerConfig {
   /** `alert_evaluator` lane (Decision 0034); default off. */
   readonly alertEvaluator: AlertEvaluatorConfig | null;
   /**
+   * S169 (Decision 0128 §9): the `testnet_faucet_pending_sweep` lane, on
+   * with TESTNET_FAUCET_ENABLED. Grants still `pending` after
+   * `pendingTimeoutSeconds` are closed as `unknown` (the tBNB hash is on
+   * chain) or `failed` (it is not). Read-only; it never signs. Absent or
+   * null keeps it off.
+   */
+  readonly testnetFaucetSweep?: {
+    readonly pendingTimeoutSeconds: number;
+    readonly intervalMs: number;
+  } | null;
+  /**
    * `market_sparkline_warm` lane (Decision 0074); default on. It only ever
    * runs when the GeckoTerminal Provider is enabled, which the runtime
    * checks against `market.geckoterminal.enabled`.
@@ -2500,6 +2521,52 @@ export interface TestnetFaucetConfig {
    * LAUNCH_USD1_ADDRESS, only while launch2 has no Factory. Null = none.
    */
   readonly usd1Source: TestnetFaucetUsd1Source | null;
+  /**
+   * S169: which variable the operator key came from. `meme` = the
+   * fallback to MEME_OPERATOR_PRIVATE_KEY, the console's pause/unpause key.
+   */
+  readonly operatorKeySource: "faucet" | "meme" | null;
+  /**
+   * TESTNET_FAUCET_OPERATOR_RESERVE_BNB (default 0.05): kept on the operator
+   * when its key is shared with the MEME pause signer in the same process,
+   * so a pause transaction always has gas. Canonical decimal and wei.
+   */
+  readonly operatorReserveBnb: string;
+  readonly operatorReserveWei: string;
+  /** TESTNET_FAUCET_DAILY_MAX_GRANTS (default 200), per UTC day. */
+  readonly dailyMaxGrants: number;
+  /** TESTNET_FAUCET_DAILY_MAX_BNB (default 2), per UTC day; canonical and wei. */
+  readonly dailyMaxBnb: string;
+  readonly dailyMaxBnbWei: string;
+  /** TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS (default 300) after a failed grant. */
+  readonly failedCooldownSeconds: number;
+  /** Failed grants per owner per UTC day before 429 (fixed, 5). */
+  readonly failedDailyLimit: number;
+  /** TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS (default 900), the sweep's age. */
+  readonly pendingTimeoutSeconds: number;
+}
+
+/** S169: failed grants one owner may cause per UTC day. */
+export const testnetFaucetFailedDailyLimit = 5;
+/** S169: the pending sweep lane's period. */
+export const testnetFaucetSweepIntervalMs = 60_000;
+
+/** S169 defaults of the faucet limit variables (API process). */
+function testnetFaucetLimitEnvironmentDefaults(
+  environment: NodeJS.ProcessEnv,
+): Record<string, string> {
+  return {
+    TESTNET_FAUCET_OPERATOR_RESERVE_BNB:
+      environment["TESTNET_FAUCET_OPERATOR_RESERVE_BNB"] ?? "0.05",
+    TESTNET_FAUCET_DAILY_MAX_GRANTS:
+      environment["TESTNET_FAUCET_DAILY_MAX_GRANTS"] ?? "200",
+    TESTNET_FAUCET_DAILY_MAX_BNB:
+      environment["TESTNET_FAUCET_DAILY_MAX_BNB"] ?? "2",
+    TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS:
+      environment["TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS"] ?? "300",
+    TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS:
+      environment["TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS"] ?? "900",
+  };
 }
 
 export type TestnetFaucetUsd1Source =
@@ -2562,6 +2629,11 @@ export function parseTestnetFaucet(data: {
   readonly LAUNCH_USD1_ADDRESS?: string | undefined;
   readonly TESTNET_FAUCET_USD1_ADDRESS?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+  readonly TESTNET_FAUCET_OPERATOR_RESERVE_BNB?: string | undefined;
+  readonly TESTNET_FAUCET_DAILY_MAX_GRANTS?: number | undefined;
+  readonly TESTNET_FAUCET_DAILY_MAX_BNB?: string | undefined;
+  readonly TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS?: number | undefined;
+  readonly TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS?: number | undefined;
 }): TestnetFaucetConfig {
   const issues: string[] = [];
   const bnbAmount = parseFaucetAmount(
@@ -2574,6 +2646,18 @@ export function parseTestnetFaucet(data: {
     "TESTNET_FAUCET_USD1_AMOUNT",
     data.TESTNET_FAUCET_USD1_AMOUNT,
     1_000_000n,
+    issues,
+  );
+  const operatorReserveBnb = parseFaucetAmount(
+    "TESTNET_FAUCET_OPERATOR_RESERVE_BNB",
+    data.TESTNET_FAUCET_OPERATOR_RESERVE_BNB ?? "0.05",
+    10n,
+    issues,
+  );
+  const dailyMaxBnb = parseFaucetAmount(
+    "TESTNET_FAUCET_DAILY_MAX_BNB",
+    data.TESTNET_FAUCET_DAILY_MAX_BNB ?? "2",
+    1_000n,
     issues,
   );
   const ownKey = data.TESTNET_FAUCET_OPERATOR_PRIVATE_KEY?.trim() ?? "";
@@ -2605,15 +2689,26 @@ export function parseTestnetFaucet(data: {
         : evm.test(launchUsd1)
           ? { kind: "launch", address: launchUsd1.toLowerCase() }
           : null;
+  const operatorPrivateKey =
+    key !== "" && privateKeyPattern.test(key) ? normalizedKey(key) : null;
   return Object.freeze({
     enabled: data.TESTNET_FAUCET_ENABLED,
     bnbAmount,
     bnbAmountWei: faucetDecimalToRaw(bnbAmount, 18).toString(),
     usd1Amount,
     cooldownSeconds: data.TESTNET_FAUCET_COOLDOWN_SECONDS,
-    operatorPrivateKey:
-      key !== "" && privateKeyPattern.test(key) ? normalizedKey(key) : null,
+    operatorPrivateKey,
     usd1Source: usd1Source === null ? null : Object.freeze(usd1Source),
+    operatorKeySource:
+      operatorPrivateKey === null ? null : ownKey !== "" ? "faucet" : "meme",
+    operatorReserveBnb,
+    operatorReserveWei: faucetDecimalToRaw(operatorReserveBnb, 18).toString(),
+    dailyMaxGrants: data.TESTNET_FAUCET_DAILY_MAX_GRANTS ?? 200,
+    dailyMaxBnb,
+    dailyMaxBnbWei: faucetDecimalToRaw(dailyMaxBnb, 18).toString(),
+    failedCooldownSeconds: data.TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS ?? 300,
+    failedDailyLimit: testnetFaucetFailedDailyLimit,
+    pendingTimeoutSeconds: data.TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS ?? 900,
   });
 }
 
@@ -3597,6 +3692,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     TESTNET_FAUCET_OPERATOR_PRIVATE_KEY:
       environment["TESTNET_FAUCET_OPERATOR_PRIVATE_KEY"],
     TESTNET_FAUCET_USD1_ADDRESS: environment["TESTNET_FAUCET_USD1_ADDRESS"],
+    ...testnetFaucetLimitEnvironmentDefaults(environment),
     ...miningSettlementEnvironmentDefaults(environment),
     ...launchChainEnvironmentDefaults(environment),
     ...memeEnvironmentDefaults(environment),
@@ -3852,6 +3948,9 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
     HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED:
       environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] ?? "false",
+    TESTNET_FAUCET_ENABLED: environment["TESTNET_FAUCET_ENABLED"] ?? "false",
+    TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS:
+      environment["TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS"] ?? "900",
     SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED:
       environment["SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED"] ?? "true",
     ISSUANCE_RATE_RECORD_CLEANUP_ENABLED:
@@ -4146,6 +4245,13 @@ export function loadReconciliationWorkerConfig(
                   apiSecret: parsed.data.STREAM_API_SECRET,
                 })
               : null,
+        })
+      : null,
+    testnetFaucetSweep: parsed.data.TESTNET_FAUCET_ENABLED
+      ? Object.freeze({
+          pendingTimeoutSeconds:
+            parsed.data.TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS,
+          intervalMs: testnetFaucetSweepIntervalMs,
         })
       : null,
     walletIntentReconcile: parsed.data.WALLET_INTENT_RECONCILE_ENABLED

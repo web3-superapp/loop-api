@@ -21,6 +21,7 @@ import {
 } from "../../features/chain/chain-contract.js";
 import type {
   TestnetFaucetChain,
+  TestnetFaucetTransactionLookup,
   TestnetFaucetTransferOutcome,
 } from "../../features/testnet-faucet/testnet-faucet-contract.js";
 import { erc20IdentityAbi } from "./erc20-abi.js";
@@ -28,7 +29,8 @@ import { isBscRpcTransportError } from "./rpc-client.js";
 
 /**
  * Decision 0128: the faucet's operator account on BSC Testnet. It signs
- * exactly two shapes: a plain tBNB transfer and `MockUSD1.mint(to, amount)`.
+ * exactly two shapes: a plain tBNB transfer (gas estimated, S169) and
+ * `MockUSD1.mint(to, amount)`.
  * Every transaction is signed locally first so its hash is known (and
  * stored by the caller) before the broadcast; a broadcast error is resolved
  * by asking the node for that hash. Receipt waits are bounded. The key never
@@ -50,9 +52,6 @@ export class TestnetFaucetChainRefusedError extends Error {
 export const factoryUsd1Abi = parseAbi([
   "function usd1() view returns (address)",
 ]);
-
-/** Plain transfer gas (no calldata, EOA recipient). */
-export const nativeTransferGas = 21_000n;
 
 export function createTestnetFaucetChain(input: {
   readonly privateKey: `0x${string}`;
@@ -174,6 +173,21 @@ export function createTestnetFaucetChain(input: {
         return { kind: "reverted" as const };
       }
     },
+    async estimateNativeGas(estimate) {
+      try {
+        const gas = await reader.estimateGas({
+          account: account.address,
+          to: estimate.to as Address,
+          value: estimate.valueWei,
+        });
+        return { kind: "ok" as const, gas };
+      } catch (error) {
+        if (isBscRpcTransportError(error)) {
+          throw error;
+        }
+        return { kind: "reverted" as const };
+      }
+    },
     readGasPrice(): Promise<bigint> {
       return reader.getGasPrice();
     },
@@ -185,7 +199,7 @@ export function createTestnetFaucetChain(input: {
         {
           to: transfer.to as Address,
           value: transfer.valueWei,
-          gas: nativeTransferGas,
+          gas: transfer.gas,
         },
         transfer.onSigned,
       );
@@ -207,4 +221,47 @@ export function createTestnetFaucetChain(input: {
     },
   };
   return Object.freeze(faucetChain);
+}
+
+/**
+ * S169 (Decision 0128 §9): the pending sweep's read-only view of BSC
+ * Testnet — does the node know a hash? No key, no signing; chain 97 only.
+ */
+export function createTestnetFaucetTransactionLookup(input: {
+  readonly chainReference: LaunchChainReference;
+  readonly rpcUrls: readonly string[];
+  readonly transport?: Transport;
+}): TestnetFaucetTransactionLookup {
+  if (input.chainReference !== bscTestnetChainReference) {
+    throw new TestnetFaucetChainRefusedError("TESTNET_FAUCET_WRONG_CHAIN");
+  }
+  if (input.rpcUrls.length === 0 && input.transport === undefined) {
+    throw new TestnetFaucetChainRefusedError(
+      "TESTNET_FAUCET_RPC_NOT_CONFIGURED",
+    );
+  }
+  const reader = createPublicClient({
+    chain: bscTestnet,
+    transport:
+      input.transport ??
+      fallback(
+        input.rpcUrls.map((url) =>
+          http(url, { timeout: 4_000, retryCount: 0 }),
+        ),
+        { retryCount: 0 },
+      ),
+  });
+  return Object.freeze({
+    async lookup(transactionHash: string) {
+      try {
+        await reader.getTransaction({ hash: transactionHash as Hex });
+        return "found" as const;
+      } catch (error) {
+        if (error instanceof TransactionNotFoundError) {
+          return "not_found" as const;
+        }
+        throw error;
+      }
+    },
+  });
 }

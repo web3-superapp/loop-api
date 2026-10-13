@@ -4,6 +4,7 @@ import {
   ConfigurationError,
   faucetDecimalToRaw,
   loadConfig,
+  loadReconciliationWorkerConfig,
   parseTestnetFaucet,
 } from "../src/config.js";
 
@@ -39,7 +40,61 @@ describe("testnet faucet configuration (Decision 0128)", () => {
       cooldownSeconds: 86_400,
       operatorPrivateKey: null,
       usd1Source: null,
+      operatorKeySource: null,
+      operatorReserveBnb: "0.05",
+      operatorReserveWei: "50000000000000000",
+      dailyMaxGrants: 200,
+      dailyMaxBnb: "2",
+      dailyMaxBnbWei: "2000000000000000000",
+      failedCooldownSeconds: 300,
+      failedDailyLimit: 5,
+      pendingTimeoutSeconds: 900,
     });
+  });
+
+  it("S169: reads the reserve, the daily caps, the failed cooldown, and the pending timeout", () => {
+    const config = loadConfig({
+      ...base,
+      TESTNET_FAUCET_OPERATOR_RESERVE_BNB: "0.10",
+      TESTNET_FAUCET_DAILY_MAX_GRANTS: "50",
+      TESTNET_FAUCET_DAILY_MAX_BNB: "1.5",
+      TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS: "600",
+      TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: "1800",
+    });
+    expect(config.testnetFaucet).toMatchObject({
+      operatorReserveBnb: "0.1",
+      operatorReserveWei: "100000000000000000",
+      dailyMaxGrants: 50,
+      dailyMaxBnb: "1.5",
+      dailyMaxBnbWei: "1500000000000000000",
+      failedCooldownSeconds: 600,
+      pendingTimeoutSeconds: 1_800,
+    });
+    for (const [name, value] of [
+      ["TESTNET_FAUCET_OPERATOR_RESERVE_BNB", "0"],
+      ["TESTNET_FAUCET_OPERATOR_RESERVE_BNB", "11"],
+      ["TESTNET_FAUCET_DAILY_MAX_BNB", "abc"],
+      ["TESTNET_FAUCET_DAILY_MAX_GRANTS", "0"],
+      ["TESTNET_FAUCET_FAILED_COOLDOWN_SECONDS", "29"],
+      ["TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS", "119"],
+    ] as const) {
+      expect(() => loadConfig({ ...base, [name]: value })).toThrow(
+        new RegExp(name),
+      );
+    }
+  });
+
+  it("S169: the worker reads TESTNET_FAUCET_ENABLED and the pending timeout for the sweep lane", () => {
+    expect(
+      loadReconciliationWorkerConfig({ ...base }).testnetFaucetSweep,
+    ).toBeNull();
+    expect(
+      loadReconciliationWorkerConfig({
+        ...base,
+        TESTNET_FAUCET_ENABLED: "true",
+        TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: "1200",
+      }).testnetFaucetSweep,
+    ).toEqual({ pendingTimeoutSeconds: 1_200, intervalMs: 60_000 });
   });
 
   it("refuses to boot when enabled off LAUNCH_CHAIN_ID=97", () => {
@@ -81,6 +136,17 @@ describe("testnet faucet configuration (Decision 0128)", () => {
       }).operatorPrivateKey,
     ).toBe(`0x${keyB}`);
     expect(parse({}).operatorPrivateKey).toBeNull();
+    // S169: the source decides whether the pause reserve applies.
+    expect(parse({ MEME_OPERATOR_PRIVATE_KEY: keyA }).operatorKeySource).toBe(
+      "meme",
+    );
+    expect(
+      parse({
+        MEME_OPERATOR_PRIVATE_KEY: keyA,
+        TESTNET_FAUCET_OPERATOR_PRIVATE_KEY: keyB,
+      }).operatorKeySource,
+    ).toBe("faucet");
+    expect(parse({}).operatorKeySource).toBeNull();
   });
 
   it("refuses a malformed key or amount without echoing the key", () => {

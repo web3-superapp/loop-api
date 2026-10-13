@@ -51,6 +51,8 @@ import type {
 } from "../src/features/launch/hooks-launch-executor.js";
 import type { createHooksLaunchExecutorLane as createHooksLaunchExecutorLaneType } from "../src/hooks-launch-executor-worker.js";
 import { HooksLaunchExecutorChainRefusedError } from "../src/integrations/launch/hooks-launch-executor-chain.js";
+import type { createTestnetFaucetSweepLane as createTestnetFaucetSweepLaneType } from "../src/testnet-faucet-sweep-worker.js";
+import { createInMemoryFaucetRepository } from "./helpers/testnet-faucet-fakes.js";
 
 const workerId = "33b40904-4487-49cd-8481-7075d9025713";
 
@@ -1859,5 +1861,109 @@ describe("launch2_buyback_keeper lane (Decision 0121)", () => {
       createLaunch2BuybackKeeperChain: off,
     });
     expect(off).not.toHaveBeenCalled();
+  });
+});
+
+describe("testnet_faucet_pending_sweep lane (S169, Decision 0128 §9)", () => {
+  const sweepEnvironment = {
+    NODE_ENV: "test",
+    LOG_LEVEL: "silent",
+    DATABASE_URL:
+      "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+    SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+    ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+    MARKET_SPARKLINE_WARM_ENABLED: "false",
+    VOICE_ROOM_REAPER_ENABLED: "false",
+    COMMUNITY_MEMBER_BUY_FEED_ENABLED: "false",
+    LAUNCH_CHAIN_ID: "97",
+    LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+    TESTNET_FAUCET_ENABLED: "true",
+    TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: "1200",
+  };
+
+  it("builds the sweep from the launch slot RPC and the timeout, read-only", async () => {
+    const events: string[] = [];
+    const repository = createInMemoryFaucetRepository();
+    const lookup = { lookup: vi.fn() };
+    const createTestnetFaucetTransactionLookup = vi.fn(() => lookup);
+    const createTestnetFaucetSweepLane = vi.fn(
+      (options: Parameters<typeof createTestnetFaucetSweepLaneType>[0]) => {
+        expect(options.repository).toBe(repository);
+        expect(options.lookup).toBe(lookup);
+        expect(options.pendingTimeoutSeconds).toBe(1_200);
+        expect(options.intervalMs).toBe(60_000);
+        return {
+          lane: "testnet_faucet_pending_sweep",
+          runOnce: vi.fn(),
+          run: vi.fn(() => {
+            events.push("run-faucet-sweep");
+            return Promise.resolve();
+          }),
+        };
+      },
+    );
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig(sweepEnvironment),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        testnetFaucet: repository,
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createTestnetFaucetTransactionLookup,
+      createTestnetFaucetSweepLane,
+    });
+    expect(createTestnetFaucetTransactionLookup).toHaveBeenCalledWith({
+      chainReference: 97,
+      rpcUrls: ["https://bsc-testnet.example/rpc"],
+    });
+    expect(events).toEqual(["ping", "run-faucet-sweep", "close"]);
+  });
+
+  it("stays idle with a reason off chain 97, and is not built while the faucet is off", async () => {
+    const logger = fakeLogger();
+    const createTestnetFaucetSweepLane = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...sweepEnvironment,
+        LAUNCH_CHAIN_ID: "56",
+        LAUNCH_BSC_RPC_URLS: "",
+      }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase([]),
+        testnetFaucet: createInMemoryFaucetRepository(),
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createTestnetFaucetSweepLane,
+    });
+    expect(createTestnetFaucetSweepLane).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "testnet_faucet_pending_sweep",
+        reasonCode: "TESTNET_FAUCET_WRONG_CHAIN",
+      },
+      "LOOP testnet faucet sweep stays idle",
+    );
+    const createLookup = vi.fn();
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...sweepEnvironment,
+        TESTNET_FAUCET_ENABLED: "false",
+      }),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase([]),
+        testnetFaucet: createInMemoryFaucetRepository(),
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createTestnetFaucetTransactionLookup: createLookup,
+      createTestnetFaucetSweepLane,
+    });
+    expect(createLookup).not.toHaveBeenCalled();
+    expect(createTestnetFaucetSweepLane).not.toHaveBeenCalled();
   });
 });

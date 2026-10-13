@@ -682,11 +682,15 @@ a USD1 (S156b: `TESTNET_FAUCET_USD1_ADDRESS`, else the Hooks Factory's `usd1()` 
 the MEME v2 USD1 — else `LAUNCH_USD1_ADDRESS`), and `LAUNCH_BSC_RPC_URLS`. The API
 signs a tBNB transfer and `MockUSD1.mint(address, amount)`; migration 000073 `testnet_faucet_grants`
 holds the per-address cooldown. Contract: `docs/frontend-v2-testnet-faucet-api.md`.
+S169 (Decision 0128 §9): pause-key reserve `TESTNET_FAUCET_OPERATOR_RESERVE_BNB`, global UTC-day
+caps (503 `TESTNET_FAUCET_DAILY_LIMIT`), failed-retry cooldown (300 s, 5 failures per owner per
+day → 429), estimated tBNB gas, and the worker lane `testnet_faucet_pending_sweep`
+(`TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS`).
 
-| Method and path           | Request                                             | Success projection                                                                                                                             | Interface     | Capability                                                                                                  |
-| ------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| `GET /v2/testnet/faucet`  | Bearer + headers; `walletId` (own embedded wallet)  | `bnbAmount`, `usd1Amount`, `cooldownSeconds`, `available`, `nextAvailableAt`, `lastGrant`                                                      | `implemented` | `implemented`; default `unavailable` (`TESTNET_FAUCET_DISABLED`)                                            |
-| `POST /v2/testnet/faucet` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` `bnb` / `usd1` `{amount, transactionHash}`, `grantedAt`, `nextAvailableAt`; 429 cooldown, 503 `TESTNET_FAUCET_PARTIAL`, 503 operator low | `implemented` | `blocked-provider` until the staging operator account holds tBNB; no on-chain (anvil / testnet) run in S156 |
+| Method and path           | Request                                             | Success projection                                                                                                                                                                                                | Interface     | Capability                                                                                                  |
+| ------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /v2/testnet/faucet`  | Bearer + headers; `walletId` (own embedded wallet)  | `bnbAmount`, `usd1Amount`, `cooldownSeconds`, `available`, `nextAvailableAt`, `lastGrant`                                                                                                                         | `implemented` | `implemented`; default `unavailable` (`TESTNET_FAUCET_DISABLED`)                                            |
+| `POST /v2/testnet/faucet` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` `bnb` / `usd1` `{amount, transactionHash}`, `grantedAt`, `nextAvailableAt`; 429 cooldown (incl. S169 failed-retry), 503 `TESTNET_FAUCET_PARTIAL`, 503 operator low, 503 `TESTNET_FAUCET_DAILY_LIMIT` (S169) | `implemented` | `blocked-provider` until the staging operator account holds tBNB; no on-chain (anvil / testnet) run in S156 |
 
 ### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
 

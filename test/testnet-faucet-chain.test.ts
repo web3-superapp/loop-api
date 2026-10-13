@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createTestnetFaucetChain,
+  createTestnetFaucetTransactionLookup,
   mockUsd1MintAbi,
   TestnetFaucetChainRefusedError,
 } from "../src/integrations/bsc/testnet-faucet-chain.js";
@@ -185,6 +186,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
     const outcome = await chain.sendNative({
       to: recipient,
       valueWei: 20_000_000_000_000_000n,
+      gas: 36_000n,
       onSigned: (hash) => {
         signed.push(hash);
         expect(script.raw).toHaveLength(0);
@@ -199,7 +201,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
     expect(tx.chainId).toBe(97);
     expect(tx.to).toBe(recipient);
     expect(tx.value).toBe(20_000_000_000_000_000n);
-    expect(tx.gas).toBe(21_000n);
+    expect(tx.gas).toBe(36_000n);
     expect(tx.nonce).toBe(7);
   });
 
@@ -232,6 +234,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
         await reverted.chain.sendNative({
           to: recipient,
           valueWei: 1n,
+          gas: 21_000n,
           onSigned: () => Promise.resolve(),
         })
       ).status,
@@ -242,6 +245,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
         await never.chain.sendNative({
           to: recipient,
           valueWei: 1n,
+          gas: 21_000n,
           onSigned: () => Promise.resolve(),
         })
       ).status,
@@ -251,6 +255,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
       await lost.chain.sendNative({
         to: recipient,
         valueWei: 1n,
+        gas: 21_000n,
         onSigned: () => Promise.resolve(),
       }),
     ).toEqual({ status: "not_sent" });
@@ -260,6 +265,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
         await known.chain.sendNative({
           to: recipient,
           valueWei: 1n,
+          gas: 21_000n,
           onSigned: () => Promise.resolve(),
         })
       ).status,
@@ -272,6 +278,7 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
       chain.sendNative({
         to: recipient,
         valueWei: 1n,
+        gas: 21_000n,
         onSigned: () => Promise.reject(new Error("db down")),
       }),
     ).rejects.toThrow("db down");
@@ -297,5 +304,60 @@ describe("testnet faucet operator chain (Decision 0128)", () => {
         amountRaw: 1n,
       }),
     ).toEqual({ kind: "reverted" });
+  });
+
+  it("S169: estimates the plain tBNB transfer, a revert is `reverted`", async () => {
+    const { chain, script } = setup();
+    expect(
+      await chain.estimateNativeGas({ to: recipient, valueWei: 1n }),
+    ).toEqual({ kind: "ok", gas: 60_000n });
+    expect(script.methods).toContain("eth_estimateGas");
+    const reverting = setup({ estimate: "revert" });
+    expect(
+      await reverting.chain.estimateNativeGas({ to: recipient, valueWei: 1n }),
+    ).toEqual({ kind: "reverted" });
+  });
+
+  it("S169: the sweep lookup reports a known and an unknown hash, refuses chain 56, and throws on transport errors", async () => {
+    const hash = `0x${"b1".repeat(32)}`;
+    const known: Script = {
+      broadcast: "ok",
+      knownAfterError: true,
+      receipt: "success",
+      estimate: "ok",
+      raw: [],
+      methods: [],
+    };
+    expect(
+      await createTestnetFaucetTransactionLookup({
+        chainReference: 97,
+        rpcUrls: [],
+        transport: rpc(known),
+      }).lookup(hash),
+    ).toBe("found");
+    expect(
+      await createTestnetFaucetTransactionLookup({
+        chainReference: 97,
+        rpcUrls: [],
+        transport: rpc({ ...known, knownAfterError: false }),
+      }).lookup(hash),
+    ).toBe("not_found");
+    expect(() =>
+      createTestnetFaucetTransactionLookup({
+        chainReference: 56,
+        rpcUrls: ["https://x.test"],
+      }),
+    ).toThrow(TestnetFaucetChainRefusedError);
+    expect(() =>
+      createTestnetFaucetTransactionLookup({ chainReference: 97, rpcUrls: [] }),
+    ).toThrow(/TESTNET_FAUCET_RPC_NOT_CONFIGURED/);
+    const down = createTestnetFaucetTransactionLookup({
+      chainReference: 97,
+      rpcUrls: [],
+      transport: custom({
+        request: () => Promise.reject(new Error("upstream closed")),
+      }),
+    });
+    await expect(down.lookup(hash)).rejects.toThrow();
   });
 });

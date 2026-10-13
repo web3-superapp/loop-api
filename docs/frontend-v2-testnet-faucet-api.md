@@ -1,6 +1,6 @@
 # 前端交接契约：测试网领取测试币（testnetFaucet）
 
-- 决策：`docs/decisions/0128-testnet-faucet.md`（S156-api）
+- 决策：`docs/decisions/0128-testnet-faucet.md`（S156-api；S169 审查修复见 §9 与本文 §7）
 - 机器契约：`openapi/loop-api.v2.json`（`pnpm openapi:generate` 生成，勿手改），operationId `getV2TestnetFaucet` / `claimV2TestnetFaucet`
 - 能力位：`GET /v2/meta/capabilities` 的 `testnetFaucet`（不是 `V2_MODULES_ENABLED` 模块，永远不会是 `deferred`）
 - 只在 BSC Testnet（`LAUNCH_CHAIN_ID=97`）可用；服务端用 operator 热钱包给用户自己的**内嵌钱包**转 tBNB 并调用 MockUSD1 的 `mint(address,uint256)`，用户无需签名
@@ -76,7 +76,7 @@ Content-Type: application/json
 ```
 
 - 金额是十进制字符串，不要转浮点；按原样展示「0.02 tBNB + 500 USD1」。
-- `available` 只看冷却（同一钱包地址 `cooldownSeconds` 内已有一次未失败的发放）。`true` 时 `nextAvailableAt` 为 `null`。
+- `available` 只看冷却：同一钱包地址 `cooldownSeconds` 内已有一次未失败的发放；S169 起另有两条——该地址最近一次「尝试过但失败」的发放（502 `TESTNET_FAUCET_TRANSFER_FAILED`）后 300 秒内，以及同一用户当天（UTC）已有 5 次失败后直到次日 UTC 0 点。`true` 时 `nextAvailableAt` 为 `null`。全局每日上限不反映在 `available` 上（只在 `POST` 时 503 `TESTNET_FAUCET_DAILY_LIMIT`）。
 - `lastGrant`：该地址最近一次**已发出 tBNB** 的发放；从未领过为 `null`。`usd1TransactionHash` 可能为 `null`（那次 USD1 没铸出，见 §4 PARTIAL）。
 - 交易哈希可拼 `https://testnet.bscscan.com/tx/<hash>` 供用户查看。
 
@@ -108,23 +108,24 @@ Content-Type: application/json
 
 ## 5. 错误码（七字段错误体，`detailsSafe.reasonCode` 区分）
 
-| HTTP | code                             | detailsSafe                                                                                                                          | 前端处理                                                                   |
-| ---- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | —                                                                                                                                    | 程序错误（walletId 格式、多余键、缺 Idempotency-Key）                      |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                    | 走统一重新登录                                                             |
-| 403  | `PERMISSION_DENIED`              | `reasonCode: TESTNET_FAUCET_WALLET_NOT_OWNED`                                                                                        | 只能给自己的内嵌钱包领；外部钱包不显示入口                                 |
-| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                    | 同一个 key 换了 walletId；新生成 key                                       |
-| 409  | `RESOURCE_CONFLICT`              | `reasonCode: TESTNET_FAUCET_IN_FLIGHT`                                                                                               | 上一次还在进行；稍后 `GET` 查看                                            |
-| 429  | `RATE_LIMITED`                   | `reasonCode: TESTNET_FAUCET_COOLDOWN`, `nextAvailableAt`                                                                             | 显示「下次可领：<本地时间>」，按钮置灰                                     |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode: TESTNET_FAUCET_PARTIAL`, `bnbTransactionHash`, `usd1TransactionHash`（仅当那笔 mint 发出过才有此键）, `nextAvailableAt` | tBNB 已到账、USD1 没铸成；冷却照常计时；提示「tBNB 已到账，USD1 发放失败」 |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode: TESTNET_FAUCET_SUBMISSION_UNKNOWN`, `bnbTransactionHash`, `nextAvailableAt`                                             | tBNB 已广播但未等到确认，可能稍后到账；冷却已计时；提示「到账确认中」      |
-| 502  | `PROVIDER_UNREACHABLE`           | `reasonCode: TESTNET_FAUCET_TRANSFER_FAILED`                                                                                         | 什么都没转出，不计冷却；可新生成 key 重试                                  |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode`: §2 表中任一，或下列之一                                                                                                | 显示「测试币暂不可领」，不自动重试                                         |
-|      |                                  | `TESTNET_FAUCET_OPERATOR_LOW`                                                                                                        | 发币账户余额不足（需运维充值）                                             |
-|      |                                  | `TESTNET_FAUCET_USD1_UNAVAILABLE`                                                                                                    | USD1 合约不可读或 mint 会回滚                                              |
-|      |                                  | `TESTNET_FAUCET_CHAIN_READ_FAILED`                                                                                                   | RPC 读失败，可稍后重试                                                     |
-|      |                                  | `TESTNET_FAUCET_BUSY`                                                                                                                | 其他人正在领，稍后重试                                                     |
-| 503  | `REQUEST_TIMEOUT`                | —                                                                                                                                    | 服务端仍可能完成；用同一个 key 重试或 `GET` 查看 `lastGrant`               |
+| HTTP | code                             | detailsSafe                                                                                                                          | 前端处理                                                                                   |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| 400  | `INVALID_REQUEST`                | —                                                                                                                                    | 程序错误（walletId 格式、多余键、缺 Idempotency-Key）                                      |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                    | 走统一重新登录                                                                             |
+| 403  | `PERMISSION_DENIED`              | `reasonCode: TESTNET_FAUCET_WALLET_NOT_OWNED`                                                                                        | 只能给自己的内嵌钱包领；外部钱包不显示入口                                                 |
+| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                    | 同一个 key 换了 walletId；新生成 key                                                       |
+| 409  | `RESOURCE_CONFLICT`              | `reasonCode: TESTNET_FAUCET_IN_FLIGHT`                                                                                               | 上一次还在进行；稍后 `GET` 查看                                                            |
+| 429  | `RATE_LIMITED`                   | `reasonCode: TESTNET_FAUCET_COOLDOWN`, `nextAvailableAt`                                                                             | 显示「下次可领：<本地时间>」，按钮置灰（S169：失败后 300 秒冷却、当天 5 次失败也是这个码） |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode: TESTNET_FAUCET_PARTIAL`, `bnbTransactionHash`, `usd1TransactionHash`（仅当那笔 mint 发出过才有此键）, `nextAvailableAt` | tBNB 已到账、USD1 没铸成；冷却照常计时；提示「tBNB 已到账，USD1 发放失败」                 |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode: TESTNET_FAUCET_SUBMISSION_UNKNOWN`, `bnbTransactionHash`, `nextAvailableAt`                                             | tBNB 已广播但未等到确认，可能稍后到账；冷却已计时；提示「到账确认中」                      |
+| 502  | `PROVIDER_UNREACHABLE`           | `reasonCode: TESTNET_FAUCET_TRANSFER_FAILED`                                                                                         | 什么都没转出；S169 起该地址 300 秒内再领会 429，之后新生成 key 重试                        |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `reasonCode`: §2 表中任一，或下列之一                                                                                                | 显示「测试币暂不可领」，不自动重试                                                         |
+|      |                                  | `TESTNET_FAUCET_OPERATOR_LOW`                                                                                                        | 发币账户余额不足（需运维充值）                                                             |
+|      |                                  | `TESTNET_FAUCET_USD1_UNAVAILABLE`                                                                                                    | USD1 合约不可读或 mint 会回滚                                                              |
+|      |                                  | `TESTNET_FAUCET_CHAIN_READ_FAILED`                                                                                                   | RPC 读失败，可稍后重试                                                                     |
+|      |                                  | `TESTNET_FAUCET_BUSY`                                                                                                                | 其他人正在领，稍后重试                                                                     |
+|      |                                  | `TESTNET_FAUCET_DAILY_LIMIT`（S169 新增），`nextAvailableAt` = 次日 UTC 0 点                                                         | 今日全站发放额度已用完；显示「今日测试币已发完，<本地时间> 后再试」，不自动重试            |
+| 503  | `REQUEST_TIMEOUT`                | —                                                                                                                                    | 服务端仍可能完成；用同一个 key 重试或 `GET` 查看 `lastGrant`                               |
 
 `429` / `503 TESTNET_FAUCET_PARTIAL` / `503 TESTNET_FAUCET_SUBMISSION_UNKNOWN` 之后 `GET` 都会返回 `available: false` 与同一个 `nextAvailableAt`。
 
@@ -133,3 +134,11 @@ Content-Type: application/json
 - 能力位 `unavailable` → 不显示入口、不调接口；两个路由此时都会返回 503 + 同一个 reasonCode。
 - 任何 503 都不显示成功；201 之外的任何结果都不得显示「已到账」。
 - 主网（56）环境永远 `unavailable`（服务端在 56 上开启会拒绝启动）。
+
+## 7. S169 变更（2026-10-13，前端下一批接）
+
+- 新 reasonCode：503 `CAPABILITY_UNAVAILABLE` `TESTNET_FAUCET_DAILY_LIMIT`，`detailsSafe = { reasonCode, nextAvailableAt }`（次日 UTC 0 点）。全站每天（UTC）最多 `TESTNET_FAUCET_DAILY_MAX_GRANTS`（默认 200）次、`TESTNET_FAUCET_DAILY_MAX_BNB`（默认 2）tBNB；能力位不变，仍为 `available`。
+- 502 `TESTNET_FAUCET_TRANSFER_FAILED` 之后不再「立刻可重试」：同一地址 300 秒内再 `POST` 得 429 `TESTNET_FAUCET_COOLDOWN`（带 `nextAvailableAt`），`GET` 也返回 `available: false`；同一用户当天 5 次失败后，所有钱包到次日 UTC 0 点前都是 429。
+- 502 现在还包括「服务端估算 tBNB 转账 gas 失败」（例如地址做了 EIP-7702 委托且拒收），这种情况不会广播任何交易。
+- `TESTNET_FAUCET_OPERATOR_LOW` 的门槛在共用 MEME 暂停私钥时多保留 0.05 tBNB，前端处理不变。
+- 服务端崩溃 / 写库失败留下的 `pending` 记录由 worker 在 15 分钟后收口为 `unknown`（tBNB 已上链，冷却照计）或 `failed`（不计冷却），不影响接口形状。

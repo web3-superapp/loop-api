@@ -45,7 +45,10 @@ const indexerLanes = new Set([
   "launch2_event",
   "launch2_snapshot_publisher",
   "launch2_buyback_keeper",
+  // S169 (Decision 0128 §9): closes faucet grants left pending.
+  "testnet_faucet_pending_sweep",
 ]);
+const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
 const memeGraduationOutcomes = new Set([
   "confirmed",
   "reverted",
@@ -138,7 +141,10 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP member buy feed posted a message"
   | "LOOP member buy feed truncated a community's pass"
   | "LOOP member buy feed message was rejected by Stream"
-  | "LOOP member buy feed could not reach Stream; the pass stalls";
+  | "LOOP member buy feed could not reach Stream; the pass stalls"
+  | "LOOP testnet faucet sweep closed a pending grant"
+  | "LOOP testnet faucet sweep could not look up a hash; kept"
+  | "LOOP testnet faucet sweep stays idle";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -252,6 +258,12 @@ export interface ReconciliationWorkerLogFields {
   /** Decision 0116 settlement lane: the UTC hour and claim reconciliation. */
   readonly hourStart?: string;
   readonly claimReconcile?: boolean;
+  /**
+   * S169 faucet sweep: the opaque grant ID and the status it was closed
+   * to. The tBNB hash goes in `transactionHash`; never an address or URL.
+   */
+  readonly testnetFaucetGrantId?: string;
+  readonly testnetFaucetStatus?: string;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -463,6 +475,16 @@ function sanitizeFields(
     safeUuidPattern.test(fields.hooksDeploymentJobId)
       ? fields.hooksDeploymentJobId
       : undefined;
+  const testnetFaucetGrantId =
+    fields.testnetFaucetGrantId !== undefined &&
+    safeUuidPattern.test(fields.testnetFaucetGrantId)
+      ? fields.testnetFaucetGrantId
+      : undefined;
+  const testnetFaucetStatus =
+    fields.testnetFaucetStatus !== undefined &&
+    testnetFaucetSweepStatuses.has(fields.testnetFaucetStatus)
+      ? fields.testnetFaucetStatus
+      : undefined;
   const hooksStatus = (value: string | undefined): string | undefined =>
     value !== undefined && hooksDeploymentStatusSet.has(value)
       ? value
@@ -532,6 +554,8 @@ function sanitizeFields(
     ...(step === undefined ? {} : { step }),
     ...(executorAddress === undefined ? {} : { executorAddress }),
     ...(factoryAddress === undefined ? {} : { factoryAddress }),
+    ...(testnetFaucetGrantId === undefined ? {} : { testnetFaucetGrantId }),
+    ...(testnetFaucetStatus === undefined ? {} : { testnetFaucetStatus }),
     ...limits,
   });
 }

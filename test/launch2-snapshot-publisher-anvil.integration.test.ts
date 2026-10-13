@@ -544,6 +544,23 @@ describe.skipIf(skipReason !== null)(
       });
     }
 
+    /**
+     * anvil (1.8.x) answers `eth_sendRawTransaction` as soon as the
+     * transaction is in its pool; the automine block lands a moment later.
+     * A `latest` nonce read straight after the publisher's broadcast can
+     * therefore still see the old nonce. Wait for the broadcast's receipt
+     * before asserting the submitter nonce.
+     */
+    async function minedReceipt(txHash: string | null): Promise<void> {
+      expect(txHash).toMatch(/^0x[0-9a-f]{64}$/u);
+      const receipt = await publicClient().waitForTransactionReceipt({
+        hash: txHash as Hex,
+        pollingInterval: 50,
+        timeout: 30_000,
+      });
+      expect(receipt.status).toBe("success");
+    }
+
     async function instanceOf(projectId: string): Promise<string> {
       const rows = await pool.query<{ instance_id: string }>(
         "select instance_id::text from public.launch2_instances where project_id = $1",
@@ -729,6 +746,7 @@ describe.skipIf(skipReason !== null)(
       expect(rows[0]!.data_hash).toBe(
         keccak256(toHex(JSON.stringify(holders))),
       );
+      await minedReceipt(rows[0]!.tx_hash);
       expect(await submitterNonce()).toBe(nonceBefore + 1);
 
       // Repeated ticks never publish twice; confirmations finish it.
@@ -937,6 +955,7 @@ describe.skipIf(skipReason !== null)(
           signatures: [],
         }),
       ]);
+      await minedReceipt(rows.rows[0]!.tx_hash);
       expect(await submitterNonce()).toBe(nonceBefore + 1);
       const transaction = await publicClient().getTransaction({
         hash: rows.rows[0]!.tx_hash as Hex,
