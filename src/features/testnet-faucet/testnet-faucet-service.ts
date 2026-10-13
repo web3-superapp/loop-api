@@ -22,6 +22,7 @@ import {
   testnetFaucetReasonCodes as reasons,
   TestnetFaucetIdempotencyConflictError,
   type TestnetFaucetChain,
+  type TestnetFaucetCooldownPolicy,
   type TestnetFaucetFinalStatus,
   type TestnetFaucetGrantRecord,
   type TestnetFaucetRepository,
@@ -42,6 +43,7 @@ type Resource = Record<string, unknown>;
 export interface TestnetFaucetLogger {
   info(object: Record<string, unknown>, message: string): void;
   warn(object: Record<string, unknown>, message: string): void;
+  error(object: Record<string, unknown>, message: string): void;
 }
 
 export interface TestnetFaucetServiceDependencies {
@@ -57,6 +59,12 @@ export interface TestnetFaucetServiceDependencies {
   readonly createUuid?: () => string;
   /** How long a request waits for the in-process grant lock (default 2500). */
   readonly lockTimeoutMs?: number;
+  /**
+   * S169: wei kept on the operator on top of the grant. Non-zero only when
+   * the operator key is the MEME pause key and the pause signer is composed
+   * in this process (the app passes `config.operatorReserveWei` then).
+   */
+  readonly operatorReserveWei?: bigint;
 }
 
 export interface TestnetFaucetService {
@@ -79,6 +87,19 @@ export { grantScope as testnetFaucetGrantScope };
 
 /** Operator balance must cover the transfer plus twice the two legs' gas. */
 const gasSafetyMultiplier = 2n;
+/** Plain transfer gas, the balance floor when the estimate reverted. */
+const plainTransferGas = 21_000n;
+const dayMs = 86_400_000;
+
+/** The start of the UTC day of `at`. */
+export function utcDayStart(at: Date): Date {
+  return new Date(Math.floor(at.getTime() / dayMs) * dayMs);
+}
+
+/** The tBNB gas limit: 21 000 as estimated, else 20 % headroom. */
+function nativeGasLimit(estimate: bigint): bigint {
+  return estimate <= plainTransferGas ? estimate : (estimate * 12n) / 10n;
+}
 
 /**
  * Configuration-only reason, first match wins (Decision 0128 §5). Shared by
@@ -177,8 +198,14 @@ export function createTestnetFaucetService(
   const now = deps.now ?? ((): Date => new Date());
   const createUuid = deps.createUuid ?? randomUUID;
   const lockTimeoutMs = deps.lockTimeoutMs ?? 2_500;
+  const operatorReserveWei = deps.operatorReserveWei ?? 0n;
   const mutex = createMutex();
   const { config } = deps;
+  const policy: TestnetFaucetCooldownPolicy = Object.freeze({
+    cooldownSeconds: config.cooldownSeconds,
+    failedCooldownSeconds: config.failedCooldownSeconds,
+    failedDailyLimit: config.failedDailyLimit,
+  });
 
   function unavailableReason(): string | null {
     return testnetFaucetConfigurationReason({
@@ -245,10 +272,6 @@ export function createTestnetFaucetService(
     return new Date(
       Date.parse(grant.grantedAt) + config.cooldownSeconds * 1_000,
     ).toISOString();
-  }
-
-  function windowStart(at: Date): Date {
-    return new Date(at.getTime() - config.cooldownSeconds * 1_000);
   }
 
   async function repositoryRead<T>(read: () => Promise<T>): Promise<T> {
@@ -323,9 +346,9 @@ export function createTestnetFaucetService(
     };
   }
 
-  function cooldownError(blocking: TestnetFaucetGrantRecord): never {
+  function cooldownError(nextAvailable: string): never {
     return fail("RATE_LIMITED", reasons.cooldown, {
-      nextAvailableAt: nextAvailableAt(blocking),
+      nextAvailableAt: nextAvailable,
     });
   }
 
@@ -340,6 +363,29 @@ export function createTestnetFaucetService(
   ): Promise<Resource> {
     const { repository, chain } = rt;
     const address = wallet.address.toLowerCase();
+    const bnbAmountRaw = BigInt(config.bnbAmountWei);
+    // S169: the global per-UTC-day caps. Grants are serialised by the
+    // mutex, so the count read here cannot be overtaken in this process.
+    const dayStart = utcDayStart(now());
+    const totals = await repositoryRead(() => repository.dailyTotals(dayStart));
+    if (
+      totals.grants >= config.dailyMaxGrants ||
+      BigInt(totals.bnbRaw) + bnbAmountRaw > BigInt(config.dailyMaxBnbWei)
+    ) {
+      deps.logger.warn(
+        {
+          event: "testnet_faucet.daily_limit",
+          grants: totals.grants,
+          bnbRaw: totals.bnbRaw,
+          maxGrants: config.dailyMaxGrants,
+          maxBnbWei: config.dailyMaxBnbWei,
+        },
+        "Testnet faucet daily limit reached",
+      );
+      fail("CAPABILITY_UNAVAILABLE", reasons.dailyLimit, {
+        nextAvailableAt: new Date(dayStart.getTime() + dayMs).toISOString(),
+      });
+    }
     const usd1 = await resolveUsd1(chain);
     // Preflight: nothing is written when the chain cannot do the grant.
     const decimals = await chainRead(() => chain.readUsd1Decimals(usd1));
@@ -352,7 +398,6 @@ export function createTestnetFaucetService(
     } catch {
       return unavailableWith(reasons.usd1Unavailable);
     }
-    const bnbAmountRaw = BigInt(config.bnbAmountWei);
     const estimate = await chainRead(() =>
       chain.estimateMintGas({ usd1, to: address, amountRaw: usd1AmountRaw }),
     );
@@ -360,11 +405,24 @@ export function createTestnetFaucetService(
       unavailableWith(reasons.usd1Unavailable);
     }
     const mintGas = (estimate.gas * 12n) / 10n;
+    // S169: the tBNB gas is estimated (an EIP-7702 / contract recipient
+    // needs more than 21 000 or refuses the value). A revert is recorded
+    // as `failed` below without a broadcast; a transport error writes
+    // nothing.
+    const nativeEstimate = await chainRead(() =>
+      chain.estimateNativeGas({ to: address, valueWei: bnbAmountRaw }),
+    );
+    const nativeGas =
+      nativeEstimate.kind === "ok"
+        ? nativeGasLimit(nativeEstimate.gas)
+        : plainTransferGas;
     const [gasPrice, balance] = await chainRead(() =>
       Promise.all([chain.readGasPrice(), chain.readOperatorBalance()]),
     );
     const required =
-      bnbAmountRaw + gasPrice * (21_000n + mintGas) * gasSafetyMultiplier;
+      bnbAmountRaw +
+      gasPrice * (nativeGas + mintGas) * gasSafetyMultiplier +
+      operatorReserveWei;
     if (balance < required) {
       deps.logger.warn(
         {
@@ -372,6 +430,7 @@ export function createTestnetFaucetService(
           operatorAddress: chain.operatorAddress,
           balanceWei: balance.toString(),
           requiredWei: required.toString(),
+          reserveWei: operatorReserveWei.toString(),
         },
         "Testnet faucet operator balance below the grant",
       );
@@ -392,26 +451,54 @@ export function createTestnetFaucetService(
         usd1TokenAddress: usd1,
         operatorAddress: chain.operatorAddress,
         now: now(),
-        cooldownSeconds: config.cooldownSeconds,
+        policy,
       }),
     );
     if (reserved.kind === "replay") return outcomeOf(reserved.grant);
-    if (reserved.kind === "cooldown") return cooldownError(reserved.blocking);
+    if (reserved.kind === "cooldown") {
+      return cooldownError(reserved.nextAvailableAt);
+    }
     const grant = reserved.grant;
 
-    const record = (leg: "bnb" | "usd1") => (transactionHash: string) =>
-      repository.recordTransactionHash({
-        grantId: grant.grantId,
-        leg,
-        transactionHash,
-      });
-    const bnb = await chain
-      .sendNative({
-        to: address,
-        valueWei: bnbAmountRaw,
-        onSigned: record("bnb"),
-      })
-      .catch((): TestnetFaucetTransferOutcome => ({ status: "not_sent" }));
+    // S169: a hash that cannot be stored is never broadcast (the chain
+    // adapter stops); the error line keeps grantId / address / hash.
+    const record =
+      (leg: "bnb" | "usd1") =>
+      async (transactionHash: string): Promise<void> => {
+        try {
+          await repository.recordTransactionHash({
+            grantId: grant.grantId,
+            leg,
+            transactionHash,
+          });
+        } catch (error) {
+          deps.logger.error(
+            {
+              event: "testnet_faucet.record_hash_failed",
+              grantId: grant.grantId,
+              address,
+              leg,
+              transactionHash,
+              errorClass: error instanceof Error ? error.name : "UnknownError",
+            },
+            "Testnet faucet could not store a signed hash; not broadcast",
+          );
+          throw error;
+        }
+      };
+    const bnb: TestnetFaucetTransferOutcome =
+      nativeEstimate.kind === "reverted"
+        ? { status: "not_sent" }
+        : await chain
+            .sendNative({
+              to: address,
+              valueWei: bnbAmountRaw,
+              gas: nativeGas,
+              onSigned: record("bnb"),
+            })
+            .catch((): TestnetFaucetTransferOutcome => ({
+              status: "not_sent",
+            }));
 
     let status: TestnetFaucetFinalStatus;
     let failureReasonCode: string | null;
@@ -442,16 +529,35 @@ export function createTestnetFaucetService(
       }
     }
     const bnbHash = bnb.status === "not_sent" ? null : bnb.transactionHash;
-    const finalized = await repositoryRead(() =>
-      repository.finalize({
-        grantId: grant.grantId,
-        status,
-        bnbTransactionHash: bnbHash,
-        usd1TransactionHash: usd1Hash,
-        failureReasonCode,
-        now: now(),
-      }),
-    );
+    const finalized = await repositoryRead(async () => {
+      try {
+        return await repository.finalize({
+          grantId: grant.grantId,
+          status,
+          bnbTransactionHash: bnbHash,
+          usd1TransactionHash: usd1Hash,
+          failureReasonCode,
+          now: now(),
+        });
+      } catch (error) {
+        // S169: the row stays `pending`; the worker's sweep closes it
+        // after TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS from the hash.
+        deps.logger.error(
+          {
+            event: "testnet_faucet.finalize_failed",
+            grantId: grant.grantId,
+            walletId: grant.walletId,
+            address,
+            status,
+            bnbTransactionHash: bnbHash,
+            usd1TransactionHash: usd1Hash,
+            errorClass: error instanceof Error ? error.name : "UnknownError",
+          },
+          "Testnet faucet could not record the grant outcome",
+        );
+        throw error;
+      }
+    });
     deps.logger.info(
       {
         event: "testnet_faucet.grant",
@@ -480,10 +586,14 @@ export function createTestnetFaucetService(
         walletId,
       );
       const address = wallet.address.toLowerCase();
-      const at = now();
-      const [blocking, sent] = await repositoryRead(() =>
+      const [blockedUntil, sent] = await repositoryRead(() =>
         Promise.all([
-          rt.repository.latestBlockingGrant(address, windowStart(at)),
+          rt.repository.nextAvailableAt({
+            address,
+            ownerUserId: principal.userId,
+            now: now(),
+            policy,
+          }),
           rt.repository.latestSentGrant(address),
         ]),
       );
@@ -493,8 +603,8 @@ export function createTestnetFaucetService(
         bnbAmount: config.bnbAmount,
         usd1Amount: config.usd1Amount,
         cooldownSeconds: config.cooldownSeconds,
-        available: blocking === null,
-        nextAvailableAt: blocking === null ? null : nextAvailableAt(blocking),
+        available: blockedUntil === null,
+        nextAvailableAt: blockedUntil,
         lastGrant:
           sent === null
             ? null
@@ -525,10 +635,15 @@ export function createTestnetFaucetService(
       if (replay.kind === "conflict") throw V2ApiError.idempotencyConflict();
       if (replay.kind === "grant") return outcomeOf(replay.grant);
       const address = wallet.address.toLowerCase();
-      const blocking = await repositoryRead(() =>
-        rt.repository.latestBlockingGrant(address, windowStart(now())),
+      const blockedUntil = await repositoryRead(() =>
+        rt.repository.nextAvailableAt({
+          address,
+          ownerUserId: principal.userId,
+          now: now(),
+          policy,
+        }),
       );
-      if (blocking !== null) cooldownError(blocking);
+      if (blockedUntil !== null) cooldownError(blockedUntil);
 
       const release = await mutex.acquire(lockTimeoutMs);
       if (release === null) unavailableWith(reasons.busy);

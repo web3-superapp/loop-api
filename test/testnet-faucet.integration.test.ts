@@ -17,6 +17,7 @@ import {
   type TestnetFaucetReserveInput,
 } from "../src/features/testnet-faucet/testnet-faucet-contract.js";
 import { createTestnetFaucetService } from "../src/features/testnet-faucet/testnet-faucet-service.js";
+import { createTestnetFaucetPendingSweep } from "../src/features/testnet-faucet/testnet-faucet-sweep.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 import {
   bnbHash,
@@ -119,7 +120,11 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
       usd1TokenAddress: faucetUsd1,
       operatorAddress: address(0xfe),
       now: NOW,
-      cooldownSeconds: 86_400,
+      policy: {
+        cooldownSeconds: 86_400,
+        failedCooldownSeconds: 300,
+        failedDailyLimit: 5,
+      },
       ...overrides,
     };
   }
@@ -222,7 +227,7 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
     ).toEqual({ kind: "conflict" });
   });
 
-  it("holds the cooldown per address, ignores failed grants, and keeps no idempotency row for a refusal", async () => {
+  it("holds the cooldown per address, a failed grant only for the failed cooldown, and keeps no idempotency row for a refusal", async () => {
     const owner = await userWithWallet();
     const first = reserveInput(owner);
     await repository.reserve(first);
@@ -234,20 +239,42 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
       failureReasonCode: "TESTNET_FAUCET_TRANSFER_FAILED",
       now: NOW,
     });
+    const policy = reserveInput(owner).policy;
+    // S169: a failed attempt holds the address for 300 s.
     expect(
-      await repository.latestBlockingGrant(owner.address, new Date(0)),
-    ).toBeNull();
-    const second = reserveInput(owner, {
-      now: new Date(NOW.getTime() + 1_000),
+      await repository.nextAvailableAt({
+        address: owner.address,
+        ownerUserId: owner.userId,
+        now: new Date(NOW.getTime() + 1_000),
+        policy,
+      }),
+    ).toBe("2026-10-12T08:05:00.000Z");
+    expect(
+      await repository.reserve(
+        reserveInput(owner, { now: new Date(NOW.getTime() + 1_000) }),
+      ),
+    ).toEqual({
+      kind: "cooldown",
+      nextAvailableAt: "2026-10-12T08:05:00.000Z",
     });
+    expect(
+      await repository.nextAvailableAt({
+        address: owner.address,
+        ownerUserId: owner.userId,
+        now: new Date(NOW.getTime() + 300_000),
+        policy,
+      }),
+    ).toBeNull();
+    const secondAt = NOW.getTime() + 300_000;
+    const second = reserveInput(owner, { now: new Date(secondAt) });
     expect((await repository.reserve(second)).kind).toBe("reserved");
     const third = reserveInput(owner, {
-      now: new Date(NOW.getTime() + 3_600_000),
+      now: new Date(secondAt + 3_600_000),
     });
     const refused = await repository.reserve(third);
-    expect(refused).toMatchObject({
+    expect(refused).toEqual({
       kind: "cooldown",
-      blocking: { grantId: second.grantId },
+      nextAvailableAt: new Date(secondAt + 86_400_000).toISOString(),
     });
     const kept = await pool.query(
       "select 1 from public.idempotency_records where idempotency_key = $1",
@@ -255,7 +282,7 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
     );
     expect(kept.rowCount).toBe(0);
     const later = reserveInput(owner, {
-      now: new Date(NOW.getTime() + 1_000 + 86_400_000 + 1),
+      now: new Date(secondAt + 86_400_000 + 1),
     });
     expect((await repository.reserve(later)).kind).toBe("reserved");
   });
@@ -324,7 +351,7 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
       repository,
       wallets: createPostgresAccountWalletRepository(pool),
       chain: createFakeFaucetChain(chain),
-      logger: { info: vi.fn(), warn: vi.fn() },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       now: () => clock,
     });
     const principal = { userId: owner.userId } as AuthenticatedLoopPrincipal;
@@ -389,5 +416,200 @@ describe("Decision 0128 testnet faucet grants on PostgreSQL", () => {
       usd1: { amount: "500", transactionHash: usd1Hash },
       grantedAt: "2026-10-13T08:00:00.000Z",
     });
+  });
+
+  it("S169: counts an owner's attempted failures per UTC day, never the sweep's PENDING_EXPIRED", async () => {
+    const owner = await userWithWallet();
+    const policy = reserveInput(owner).policy;
+    // Four attempted failures and one expired pending on 2026-10-12.
+    const day = Date.parse("2026-10-12T01:00:00.000Z");
+    for (let index = 0; index < 5; index += 1) {
+      const input = reserveInput(owner, {
+        now: new Date(day + index * 600_000),
+      });
+      expect((await repository.reserve(input)).kind).toBe("reserved");
+      if (index === 4) {
+        expect(
+          await repository.resolveStalePending({
+            grantId: input.grantId,
+            status: "failed",
+            failureReasonCode: "TESTNET_FAUCET_PENDING_EXPIRED",
+            now: new Date(day + index * 600_000 + 1_000),
+          }),
+        ).toBe(true);
+      } else {
+        await repository.finalize({
+          grantId: input.grantId,
+          status: "failed",
+          bnbTransactionHash: null,
+          usd1TransactionHash: null,
+          failureReasonCode: "TESTNET_FAUCET_TRANSFER_FAILED",
+          now: new Date(day + index * 600_000 + 1_000),
+        });
+      }
+    }
+    const later = new Date(day + 3_600_000);
+    expect(
+      await repository.nextAvailableAt({
+        address: owner.address,
+        ownerUserId: owner.userId,
+        now: later,
+        policy,
+      }),
+    ).toBeNull();
+    const fifth = reserveInput(owner, { now: later });
+    expect((await repository.reserve(fifth)).kind).toBe("reserved");
+    await repository.finalize({
+      grantId: fifth.grantId,
+      status: "failed",
+      bnbTransactionHash: null,
+      usd1TransactionHash: null,
+      failureReasonCode: "TESTNET_FAUCET_TRANSFER_FAILED",
+      now: later,
+    });
+    const blockedAt = new Date(later.getTime() + 600_000);
+    expect(
+      await repository.reserve(reserveInput(owner, { now: blockedAt })),
+    ).toEqual({
+      kind: "cooldown",
+      nextAvailableAt: "2026-10-13T00:00:00.000Z",
+    });
+    expect(
+      await repository.nextAvailableAt({
+        address: owner.address,
+        ownerUserId: owner.userId,
+        now: new Date("2026-10-13T00:00:00.000Z"),
+        policy,
+      }),
+    ).toBeNull();
+  });
+
+  it("S169: sums the UTC day's granted / partial / unknown grants for the daily caps", async () => {
+    const dayStart = new Date("2030-01-02T00:00:00.000Z");
+    expect(await repository.dailyTotals(dayStart)).toEqual({
+      grants: 0,
+      bnbRaw: "0",
+    });
+    const statuses = ["granted", "partial", "unknown", "failed"] as const;
+    for (const [index, status] of statuses.entries()) {
+      const owner = await userWithWallet();
+      const input = reserveInput(owner, {
+        now: new Date(dayStart.getTime() + index * 60_000),
+      });
+      await repository.reserve(input);
+      await repository.finalize({
+        grantId: input.grantId,
+        status,
+        bnbTransactionHash: status === "failed" ? null : bnbHash,
+        usd1TransactionHash: status === "granted" ? usd1Hash : null,
+        failureReasonCode:
+          status === "granted" ? null : "TESTNET_FAUCET_TRANSFER_FAILED",
+        now: new Date(dayStart.getTime() + index * 60_000 + 1_000),
+      });
+    }
+    // A pending grant and one of the previous day are not counted.
+    const pendingOwner = await userWithWallet();
+    await repository.reserve(
+      reserveInput(pendingOwner, {
+        now: new Date(dayStart.getTime() + 600_000),
+      }),
+    );
+    const yesterdayOwner = await userWithWallet();
+    const yesterday = reserveInput(yesterdayOwner, {
+      now: new Date(dayStart.getTime() - 1_000),
+    });
+    await repository.reserve(yesterday);
+    await repository.finalize({
+      grantId: yesterday.grantId,
+      status: "granted",
+      bnbTransactionHash: bnbHash,
+      usd1TransactionHash: usd1Hash,
+      failureReasonCode: null,
+      now: dayStart,
+    });
+    expect(await repository.dailyTotals(dayStart)).toEqual({
+      grants: 3,
+      bnbRaw: "60000000000000000",
+    });
+  });
+
+  it("S169: the pending sweep closes stale grants from the chain and leaves fresh ones", async () => {
+    const sweepNow = new Date("2031-05-05T12:00:00.000Z");
+    const stale = async (hash: string | null) => {
+      const owner = await userWithWallet();
+      const input = reserveInput(owner, {
+        now: new Date(sweepNow.getTime() - 3_600_000),
+      });
+      await repository.reserve(input);
+      if (hash !== null) {
+        await repository.recordTransactionHash({
+          grantId: input.grantId,
+          leg: "bnb",
+          transactionHash: hash,
+        });
+      }
+      return input.grantId;
+    };
+    const landed = await stale(bnbHash);
+    const dropped = await stale(usd1Hash);
+    const unsigned = await stale(null);
+    const flaky = await stale(`0x${"d4".repeat(32)}`);
+    const freshOwner = await userWithWallet();
+    const fresh = reserveInput(freshOwner, {
+      now: new Date(sweepNow.getTime() - 60_000),
+    });
+    await repository.reserve(fresh);
+    const sweep = createTestnetFaucetPendingSweep({
+      repository,
+      lookup: {
+        lookup: (hash) =>
+          hash === bnbHash
+            ? Promise.resolve("found")
+            : hash === usd1Hash
+              ? Promise.resolve("not_found")
+              : Promise.reject(new Error("rpc down")),
+      },
+      pendingTimeoutSeconds: 900,
+      now: () => sweepNow,
+    });
+    const result = await sweep.runOnce();
+    // Earlier tests in this database leave stale pending rows too; the
+    // rows of this test are asserted one by one below.
+    expect(result.unknown).toBeGreaterThanOrEqual(1);
+    expect(result.failed).toBeGreaterThanOrEqual(2);
+    expect(result.skipped).toBe(1);
+    const rows = await pool.query<{
+      grant_id: string;
+      status: string;
+      failure_reason_code: string | null;
+    }>(
+      `select grant_id, status, failure_reason_code from public.testnet_faucet_grants
+       where grant_id = any($1::uuid[])`,
+      [[landed, dropped, unsigned, flaky, fresh.grantId]],
+    );
+    const byId = new Map(rows.rows.map((row) => [row.grant_id, row]));
+    expect(byId.get(landed)).toMatchObject({
+      status: "unknown",
+      failure_reason_code: "TESTNET_FAUCET_SUBMISSION_UNKNOWN",
+    });
+    expect(byId.get(dropped)).toMatchObject({
+      status: "failed",
+      failure_reason_code: "TESTNET_FAUCET_PENDING_EXPIRED",
+    });
+    expect(byId.get(unsigned)).toMatchObject({
+      status: "failed",
+      failure_reason_code: "TESTNET_FAUCET_PENDING_EXPIRED",
+    });
+    expect(byId.get(flaky)?.status).toBe("pending");
+    expect(byId.get(fresh.grantId)?.status).toBe("pending");
+    // A grant finished meanwhile is not overwritten.
+    expect(
+      await repository.resolveStalePending({
+        grantId: landed,
+        status: "failed",
+        failureReasonCode: "TESTNET_FAUCET_PENDING_EXPIRED",
+        now: sweepNow,
+      }),
+    ).toBe(false);
   });
 });

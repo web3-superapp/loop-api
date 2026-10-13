@@ -6,7 +6,9 @@ import type {
 } from "../../src/database/account-wallet-repository.js";
 import {
   TestnetFaucetIdempotencyConflictError,
+  testnetFaucetReasonCodes,
   type TestnetFaucetChain,
+  type TestnetFaucetCooldownPolicy,
   type TestnetFaucetGrantRecord,
   type TestnetFaucetRepository,
   type TestnetFaucetTransferOutcome,
@@ -85,6 +87,54 @@ export interface InMemoryFaucetRepository extends TestnetFaucetRepository {
   >;
 }
 
+const dayMs = 86_400_000;
+
+/** Mirrors `blockedUntil` of the PostgreSQL repository (S169). */
+function blockedUntil(
+  grants: readonly TestnetFaucetGrantRecord[],
+  input: {
+    readonly address: string;
+    readonly ownerUserId: string;
+    readonly now: Date;
+    readonly policy: TestnetFaucetCooldownPolicy;
+  },
+): string | null {
+  const at = input.now.getTime();
+  const dayStart = Math.floor(at / dayMs) * dayMs;
+  const attempted = (grant: TestnetFaucetGrantRecord) =>
+    grant.status === "failed" &&
+    grant.failureReasonCode === testnetFaucetReasonCodes.transferFailed;
+  const instants: number[] = [];
+  for (const grant of grants) {
+    const granted = Date.parse(grant.grantedAt);
+    if (grant.address !== input.address) continue;
+    if (
+      grant.status !== "failed" &&
+      granted > at - input.policy.cooldownSeconds * 1_000
+    ) {
+      instants.push(granted + input.policy.cooldownSeconds * 1_000);
+    }
+    if (
+      attempted(grant) &&
+      granted > at - input.policy.failedCooldownSeconds * 1_000
+    ) {
+      instants.push(granted + input.policy.failedCooldownSeconds * 1_000);
+    }
+  }
+  const failedToday = grants.filter(
+    (grant) =>
+      grant.ownerUserId === input.ownerUserId &&
+      attempted(grant) &&
+      Date.parse(grant.grantedAt) >= dayStart,
+  ).length;
+  if (failedToday >= input.policy.failedDailyLimit) {
+    instants.push(dayStart + dayMs);
+  }
+  return instants.length === 0
+    ? null
+    : new Date(Math.max(...instants)).toISOString();
+}
+
 /** Mirrors the PostgreSQL repository's rules (Decision 0128 §2). */
 export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
   const grants: StoredGrant[] = [];
@@ -113,15 +163,57 @@ export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
     grants,
     usd1Tokens,
     records,
-    latestBlockingGrant(address, since) {
+    nextAvailableAt(input) {
       return Promise.resolve(
-        newest(
-          (grant) =>
-            grant.address === address &&
-            grant.status !== "failed" &&
-            Date.parse(grant.grantedAt) > since.getTime(),
+        blockedUntil(
+          grants.map((grant) => grant.record),
+          input,
         ),
       );
+    },
+    dailyTotals(dayStart) {
+      const counted = grants
+        .map((grant) => grant.record)
+        .filter(
+          (grant) =>
+            ["granted", "partial", "unknown"].includes(grant.status) &&
+            Date.parse(grant.grantedAt) >= dayStart.getTime() &&
+            Date.parse(grant.grantedAt) < dayStart.getTime() + dayMs,
+        );
+      return Promise.resolve({
+        grants: counted.length,
+        bnbRaw: counted
+          .reduce((sum, grant) => sum + BigInt(grant.bnbAmountRaw), 0n)
+          .toString(),
+      });
+    },
+    listStalePending(before, limit) {
+      return Promise.resolve(
+        grants
+          .map((grant) => grant.record)
+          .filter(
+            (grant) =>
+              grant.status === "pending" &&
+              Date.parse(grant.grantedAt) < before.getTime(),
+          )
+          .sort((left, right) => left.grantedAt.localeCompare(right.grantedAt))
+          .slice(0, limit),
+      );
+    },
+    resolveStalePending(input) {
+      const stored = grants.find(
+        (grant) => grant.record.grantId === input.grantId,
+      );
+      if (stored === undefined || stored.record.status !== "pending") {
+        return Promise.resolve(false);
+      }
+      stored.record = {
+        ...stored.record,
+        status: input.status,
+        failureReasonCode: input.failureReasonCode,
+        completedAt: input.now.toISOString(),
+      };
+      return Promise.resolve(true);
     },
     latestSentGrant(address) {
       return Promise.resolve(
@@ -165,17 +257,12 @@ export function createInMemoryFaucetRepository(): InMemoryFaucetRepository {
       if (existing !== undefined) {
         return Promise.resolve({ kind: "replay", grant: existing.record });
       }
-      const since = new Date(
-        input.now.getTime() - input.cooldownSeconds * 1_000,
+      const blocked = blockedUntil(
+        grants.map((grant) => grant.record),
+        input,
       );
-      const blocking = newest(
-        (grant) =>
-          grant.address === input.address &&
-          grant.status !== "failed" &&
-          Date.parse(grant.grantedAt) > since.getTime(),
-      );
-      if (blocking !== null) {
-        return Promise.resolve({ kind: "cooldown", blocking });
+      if (blocked !== null) {
+        return Promise.resolve({ kind: "cooldown", nextAvailableAt: blocked });
       }
       usd1Tokens.push(input.usd1TokenAddress);
       records.set(input.idempotencyKey, {
@@ -235,6 +322,11 @@ export interface FakeFaucetChainState {
   gasPriceWei: bigint;
   mintGas: bigint;
   mintEstimate: "ok" | "reverted" | "throws";
+  /** S169: the tBNB transfer estimate. */
+  nativeEstimate: "ok" | "reverted" | "throws";
+  nativeGas: bigint;
+  /** The gas limit of every native send, in order. */
+  readonly nativeGasLimits: bigint[];
   readsThrow: boolean;
   native: TestnetFaucetTransferOutcome["status"];
   mint: TestnetFaucetTransferOutcome["status"];
@@ -254,6 +346,9 @@ export function defaultFaucetChainState(
     gasPriceWei: 1_000_000_000n,
     mintGas: 60_000n,
     mintEstimate: "ok",
+    nativeEstimate: "ok",
+    nativeGas: 21_000n,
+    nativeGasLimits: [],
     readsThrow: false,
     native: "confirmed",
     mint: "confirmed",
@@ -297,10 +392,21 @@ export function createFakeFaucetChain(
           : { kind: "reverted" as const },
       );
     },
+    estimateNativeGas: () => {
+      if (state.readsThrow || state.nativeEstimate === "throws") {
+        return Promise.reject(new Error("rpc down"));
+      }
+      return Promise.resolve(
+        state.nativeEstimate === "ok"
+          ? { kind: "ok" as const, gas: state.nativeGas }
+          : { kind: "reverted" as const },
+      );
+    },
     readGasPrice: () => read(state.gasPriceWei),
     readOperatorBalance: () => read(state.balanceWei),
     async sendNative(input) {
       state.calls.push(`native:${input.to}:${input.valueWei}`);
+      state.nativeGasLimits.push(input.gas);
       if (state.native !== "not_sent") await input.onSigned(bnbHash);
       if (state.nativeGate !== null) await state.nativeGate;
       return outcome(state.native, bnbHash);

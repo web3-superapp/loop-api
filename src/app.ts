@@ -2227,6 +2227,33 @@ export async function buildApp(
     options.testnetFaucetChain !== undefined
       ? options.testnetFaucetChain
       : composeTestnetFaucetChain(config);
+  // S169: a faucet that signs with the MEME pause key (no own key) while
+  // the console's pause signer is composed here keeps
+  // TESTNET_FAUCET_OPERATOR_RESERVE_BNB on the account, so a pause always
+  // has gas.
+  // Composed lazily and once: the console mount below reuses it.
+  let composedMemePause: AdminMemePauseRuntime | null = null;
+  const adminMemePause = (): AdminMemePauseRuntime => {
+    composedMemePause ??= composeAdminMemePause(
+      config,
+      options.memePauseSender,
+    );
+    return composedMemePause;
+  };
+  const faucetSharesPauseKey =
+    config.testnetFaucet.enabled &&
+    config.testnetFaucet.operatorKeySource === "meme" &&
+    config.admin !== null &&
+    adminMemePause().status === "available";
+  if (faucetSharesPauseKey) {
+    app.log.warn(
+      {
+        event: "testnet_faucet.operator_shared_with_meme_pause",
+        reserveBnb: config.testnetFaucet.operatorReserveBnb,
+      },
+      "Testnet faucet signs with MEME_OPERATOR_PRIVATE_KEY, the MEME pause key; keeping TESTNET_FAUCET_OPERATOR_RESERVE_BNB for pause gas",
+    );
+  }
   const testnetFaucetService =
     options.testnetFaucetService ??
     createTestnetFaucetService({
@@ -2241,6 +2268,9 @@ export async function buildApp(
       chain: testnetFaucetChain,
       logger: app.log,
       now: options.walletIntentNow ?? ((): Date => new Date()),
+      operatorReserveWei: faucetSharesPauseKey
+        ? BigInt(config.testnetFaucet.operatorReserveWei)
+        : 0n,
     });
   const miningRewardsService =
     options.miningRewardsService ??
@@ -2705,7 +2735,7 @@ export async function buildApp(
                 push: pushRuntimeAvailable ? pushDispatchService : null,
                 logger: app.log,
               }),
-        memePause: composeAdminMemePause(config, options.memePauseSender),
+        memePause: adminMemePause(),
         production: config.nodeEnv === "production",
         logger: app.log,
         ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
