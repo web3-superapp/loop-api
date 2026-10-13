@@ -3076,7 +3076,11 @@ export function createLaunch2Service(
               : Object.freeze({
                   graduatedAt: graduation.graduatedAt,
                   officialPoolId: graduation.poolId,
-                  hookAddress: record.addresses.hook,
+                  // S171: a LoopDynamic instance deploys its Hook at graduation; report the bound one.
+                  hookAddress:
+                    hookKindOf(record) === "loopDynamic"
+                      ? (record.dynamicPool?.hook ?? record.addresses.hook)
+                      : record.addresses.hook,
                   lpFee: launch2Template.lpFee,
                   tickSpacing: launch2Template.tickSpacing,
                   officialPoolTaxBps: launch2Template.officialPoolTaxBps,
@@ -3088,7 +3092,11 @@ export function createLaunch2Service(
               ? null
               : Object.freeze({
                   poolId: graduation.poolId,
-                  router: deps.poolChain?.router ?? null,
+                  // S171: LoopDynamic pools trade through the LoopRouter, not the OfficialPoolRouter.
+                  router:
+                    hookKindOf(record) === "loopDynamic"
+                      ? (deps.dynamicChain?.router ?? null)
+                      : (deps.poolChain?.router ?? null),
                   tradeCount: record.pool.tradeCount,
                   buyCount: record.pool.buyCount,
                   sellCount: record.pool.sellCount,
