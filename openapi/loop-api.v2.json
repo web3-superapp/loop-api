@@ -94291,6 +94291,59 @@
                                     "buybackMinIntervalSeconds": {
                                       "type": "integer",
                                       "minimum": 0
+                                    },
+                                    "officialPoolHookKind": {
+                                      "type": "string",
+                                      "enum": ["officialTax", "loopDynamic"]
+                                    },
+                                    "loopDynamic": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "router",
+                                        "buyFeePpm",
+                                        "baseSellFeePpm",
+                                        "baseFeeRecipient",
+                                        "priceTiming",
+                                        "routingPolicy",
+                                        "routerRegistryAdmin",
+                                        "excludeBuybackFromRewards"
+                                      ],
+                                      "properties": {
+                                        "router": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "buyFeePpm": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 1000000
+                                        },
+                                        "baseSellFeePpm": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 1000000
+                                        },
+                                        "baseFeeRecipient": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "priceTiming": {
+                                          "type": "string",
+                                          "enum": ["PRE_SWAP", "POST_SWAP"]
+                                        },
+                                        "routingPolicy": {
+                                          "type": "string",
+                                          "enum": ["LoopRouterOnly", "Open"]
+                                        },
+                                        "routerRegistryAdmin": {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        "excludeBuybackFromRewards": {
+                                          "type": "boolean"
+                                        }
+                                      }
                                     }
                                   }
                                 },
@@ -95450,6 +95503,59 @@
                             "buybackMinIntervalSeconds": {
                               "type": "integer",
                               "minimum": 0
+                            },
+                            "officialPoolHookKind": {
+                              "type": "string",
+                              "enum": ["officialTax", "loopDynamic"]
+                            },
+                            "loopDynamic": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "router",
+                                "buyFeePpm",
+                                "baseSellFeePpm",
+                                "baseFeeRecipient",
+                                "priceTiming",
+                                "routingPolicy",
+                                "routerRegistryAdmin",
+                                "excludeBuybackFromRewards"
+                              ],
+                              "properties": {
+                                "router": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "buyFeePpm": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1000000
+                                },
+                                "baseSellFeePpm": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 1000000
+                                },
+                                "baseFeeRecipient": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "priceTiming": {
+                                  "type": "string",
+                                  "enum": ["PRE_SWAP", "POST_SWAP"]
+                                },
+                                "routingPolicy": {
+                                  "type": "string",
+                                  "enum": ["LoopRouterOnly", "Open"]
+                                },
+                                "routerRegistryAdmin": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "excludeBuybackFromRewards": {
+                                  "type": "boolean"
+                                }
+                              }
                             }
                           }
                         },

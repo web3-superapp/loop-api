@@ -1855,6 +1855,36 @@ const hooksLaunchFixedEconomicsSchema = {
     tickSpacing: { type: "integer", minimum: 1, maximum: 32_767 },
     buybackOrderUsd1Raw: uintStringSchema,
     buybackMinIntervalSeconds: { type: "integer", minimum: 0 },
+    // Decision 0131/0132: LoopDynamic templates carry the Hook kind and its
+    // immutable parameters; OfficialTax drafts omit both keys.
+    officialPoolHookKind: {
+      type: "string",
+      enum: ["officialTax", "loopDynamic"],
+    },
+    loopDynamic: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "router",
+        "buyFeePpm",
+        "baseSellFeePpm",
+        "baseFeeRecipient",
+        "priceTiming",
+        "routingPolicy",
+        "routerRegistryAdmin",
+        "excludeBuybackFromRewards",
+      ],
+      properties: {
+        router: addressSchema,
+        buyFeePpm: { type: "integer", minimum: 0, maximum: 1_000_000 },
+        baseSellFeePpm: { type: "integer", minimum: 0, maximum: 1_000_000 },
+        baseFeeRecipient: addressSchema,
+        priceTiming: { type: "string", enum: ["PRE_SWAP", "POST_SWAP"] },
+        routingPolicy: { type: "string", enum: ["LoopRouterOnly", "Open"] },
+        routerRegistryAdmin: addressSchema,
+        excludeBuybackFromRewards: { type: "boolean" },
+      },
+    },
   },
 } as const;
 
