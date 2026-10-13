@@ -128,20 +128,26 @@ const transferTopic =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const zeroTopic = `0x${"0".repeat(64)}`;
 
-/** Decision 0129 §2: every anchor's mint is among the logs. */
-function mintAnchorsMet(
+/**
+ * Decision 0129 §2 / 0132: the anchor tokens whose mint is not among the
+ * logs (lower-case, unique; empty = every anchor is met).
+ */
+function missingMintAnchors(
   logs: readonly Log<bigint, number, false>[],
   anchors: readonly { readonly token: string; readonly blockNumber: bigint }[],
-): boolean {
-  return anchors.every((anchor) =>
-    logs.some(
+): string[] {
+  const missing = new Set<string>();
+  for (const anchor of anchors) {
+    const met = logs.some(
       (log) =>
         lower(log.address) === lower(anchor.token) &&
         log.blockNumber === anchor.blockNumber &&
         lower(log.topics[0] ?? "") === transferTopic &&
         lower(log.topics[1] ?? "") === zeroTopic,
-    ),
-  );
+    );
+    if (!met) missing.add(lower(anchor.token));
+  }
+  return [...missing].sort();
 }
 
 function stringify(value: unknown): string {
@@ -290,23 +296,24 @@ export function createLaunch2Chain(input: {
         (anchor) =>
           anchor.blockNumber >= fromBlock && anchor.blockNumber <= toBlock,
       );
-      if (!mintAnchorsMet(raw, anchors)) {
-        let trusted: Log<bigint, number, false>[] | null = null;
+      let untrusted = missingMintAnchors(raw, anchors);
+      if (untrusted.length > 0) {
+        // Decision 0132: the first endpoint answering every anchor wins;
+        // else the answer missing the fewest, and the lane degrades only
+        // the instances whose anchor is still missing.
         for (const single of singles) {
           try {
             const answer = await addressLogs(single);
-            if (mintAnchorsMet(answer, anchors)) {
-              trusted = answer;
-              break;
+            const missing = missingMintAnchors(answer, anchors);
+            if (missing.length < untrusted.length) {
+              raw = answer;
+              untrusted = missing;
             }
+            if (missing.length === 0) break;
           } catch {
             // This endpoint refused or failed; ask the next one.
           }
         }
-        if (trusted === null) {
-          throw new Launch2ChainRefusedError("LAUNCH2_RPC_LOGS_UNTRUSTED");
-        }
-        raw = trusted;
       }
       // Decision 0124: the PoolManager serves every v4 pool on the chain, so
       // its Swap logs are asked for by pool id (topic1), never by address
@@ -394,7 +401,95 @@ export function createLaunch2Chain(input: {
           blockHash: lower(log.blockHash),
         });
       }
-      return { logs, ignored };
+      return {
+        logs,
+        ignored,
+        ...(untrusted.length === 0 ? {} : { untrustedTokens: untrusted }),
+      };
+    },
+
+    async readMemeBalances({ token, addresses, blockNumber }) {
+      const readers = [client, ...singles];
+      for (const reader of readers) {
+        try {
+          const [supply, ...balances] = await Promise.all([
+            reader.readContract({
+              address: token as Address,
+              abi: erc20Abi,
+              functionName: "totalSupply",
+              blockNumber,
+            }),
+            ...addresses.map((holder) =>
+              reader.readContract({
+                address: token as Address,
+                abi: erc20Abi,
+                functionName: "balanceOf",
+                args: [holder as Address],
+                blockNumber,
+              }),
+            ),
+          ]);
+          const byAddress: Record<string, string> = {};
+          addresses.forEach((holder, index) => {
+            byAddress[lower(holder)] = (balances[index] ?? 0n).toString(10);
+          });
+          return {
+            balances: Object.freeze(byAddress),
+            totalSupply: supply.toString(10),
+          };
+        } catch {
+          // Pruned state / refusal: the next endpoint.
+        }
+      }
+      throw new Launch2ChainRefusedError("LAUNCH2_RPC_STATE_UNAVAILABLE");
+    },
+
+    async readMemeTransferAlternatives({ token, fromBlock, toBlock }) {
+      const answers: Launch2DecodedLog[][] = [];
+      for (const single of singles) {
+        let found: Log<bigint, number, false>[];
+        try {
+          found = await single.getLogs({
+            address: token as Address,
+            fromBlock,
+            toBlock,
+          });
+        } catch {
+          continue;
+        }
+        const decodedLogs: Launch2DecodedLog[] = [];
+        for (const log of found) {
+          let decoded;
+          try {
+            decoded = decodeEventLog({
+              abi: erc20Abi,
+              data: log.data,
+              topics: log.topics,
+              strict: true,
+            });
+          } catch {
+            continue;
+          }
+          if (decoded.eventName !== "Transfer") continue;
+          const args: Record<string, string> = {};
+          for (const [key, value] of Object.entries(
+            decoded.args as Record<string, unknown>,
+          )) {
+            args[key] = stringify(value);
+          }
+          decodedLogs.push({
+            contractAddress: lower(log.address),
+            eventName: "Transfer",
+            args: Object.freeze(args),
+            transactionHash: lower(log.transactionHash),
+            logIndex: log.logIndex,
+            blockNumber: log.blockNumber,
+            blockHash: lower(log.blockHash),
+          });
+        }
+        answers.push(decodedLogs);
+      }
+      return answers;
     },
 
     async readSnapshotPublication(transactionHash) {
@@ -583,8 +678,32 @@ export function createLaunch2Chain(input: {
       return { poolManager: lower(poolManager), currency0: lower(currency0) };
     },
 
+    async readTransactionParties(transactionHashes) {
+      const parties = new Map<
+        string,
+        { readonly from: string; readonly to: string | null }
+      >();
+      // Batched by the transport (32 per HTTP request).
+      const answers = await Promise.all(
+        [...new Set(transactionHashes.map(lower))].map(async (hash) => {
+          const transaction = await client.getTransaction({
+            hash: hash as Hex,
+          });
+          return [
+            hash,
+            {
+              from: lower(transaction.from),
+              to: transaction.to === null ? null : lower(transaction.to),
+            },
+          ] as const;
+        }),
+      );
+      for (const [hash, party] of answers) parties.set(hash, party);
+      return parties;
+    },
+
     async readDynamicHookPool(hook) {
-      const [manager, meme, quote] = await Promise.all([
+      const [manager, meme, quote, trustedRouter] = await Promise.all([
         client.readContract({
           address: hook as Address,
           abi: loopDynamicHookAbi,
@@ -600,12 +719,18 @@ export function createLaunch2Chain(input: {
           abi: loopDynamicHookAbi,
           functionName: "quote",
         }),
+        client.readContract({
+          address: hook as Address,
+          abi: loopDynamicHookAbi,
+          functionName: "trustedRouter",
+        }),
       ]);
       const a = lower(meme);
       const b = lower(quote);
       return {
         poolManager: lower(manager),
         currency0: BigInt(a) < BigInt(b) ? a : b,
+        trustedRouter: lower(trustedRouter),
       };
     },
 

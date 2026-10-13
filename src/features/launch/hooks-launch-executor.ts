@@ -10,6 +10,11 @@ import {
   type HooksLaunchSignedSubmission,
 } from "./hooks-launch-submission.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
+import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
+import {
+  verifyHooksLaunchLoopDynamicDeployment,
+  type HooksLaunchLoopDynamicOnChainFacts,
+} from "./hooks-launch-loop-dynamic-verification.js";
 import {
   verifyHooksLaunchDeployment,
   type HooksLaunchDeployedEvent,
@@ -59,8 +64,26 @@ export type HooksLaunchExecutorFailureCode =
 export type HooksLaunchExecutorIdleReason =
   | "HOOKS_EXECUTOR_WRONG_CHAIN"
   | "HOOKS_FACTORY_CODE_MISMATCH"
+  /**
+   * Decision 0132: a LoopDynamic Factory whose `hookKind()` /
+   * `TEMPLATE_HASH` / Hook parameters cannot be read or do not reproduce
+   * `hooksLaunchLoopDynamicTemplateHash(params)`.
+   */
+  | "HOOKS_FACTORY_TEMPLATE_MISMATCH"
   | "HOOKS_EXECUTOR_NOT_AUTHORIZED"
   | "HOOKS_GAS_PRICE_ABOVE_CAP";
+
+/**
+ * Decision 0132: thrown by `loopDynamicTemplate()` when the Factory is not
+ * a LoopDynamic Factory whose parameters reproduce its `TEMPLATE_HASH`
+ * (transport failures are not this error and back off as infrastructure).
+ */
+export class HooksLaunchFactoryTemplateMismatchError extends Error {
+  constructor() {
+    super("Hooks launch Factory template mismatch");
+    this.name = "HooksLaunchFactoryTemplateMismatchError";
+  }
+}
 
 export class HooksLaunchExecutorIdleError extends Error {
   constructor(readonly reason: HooksLaunchExecutorIdleReason) {
@@ -235,6 +258,18 @@ export class HooksLaunchChainRevertError extends Error {
 export interface HooksLaunchExecutorChain {
   readonly executorAddress: string;
   readonly factoryAddress: string;
+  /** Decision 0132: the Factory's Hook kind (absent = officialTax). */
+  readonly hookKind?: "officialTax" | "loopDynamic";
+  /**
+   * Decision 0132 (loopDynamic): the Factory's Hook parameters and its
+   * `TEMPLATE_HASH`, verified equal to
+   * `hooksLaunchLoopDynamicTemplateHash(params)`; throws when unreadable or
+   * different.
+   */
+  loopDynamicTemplate?(): Promise<{
+    readonly params: HooksLaunchLoopDynamicParams;
+    readonly templateHash: string;
+  }>;
   chainId(): Promise<number>;
   codeHash(address: string): Promise<string | null>;
   deploymentExecutor(): Promise<string>;
@@ -264,11 +299,19 @@ export interface HooksLaunchExecutorChain {
   ): Promise<HooksLaunchSignedTransaction>;
   sendRaw(rawTx: string): Promise<HooksLaunchSendResult>;
   receipt(txHash: string): Promise<HooksLaunchReceipt | null>;
-  readLaunch(launchId: string): Promise<HooksLaunchOnChainFacts>;
+  /** Decision 0132: a LoopDynamic chain answers LoopDynamic facts. */
+  readLaunch(
+    launchId: string,
+  ): Promise<HooksLaunchOnChainFacts | HooksLaunchLoopDynamicOnChainFacts>;
   gatePublished(gate: string): Promise<boolean>;
 }
 
 export interface HooksLaunchExecutorPolicy {
+  /**
+   * Decision 0132: the target Factory's Hook kind (absent = officialTax).
+   * Must equal the chain client's; a mismatch idles the lane.
+   */
+  readonly hookKind?: "officialTax" | "loopDynamic";
   readonly factoryCodeHash: string;
   readonly confirmations: number;
   readonly maxAttempts: number;
@@ -328,6 +371,8 @@ function parseAuthorization(
 async function authorizationValid(input: {
   readonly task: HooksLaunchExecutorTask;
   readonly payload: HooksLaunchSignedSubmission;
+  /** Decision 0132: a LoopDynamic Factory's `TEMPLATE_HASH`. */
+  readonly templateHash: string | null;
 }): Promise<boolean> {
   const { task, payload } = input;
   const request = payload.request;
@@ -350,6 +395,9 @@ async function authorizationValid(input: {
       chainId: 97,
       verifyingContract: task.factoryAddress,
       request,
+      ...(input.templateHash === null
+        ? {}
+        : { templateHash: input.templateHash }),
     });
     const digest = hashTypedData({
       ...typed,
@@ -427,6 +475,15 @@ export function createHooksLaunchExecutor(options: {
   const now = options.now ?? (() => Math.floor(Date.now() / 1_000));
   const executorAddress = chain.executorAddress.toLowerCase();
   let transitions = 0;
+  const loopDynamic = (policy.hookKind ?? "officialTax") === "loopDynamic";
+  /**
+   * Decision 0132: the LoopDynamic template verified by this tick's
+   * preflight (null for OfficialTax: the constant template, no read).
+   */
+  let template: {
+    readonly params: HooksLaunchLoopDynamicParams;
+    readonly templateHash: string;
+  } | null = null;
 
   async function move(
     task: HooksLaunchExecutorTask,
@@ -500,7 +557,14 @@ export function createHooksLaunchExecutor(options: {
     for (const entry of context.authorizations) {
       const payload = parseAuthorization(entry.signedPayload);
       if (payload === null) continue;
-      if (!(await authorizationValid({ task, payload }))) continue;
+      if (
+        !(await authorizationValid({
+          task,
+          payload,
+          templateHash: template?.templateHash ?? null,
+        }))
+      )
+        continue;
       if (
         best === null ||
         BigInt(payload.request.deadline) > BigInt(best.request.deadline)
@@ -874,11 +938,34 @@ export function createHooksLaunchExecutor(options: {
     }
     const expected = expectedOf(task, payload);
     const facts = await chain.readLaunch(expected.launchId);
-    const result = verifyHooksLaunchDeployment({
-      expected,
-      event: tracked.receipt.launchDeployed,
-      facts,
-    });
+    // Decision 0132: LoopDynamic modules are verified against the template
+    // this tick's preflight read; a Factory / facts kind mismatch fails.
+    const factsDynamic = "hookKind" in facts;
+    const result =
+      factsDynamic !== loopDynamic
+        ? {
+            passed: false,
+            failedChecks: ["factory_template"],
+            passedChecks: [],
+          }
+        : factsDynamic
+          ? template === null
+            ? {
+                passed: false,
+                failedChecks: ["factory_template"],
+                passedChecks: [],
+              }
+            : verifyHooksLaunchLoopDynamicDeployment({
+                expected,
+                template,
+                event: tracked.receipt.launchDeployed,
+                facts: facts,
+              })
+          : verifyHooksLaunchDeployment({
+              expected,
+              event: tracked.receipt.launchDeployed,
+              facts: facts,
+            });
     if (!result.passed || facts.modules === null) {
       return fail(task, "HOOKS_VERIFICATION_MISMATCH", {
         retryable: false,
@@ -905,6 +992,13 @@ export function createHooksLaunchExecutor(options: {
           nftSaleEnd: (facts.nft?.saleEnd ?? 0n).toString(10),
           ...(facts.factory.nftSaleDurationLegacy
             ? { legacyFactory: true }
+            : {}),
+          // Decision 0132: what the LoopDynamic launch was verified against.
+          ...(factsDynamic && template !== null
+            ? {
+                hookKind: "loopDynamic",
+                templateHash: template.templateHash,
+              }
             : {}),
         },
       },
@@ -1188,6 +1282,39 @@ export function createHooksLaunchExecutor(options: {
         return idle("HOOKS_FACTORY_CODE_MISMATCH");
       if (authorized.toLowerCase() !== executorAddress)
         return idle("HOOKS_EXECUTOR_NOT_AUTHORIZED");
+      // Decision 0132: the client and the policy name the same Hook kind,
+      // and a LoopDynamic Factory's template reproduces from its
+      // parameters (read every tick; immutable, so the client may cache).
+      if (
+        (chain.hookKind ?? "officialTax") !== (policy.hookKind ?? "officialTax")
+      )
+        return idle("HOOKS_FACTORY_TEMPLATE_MISMATCH");
+      template = null;
+      if (loopDynamic) {
+        if (chain.loopDynamicTemplate === undefined) {
+          return idle("HOOKS_FACTORY_TEMPLATE_MISMATCH");
+        }
+        let read: Awaited<
+          ReturnType<
+            NonNullable<HooksLaunchExecutorChain["loopDynamicTemplate"]>
+          >
+        >;
+        try {
+          read = await chain.loopDynamicTemplate();
+        } catch (error) {
+          if (error instanceof HooksLaunchFactoryTemplateMismatchError) {
+            return idle("HOOKS_FACTORY_TEMPLATE_MISMATCH");
+          }
+          throw error;
+        }
+        if (!/^0x[0-9a-f]{64}$/u.test(read.templateHash.toLowerCase())) {
+          return idle("HOOKS_FACTORY_TEMPLATE_MISMATCH");
+        }
+        template = {
+          params: read.params,
+          templateHash: read.templateHash.toLowerCase(),
+        };
+      }
 
       const seen: string[] = [];
       let processed = 0;

@@ -81,13 +81,14 @@ describe("LoopDynamic worker configuration (Decision 0131)", () => {
         HOOKS_LAUNCH_FACTORY_CODE_HASH: "",
       }),
     ).toContain("LAUNCH_CHAIN_ID=97");
+    // Decision 0132: a loopDynamic executor needs the LoopDynamic pair.
     expect(
       refusal({
         HOOKS_LAUNCH_EXECUTOR_ENABLED: "on",
         HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: key,
         HOOKS_LAUNCH_HOOK_KIND: "loopDynamic",
       }),
-    ).toContain("HOOKS_LAUNCH_HOOK_KIND=loopDynamic");
+    ).toContain("LAUNCH2_DYNAMIC_FACTORY_ADDRESS");
     expect(
       loadReconciliationWorkerConfig({
         ...base,
@@ -95,5 +96,42 @@ describe("LoopDynamic worker configuration (Decision 0131)", () => {
         HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: key,
       }).hooksLaunchExecutor,
     ).not.toBeNull();
+  });
+});
+
+describe("LoopDynamic deployment executor configuration (Decision 0132)", () => {
+  it("targets the LoopDynamic Factory pair with HOOKS_LAUNCH_HOOK_KIND=loopDynamic", () => {
+    const config = loadReconciliationWorkerConfig({
+      ...base,
+      HOOKS_LAUNCH_EXECUTOR_ENABLED: "on",
+      HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: key,
+      HOOKS_LAUNCH_HOOK_KIND: "loopDynamic",
+      LAUNCH2_DYNAMIC_FACTORY_ADDRESS:
+        "0xAF077cAb35385027592f959aCA185f815C3c5A5A",
+      LAUNCH2_DYNAMIC_FACTORY_CODE_HASH:
+        "0xa4074cf17e6f45f6e96c578ffaff4eb192ab0c09f66bf0acec1f0d00e9f2f51c",
+    }).hooksLaunchExecutor;
+    expect(config).toMatchObject({
+      hookKind: "loopDynamic",
+      factoryAddress: "0xaf077cab35385027592f959aca185f815c3c5a5a",
+      factoryCodeHash:
+        "0xa4074cf17e6f45f6e96c578ffaff4eb192ab0c09f66bf0acec1f0d00e9f2f51c",
+    });
+  });
+
+  it("keeps the OfficialTax target by default", () => {
+    expect(
+      loadReconciliationWorkerConfig({
+        ...base,
+        HOOKS_LAUNCH_EXECUTOR_ENABLED: "on",
+        HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: key,
+        LAUNCH2_DYNAMIC_FACTORY_ADDRESS:
+          "0x6666666666666666666666666666666666666666",
+        LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: `0x${"cd".repeat(32)}`,
+      }).hooksLaunchExecutor,
+    ).toMatchObject({
+      hookKind: "officialTax",
+      factoryAddress: base.HOOKS_LAUNCH_FACTORY_ADDRESS,
+    });
   });
 });

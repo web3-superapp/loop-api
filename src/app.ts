@@ -1990,23 +1990,47 @@ export async function buildApp(
   // BSC Testnet launch slot with a configured Factory + code hash. Missing
   // pieces leave the services fail-closed (CAPABILITY_UNAVAILABLE).
   const hooksLaunchEnabled = config.hooksLaunch.enabled;
-  // Decision 0131: HOOKS_LAUNCH_HOOK_KIND=loopDynamic keeps config saves,
-  // reviews and signing preparation fail-closed (no Factory reader) until
-  // the deployment executor verifies LoopDynamic launches.
+  // Decision 0132 (supersedes the 0131 fail-closed stub):
+  // HOOKS_LAUNCH_HOOK_KIND=loopDynamic saves, reviews and prepares / accepts
+  // signatures for the LoopDynamic Factory (LAUNCH2_DYNAMIC_FACTORY_*,
+  // template read and verified on chain); without that pair the reader is
+  // null and every one of them stays 503 HOOKS_LAUNCH_FACTORY_UNAVAILABLE —
+  // never the OfficialTax Factory.
+  const hooksTargetFactory =
+    config.hooksLaunch.hookKind === "loopDynamic"
+      ? config.hooksLaunch.dynamicFactory
+      : config.hooksLaunch.factoryAddress !== null &&
+          config.hooksLaunch.factoryCodeHash !== null
+        ? {
+            address: config.hooksLaunch.factoryAddress,
+            codeHash: config.hooksLaunch.factoryCodeHash,
+          }
+        : null;
+  const injectedHooksFactoryReader =
+    options.hooksLaunchFactoryReader === undefined
+      ? undefined
+      : // A reader of another Hook kind than configured is never used.
+        (options.hooksLaunchFactoryReader.hookKind ?? "officialTax") ===
+          config.hooksLaunch.hookKind
+        ? options.hooksLaunchFactoryReader
+        : null;
   const hooksFactoryReader: HooksLaunchFactoryReader | null =
-    !hooksLaunchEnabled || config.launch2.hookKind === "loopDynamic"
+    !hooksLaunchEnabled
       ? null
-      : (options.hooksLaunchFactoryReader ??
-        (config.hooksLaunch.factoryAddress !== null &&
-        config.hooksLaunch.factoryCodeHash !== null &&
-        config.launchChain.chainId === bscTestnetChainId &&
-        config.launchChain.rpcUrls.length > 0
+      : injectedHooksFactoryReader !== undefined
+        ? injectedHooksFactoryReader
+        : hooksTargetFactory !== null &&
+            config.launchChain.chainId === bscTestnetChainId &&
+            config.launchChain.rpcUrls.length > 0
           ? createHooksLaunchFactoryReader({
-              factoryAddress: config.hooksLaunch.factoryAddress,
-              expectedRuntimeCodeHash: config.hooksLaunch.factoryCodeHash,
+              factoryAddress: hooksTargetFactory.address,
+              expectedRuntimeCodeHash: hooksTargetFactory.codeHash,
               rpcUrls: config.launchChain.rpcUrls,
+              ...(config.hooksLaunch.hookKind === "loopDynamic"
+                ? { hookKind: "loopDynamic" as const }
+                : {}),
             })
-          : null));
+          : null;
   const hooksLaunchProjectConfigService = hooksLaunchEnabled
     ? createHooksLaunchProjectConfigService({
         repository: database.hooksLaunchProjectConfigs ?? null,

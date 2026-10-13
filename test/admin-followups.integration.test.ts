@@ -298,7 +298,7 @@ describe("Decision 0111 console follow-ups on PostgreSQL", () => {
   });
 
   it("migrates to the head migration", async () => {
-    expect(latestMigrationName).toBe("000076_launch2_loop_dynamic");
+    expect(latestMigrationName).toBe("000078_hooks_launch_loop_dynamic_config");
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by run_on desc, id desc limit 1",
     );

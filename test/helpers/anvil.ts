@@ -288,3 +288,92 @@ export function deployProtocol(
     executorKey: anvilPrivateKey(2),
   };
 }
+
+export interface DeployedLoopDynamicProtocol {
+  readonly poolManager: `0x${string}`;
+  readonly usd1: `0x${string}`;
+  readonly factory: `0x${string}`;
+  readonly loopRouter: `0x${string}`;
+  readonly hookDeploymentFactory: `0x${string}`;
+  readonly routerRegistry: `0x${string}`;
+  readonly roles: Readonly<Record<string, `0x${string}`>>;
+  /** Private key of the Factory's deployment executor (anvil account 2). */
+  readonly executorKey: `0x${string}`;
+}
+
+/**
+ * Decision 0132: PoolManager + tUSD1 (`DeployBscTestnetBase`) and the
+ * LoopDynamic component of `DeployLoopProtocol` (LoopRouter,
+ * LaunchLoopDynamicDeployer, its own token / sale / buyback deployers and
+ * the `LoopDynamicLaunchFactory` with `LoopDynamicDefaults`), same anvil
+ * role accounts as `deployProtocol` (registry admin = admin).
+ */
+export function deployLoopDynamicProtocol(
+  tools: FoundryTools,
+  rpcUrl: string,
+  options: { readonly nftSaleDurationSeconds?: number } = {},
+): DeployedLoopDynamicProtocol {
+  const address = (index: number) =>
+    anvilAccount(index).address.toLowerCase() as `0x${string}`;
+  const deployerKey = anvilPrivateKey(0);
+  const base = forgeScript(
+    tools,
+    "script/DeployBscTestnetBase.s.sol:DeployBscTestnetBase",
+    rpcUrl,
+    { BSC_TESTNET_DEPLOYER_PRIVATE_KEY: deployerKey },
+  );
+  const poolManager = logged(base, "PoolManager candidate:");
+  const usd1 = logged(base, "TestnetUSD1 candidate:");
+  const roles = {
+    LOOP_ROLE_ADMIN: address(1),
+    LOOP_ROLE_DEPLOYMENT_EXECUTOR: address(2),
+    LOOP_ROLE_PLATFORM_TAX_RECEIVER: address(3),
+    LOOP_ROLE_FEE_VAULT: address(4),
+    LOOP_ROLE_PRIMARY_KEEPER: address(5),
+    LOOP_ROLE_FALLBACK_KEEPER: address(6),
+    LOOP_ROLE_PAUSE_AUTHORITY: address(7),
+    LOOP_ROLE_RESUME_AUTHORITY: address(8),
+    LOOP_ROLE_SNAPSHOT_SIGNER_0: address(9),
+    LOOP_ROLE_SNAPSHOT_SIGNER_1: address(10),
+    LOOP_ROLE_SNAPSHOT_SIGNER_2: address(11),
+  } as const;
+  const output = forgeScript(
+    tools,
+    "script/DeployLoopProtocol.s.sol:DeployLoopProtocol",
+    rpcUrl,
+    {
+      LOOP_DEPLOY_CHAIN_ID: "97",
+      LOOP_DEPLOY_FACTORY: "false",
+      LOOP_DEPLOY_LOOP_DYNAMIC: "true",
+      LOOP_DEPLOY_DEPLOYER: address(0),
+      LOOP_DEPLOY_DEPLOYER_PRIVATE_KEY: deployerKey,
+      LOOP_DEPLOY_POOL_MANAGER: poolManager,
+      LOOP_DEPLOY_USD1: usd1,
+      LOOP_DEPLOY_NFT_SALE_DURATION_SECONDS: String(
+        options.nftSaleDurationSeconds ?? 3_600,
+      ),
+      LOOP_DEPLOY_ACTIVATION_BUFFER_SECONDS: "3600",
+      ...roles,
+    },
+  );
+  const deployedAt = (name: string): `0x${string}` => {
+    const match = new RegExp(
+      `LOOP_DEPLOYED ${name} (0x[0-9a-fA-F]{40})`,
+      "u",
+    ).exec(output);
+    if (match?.[1] === undefined) {
+      throw new Error(`DeployLoopProtocol output has no ${name}`);
+    }
+    return match[1].toLowerCase() as `0x${string}`;
+  };
+  return {
+    poolManager,
+    usd1,
+    factory: deployedAt("loopDynamicLaunchFactory"),
+    loopRouter: deployedAt("loopRouter"),
+    hookDeploymentFactory: deployedAt("loopHookDeploymentFactory"),
+    routerRegistry: deployedAt("loopRouterRegistry"),
+    roles,
+    executorKey: anvilPrivateKey(2),
+  };
+}

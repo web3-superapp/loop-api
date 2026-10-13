@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { Pool, PoolClient } from "pg";
 
-import { parseHooksLaunchDraft } from "../features/launch/hooks-launch-config.js";
+import {
+  parseHooksLaunchDraft,
+  type HooksLaunchLoopDynamicParams,
+} from "../features/launch/hooks-launch-config.js";
 import {
   HooksLaunchReviewError,
   hooksLaunchCommandHash,
@@ -124,6 +127,8 @@ async function saveConfig(
   nowUnixSeconds: number,
   minimumLeadSeconds: number,
   nftSaleDurationSeconds: number | undefined,
+  /** Decision 0132: a LoopDynamic target Factory's Hook parameters. */
+  loopDynamic: HooksLaunchLoopDynamicParams | undefined,
 ): Promise<unknown> {
   const projectId = command.target;
   const project = await lockApprovedProject(client, projectId, "update");
@@ -145,6 +150,7 @@ async function saveConfig(
       nowUnixSeconds: String(nowUnixSeconds),
       minimumLeadSeconds,
       nftSaleDurationSeconds,
+      ...(loopDynamic === undefined ? {} : { loopDynamic }),
     });
   } catch {
     throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
@@ -702,6 +708,7 @@ export function createPostgresHooksLaunchReviewRepository(
             now(),
             minimumLeadSeconds,
             context?.nftSaleDurationSeconds,
+            context?.loopDynamic,
           );
         } else if (command.action === "launch.config.approve") {
           result = await approveConfig(client, actor, command);

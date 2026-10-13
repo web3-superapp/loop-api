@@ -1,4 +1,4 @@
-export const latestMigrationName = "000076_launch2_loop_dynamic";
+export const latestMigrationName = "000078_hooks_launch_loop_dynamic_config";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

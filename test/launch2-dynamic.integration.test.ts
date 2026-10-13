@@ -10,6 +10,7 @@ import { createPostgresLaunch2Repository } from "../src/database/launch2-reposit
 import { parseHooksLaunchDraft } from "../src/features/launch/hooks-launch-config.js";
 import { hooksLaunchReviewCommandSchema } from "../src/features/launch/hooks-launch-review.js";
 import type { Launch2LaneEvent } from "../src/features/launch2/launch2-ports.js";
+import { testnetLoopDynamicParams } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 
 /**
@@ -537,5 +538,322 @@ describe("Decision 0131: LoopDynamic read model (000076)", () => {
         [intentId],
       ),
     ).rejects.toThrow(/append-only/u);
+  });
+});
+
+describe("Decision 0132: LoopDynamic wallet attribution and MEME coverage degradation (000077)", () => {
+  it("stores a tx.from attribution without a router log and lists it as the wallet's pool trade", async () => {
+    const target = await instance();
+    const poolId = `0x${"43".repeat(32)}`;
+    const swap = {
+      ...event(
+        target,
+        `0x${"8".repeat(40)}`,
+        "Swap",
+        {
+          id: poolId,
+          sender: `0x${"7".repeat(40)}`,
+          amount0: "-100",
+          amount1: "160000",
+          sqrtPriceX96: (2n ** 96n).toString(10),
+          liquidity: "1",
+          tick: "0",
+          fee: "2500",
+          memeIsCurrency0: "false",
+          poolHookKind: "loopDynamic",
+          dynamicFee: "3200",
+          attributionSource: "transactionSender",
+          routerPayer: buyerA,
+          routerRecipient: buyerA,
+          routerAmountIn: "100",
+          routerAmountOut: "156800",
+        },
+        5_000,
+        3,
+      ),
+      // Unique per run: the shared test database keeps earlier runs' facts.
+      transactionHash: hex(32),
+    };
+    await commit([swap], 5_000);
+    const row = await pool.query<{
+      wallet_address: string;
+      attribution_source: string;
+      router_log_index: number | null;
+      tax_amount: string;
+    }>(
+      `select wallet_address, attribution_source, router_log_index,
+         tax_amount::text from public.launch2_pool_swaps
+       where instance_id = $1`,
+      [target.instanceId],
+    );
+    expect(row.rows).toEqual([
+      {
+        wallet_address: buyerA,
+        attribution_source: "transaction_sender",
+        router_log_index: null,
+        tax_amount: "3200",
+      },
+    ]);
+    const trades = await launch2.listPoolTrades({
+      instanceId: target.instanceId,
+      walletAddress: buyerA,
+      limit: 10,
+    });
+    expect(trades).toEqual([
+      expect.objectContaining({
+        side: "buy",
+        amountIn: "100",
+        amountOut: "156800",
+        recipientAddress: buyerA,
+        taxAmount: "3200",
+      }),
+    ]);
+    // Re-indexing the same swap keeps the attribution and its source.
+    await commit(
+      [{ ...swap, args: { ...swap.args, routerPayer: buyerB } }],
+      5_000,
+    );
+    const again = await pool.query<{ wallet_address: string }>(
+      "select wallet_address from public.launch2_pool_swaps where instance_id = $1",
+      [target.instanceId],
+    );
+    expect(again.rows[0]?.wallet_address).toBe(buyerA);
+    // The shape: a sender attribution never carries a router log index.
+    await expect(
+      pool.query(
+        `update public.launch2_pool_swaps set router_log_index = 9
+         where instance_id = $1`,
+        [target.instanceId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+    // An anonymous LoopDynamic swap (no attribution) stays unattributed.
+    await commit(
+      [
+        {
+          ...event(
+            target,
+            `0x${"8".repeat(40)}`,
+            "Swap",
+            {
+              id: poolId,
+              sender: `0x${"6".repeat(40)}`,
+              amount0: "-50",
+              amount1: "80000",
+              sqrtPriceX96: (2n ** 96n).toString(10),
+              liquidity: "1",
+              tick: "0",
+              fee: "2500",
+              memeIsCurrency0: "false",
+              poolHookKind: "loopDynamic",
+              dynamicFee: "0",
+            },
+            5_001,
+            1,
+          ),
+          transactionHash: hex(32),
+        },
+      ],
+      5_001,
+    );
+    const anonymous = await pool.query<{
+      wallet_address: string | null;
+      attribution_source: string | null;
+    }>(
+      `select wallet_address, attribution_source from public.launch2_pool_swaps
+       where instance_id = $1 and block_number = 5001`,
+      [target.instanceId],
+    );
+    expect(anonymous.rows).toEqual([
+      { wallet_address: null, attribution_source: null },
+    ]);
+  });
+
+  it("stores a LoopDynamic config version (000078) and refuses any other poolHookKind", async () => {
+    const owner = await user();
+    const projectId = randomUUID();
+    await pool.query(
+      "insert into public.launch_projects (project_id, owner_user_id, name, ticker, review_status, submitted_at, reviewed_at) values ($1, $2, 'Project', 'MEME', 'approved', now(), now())",
+      [projectId, owner],
+    );
+    const dynamicDraft = parseHooksLaunchDraft(
+      {
+        name: "Project",
+        ticker: "MEME",
+        logoAssetUrl: "https://example.com/logo.png",
+        description: "Test",
+        links: [],
+        nftSaleStartAt: "1900000000",
+        buybackRecipient: "0x3333333333333333333333333333333333333333",
+      },
+      {
+        nowUnixSeconds: "1800000000",
+        minimumLeadSeconds: 86_400,
+        nftSaleDurationSeconds: 3_600,
+        loopDynamic: testnetLoopDynamicParams,
+      },
+    );
+    const saved = await configs.saveOwnedDraft({
+      projectId,
+      ownerUserId: owner,
+      expectedVersion: 0,
+      templateVersion: dynamicDraft.templateVersion,
+      configHash: dynamicDraft.configHash,
+      config: dynamicDraft,
+      updatedByUserId: owner,
+    });
+    expect(saved.config.poolHookKind).toBe("loopDynamic");
+    expect(saved.config.templateHash).toBe(dynamicDraft.templateHash);
+    await expect(
+      configs.saveOwnedDraft({
+        projectId,
+        ownerUserId: owner,
+        expectedVersion: saved.version,
+        templateVersion: dynamicDraft.templateVersion,
+        configHash: dynamicDraft.configHash,
+        config: {
+          ...dynamicDraft,
+          poolHookKind: "other",
+        } as unknown as typeof dynamicDraft,
+        updatedByUserId: owner,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("reads the ledger below a block and degrades one instance's coverage in the segment's transaction", async () => {
+    const target = await instance();
+    const other = await instance();
+    const meme = (
+      await pool.query<{ meme_address: string }>(
+        "select meme_address from public.launch2_instances where instance_id = $1",
+        [target.instanceId],
+      )
+    ).rows[0]!.meme_address;
+    expect(meme).toMatch(/6666$/u);
+    const transfer = (
+      from: string,
+      to: string,
+      amount: string,
+      block: number,
+      logIndex: number,
+    ) => ({
+      instanceId: target.instanceId,
+      from,
+      to,
+      amount,
+      transactionHash: hex(32),
+      logIndex,
+      blockNumber: String(block),
+      blockHash: `0x${block.toString(16).padStart(64, "0")}`,
+      at: String(1_800_000_000 + block),
+    });
+    await launch2.commitSegment({
+      chainId,
+      events: [],
+      checkpoint: {
+        lastBlockNumber: "6010",
+        lastBlockHash: `0x${(6010).toString(16).padStart(64, "0")}`,
+        startedFromBlockNumber: "1",
+      },
+      activationGraceBlocks: 15,
+      memeTransfers: [
+        transfer(zeroAddress, target.curve, "1000", 6_000, 0),
+        transfer(target.curve, buyerA, "300", 6_005, 1),
+        transfer(buyerA, buyerB, "100", 6_010, 2),
+      ],
+    });
+    const ledger = await launch2.memeLedgerBalances!({
+      chainId,
+      instanceId: target.instanceId,
+      addresses: [
+        target.curve.toUpperCase().replace("0X", "0x"),
+        buyerA,
+        buyerB,
+      ],
+      beforeBlockNumber: "6010",
+    });
+    expect(ledger).toEqual({
+      balances: { [target.curve]: "700", [buyerA]: "300", [buyerB]: "0" },
+      supply: "1000",
+    });
+
+    await pool.query(
+      `update public.launch2_instances
+       set meme_transfers_target_block = 6000,
+         meme_transfers_complete_at = now(),
+         meme_transfers_coverage_failures = 0
+       where instance_id = any($1::uuid[])`,
+      [[target.instanceId, other.instanceId]],
+    );
+    const coverage = async (instanceId: string) =>
+      (
+        await pool.query<{
+          complete: boolean;
+          failures: number;
+          target: string | null;
+        }>(
+          `select meme_transfers_complete_at is not null as complete,
+             meme_transfers_coverage_failures as failures,
+             meme_transfers_target_block::text as target
+           from public.launch2_instances where instance_id = $1`,
+          [instanceId],
+        )
+      ).rows[0];
+    const degrade = (
+      kind: "retry" | "stalled" | "unverified",
+      failedAttempts: number,
+    ) =>
+      launch2.commitSegment({
+        chainId,
+        events: [],
+        checkpoint: {
+          lastBlockNumber: "6020",
+          lastBlockHash: `0x${(6020).toString(16).padStart(64, "0")}`,
+          startedFromBlockNumber: "1",
+        },
+        activationGraceBlocks: 15,
+        memeCoverageDegraded: [
+          { instanceId: target.instanceId, kind, failedAttempts },
+        ],
+      });
+    await degrade("unverified", 0);
+    expect(await coverage(target.instanceId)).toEqual({
+      complete: false,
+      failures: 0,
+      target: "6000",
+    });
+    // Nothing recorded for a pending verdict.
+    await launch2.recordMemeCoverage({
+      chainId,
+      verdicts: [{ kind: "pending", instanceId: target.instanceId }],
+    });
+    expect((await coverage(target.instanceId))?.complete).toBe(false);
+    await degrade("retry", 1);
+    expect(await coverage(target.instanceId)).toEqual({
+      complete: false,
+      failures: 1,
+      target: null,
+    });
+    await pool.query(
+      "update public.launch2_instances set meme_transfers_target_block = 6000 where instance_id = $1",
+      [target.instanceId],
+    );
+    await degrade("stalled", 3);
+    expect(await coverage(target.instanceId)).toEqual({
+      complete: false,
+      failures: 3,
+      target: "6000",
+    });
+    // The other instance is untouched.
+    expect(await coverage(other.instanceId)).toEqual({
+      complete: true,
+      failures: 0,
+      target: "6000",
+    });
+    // The lane reports the failure counter on its instance list.
+    const lane = await launch2.listLaneInstances(chainId);
+    expect(
+      lane.find((entry) => entry.instanceId === target.instanceId)
+        ?.memeTransfersCoverageFailures,
+    ).toBe(3);
   });
 });

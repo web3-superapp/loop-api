@@ -54,7 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000076_launch2_loop_dynamic");
+    expect(latestMigrationName).toBe("000078_hooks_launch_loop_dynamic_config");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

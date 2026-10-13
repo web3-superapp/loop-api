@@ -16,11 +16,13 @@ import {
 } from "./hooks-launch-project-config.js";
 import {
   assertHooksLaunchFactoryTemplate,
+  readHooksLaunchFactoryTemplate,
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
+  hooksLaunchHookPermissionBits,
   hooksLaunchId,
   type HooksLaunchTypedRequestInput,
 } from "./hooks-launch-deployment-crypto.js";
@@ -254,12 +256,25 @@ export function createHooksLaunchSubmissionService(input: {
         throw new HooksLaunchSubmissionError("invalid");
       const body = parsed.data;
       const request = body.request;
+      // Decision 0132: a LoopDynamic Factory's TEMPLATE_HASH is in the
+      // signed struct; OfficialTax keeps the constant (no read).
+      const loopDynamic = reader.hookKind === "loopDynamic";
+      let templateHash: string | null = null;
+      if (loopDynamic) {
+        try {
+          templateHash = (await readHooksLaunchFactoryTemplate(reader))
+            .templateHash;
+        } catch {
+          throw new HooksLaunchSubmissionError("unavailable");
+        }
+      }
       let digest: Hex;
       try {
         const typed = createHooksLaunchDeploymentTypedData({
           chainId: 97,
           verifyingContract: reader.factoryAddress,
           request,
+          ...(templateHash === null ? {} : { templateHash }),
         });
         digest = hashTypedData({
           ...typed,
@@ -386,7 +401,13 @@ export function createHooksLaunchSubmissionService(input: {
           salt: body.hookSalt as Hex,
           bytecodeHash: hook.initCodeHash as Hex,
         });
-        if ((BigInt(hookAddress) & 0x3fffn) !== 0x20ccn)
+        if (
+          (BigInt(hookAddress) & 0x3fffn) !==
+            hooksLaunchHookPermissionBits[
+              loopDynamic ? "loopDynamic" : "officialTax"
+            ] ||
+          (loopDynamic && /^0x0{64}$/iu.test(body.hookSalt))
+        )
           throw new HooksLaunchSubmissionError("invalid");
       } catch (error) {
         if (error instanceof HooksLaunchSubmissionError) throw error;

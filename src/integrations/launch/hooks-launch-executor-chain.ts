@@ -24,6 +24,7 @@ import { bscTestnet } from "viem/chains";
 
 import {
   HooksLaunchChainRevertError,
+  HooksLaunchFactoryTemplateMismatchError,
   type HooksLaunchDeployCall,
   type HooksLaunchExecutorChain,
   type HooksLaunchReceipt,
@@ -34,10 +35,16 @@ import {
   type HooksLaunchModules,
   type HooksLaunchOnChainFacts,
 } from "../../features/launch/hooks-launch-verification.js";
+import type { HooksLaunchLoopDynamicOnChainFacts } from "../../features/launch/hooks-launch-loop-dynamic-verification.js";
+import { readHooksLaunchLoopDynamicTemplate } from "./hooks-launch-factory-reader.js";
 import {
   buybackExecutorAbi,
   curveEngineAbi,
   launchPublicationGateAbi,
+  loopDynamicBuybackAdapterAbi,
+  loopDynamicGraduationAdapterAbi,
+  loopDynamicLaunchFactoryAbi,
+  loopHookDeploymentFactoryAbi,
   loopLaunchFactoryAbi,
   memeTokenAbi,
   nftEscrowAbi,
@@ -115,6 +122,14 @@ export function createHooksLaunchExecutorChain(input: {
   readonly privateKey: `0x${string}`;
   readonly factoryAddress: string;
   readonly rpcUrls: readonly string[];
+  /**
+   * Decision 0132: `loopDynamic` = a `LoopDynamicLaunchFactory`. The
+   * `deployLaunch` / `activateLaunch` / `launchModules` / `nonces` /
+   * `LaunchDeployed` ABI items are byte-identical on both Factories (same
+   * core contract), so signing and receipts are shared; the template and
+   * the module read-back differ.
+   */
+  readonly hookKind?: "officialTax" | "loopDynamic";
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
 }): HooksLaunchExecutorChain {
@@ -139,6 +154,7 @@ export function createHooksLaunchExecutorChain(input: {
   const account = privateKeyToAccount(input.privateKey);
   const client = createPublicClient({ chain: bscTestnet, transport });
   const factory = lower(input.factoryAddress) as Address;
+  const loopDynamic = input.hookKind === "loopDynamic";
 
   async function codeHash(address: string): Promise<string | null> {
     const code = await client.getCode({ address: address as Address });
@@ -320,9 +336,576 @@ export function createHooksLaunchExecutorChain(input: {
     };
   }
 
+  /**
+   * The module reads both Hook kinds share (MEME, curve, gate, NFT, escrow,
+   * buyback executor, snapshot registry); Decision 0112 values unchanged.
+   */
+  async function sharedModuleFacts(modules: HooksLaunchModules) {
+    const M = memeTokenAbi;
+    const C = curveEngineAbi;
+    const G = launchPublicationGateAbi;
+    const N = projectNFTAbi;
+    const E = nftEscrowAbi;
+    const B = buybackExecutorAbi;
+    const S = snapshotRegistryAbi;
+    const [meme, curve, gate, nft, escrow, buyback, snapshots] =
+      await Promise.all([
+        (async () => ({
+          totalSupply: await big(modules.meme, M, "totalSupply"),
+          templateTotalSupply: await big(modules.meme, M, "TOTAL_SUPPLY"),
+          name: await str(modules.meme, M, "name"),
+          symbol: await str(modules.meme, M, "symbol"),
+          decimals: await num(modules.meme, M, "decimals"),
+          launchFactory: await address(modules.meme, M, "launchFactory"),
+          graduationAuthority: await address(
+            modules.meme,
+            M,
+            "graduationAuthority",
+          ),
+          curve: await address(modules.meme, M, "curve"),
+          graduated: await bool(modules.meme, M, "graduated"),
+          curveBalance: await big(modules.meme, M, "balanceOf", [
+            modules.curve,
+          ]),
+          adapterBalance: await big(modules.meme, M, "balanceOf", [
+            modules.graduationAdapter,
+          ]),
+        }))(),
+        (async () => ({
+          buyTaxBps: await big(modules.curve, C, "BUY_TAX_BPS"),
+          sellTaxBps: await big(modules.curve, C, "SELL_TAX_BPS"),
+          maxCumulativeBuy: await big(modules.curve, C, "MAX_CUMULATIVE_BUY"),
+          earlyRoundDuration: await big(
+            modules.curve,
+            C,
+            "EARLY_ROUND_DURATION",
+          ),
+          meme: await address(modules.curve, C, "meme"),
+          usd1: await address(modules.curve, C, "usd1"),
+          snapshots: await address(modules.curve, C, "snapshots"),
+          graduationAdapter: await address(
+            modules.curve,
+            C,
+            "graduationAdapter",
+          ),
+          publicationGate: await address(modules.curve, C, "publicationGate"),
+          platformTaxReceiver: await address(
+            modules.curve,
+            C,
+            "platformTaxReceiver",
+          ),
+          soldSupply: await big(modules.curve, C, "soldSupply"),
+          accountedReserve: await big(modules.curve, C, "accountedReserve"),
+          graduated: await bool(modules.curve, C, "graduated"),
+        }))(),
+        (async () => ({
+          launchId: lower(await str(modules.gate, G, "launchId")),
+          configHash: lower(await str(modules.gate, G, "configHash")),
+          nftSaleStart: await big(modules.gate, G, "nftSaleStart"),
+          activationBufferSeconds: await big(
+            modules.gate,
+            G,
+            "activationBufferSeconds",
+          ),
+          deployExecutor: await address(modules.gate, G, "deployExecutor"),
+          published: await bool(modules.gate, G, "published"),
+        }))(),
+        (async () => ({
+          price: await big(modules.nft, N, "PRICE"),
+          saleDuration: await big(modules.nft, N, "SALE_DURATION"),
+          launchId: lower(await str(modules.nft, N, "launchId")),
+          usd1: await address(modules.nft, N, "usd1"),
+          publicationGate: await address(modules.nft, N, "publicationGate"),
+          escrow: await address(modules.nft, N, "escrow"),
+          saleStart: await big(modules.nft, N, "saleStart"),
+          saleEnd: await big(modules.nft, N, "saleEnd"),
+          totalMinted: await big(modules.nft, N, "totalMinted"),
+        }))(),
+        (async () => ({
+          usd1: await address(modules.escrow, E, "usd1"),
+          launchFactory: await address(modules.escrow, E, "launchFactory"),
+          projectNft: await address(modules.escrow, E, "projectNft"),
+          buybackExecutor: await address(modules.escrow, E, "buybackExecutor"),
+        }))(),
+        (async () => ({
+          usd1: await address(modules.buybackExecutor, B, "usd1"),
+          meme: await address(modules.buybackExecutor, B, "meme"),
+          budget: await address(modules.buybackExecutor, B, "budget"),
+          swapAdapter: await address(modules.buybackExecutor, B, "swapAdapter"),
+          recipient: await address(modules.buybackExecutor, B, "recipient"),
+          primaryKeeper: await address(
+            modules.buybackExecutor,
+            B,
+            "primaryKeeper",
+          ),
+          fallbackKeeper: await address(
+            modules.buybackExecutor,
+            B,
+            "fallbackKeeper",
+          ),
+          pauseAuthority: await address(
+            modules.buybackExecutor,
+            B,
+            "pauseAuthority",
+          ),
+          resumeAuthority: await address(
+            modules.buybackExecutor,
+            B,
+            "resumeAuthority",
+          ),
+        }))(),
+        (async () => ({
+          launchId: lower(await str(modules.snapshots, S, "launchId")),
+          nft: await address(modules.snapshots, S, "nft"),
+          nftSaleEnd: await big(modules.snapshots, S, "nftSaleEnd"),
+        }))(),
+      ]);
+    return { meme, curve, gate, nft, escrow, buyback, snapshots };
+  }
+
+  /**
+   * Decision 0132: the LoopDynamic template (immutable; read once per
+   * client after a successful read). A semantic mismatch throws
+   * `HooksLaunchFactoryTemplateMismatchError`; RPC failures propagate.
+   */
+  let template: Awaited<
+    ReturnType<typeof readHooksLaunchLoopDynamicTemplate>
+  > | null = null;
+  async function loopDynamicTemplate() {
+    if (template === null) {
+      template = await readHooksLaunchLoopDynamicTemplate(
+        (target, abi, functionName) =>
+          client.readContract({ address: target, abi, functionName }),
+        factory,
+      );
+    }
+    return template;
+  }
+
+  /** Decision 0132: read-back of a LoopDynamic launch (no Hook yet). */
+  async function readLoopDynamicLaunch(
+    launchId: string,
+  ): Promise<HooksLaunchLoopDynamicOnChainFacts> {
+    const F = loopDynamicLaunchFactoryAbi as Abi;
+    const [
+      factoryCodeHash,
+      hookKind,
+      templateHash,
+      poolManager,
+      usd1,
+      platformTaxReceiver,
+      primaryKeeper,
+      fallbackKeeper,
+      pauseAuthority,
+      resumeAuthority,
+      activationBufferSeconds,
+      saleDuration,
+      loopRouter,
+      loopHookDeploymentFactory,
+      routerRegistry,
+      deployerRows,
+      modules,
+    ] = await Promise.all([
+      codeHash(factory),
+      num(factory, F, "hookKind"),
+      str(factory, F, "TEMPLATE_HASH"),
+      address(factory, F, "poolManager"),
+      address(factory, F, "usd1"),
+      address(factory, F, "platformTaxReceiver"),
+      address(factory, F, "primaryKeeper"),
+      address(factory, F, "fallbackKeeper"),
+      address(factory, F, "pauseAuthority"),
+      address(factory, F, "resumeAuthority"),
+      big(factory, F, "activationBufferSeconds"),
+      big(factory, F, "nftSaleDuration"),
+      address(factory, F, "loopRouter"),
+      address(factory, F, "loopHookDeploymentFactory"),
+      address(factory, F, "routerRegistry"),
+      Promise.all(
+        (
+          [
+            ["token", "tokenDeployer", "tokenDeployerCodeHash"],
+            ["sale", "saleDeployer", "saleDeployerCodeHash"],
+            ["buyback", "buybackDeployer", "buybackDeployerCodeHash"],
+            [
+              "loopDynamic",
+              "loopDynamicDeployer",
+              "loopDynamicDeployerCodeHash",
+            ],
+          ] as const
+        ).map(async ([name, addressFn, hashFn]) => {
+          const deployer = await address(factory, F, addressFn);
+          const [pinned, actual] = await Promise.all([
+            str(factory, F, hashFn),
+            codeHash(deployer),
+          ]);
+          return {
+            name,
+            address: deployer,
+            pinnedCodeHash: lower(pinned),
+            actualCodeHash: actual,
+          };
+        }),
+      ),
+      readModules(launchId),
+    ]);
+    const factoryFacts = {
+      hookKind,
+      templateHash: lower(templateHash),
+      poolManager,
+      usd1,
+      platformTaxReceiver,
+      primaryKeeper,
+      fallbackKeeper,
+      pauseAuthority,
+      resumeAuthority,
+      activationBufferSeconds,
+      nftSaleDuration: saleDuration,
+      nftSaleDurationLegacy: false as const,
+      loopRouter,
+      loopHookDeploymentFactory,
+      routerRegistry,
+      deployers: deployerRows,
+    };
+    if (modules === null) {
+      return {
+        hookKind: "loopDynamic",
+        factoryCodeHash,
+        factory: factoryFacts,
+        modules: null,
+        codeHashes: {},
+        meme: null,
+        curve: null,
+        gate: null,
+        nft: null,
+        escrow: null,
+        buyback: null,
+        snapshots: null,
+        adapter: null,
+        buybackAdapter: null,
+        hookFactory: null,
+      };
+    }
+    const moduleAddresses = [
+      modules.meme,
+      modules.nft,
+      modules.snapshots,
+      modules.escrow,
+      modules.gate,
+      modules.curve,
+      modules.graduationAdapter,
+      modules.buybackAdapter,
+      modules.buybackExecutor,
+    ];
+    const hashes = await Promise.all(moduleAddresses.map(codeHash));
+    const codeHashes: Record<string, string | null> = {};
+    moduleAddresses.forEach((moduleAddress, index) => {
+      codeHashes[moduleAddress] = hashes[index] ?? null;
+    });
+    const A = loopDynamicGraduationAdapterAbi as Abi;
+    const BA = loopDynamicBuybackAdapterAbi as Abi;
+    const HF = loopHookDeploymentFactoryAbi as Abi;
+    const adapterAddress = modules.graduationAdapter;
+    const [shared, adapter, buybackAdapter, hookFactory] = await Promise.all([
+      sharedModuleFacts(modules),
+      (async () => ({
+        lpMemeAllocation: await big(adapterAddress, A, "LP_MEME_ALLOCATION"),
+        lpFee: await num(adapterAddress, A, "LP_FEE"),
+        tickSpacing: await num(adapterAddress, A, "TICK_SPACING"),
+        hookPermissions: await big(adapterAddress, A, "HOOK_PERMISSIONS"),
+        launchFactory: await address(adapterAddress, A, "launchFactory"),
+        poolManager: await address(adapterAddress, A, "poolManager"),
+        usd1: await address(adapterAddress, A, "usd1"),
+        currency0: await address(adapterAddress, A, "currency0"),
+        currency1: await address(adapterAddress, A, "currency1"),
+        meme: await address(adapterAddress, A, "meme"),
+        curve: await address(adapterAddress, A, "curve"),
+        projectBound: await bool(adapterAddress, A, "projectBound"),
+        finalized: await bool(adapterAddress, A, "finalized"),
+        hookFactory: await address(adapterAddress, A, "hookFactory"),
+        launchId: lower(await str(adapterAddress, A, "launchId")),
+        hook: await address(adapterAddress, A, "hook"),
+        graduationSqrtPriceX96: await big(
+          adapterAddress,
+          A,
+          "graduationSqrtPriceX96",
+          [modules.meme],
+        ),
+      }))(),
+      (async () => ({
+        usd1: await address(modules.buybackAdapter, BA, "usd1"),
+        meme: await address(modules.buybackAdapter, BA, "meme"),
+        launchFactory: await address(
+          modules.buybackAdapter,
+          BA,
+          "launchFactory",
+        ),
+        router: await address(modules.buybackAdapter, BA, "router"),
+        graduationAdapter: await address(
+          modules.buybackAdapter,
+          BA,
+          "graduationAdapter",
+        ),
+        executor: await address(modules.buybackAdapter, BA, "executor"),
+        bound: await bool(modules.buybackAdapter, BA, "bound"),
+      }))(),
+      (async () => {
+        const hf = loopHookDeploymentFactory;
+        const launch = (await read(hf, HF, "launchHook", [launchId])) as {
+          readonly meme: string;
+          readonly initializer: string;
+          readonly buybackBuyer: string;
+          readonly salt: string;
+          readonly saltRegistered: boolean;
+          readonly hook: string;
+        };
+        const initCodeHash = lower(
+          String(await read(hf, HF, "hookInitCodeHash", [launchId])),
+        );
+        const predictedHook = lower(
+          String(
+            await read(hf, HF, "computeAddress", [launch.salt, initCodeHash]),
+          ),
+        );
+        return {
+          launchFactory: await address(hf, HF, "launchFactory"),
+          poolManager: await address(hf, HF, "poolManager"),
+          router: await address(hf, HF, "router"),
+          quote: await address(hf, HF, "quote"),
+          baseSellFeePpm: await num(hf, HF, "baseSellFeePpm"),
+          baseFeeRecipient: await address(hf, HF, "baseFeeRecipient"),
+          priceTiming: await num(hf, HF, "priceTiming"),
+          routingPolicy: await num(hf, HF, "routingPolicy"),
+          routerRegistry: await address(hf, HF, "routerRegistry"),
+          excludeBuybackFromRewards: await bool(
+            hf,
+            HF,
+            "excludeBuybackFromRewards",
+          ),
+          buyFeePpm: await num(hf, HF, "buyFeePpm"),
+          lpFee: await num(hf, HF, "LP_FEE"),
+          tickSpacing: await num(hf, HF, "TICK_SPACING"),
+          launch: {
+            meme: lower(launch.meme),
+            initializer: lower(launch.initializer),
+            buybackBuyer: lower(launch.buybackBuyer),
+            salt: lower(launch.salt),
+            saltRegistered: launch.saltRegistered === true,
+            hook: lower(launch.hook),
+          },
+          initCodeHash,
+          predictedHook,
+        };
+      })(),
+    ]);
+    return {
+      hookKind: "loopDynamic",
+      factoryCodeHash,
+      factory: factoryFacts,
+      modules,
+      codeHashes,
+      ...shared,
+      adapter,
+      buybackAdapter,
+      hookFactory,
+    };
+  }
+
+  /** Decision 0112: read-back of an OfficialTax launch (unchanged). */
+  async function readOfficialTaxLaunch(
+    launchId: string,
+  ): Promise<HooksLaunchOnChainFacts> {
+    const F = loopLaunchFactoryAbi;
+    const [
+      factoryCodeHash,
+      poolManager,
+      usd1,
+      platformTaxReceiver,
+      feeVault,
+      primaryKeeper,
+      fallbackKeeper,
+      pauseAuthority,
+      resumeAuthority,
+      activationBufferSeconds,
+      saleDuration,
+      deployerRows,
+      modules,
+    ] = await Promise.all([
+      codeHash(factory),
+      address(factory, F, "poolManager"),
+      address(factory, F, "usd1"),
+      address(factory, F, "platformTaxReceiver"),
+      address(factory, F, "feeVault"),
+      address(factory, F, "primaryKeeper"),
+      address(factory, F, "fallbackKeeper"),
+      address(factory, F, "pauseAuthority"),
+      address(factory, F, "resumeAuthority"),
+      big(factory, F, "activationBufferSeconds"),
+      nftSaleDuration(),
+      Promise.all(
+        (
+          [
+            ["token", "tokenDeployer", "tokenDeployerCodeHash"],
+            ["v4", "v4Deployer", "v4DeployerCodeHash"],
+            ["sale", "saleDeployer", "saleDeployerCodeHash"],
+            ["buyback", "buybackDeployer", "buybackDeployerCodeHash"],
+          ] as const
+        ).map(async ([name, addressFn, hashFn]) => {
+          const deployer = await address(factory, F, addressFn);
+          const [pinned, actual] = await Promise.all([
+            str(factory, F, hashFn),
+            codeHash(deployer),
+          ]);
+          return {
+            name,
+            address: deployer,
+            pinnedCodeHash: lower(pinned),
+            actualCodeHash: actual,
+          };
+        }),
+      ),
+      readModules(launchId),
+    ]);
+    const factoryFacts = {
+      poolManager,
+      usd1,
+      platformTaxReceiver,
+      feeVault,
+      primaryKeeper,
+      fallbackKeeper,
+      pauseAuthority,
+      resumeAuthority,
+      activationBufferSeconds,
+      nftSaleDuration: saleDuration.seconds,
+      nftSaleDurationLegacy: saleDuration.legacy,
+      deployers: deployerRows,
+    };
+    if (modules === null) {
+      return {
+        factoryCodeHash,
+        factory: factoryFacts,
+        modules: null,
+        codeHashes: {},
+        meme: null,
+        curve: null,
+        hook: null,
+        gate: null,
+        nft: null,
+        escrow: null,
+        buyback: null,
+        adapter: null,
+        snapshots: null,
+      };
+    }
+    const moduleAddresses = [
+      modules.meme,
+      modules.nft,
+      modules.snapshots,
+      modules.escrow,
+      modules.gate,
+      modules.curve,
+      modules.graduationAdapter,
+      modules.officialHook,
+      modules.buybackAdapter,
+      modules.priceRecorder,
+      modules.buybackExecutor,
+    ];
+    const hashes = await Promise.all(moduleAddresses.map(codeHash));
+    const codeHashes: Record<string, string | null> = {};
+    moduleAddresses.forEach((moduleAddress, index) => {
+      codeHashes[moduleAddress] = hashes[index] ?? null;
+    });
+    const H = officialTaxHookAbi;
+    const A = officialV4GraduationAdapterAbi;
+    const [shared, hook, adapter] = await Promise.all([
+      sharedModuleFacts(modules),
+      (async () => ({
+        taxBps: await big(modules.officialHook, H, "TAX_BPS"),
+        poolManager: await address(modules.officialHook, H, "poolManager"),
+        feeVault: await address(modules.officialHook, H, "feeVault"),
+        poolInitializer: await address(
+          modules.officialHook,
+          H,
+          "poolInitializer",
+        ),
+        expectedInitialSqrtPriceX96: await big(
+          modules.officialHook,
+          H,
+          "expectedInitialSqrtPriceX96",
+        ),
+        currency0: await address(modules.officialHook, H, "currency0"),
+        currency1: await address(modules.officialHook, H, "currency1"),
+        lpFee: await num(modules.officialHook, H, "lpFee"),
+        tickSpacing: await num(modules.officialHook, H, "tickSpacing"),
+      }))(),
+      (async () => ({
+        lpMemeAllocation: await big(
+          modules.graduationAdapter,
+          A,
+          "LP_MEME_ALLOCATION",
+        ),
+        lpFee: await num(modules.graduationAdapter, A, "LP_FEE"),
+        tickSpacing: await num(modules.graduationAdapter, A, "TICK_SPACING"),
+        launchFactory: await address(
+          modules.graduationAdapter,
+          A,
+          "launchFactory",
+        ),
+        poolManager: await address(modules.graduationAdapter, A, "poolManager"),
+        usd1: await address(modules.graduationAdapter, A, "usd1"),
+        currency0: await address(modules.graduationAdapter, A, "currency0"),
+        currency1: await address(modules.graduationAdapter, A, "currency1"),
+        meme: await address(modules.graduationAdapter, A, "meme"),
+        curve: await address(modules.graduationAdapter, A, "curve"),
+        projectBound: await bool(modules.graduationAdapter, A, "projectBound"),
+        finalized: await bool(modules.graduationAdapter, A, "finalized"),
+      }))(),
+    ]);
+    return {
+      factoryCodeHash,
+      factory: factoryFacts,
+      modules,
+      codeHashes,
+      meme: shared.meme,
+      curve: shared.curve,
+      hook,
+      gate: shared.gate,
+      nft: shared.nft,
+      escrow: shared.escrow,
+      buyback: shared.buyback,
+      adapter,
+      snapshots: shared.snapshots,
+    };
+  }
+
   const chain: HooksLaunchExecutorChain = {
     executorAddress: lower(account.address),
     factoryAddress: factory,
+    hookKind: loopDynamic ? "loopDynamic" : "officialTax",
+    ...(loopDynamic
+      ? {
+          async loopDynamicTemplate() {
+            try {
+              const read = await loopDynamicTemplate();
+              return { params: read.params, templateHash: read.templateHash };
+            } catch (error) {
+              // A Factory that is not LoopDynamic reverts on hookKind():
+              // a template mismatch, not an infrastructure failure.
+              if (
+                error instanceof HooksLaunchFactoryTemplateMismatchError ||
+                revertReason(error) !== null ||
+                (error instanceof BaseError &&
+                  error.walk(
+                    (cause) => cause instanceof ContractFunctionZeroDataError,
+                  ) !== null)
+              ) {
+                throw new HooksLaunchFactoryTemplateMismatchError();
+              }
+              throw error;
+            }
+          },
+        }
+      : {}),
     async chainId() {
       return client.getChainId();
     },
@@ -478,301 +1061,10 @@ export function createHooksLaunchExecutorChain(input: {
     async gatePublished(gate) {
       return bool(gate, launchPublicationGateAbi, "published");
     },
-    async readLaunch(launchId): Promise<HooksLaunchOnChainFacts> {
-      const F = loopLaunchFactoryAbi;
-      const [
-        factoryCodeHash,
-        poolManager,
-        usd1,
-        platformTaxReceiver,
-        feeVault,
-        primaryKeeper,
-        fallbackKeeper,
-        pauseAuthority,
-        resumeAuthority,
-        activationBufferSeconds,
-        saleDuration,
-        deployerRows,
-        modules,
-      ] = await Promise.all([
-        codeHash(factory),
-        address(factory, F, "poolManager"),
-        address(factory, F, "usd1"),
-        address(factory, F, "platformTaxReceiver"),
-        address(factory, F, "feeVault"),
-        address(factory, F, "primaryKeeper"),
-        address(factory, F, "fallbackKeeper"),
-        address(factory, F, "pauseAuthority"),
-        address(factory, F, "resumeAuthority"),
-        big(factory, F, "activationBufferSeconds"),
-        nftSaleDuration(),
-        Promise.all(
-          (
-            [
-              ["token", "tokenDeployer", "tokenDeployerCodeHash"],
-              ["v4", "v4Deployer", "v4DeployerCodeHash"],
-              ["sale", "saleDeployer", "saleDeployerCodeHash"],
-              ["buyback", "buybackDeployer", "buybackDeployerCodeHash"],
-            ] as const
-          ).map(async ([name, addressFn, hashFn]) => {
-            const deployer = await address(factory, F, addressFn);
-            const [pinned, actual] = await Promise.all([
-              str(factory, F, hashFn),
-              codeHash(deployer),
-            ]);
-            return {
-              name,
-              address: deployer,
-              pinnedCodeHash: lower(pinned),
-              actualCodeHash: actual,
-            };
-          }),
-        ),
-        readModules(launchId),
-      ]);
-      const factoryFacts = {
-        poolManager,
-        usd1,
-        platformTaxReceiver,
-        feeVault,
-        primaryKeeper,
-        fallbackKeeper,
-        pauseAuthority,
-        resumeAuthority,
-        activationBufferSeconds,
-        nftSaleDuration: saleDuration.seconds,
-        nftSaleDurationLegacy: saleDuration.legacy,
-        deployers: deployerRows,
-      };
-      if (modules === null) {
-        return {
-          factoryCodeHash,
-          factory: factoryFacts,
-          modules: null,
-          codeHashes: {},
-          meme: null,
-          curve: null,
-          hook: null,
-          gate: null,
-          nft: null,
-          escrow: null,
-          buyback: null,
-          adapter: null,
-          snapshots: null,
-        };
-      }
-      const moduleAddresses = [
-        modules.meme,
-        modules.nft,
-        modules.snapshots,
-        modules.escrow,
-        modules.gate,
-        modules.curve,
-        modules.graduationAdapter,
-        modules.officialHook,
-        modules.buybackAdapter,
-        modules.priceRecorder,
-        modules.buybackExecutor,
-      ];
-      const hashes = await Promise.all(moduleAddresses.map(codeHash));
-      const codeHashes: Record<string, string | null> = {};
-      moduleAddresses.forEach((moduleAddress, index) => {
-        codeHashes[moduleAddress] = hashes[index] ?? null;
-      });
-      const M = memeTokenAbi;
-      const C = curveEngineAbi;
-      const H = officialTaxHookAbi;
-      const G = launchPublicationGateAbi;
-      const N = projectNFTAbi;
-      const E = nftEscrowAbi;
-      const B = buybackExecutorAbi;
-      const A = officialV4GraduationAdapterAbi;
-      const S = snapshotRegistryAbi;
-      const [
-        meme,
-        curve,
-        hook,
-        gate,
-        nft,
-        escrow,
-        buyback,
-        adapter,
-        snapshots,
-      ] = await Promise.all([
-        (async () => ({
-          totalSupply: await big(modules.meme, M, "totalSupply"),
-          templateTotalSupply: await big(modules.meme, M, "TOTAL_SUPPLY"),
-          name: await str(modules.meme, M, "name"),
-          symbol: await str(modules.meme, M, "symbol"),
-          decimals: await num(modules.meme, M, "decimals"),
-          launchFactory: await address(modules.meme, M, "launchFactory"),
-          graduationAuthority: await address(
-            modules.meme,
-            M,
-            "graduationAuthority",
-          ),
-          curve: await address(modules.meme, M, "curve"),
-          graduated: await bool(modules.meme, M, "graduated"),
-          curveBalance: await big(modules.meme, M, "balanceOf", [
-            modules.curve,
-          ]),
-          adapterBalance: await big(modules.meme, M, "balanceOf", [
-            modules.graduationAdapter,
-          ]),
-        }))(),
-        (async () => ({
-          buyTaxBps: await big(modules.curve, C, "BUY_TAX_BPS"),
-          sellTaxBps: await big(modules.curve, C, "SELL_TAX_BPS"),
-          maxCumulativeBuy: await big(modules.curve, C, "MAX_CUMULATIVE_BUY"),
-          earlyRoundDuration: await big(
-            modules.curve,
-            C,
-            "EARLY_ROUND_DURATION",
-          ),
-          meme: await address(modules.curve, C, "meme"),
-          usd1: await address(modules.curve, C, "usd1"),
-          snapshots: await address(modules.curve, C, "snapshots"),
-          graduationAdapter: await address(
-            modules.curve,
-            C,
-            "graduationAdapter",
-          ),
-          publicationGate: await address(modules.curve, C, "publicationGate"),
-          platformTaxReceiver: await address(
-            modules.curve,
-            C,
-            "platformTaxReceiver",
-          ),
-          soldSupply: await big(modules.curve, C, "soldSupply"),
-          accountedReserve: await big(modules.curve, C, "accountedReserve"),
-          graduated: await bool(modules.curve, C, "graduated"),
-        }))(),
-        (async () => ({
-          taxBps: await big(modules.officialHook, H, "TAX_BPS"),
-          poolManager: await address(modules.officialHook, H, "poolManager"),
-          feeVault: await address(modules.officialHook, H, "feeVault"),
-          poolInitializer: await address(
-            modules.officialHook,
-            H,
-            "poolInitializer",
-          ),
-          expectedInitialSqrtPriceX96: await big(
-            modules.officialHook,
-            H,
-            "expectedInitialSqrtPriceX96",
-          ),
-          currency0: await address(modules.officialHook, H, "currency0"),
-          currency1: await address(modules.officialHook, H, "currency1"),
-          lpFee: await num(modules.officialHook, H, "lpFee"),
-          tickSpacing: await num(modules.officialHook, H, "tickSpacing"),
-        }))(),
-        (async () => ({
-          launchId: lower(await str(modules.gate, G, "launchId")),
-          configHash: lower(await str(modules.gate, G, "configHash")),
-          nftSaleStart: await big(modules.gate, G, "nftSaleStart"),
-          activationBufferSeconds: await big(
-            modules.gate,
-            G,
-            "activationBufferSeconds",
-          ),
-          deployExecutor: await address(modules.gate, G, "deployExecutor"),
-          published: await bool(modules.gate, G, "published"),
-        }))(),
-        (async () => ({
-          price: await big(modules.nft, N, "PRICE"),
-          saleDuration: await big(modules.nft, N, "SALE_DURATION"),
-          launchId: lower(await str(modules.nft, N, "launchId")),
-          usd1: await address(modules.nft, N, "usd1"),
-          publicationGate: await address(modules.nft, N, "publicationGate"),
-          escrow: await address(modules.nft, N, "escrow"),
-          saleStart: await big(modules.nft, N, "saleStart"),
-          saleEnd: await big(modules.nft, N, "saleEnd"),
-          totalMinted: await big(modules.nft, N, "totalMinted"),
-        }))(),
-        (async () => ({
-          usd1: await address(modules.escrow, E, "usd1"),
-          launchFactory: await address(modules.escrow, E, "launchFactory"),
-          projectNft: await address(modules.escrow, E, "projectNft"),
-          buybackExecutor: await address(modules.escrow, E, "buybackExecutor"),
-        }))(),
-        (async () => ({
-          usd1: await address(modules.buybackExecutor, B, "usd1"),
-          meme: await address(modules.buybackExecutor, B, "meme"),
-          budget: await address(modules.buybackExecutor, B, "budget"),
-          swapAdapter: await address(modules.buybackExecutor, B, "swapAdapter"),
-          recipient: await address(modules.buybackExecutor, B, "recipient"),
-          primaryKeeper: await address(
-            modules.buybackExecutor,
-            B,
-            "primaryKeeper",
-          ),
-          fallbackKeeper: await address(
-            modules.buybackExecutor,
-            B,
-            "fallbackKeeper",
-          ),
-          pauseAuthority: await address(
-            modules.buybackExecutor,
-            B,
-            "pauseAuthority",
-          ),
-          resumeAuthority: await address(
-            modules.buybackExecutor,
-            B,
-            "resumeAuthority",
-          ),
-        }))(),
-        (async () => ({
-          lpMemeAllocation: await big(
-            modules.graduationAdapter,
-            A,
-            "LP_MEME_ALLOCATION",
-          ),
-          lpFee: await num(modules.graduationAdapter, A, "LP_FEE"),
-          tickSpacing: await num(modules.graduationAdapter, A, "TICK_SPACING"),
-          launchFactory: await address(
-            modules.graduationAdapter,
-            A,
-            "launchFactory",
-          ),
-          poolManager: await address(
-            modules.graduationAdapter,
-            A,
-            "poolManager",
-          ),
-          usd1: await address(modules.graduationAdapter, A, "usd1"),
-          currency0: await address(modules.graduationAdapter, A, "currency0"),
-          currency1: await address(modules.graduationAdapter, A, "currency1"),
-          meme: await address(modules.graduationAdapter, A, "meme"),
-          curve: await address(modules.graduationAdapter, A, "curve"),
-          projectBound: await bool(
-            modules.graduationAdapter,
-            A,
-            "projectBound",
-          ),
-          finalized: await bool(modules.graduationAdapter, A, "finalized"),
-        }))(),
-        (async () => ({
-          launchId: lower(await str(modules.snapshots, S, "launchId")),
-          nft: await address(modules.snapshots, S, "nft"),
-          nftSaleEnd: await big(modules.snapshots, S, "nftSaleEnd"),
-        }))(),
-      ]);
-      return {
-        factoryCodeHash,
-        factory: factoryFacts,
-        modules,
-        codeHashes,
-        meme,
-        curve,
-        hook,
-        gate,
-        nft,
-        escrow,
-        buyback,
-        adapter,
-        snapshots,
-      };
+    async readLaunch(launchId) {
+      return loopDynamic
+        ? readLoopDynamicLaunch(launchId)
+        : readOfficialTaxLaunch(launchId);
     },
   };
   return Object.freeze(chain);

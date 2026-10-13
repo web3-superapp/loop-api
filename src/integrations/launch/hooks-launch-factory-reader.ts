@@ -8,15 +8,125 @@ import {
   fallback,
   http,
   keccak256,
+  type Abi,
   type Address,
+  type Transport,
 } from "viem";
 import { bscTestnet } from "viem/chains";
 
 import {
   hooksLaunchLegacyNftSaleDurationSeconds,
+  hooksLaunchLoopDynamicTemplateHash,
   isHooksLaunchNftSaleDuration,
+  type HooksLaunchLoopDynamicParams,
 } from "../../features/launch/hooks-launch-config.js";
 import type { HooksLaunchFactoryReader } from "../../features/launch/hooks-launch-deployment.js";
+import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
+import {
+  loopDynamicLaunchFactoryAbi,
+  loopHookDeploymentFactoryAbi,
+  loopRouterRegistryAbi,
+} from "./hooks-launch-protocol-abi.generated.js";
+
+const zeroAddress = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Decision 0132: the Hook parameters a LoopDynamic Factory commits in its
+ * `TEMPLATE_HASH`, read from the chain (all immutable): the router from
+ * `loopRouter()`, the fee / timing / routing / buyback settings from its
+ * `loopHookDeploymentFactory()`, the registry admin from `routerRegistry()`
+ * (zero for `LoopRouterOnly`). The recomputed template hash must equal
+ * `TEMPLATE_HASH()` and `hookKind()` must be `LoopDynamic` (1), else the
+ * Factory is not the template this backend hashes and every save /
+ * signature fails closed.
+ */
+export async function readHooksLaunchLoopDynamicTemplate(
+  read: (address: Address, abi: Abi, functionName: string) => Promise<unknown>,
+  factoryAddress: Address,
+): Promise<{
+  readonly params: HooksLaunchLoopDynamicParams;
+  readonly templateHash: `0x${string}`;
+  readonly hookDeploymentFactory: string;
+  readonly routerRegistry: string;
+}> {
+  const F = loopDynamicLaunchFactoryAbi as Abi;
+  const H = loopHookDeploymentFactoryAbi as Abi;
+  const [kind, templateHash, router, hookFactory, registry] = await Promise.all(
+    [
+      read(factoryAddress, F, "hookKind"),
+      read(factoryAddress, F, "TEMPLATE_HASH"),
+      read(factoryAddress, F, "loopRouter"),
+      read(factoryAddress, F, "loopHookDeploymentFactory"),
+      read(factoryAddress, F, "routerRegistry"),
+    ],
+  );
+  const hdf = String(hookFactory) as Address;
+  const [
+    hookRouter,
+    baseSellFeePpm,
+    baseFeeRecipient,
+    priceTiming,
+    routingPolicy,
+    hookRegistry,
+    excludeBuybackFromRewards,
+    buyFeePpm,
+    launchFactory,
+  ] = await Promise.all([
+    read(hdf, H, "router"),
+    read(hdf, H, "baseSellFeePpm"),
+    read(hdf, H, "baseFeeRecipient"),
+    read(hdf, H, "priceTiming"),
+    read(hdf, H, "routingPolicy"),
+    read(hdf, H, "routerRegistry"),
+    read(hdf, H, "excludeBuybackFromRewards"),
+    read(hdf, H, "buyFeePpm"),
+    read(hdf, H, "launchFactory"),
+  ]);
+  const registryAddress = String(registry).toLowerCase();
+  const admin =
+    registryAddress === zeroAddress
+      ? zeroAddress
+      : String(
+          await read(
+            registryAddress as Address,
+            loopRouterRegistryAbi,
+            "admin",
+          ),
+        ).toLowerCase();
+  const timing = Number(priceTiming);
+  const policy = Number(routingPolicy);
+  if (
+    Number(kind) !== 1 ||
+    String(hookRouter).toLowerCase() !== String(router).toLowerCase() ||
+    String(hookRegistry).toLowerCase() !== registryAddress ||
+    String(launchFactory).toLowerCase() !== factoryAddress.toLowerCase() ||
+    (timing !== 0 && timing !== 1) ||
+    (policy !== 0 && policy !== 1) ||
+    typeof excludeBuybackFromRewards !== "boolean"
+  ) {
+    throw new HooksLaunchFactoryTemplateMismatchError();
+  }
+  const params: HooksLaunchLoopDynamicParams = Object.freeze({
+    router: String(router).toLowerCase(),
+    baseSellFeePpm: Number(baseSellFeePpm),
+    baseFeeRecipient: String(baseFeeRecipient).toLowerCase(),
+    priceTiming: timing,
+    routingPolicy: policy,
+    routerRegistryAdmin: admin,
+    excludeBuybackFromRewards,
+    buyFeePpm: Number(buyFeePpm),
+  });
+  const expected = hooksLaunchLoopDynamicTemplateHash(params);
+  if (expected.toLowerCase() !== String(templateHash).toLowerCase()) {
+    throw new HooksLaunchFactoryTemplateMismatchError();
+  }
+  return Object.freeze({
+    params,
+    templateHash: expected.toLowerCase() as `0x${string}`,
+    hookDeploymentFactory: hdf.toLowerCase(),
+    routerRegistry: registryAddress,
+  });
+}
 
 const hooksLaunchFactoryAbi = [
   {
@@ -114,20 +224,31 @@ export function createHooksLaunchFactoryReader(input: {
   readonly factoryAddress: string;
   readonly expectedRuntimeCodeHash: string;
   readonly rpcUrls: readonly string[];
+  /**
+   * Decision 0132: `loopDynamic` = a `LoopDynamicLaunchFactory`: the
+   * template (Hook parameters, `TEMPLATE_HASH`) is read and verified, and
+   * the Hook salt is mined for `loopHookDeploymentFactory()` /
+   * `previewLoopHookInitCodeHash(request)` (bits 0x10C4). Absent =
+   * OfficialTax, unchanged.
+   */
+  readonly hookKind?: "officialTax" | "loopDynamic";
+  /** Test seam (anvil); production uses the RPC URL list. */
+  readonly transport?: Transport;
 }): HooksLaunchFactoryReader {
   if (
     !/^0x[0-9a-fA-F]{40}$/.test(input.factoryAddress) ||
     !/^0x[0-9a-fA-F]{64}$/.test(input.expectedRuntimeCodeHash) ||
-    input.rpcUrls.length === 0
+    (input.rpcUrls.length === 0 && input.transport === undefined)
   ) {
     throw new Error("Hooks launch factory reader unavailable");
   }
   const factoryAddress = input.factoryAddress as Address;
+  const loopDynamic = input.hookKind === "loopDynamic";
   const client = createPublicClient({
     chain: bscTestnet,
-    transport: fallback(
-      input.rpcUrls.map((url) => http(url, { timeout: 8_000 })),
-    ),
+    transport:
+      input.transport ??
+      fallback(input.rpcUrls.map((url) => http(url, { timeout: 8_000 }))),
   });
 
   async function verifyNetworkAndCode(): Promise<void> {
@@ -155,10 +276,36 @@ export function createHooksLaunchFactoryReader(input: {
     readonly seconds: number;
     readonly legacy: boolean;
   } | null = null;
+  let template: Awaited<
+    ReturnType<typeof readHooksLaunchLoopDynamicTemplate>
+  > | null = null;
+  async function loopDynamicTemplate() {
+    if (template !== null) return template;
+    await verifyNetworkAndCode();
+    try {
+      template = await readHooksLaunchLoopDynamicTemplate(
+        (address, abi, functionName) =>
+          client.readContract({ address, abi, functionName }),
+        factoryAddress,
+      );
+    } catch {
+      throw new Error("Hooks launch factory read unavailable");
+    }
+    return template;
+  }
 
   return Object.freeze({
     factoryAddress,
     chainId: 97,
+    hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
+    ...(loopDynamic
+      ? {
+          async loopDynamicTemplate() {
+            const read = await loopDynamicTemplate();
+            return { params: read.params, templateHash: read.templateHash };
+          },
+        }
+      : {}),
     async nftSaleDuration() {
       if (saleDuration !== null) return saleDuration;
       await verifyNetworkAndCode();
@@ -259,32 +406,48 @@ export function createHooksLaunchFactoryReader(input: {
       readonly memeSalt: string;
     }) {
       await verifyNetworkAndCode();
+      const launchRequest = {
+        projectOwner: request.projectOwner as Address,
+        configVersion: request.configVersion,
+        configHash: request.configHash as `0x${string}`,
+        name: request.name,
+        ticker: request.ticker,
+        nftSaleStart: BigInt(request.nftSaleStart),
+        buybackRecipient: request.buybackRecipient as Address,
+        deadline: BigInt(request.deadline),
+        memeSalt: request.memeSalt as `0x${string}`,
+      };
       try {
-        const [deployer, initCodeHash] = await Promise.all([
-          client.readContract({
-            address: factoryAddress,
-            abi: hooksLaunchFactoryAbi,
-            functionName: "hookDeploymentFactory",
-          }),
-          client.readContract({
-            address: factoryAddress,
-            abi: hooksLaunchFactoryAbi,
-            functionName: "previewHookInitCodeHash",
-            args: [
-              {
-                projectOwner: request.projectOwner as Address,
-                configVersion: request.configVersion,
-                configHash: request.configHash as `0x${string}`,
-                name: request.name,
-                ticker: request.ticker,
-                nftSaleStart: BigInt(request.nftSaleStart),
-                buybackRecipient: request.buybackRecipient as Address,
-                deadline: BigInt(request.deadline),
-                memeSalt: request.memeSalt as `0x${string}`,
-              },
-            ],
-          }),
-        ]);
+        // Decision 0132: a LoopDynamic Hook is CREATE2-deployed at
+        // graduation by the Factory's LoopHookDeploymentFactory; the salt
+        // passed to deployLaunch is registered (and checked) there.
+        const [deployer, initCodeHash] = loopDynamic
+          ? await Promise.all([
+              client.readContract({
+                address: factoryAddress,
+                abi: loopDynamicLaunchFactoryAbi,
+                functionName: "loopHookDeploymentFactory",
+              }),
+              client.readContract({
+                address: factoryAddress,
+                abi: loopDynamicLaunchFactoryAbi,
+                functionName: "previewLoopHookInitCodeHash",
+                args: [launchRequest],
+              }),
+            ])
+          : await Promise.all([
+              client.readContract({
+                address: factoryAddress,
+                abi: hooksLaunchFactoryAbi,
+                functionName: "hookDeploymentFactory",
+              }),
+              client.readContract({
+                address: factoryAddress,
+                abi: hooksLaunchFactoryAbi,
+                functionName: "previewHookInitCodeHash",
+                args: [launchRequest],
+              }),
+            ]);
         const deployerCode = await client.getBytecode({ address: deployer });
         if (deployerCode === undefined || deployerCode === "0x") {
           throw new Error("Hook deployment factory has no code");

@@ -334,6 +334,21 @@ export interface HooksLaunchConfig {
    * `HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE`.
    */
   readonly fixedBuybackRecipient: string | null;
+  /**
+   * Decision 0132: `HOOKS_LAUNCH_HOOK_KIND` — the official-pool Hook kind
+   * new Hooks launches are saved, approved and signed for. `loopDynamic`
+   * targets `dynamicFactory` (null = config saves / signing 503
+   * `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`, never the OfficialTax Factory).
+   */
+  readonly hookKind: "officialTax" | "loopDynamic";
+  /**
+   * Decision 0132: `LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `_CODE_HASH`
+   * (lower-case, one unit, BSC Testnet only).
+   */
+  readonly dynamicFactory: {
+    readonly address: string;
+    readonly codeHash: string;
+  } | null;
 }
 
 /** Decision 0117: the Gate activation buffer (3,600 s) + 600 s executor margin. */
@@ -866,9 +881,11 @@ const environmentSchema = z
     LAUNCH2_POOL_ROUTER_ADDRESS: optionalCredential(64),
     LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
     // Decision 0131: which official-pool Hook kind new Hooks launches use
-    // (officialTax default). loopDynamic keeps Hooks config saves 503 until
-    // the deployment executor supports the LoopDynamic Factory.
+    // (officialTax default). Decision 0132: loopDynamic saves, reviews and
+    // signs for the LoopDynamic Factory below (blank = those stay 503).
     HOOKS_LAUNCH_HOOK_KIND: z.enum(["officialTax", "loopDynamic"]),
+    LAUNCH2_DYNAMIC_FACTORY_ADDRESS: optionalCredential(64),
+    LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: optionalCredential(66),
     // Decision 0131: the shared LoopRouter of LoopDynamic pools and its
     // runtime code hash (one unit, BSC Testnet only), plus the optional
     // trusted-router list every LoopDynamic Hook must point at. Blank keeps
@@ -887,6 +904,12 @@ const environmentSchema = z
       context,
       "LAUNCH2_DYNAMIC_ROUTER_ADDRESS",
       "LAUNCH2_DYNAMIC_ROUTER_CODE_HASH",
+    );
+    refineAddressCodeHashPair(
+      value,
+      context,
+      "LAUNCH2_DYNAMIC_FACTORY_ADDRESS",
+      "LAUNCH2_DYNAMIC_FACTORY_CODE_HASH",
     );
     refineMarketEnvironment(value, context);
     refineLaunchChainEnvironment(value, context);
@@ -1123,7 +1146,7 @@ const reconciliationWorkerEnvironmentSchema = z
     LAUNCH2_POOL_ROUTER_CODE_HASH: optionalCredential(66),
     // Decision 0131: the LoopDynamic Factory the lane indexes beside the
     // OfficialTax one (one unit, BSC Testnet only), the Hook kind of new
-    // launches (the executor refuses loopDynamic until it supports it),
+    // launches (Decision 0132: loopDynamic = the executor targets this pair),
     // and the default-off `poke()` keeper of armed LoopDynamic rounds.
     HOOKS_LAUNCH_HOOK_KIND: z.enum(["officialTax", "loopDynamic"]),
     LAUNCH2_DYNAMIC_FACTORY_ADDRESS: optionalCredential(64),
@@ -2745,6 +2768,11 @@ export function parseMemeGraduationExecutor(data: {
 
 export interface HooksLaunchExecutorConfig {
   readonly privateKey: `0x${string}`;
+  /**
+   * Decision 0132: the Hook kind of the target Factory. `loopDynamic`: the
+   * `LAUNCH2_DYNAMIC_FACTORY_*` pair below is the target.
+   */
+  readonly hookKind: "officialTax" | "loopDynamic";
   readonly factoryAddress: string;
   readonly factoryCodeHash: string;
   readonly confirmations: number;
@@ -2771,6 +2799,9 @@ export function parseHooksLaunchExecutor(data: {
   readonly HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
+  /** Decision 0132: the LoopDynamic Factory pair (loopDynamic target). */
+  readonly LAUNCH2_DYNAMIC_FACTORY_ADDRESS?: string | undefined;
+  readonly LAUNCH2_DYNAMIC_FACTORY_CODE_HASH?: string | undefined;
   readonly HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS: number;
   readonly HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS: number;
   readonly HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS: number;
@@ -2794,27 +2825,36 @@ export function parseHooksLaunchExecutor(data: {
       "HOOKS_LAUNCH_EXECUTOR_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
     );
   }
+  // Decision 0132: a loopDynamic executor deploys on the LoopDynamic
+  // Factory (and verifies LoopDynamic modules); the OfficialTax pair is not
+  // its target.
+  const dynamic = data.HOOKS_LAUNCH_HOOK_KIND === "loopDynamic";
+  const factoryAddress = dynamic
+    ? data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS
+    : data.HOOKS_LAUNCH_FACTORY_ADDRESS;
+  const factoryCodeHash = dynamic
+    ? data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH
+    : data.HOOKS_LAUNCH_FACTORY_CODE_HASH;
+  if (factoryAddress === undefined || factoryCodeHash === undefined) {
+    issues.push(
+      dynamic
+        ? "HOOKS_LAUNCH_EXECUTOR_ENABLED: HOOKS_LAUNCH_HOOK_KIND=loopDynamic requires LAUNCH2_DYNAMIC_FACTORY_ADDRESS and LAUNCH2_DYNAMIC_FACTORY_CODE_HASH (Decision 0132)"
+        : "HOOKS_LAUNCH_EXECUTOR_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH",
+    );
+  }
   if (
-    data.HOOKS_LAUNCH_FACTORY_ADDRESS === undefined ||
-    data.HOOKS_LAUNCH_FACTORY_CODE_HASH === undefined
+    issues.length > 0 ||
+    key === undefined ||
+    factoryAddress === undefined ||
+    factoryCodeHash === undefined
   ) {
-    issues.push(
-      "HOOKS_LAUNCH_EXECUTOR_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS and HOOKS_LAUNCH_FACTORY_CODE_HASH",
-    );
-  }
-  // Decision 0131: the executor verifies OfficialTax modules only.
-  if (data.HOOKS_LAUNCH_HOOK_KIND === "loopDynamic") {
-    issues.push(
-      "HOOKS_LAUNCH_EXECUTOR_ENABLED: not supported with HOOKS_LAUNCH_HOOK_KIND=loopDynamic (the executor verifies OfficialTax launches only; Decision 0131)",
-    );
-  }
-  if (issues.length > 0 || key === undefined) {
     throw new ConfigurationError(issues);
   }
   return Object.freeze({
     privateKey: (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`,
-    factoryAddress: data.HOOKS_LAUNCH_FACTORY_ADDRESS!.toLowerCase(),
-    factoryCodeHash: data.HOOKS_LAUNCH_FACTORY_CODE_HASH!.toLowerCase(),
+    hookKind: dynamic ? ("loopDynamic" as const) : ("officialTax" as const),
+    factoryAddress: factoryAddress.toLowerCase(),
+    factoryCodeHash: factoryCodeHash.toLowerCase(),
     confirmations: data.HOOKS_LAUNCH_EXECUTOR_CONFIRMATIONS,
     pollIntervalMs: data.HOOKS_LAUNCH_EXECUTOR_POLL_INTERVAL_MS,
     leaseSeconds: data.HOOKS_LAUNCH_EXECUTOR_LEASE_SECONDS,
@@ -3742,6 +3782,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS: blankAsUndefined(
       environment["LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS"],
     ),
+    LAUNCH2_DYNAMIC_FACTORY_ADDRESS: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_FACTORY_ADDRESS"],
+    ),
+    LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: blankAsUndefined(
+      environment["LAUNCH2_DYNAMIC_FACTORY_CODE_HASH"],
+    ),
   });
 
   if (!parsed.success) {
@@ -3881,6 +3927,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       minimumSaleLeadSeconds: parsed.data.HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS,
       fixedBuybackRecipient:
         parsed.data.LAUNCH2_BUYBACK_RECIPIENT?.toLowerCase() ?? null,
+      hookKind: parsed.data.HOOKS_LAUNCH_HOOK_KIND,
+      dynamicFactory:
+        parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS === undefined ||
+        parsed.data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
+          ? null
+          : Object.freeze({
+              address:
+                parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS.toLowerCase(),
+              codeHash:
+                parsed.data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH.toLowerCase(),
+            }),
     },
     meme: parseMemeConfig(parsed.data, parseLaunchContractConfig(parsed.data)),
     launch2: Object.freeze({

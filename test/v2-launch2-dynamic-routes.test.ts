@@ -264,7 +264,11 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     expect(Object.keys(off.json<object>()).sort()).toEqual(errorKeys);
     expect(off.json()).toMatchObject({
       code: "CAPABILITY_UNAVAILABLE",
-      detailsSafe: { reasonCode: "LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED" },
+      // Decision 0132: the registry's Hook kind rides on dependency 503s.
+      detailsSafe: {
+        reasonCode: "LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED",
+        hookKind: "loopDynamic",
+      },
     });
     const { app } = await createApp({ repository });
     const pending = await get(
@@ -272,7 +276,43 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       `/v2/launch2/instances/${unindexed.instanceId}/dynamic-pool`,
     );
     expect(pending.json()).toMatchObject({
-      detailsSafe: { reasonCode: "LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED" },
+      detailsSafe: {
+        reasonCode: "LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED",
+        hookKind: "loopDynamic",
+      },
+    });
+    expect(Object.keys(pending.json<object>()).sort()).toEqual(errorKeys);
+    const foreignRead = await createApp({
+      repository,
+      dynamic: defaultDynamicState({
+        hook: { trustedRouter: "0x1212121212121212121212121212121212121212" },
+      }),
+    });
+    const foreignPool = await get(
+      foreignRead.app,
+      `/v2/launch2/instances/${record.instanceId}/dynamic-pool`,
+    );
+    expect(foreignPool.statusCode).toBe(503);
+    const down = await createApp({
+      repository,
+      dynamic: { ...defaultDynamicState(), failRead: true },
+    });
+    const downPool = await get(
+      down.app,
+      `/v2/launch2/instances/${record.instanceId}/dynamic-pool`,
+    );
+    expect(downPool.statusCode).toBe(503);
+    expect(downPool.json()).toMatchObject({
+      detailsSafe: {
+        reasonCode: "LAUNCH2_CHAIN_READ_FAILED",
+        hookKind: "loopDynamic",
+      },
+    });
+    expect(foreignPool.json()).toMatchObject({
+      detailsSafe: {
+        reasonCode: "LAUNCH2_DYNAMIC_HOOK_MISMATCH",
+        hookKind: "loopDynamic",
+      },
     });
     const foreign = await createApp({
       repository,

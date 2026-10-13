@@ -704,6 +704,9 @@ describe("launch chain slot (Decision 0038)", () => {
       factoryCodeHash: null,
       minimumSaleLeadSeconds: 86_400,
       fixedBuybackRecipient: null,
+      // Decision 0132: OfficialTax by default, no LoopDynamic Factory.
+      hookKind: "officialTax",
+      dynamicFactory: null,
     });
     const environment = validEnvironment();
     environment["HOOKS_LAUNCH_ENABLED"] = "on";
@@ -765,6 +768,9 @@ describe("launch chain slot (Decision 0038)", () => {
       factoryCodeHash: `0x${"ab".repeat(32)}`,
       minimumSaleLeadSeconds: 86_400,
       fixedBuybackRecipient: null,
+      // Decision 0132: OfficialTax by default, no LoopDynamic Factory.
+      hookKind: "officialTax",
+      dynamicFactory: null,
     });
     expect(() =>
       loadConfig({
@@ -816,6 +822,35 @@ describe("launch chain slot (Decision 0038)", () => {
         LAUNCH_BSC_RPC_URLS: "",
       }),
     ).toThrow(/LAUNCH2_POOL_ROUTER_ADDRESS/);
+  });
+
+  it("parses the Decision 0132 API LoopDynamic Factory pair for Hooks saves / signing", () => {
+    const environment = {
+      ...validEnvironment(),
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_BSC_RPC_URLS: "https://bsc-testnet.example/rpc",
+      HOOKS_LAUNCH_HOOK_KIND: "loopDynamic",
+      LAUNCH2_DYNAMIC_FACTORY_ADDRESS:
+        "0xAF077cAb35385027592f959aCA185f815C3c5A5A",
+      LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: `0x${"A4".repeat(32)}`,
+    };
+    expect(loadConfig(environment).hooksLaunch).toMatchObject({
+      hookKind: "loopDynamic",
+      dynamicFactory: {
+        address: "0xaf077cab35385027592f959aca185f815c3c5a5a",
+        codeHash: `0x${"a4".repeat(32)}`,
+      },
+    });
+    expect(() =>
+      loadConfig({ ...environment, LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: "" }),
+    ).toThrow(/LAUNCH2_DYNAMIC_FACTORY_CODE_HASH/);
+    expect(() =>
+      loadConfig({
+        ...environment,
+        LAUNCH_CHAIN_ID: "56",
+        LAUNCH_BSC_RPC_URLS: "",
+      }),
+    ).toThrow(/LAUNCH2_DYNAMIC_FACTORY_ADDRESS/);
   });
 
   it("parses the Decision 0131 LoopDynamic keys (default off, LoopRouter pair BSC Testnet only)", () => {

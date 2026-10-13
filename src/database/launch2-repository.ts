@@ -188,6 +188,7 @@ const instanceColumns = `
     as pool_volume_24h_usd1,
   coalesce(activated_at, registered_at) as sort_at,
   meme_transfers_target_block::text,
+  meme_transfers_coverage_failures,
   pool_router_target_block::text,
   pool_hook_kind, dynamic_hook_address, dynamic_pool_id,
   dynamic_hook_bound_block::text,
@@ -449,6 +450,10 @@ function secondsToTimestamp(seconds: string): string {
 /**
  * Decision 0126: the router attribution the lane paired with a PoolManager
  * swap (all five or none; anything malformed is left unattributed).
+ * Decision 0132: `attributionSource = transactionSender` — a LoopDynamic
+ * swap attributed to its transaction's `from` (direct LoopRouter call): the
+ * same four values without a router log index. The sixth value is the
+ * stored `attribution_source`.
  */
 function attributionValues(
   a: Readonly<Record<string, string>>,
@@ -461,6 +466,22 @@ function attributionValues(
   const routerLog = a["routerLogIndex"];
   const address = /^0x[0-9a-f]{40}$/u;
   const positive = /^[1-9][0-9]{0,77}$/u;
+  if (a["attributionSource"] === "transactionSender") {
+    if (
+      payer === undefined ||
+      recipient === undefined ||
+      amountIn === undefined ||
+      amountOut === undefined ||
+      routerLog !== undefined ||
+      !address.test(payer) ||
+      !address.test(recipient) ||
+      !positive.test(amountIn) ||
+      !positive.test(amountOut)
+    ) {
+      return [null, null, null, null, null, null];
+    }
+    return [payer, recipient, amountIn, amountOut, null, "transaction_sender"];
+  }
   if (
     payer === undefined ||
     recipient === undefined ||
@@ -474,9 +495,16 @@ function attributionValues(
     !/^[0-9]{1,9}$/u.test(routerLog) ||
     Number(routerLog) <= logIndex
   ) {
-    return [null, null, null, null, null];
+    return [null, null, null, null, null, null];
   }
-  return [payer, recipient, amountIn, amountOut, Number(routerLog)];
+  return [
+    payer,
+    recipient,
+    amountIn,
+    amountOut,
+    Number(routerLog),
+    "router_swap",
+  ];
 }
 
 async function insertFact(
@@ -615,11 +643,12 @@ async function insertFact(
             instance_id, pool_id, caller_address, side, usd1_amount,
             meme_amount, tax_amount, tax_token, sqrt_price_x96, price_e18,
             swapped_at, wallet_address, recipient_address, router_amount_in,
-            router_amount_out, router_log_index
+            router_amount_out, router_log_index, attribution_source
           )
           values ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10::numeric,
             $11::numeric, $12::numeric, $13, $14::numeric, $15::numeric,
-            $16::timestamptz, $17, $18, $19::numeric, $20::numeric, $21::integer)
+            $16::timestamptz, $17, $18, $19::numeric, $20::numeric, $21::integer,
+            $22)
           on conflict (chain_id, transaction_hash, log_index) do update set
             block_number = excluded.block_number,
             block_hash = excluded.block_hash,
@@ -631,7 +660,12 @@ async function insertFact(
             recipient_address = coalesce(public.launch2_pool_swaps.recipient_address, excluded.recipient_address),
             router_amount_in = coalesce(public.launch2_pool_swaps.router_amount_in, excluded.router_amount_in),
             router_amount_out = coalesce(public.launch2_pool_swaps.router_amount_out, excluded.router_amount_out),
-            router_log_index = coalesce(public.launch2_pool_swaps.router_log_index, excluded.router_log_index)
+            router_log_index = coalesce(public.launch2_pool_swaps.router_log_index, excluded.router_log_index),
+            -- Decision 0132: the source travels with the first attribution.
+            attribution_source = case
+              when public.launch2_pool_swaps.wallet_address is null
+                then excluded.attribution_source
+              else public.launch2_pool_swaps.attribution_source end
         `,
         values: [
           ...base,
@@ -1289,6 +1323,10 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     nextChangeAt: instance.nextChangeAt,
     // Decision 0125: null until the one MEME transfer re-scan started.
     memeTransfersTargetBlock: nullableText(row, "meme_transfers_target_block"),
+    // Decision 0132: consecutive failed coverage checks (3 = stalled).
+    memeTransfersCoverageFailures: Number(
+      row["meme_transfers_coverage_failures"] ?? 0,
+    ),
     // Decision 0126: the router-attribution re-scan.
     graduationBlockNumber: instance.graduation?.blockNumber ?? null,
     poolRouterTargetBlock: nullableText(row, "pool_router_target_block"),
@@ -1505,8 +1543,55 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
       );
     },
 
+    async memeLedgerBalances(input) {
+      const addresses = input.addresses.map((address) => address.toLowerCase());
+      const rows = await query<Row>(
+        `
+          select flow.address, sum(flow.delta)::text as balance
+          from (
+            select t.to_address as address, t.amount as delta
+            from public.launch2_meme_transfers t
+            where t.chain_id = $1 and t.instance_id = $2::uuid
+              and not t.removed and t.block_number < $3::numeric
+              and t.to_address = any($4::text[])
+            union all
+            select t.from_address, -t.amount
+            from public.launch2_meme_transfers t
+            where t.chain_id = $1 and t.instance_id = $2::uuid
+              and not t.removed and t.block_number < $3::numeric
+              and t.from_address = any($4::text[])
+          ) flow
+          group by flow.address
+        `,
+        [input.chainId, input.instanceId, input.beforeBlockNumber, addresses],
+      );
+      const supply = await query<Row>(
+        `
+          select (
+            coalesce(sum(case when t.from_address = $4 then t.amount end), 0)
+            - coalesce(sum(case when t.to_address = $4 then t.amount end), 0)
+          )::text as supply
+          from public.launch2_meme_transfers t
+          where t.chain_id = $1 and t.instance_id = $2::uuid
+            and not t.removed and t.block_number < $3::numeric
+        `,
+        [input.chainId, input.instanceId, input.beforeBlockNumber, zeroAddress],
+      );
+      const balances: Record<string, string> = {};
+      for (const address of addresses) balances[address] = "0";
+      for (const row of rows) {
+        balances[text(row, "address")] = text(row, "balance");
+      }
+      return Object.freeze({
+        balances: Object.freeze(balances),
+        supply: supply[0] === undefined ? "0" : text(supply[0], "supply"),
+      });
+    },
+
     async recordMemeCoverage(input) {
       for (const verdict of input.verdicts) {
+        // Decision 0132: unreadable state at the segment end — nothing.
+        if (verdict.kind === "pending") continue;
         if (verdict.kind === "complete") {
           await query(
             `update public.launch2_instances
@@ -1620,6 +1705,29 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
                 input.chainId,
                 input.memeTransferCoverage.instanceIds,
                 input.memeTransferCoverage.targetBlockNumber,
+              ],
+            });
+          }
+          // Decision 0132: per-instance degradation of a segment the lane
+          // could not vouch for (after the target above, same transaction).
+          for (const degraded of input.memeCoverageDegraded ?? []) {
+            await client.query({
+              text: `
+                update public.launch2_instances
+                set meme_transfers_complete_at = null,
+                  meme_transfers_coverage_failures = case
+                    when $3 = 'unverified' then meme_transfers_coverage_failures
+                    else $4::integer end,
+                  meme_transfers_target_block = case
+                    when $3 = 'retry' then null
+                    else meme_transfers_target_block end
+                where chain_id = $1 and instance_id = $2::uuid
+              `,
+              values: [
+                input.chainId,
+                degraded.instanceId,
+                degraded.kind,
+                degraded.failedAttempts,
               ],
             });
           }

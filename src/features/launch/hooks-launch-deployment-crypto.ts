@@ -15,6 +15,18 @@ const bytes32Pattern = /^0x[0-9a-fA-F]{64}$/;
 const hookPermissionMask = 0x3fffn;
 const requiredHookPermissionBits = 0x20ccn;
 
+/**
+ * Decision 0132: the v4 permission bits a Hook address must carry, by the
+ * Factory's Hook kind. `OfficialTaxHook`: 0x20CC (unchanged since S125);
+ * `LoopDynamicHook` (`LoopHookDeploymentFactory.REQUIRED_PERMISSION_MASK`):
+ * afterInitialize | beforeSwap | afterSwap | afterSwapReturnDelta = 0x10C4.
+ */
+export const hooksLaunchHookPermissionBits = Object.freeze({
+  officialTax: requiredHookPermissionBits,
+  loopDynamic: 0x10c4n,
+} as const);
+export type HooksLaunchHookKind = keyof typeof hooksLaunchHookPermissionBits;
+
 export const hooksLaunchDeploymentTypes = {
   LaunchRequest: [
     { name: "configHash", type: "bytes32" },
@@ -95,6 +107,12 @@ export function createHooksLaunchDeploymentTypedData(input: {
   readonly chainId: number;
   readonly verifyingContract: string;
   readonly request: HooksLaunchTypedRequestInput;
+  /**
+   * Decision 0132: the target Factory's `TEMPLATE_HASH`. Absent = the
+   * OfficialTax `keccak256("hooks_launch_v1")` (byte-identical typed data);
+   * a LoopDynamic Factory commits its Hook parameters into it.
+   */
+  readonly templateHash?: string;
 }) {
   const { request } = input;
   const uint64Max = (1n << 64n) - 1n;
@@ -112,7 +130,9 @@ export function createHooksLaunchDeploymentTypedData(input: {
     !/^(0|[1-9][0-9]*)$/.test(request.nftSaleStart) ||
     !/^(0|[1-9][0-9]*)$/.test(request.deadline) ||
     !bytes32Pattern.test(request.memeSalt) ||
-    !/^(0|[1-9][0-9]*)$/.test(request.nonce)
+    !/^(0|[1-9][0-9]*)$/.test(request.nonce) ||
+    (input.templateHash !== undefined &&
+      !bytes32Pattern.test(input.templateHash))
   ) {
     throw new Error("Invalid Hooks launch signing request");
   }
@@ -138,7 +158,8 @@ export function createHooksLaunchDeploymentTypedData(input: {
       deadline: request.deadline,
       memeSalt: request.memeSalt as Hex,
       nonce: request.nonce,
-      templateHash: hooksLaunchTemplateHash,
+      templateHash: (input.templateHash?.toLowerCase() ??
+        hooksLaunchTemplateHash) as Hex,
     }),
   });
 }
@@ -223,6 +244,8 @@ function* searchHooksLaunchSalt(input: {
   readonly deployer: string;
   readonly initCodeHash: string;
   readonly maxAttempts: number;
+  /** Decision 0132: absent = OfficialTax (0x20CC). */
+  readonly hookKind?: HooksLaunchHookKind;
 }): Generator<void, Hex, void> {
   if (
     !addressPattern.test(input.deployer) ||
@@ -236,14 +259,17 @@ function* searchHooksLaunchSalt(input: {
   const deployer = input.deployer.toLowerCase().slice(2);
   const initCodeHash = input.initCodeHash as Hex;
   const create2Prefix = `0xff${deployer}` as Hex;
-  for (let attempt = 0; attempt < input.maxAttempts; attempt += 1) {
+  const required =
+    hooksLaunchHookPermissionBits[input.hookKind ?? "officialTax"];
+  // Decision 0132: a zero salt means "none registered" to the LoopDynamic
+  // Factory (`deployLaunch` skips `registerSalt`, the Hook would be mined
+  // on chain at graduation at another address), so its search starts at 1.
+  const first = input.hookKind === "loopDynamic" ? 1 : 0;
+  for (let attempt = first; attempt < input.maxAttempts; attempt += 1) {
     if (attempt % 256 === 0) yield;
     const salt = numberToHex(BigInt(attempt), { size: 32 });
     const digest = keccak256(concatHex([create2Prefix, salt, initCodeHash]));
-    if (
-      (BigInt(`0x${digest.slice(-4)}`) & hookPermissionMask) ===
-      requiredHookPermissionBits
-    ) {
+    if ((BigInt(`0x${digest.slice(-4)}`) & hookPermissionMask) === required) {
       return salt;
     }
   }

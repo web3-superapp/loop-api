@@ -25,10 +25,14 @@ import {
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
 import { launch2HookKindOf } from "./features/launch2/launch2-dynamic.js";
+import { launch2PoolSwapFacts } from "./features/launch2/launch2-pool.js";
 import {
   assessLaunch2MemeCoverage,
+  compareLaunch2MemeBalances,
   launch2MemeCoverageMaxAttempts,
   launch2MemeCoverageReasonCode,
+  selectLaunch2MemeBalanceSample,
+  type Launch2MemeBalanceVerdict,
   type Launch2MemeCoverageGap,
 } from "./features/launch2/launch2-meme-coverage.js";
 
@@ -79,6 +83,8 @@ import {
  */
 
 export const launch2DefaultMaxLogRange = 2_000n;
+
+const zeroAddress = "0x0000000000000000000000000000000000000000";
 
 /** Decision 0129 §2: no endpoint returned an instance's deploy-block mint. */
 const rpcLogsUntrustedReasonCode = "LAUNCH2_RPC_LOGS_UNTRUSTED";
@@ -221,12 +227,37 @@ function attributionArgs(
   };
 }
 
+function senderAttributionArgs(
+  attribution:
+    | {
+        readonly payer: string;
+        readonly recipient: string;
+        readonly amountIn: string;
+        readonly amountOut: string;
+      }
+    | undefined,
+): Record<string, string> {
+  if (attribution === undefined) return {};
+  return {
+    attributionSource: "transactionSender",
+    routerPayer: attribution.payer,
+    routerRecipient: attribution.recipient,
+    routerAmountIn: attribution.amountIn,
+    routerAmountOut: attribution.amountOut,
+  };
+}
+
 interface PoolOwner {
   readonly instanceId: string;
   readonly poolManager: string;
   readonly memeIsCurrency0: boolean;
   /** Decision 0131: the LoopDynamic Hook of the pool (null: OfficialTax). */
   readonly dynamicHook: string | null;
+  /**
+   * Decision 0132: the LoopDynamic Hook's `trustedRouter()` (LoopRouter);
+   * null for OfficialTax or a reader that does not report it.
+   */
+  readonly dynamicRouter: string | null;
 }
 
 /** PoolManager → the pool ids it serves (lane → chain filter). */
@@ -366,6 +397,115 @@ export function pairLaunch2DynamicFees(
   return paired;
 }
 
+/**
+ * Decision 0132: the LoopDynamic swaps attributable to a wallet — the
+ * coordinator's ruling: LoopRouter emits no event and the user's wallet
+ * calls it directly, so the trader is the transaction's `from`. A
+ * PoolManager `Swap` of a LoopDynamic pool is attributed when
+ *
+ * - its `sender` is the pool Hook's trusted LoopRouter,
+ * - the transaction's `to` is that LoopRouter (a direct call; the buyback
+ *   reaches LoopRouter through its executor / adapter and other routers
+ *   or contract wallets have another `to`), and
+ * - it is the only such swap of the transaction (one direct
+ *   `swapExactInput` call swaps exactly once),
+ *
+ * with `amountIn` = the swap's input and `amountOut` = its output minus the
+ * Hook fee of the same swap (`pairLaunch2DynamicFees`; LoopRouter pays the
+ * caller exactly that). Everything else stays anonymous: pool statistics
+ * only. Returns PoolManager log key → attribution.
+ */
+export function pairLaunch2DynamicSenders(input: {
+  readonly logs: readonly Launch2DecodedLog[];
+  readonly pools: ReadonlyMap<
+    string,
+    Pick<
+      PoolOwner,
+      "poolManager" | "memeIsCurrency0" | "dynamicHook" | "dynamicRouter"
+    >
+  >;
+  readonly fees: ReadonlyMap<string, string>;
+  readonly parties: ReadonlyMap<
+    string,
+    { readonly from: string; readonly to: string | null }
+  >;
+}): Map<
+  string,
+  {
+    readonly payer: string;
+    readonly recipient: string;
+    readonly amountIn: string;
+    readonly amountOut: string;
+  }
+> {
+  const keyOf = (log: Launch2DecodedLog): string =>
+    `${log.transactionHash}:${log.logIndex}`;
+  const routed = input.logs.filter((log) => {
+    if (log.eventName !== "Swap") return false;
+    const pool = input.pools.get(log.args["id"] ?? "");
+    return (
+      pool !== undefined &&
+      pool.dynamicHook !== null &&
+      pool.dynamicRouter !== null &&
+      pool.poolManager === log.contractAddress &&
+      log.args["sender"] === pool.dynamicRouter
+    );
+  });
+  const perTransaction = new Map<string, number>();
+  for (const log of routed) {
+    perTransaction.set(
+      log.transactionHash,
+      (perTransaction.get(log.transactionHash) ?? 0) + 1,
+    );
+  }
+  const attributed = new Map<
+    string,
+    {
+      readonly payer: string;
+      readonly recipient: string;
+      readonly amountIn: string;
+      readonly amountOut: string;
+    }
+  >();
+  for (const log of routed) {
+    const pool = input.pools.get(log.args["id"] ?? "");
+    const party = input.parties.get(log.transactionHash);
+    if (
+      pool === undefined ||
+      party === undefined ||
+      party.to === null ||
+      party.to !== pool.dynamicRouter ||
+      perTransaction.get(log.transactionHash) !== 1 ||
+      !/^0x[0-9a-f]{40}$/u.test(party.from)
+    ) {
+      continue;
+    }
+    let facts: ReturnType<typeof launch2PoolSwapFacts>;
+    try {
+      facts = launch2PoolSwapFacts({
+        amount0: BigInt(log.args["amount0"] ?? "0"),
+        amount1: BigInt(log.args["amount1"] ?? "0"),
+        memeIsCurrency0: pool.memeIsCurrency0,
+      });
+    } catch {
+      continue;
+    }
+    if (facts === null) continue;
+    const fee = BigInt(input.fees.get(keyOf(log)) ?? "0");
+    const amountIn = facts.side === "buy" ? facts.usd1Amount : facts.memeAmount;
+    const gross = facts.side === "buy" ? facts.memeAmount : facts.usd1Amount;
+    const amountOut = gross - fee;
+    if (amountIn <= 0n || amountOut <= 0n) continue;
+    attributed.set(keyOf(log), {
+      payer: party.from,
+      recipient: party.from,
+      amountIn: amountIn.toString(10),
+      amountOut: amountOut.toString(10),
+    });
+  }
+  return attributed;
+}
+
 function result(
   kind: Launch2LaneResult["kind"],
   reasonCode: string | null,
@@ -403,7 +543,12 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
   /** Hook → (PoolManager, currency0): immutable, read once per hook. */
   const hookPools = new Map<
     string,
-    { readonly poolManager: string; readonly currency0: string }
+    {
+      readonly poolManager: string;
+      readonly currency0: string;
+      /** Decision 0132: LoopDynamic only. */
+      readonly trustedRouter?: string;
+    }
   >();
 
   async function addPools(
@@ -433,6 +578,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         poolManager: facts.poolManager,
         memeIsCurrency0: facts.currency0 === instance.addresses.meme,
         dynamicHook: dynamic ? hook : null,
+        dynamicRouter: dynamic ? (facts.trustedRouter ?? null) : null,
       });
     }
   }
@@ -520,20 +666,29 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
    * Decision 0129 §2: re-scans whose target the checkpoint reached are
    * complete only when the indexed transfers prove it.
    */
-  async function checkMemeCoverage(throughBlock: bigint): Promise<void> {
+  async function checkMemeCoverage(
+    throughBlock: bigint,
+    /** Decision 0132: this tick's `balanceOf` verdicts at `throughBlock`. */
+    balances: ReadonlyMap<string, Launch2MemeBalanceVerdict>,
+  ): Promise<void> {
     const checks = await options.repository.listMemeCoverageChecks({
       chainId: options.chainId,
       throughBlockNumber: throughBlock.toString(10),
       maxAttempts: launch2MemeCoverageMaxAttempts,
     });
     if (checks.length === 0) return;
-    const verdicts = checks.map((facts) => assessLaunch2MemeCoverage(facts));
+    const verdicts = checks.map((facts) => {
+      const balance = balances.get(facts.instanceId);
+      return assessLaunch2MemeCoverage(
+        balance === undefined ? facts : { ...facts, balance },
+      );
+    });
     await options.repository.recordMemeCoverage({
       chainId: options.chainId,
       verdicts,
     });
     for (const verdict of verdicts) {
-      if (verdict.kind === "complete") continue;
+      if (verdict.kind === "complete" || verdict.kind === "pending") continue;
       options.onMemeCoverageIncomplete?.({
         reasonCode: launch2MemeCoverageReasonCode,
         instanceId: verdict.instanceId,
@@ -543,6 +698,268 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         stalled: verdict.kind === "stalled",
       });
     }
+  }
+
+  /**
+   * Decision 0132: what this segment proves about each tracked instance's
+   * MEME transfer coverage (see `launch2-meme-coverage.ts`). Pure reads;
+   * the degradations are committed with the segment.
+   */
+  async function verifyMemeSegment(input: {
+    readonly instances: readonly Launch2LaneInstance[];
+    readonly untrustedTokens: ReadonlySet<string>;
+    readonly memeTransfers: readonly Launch2MemeTransferRecord[];
+    readonly pools: ReadonlyMap<string, PoolOwner>;
+    readonly fromBlock: bigint;
+    readonly toBlock: bigint;
+    readonly timestamps: Map<bigint, bigint>;
+  }): Promise<
+    | { readonly kind: "moved" }
+    | {
+        readonly kind: "ok";
+        readonly ran: boolean;
+        readonly memeTransfers: Launch2MemeTransferRecord[];
+        readonly degraded: {
+          readonly instanceId: string;
+          readonly kind: "retry" | "stalled" | "unverified";
+          readonly failedAttempts: number;
+        }[];
+        readonly events: Parameters<
+          NonNullable<Launch2LaneOptions["onMemeCoverageIncomplete"]>
+        >[0][];
+        readonly balances: Map<string, Launch2MemeBalanceVerdict>;
+        readonly unverifiedCount: number;
+      }
+  > {
+    let transfers = [...input.memeTransfers];
+    const degraded: {
+      readonly instanceId: string;
+      readonly kind: "retry" | "stalled" | "unverified";
+      readonly failedAttempts: number;
+    }[] = [];
+    const events: Parameters<
+      NonNullable<Launch2LaneOptions["onMemeCoverageIncomplete"]>
+    >[0][] = [];
+    const balances = new Map<string, Launch2MemeBalanceVerdict>();
+    let unverifiedCount = 0;
+    let ran = false;
+    const ledgerOf = options.repository.memeLedgerBalances?.bind(
+      options.repository,
+    );
+    if (ledgerOf === undefined) {
+      return {
+        kind: "ok",
+        ran,
+        memeTransfers: transfers,
+        degraded,
+        events,
+        balances,
+        unverifiedCount,
+      };
+    }
+    const fail = (
+      instance: Launch2LaneInstance,
+      failures: number,
+      gaps: readonly Launch2MemeCoverageGap[],
+    ): void => {
+      const failedAttempts = failures + 1;
+      const stalled = failedAttempts >= launch2MemeCoverageMaxAttempts;
+      degraded.push({
+        instanceId: instance.instanceId,
+        kind: stalled ? "stalled" : "retry",
+        failedAttempts,
+      });
+      events.push({
+        reasonCode: launch2MemeCoverageReasonCode,
+        instanceId: instance.instanceId,
+        gaps,
+        failedAttempts,
+        negativeBalanceCount: 0,
+        stalled,
+      });
+    };
+    const blockAt = async (blockNumber: bigint, hash: string) => {
+      let at = input.timestamps.get(blockNumber);
+      if (at === undefined) {
+        const block = await options.chain.getBlock(blockNumber);
+        if (block === null || block.hash !== hash) return null;
+        at = block.timestamp;
+        input.timestamps.set(blockNumber, at);
+      }
+      return at;
+    };
+    for (const instance of input.instances) {
+      const failures = instance.memeTransfersCoverageFailures;
+      if (
+        instance.memeTransfersTargetBlock === undefined ||
+        failures === undefined ||
+        failures >= launch2MemeCoverageMaxAttempts ||
+        BigInt(instance.deployBlockNumber) > input.toBlock
+      ) {
+        continue;
+      }
+      const token = instance.addresses.meme;
+      // 3a: no endpoint returned this instance's deploy-block mint.
+      if (input.untrustedTokens.has(token)) {
+        fail(instance, failures, ["DEPLOY_MINT_UNTRUSTED"]);
+        continue;
+      }
+      // 3b: balanceOf at the segment's last block against the ledger.
+      ran = true;
+      const own = transfers.filter(
+        (transfer) => transfer.instanceId === instance.instanceId,
+      );
+      const hot = [
+        instance.addresses.curve,
+        ...[...input.pools.values()]
+          .filter((pool) => pool.instanceId === instance.instanceId)
+          .map((pool) => pool.poolManager),
+      ];
+      const sample = selectLaunch2MemeBalanceSample({ hot, transfers: own });
+      const before = await ledgerOf({
+        chainId: options.chainId,
+        instanceId: instance.instanceId,
+        addresses: sample,
+        beforeBlockNumber: input.fromBlock.toString(10),
+      });
+      let onChain: Awaited<
+        ReturnType<NonNullable<Launch2Chain["readMemeBalances"]>>
+      > | null = null;
+      if (options.chain.readMemeBalances !== undefined) {
+        try {
+          onChain = await options.chain.readMemeBalances({
+            token,
+            addresses: sample,
+            blockNumber: input.toBlock,
+          });
+        } catch (error) {
+          if (!(
+            error instanceof Error &&
+            (error as { reasonCode?: unknown }).reasonCode ===
+              "LAUNCH2_RPC_STATE_UNAVAILABLE"
+          )) {
+            throw error;
+          }
+        }
+      }
+      if (onChain === null) {
+        balances.set(instance.instanceId, { kind: "unverified" });
+        degraded.push({
+          instanceId: instance.instanceId,
+          kind: "unverified",
+          failedAttempts: failures,
+        });
+        unverifiedCount += 1;
+        continue;
+      }
+      const chainBalances = new Map(
+        sample.map((address) => [
+          address,
+          BigInt(onChain.balances[address] ?? "0"),
+        ]),
+      );
+      const chainSupply = BigInt(onChain.totalSupply);
+      const verdictOf = (
+        segment: readonly Launch2MemeTransferRecord[],
+      ): Launch2MemeBalanceVerdict => {
+        const ledger = new Map(
+          sample.map((address) => [
+            address,
+            BigInt(before.balances[address] ?? "0"),
+          ]),
+        );
+        let supply = BigInt(before.supply);
+        for (const transfer of segment) {
+          const amount = BigInt(transfer.amount);
+          if (ledger.has(transfer.from)) {
+            ledger.set(
+              transfer.from,
+              (ledger.get(transfer.from) ?? 0n) - amount,
+            );
+          }
+          if (ledger.has(transfer.to)) {
+            ledger.set(transfer.to, (ledger.get(transfer.to) ?? 0n) + amount);
+          }
+          if (transfer.from === zeroAddress) supply += amount;
+          if (transfer.to === zeroAddress) supply -= amount;
+        }
+        return compareLaunch2MemeBalances({
+          ledger,
+          ledgerSupply: supply,
+          chain: chainBalances,
+          chainSupply,
+        });
+      };
+      let verdict = verdictOf(own);
+      if (
+        verdict.kind === "mismatch" &&
+        options.chain.readMemeTransferAlternatives !== undefined
+      ) {
+        // Second chance: the segment's MEME logs from every endpoint; the
+        // union with the first answer is kept when it reconciles.
+        const answers = await options.chain.readMemeTransferAlternatives({
+          token,
+          fromBlock: input.fromBlock,
+          toBlock: input.toBlock,
+        });
+        for (const answer of answers) {
+          const merged = new Map(
+            own.map((transfer) => [
+              `${transfer.transactionHash}:${transfer.logIndex}`,
+              transfer,
+            ]),
+          );
+          for (const log of answer) {
+            const key = `${log.transactionHash}:${log.logIndex}`;
+            if (merged.has(key) || log.contractAddress !== token) continue;
+            const at = await blockAt(log.blockNumber, log.blockHash);
+            if (at === null) return { kind: "moved" };
+            merged.set(key, {
+              instanceId: instance.instanceId,
+              from: log.args["from"] ?? "",
+              to: log.args["to"] ?? "",
+              amount: log.args["value"] ?? "",
+              transactionHash: log.transactionHash,
+              logIndex: log.logIndex,
+              blockNumber: log.blockNumber.toString(10),
+              blockHash: log.blockHash,
+              at: at.toString(10),
+            });
+          }
+          const candidate = [...merged.values()].sort((a, b) =>
+            a.blockNumber === b.blockNumber
+              ? a.logIndex - b.logIndex
+              : BigInt(a.blockNumber) < BigInt(b.blockNumber)
+                ? -1
+                : 1,
+          );
+          const second = verdictOf(candidate);
+          if (second.kind === "verified") {
+            transfers = [
+              ...transfers.filter(
+                (transfer) => transfer.instanceId !== instance.instanceId,
+              ),
+              ...candidate,
+            ];
+            verdict = second;
+            break;
+          }
+        }
+      }
+      balances.set(instance.instanceId, verdict);
+      if (verdict.kind === "mismatch") {
+        fail(instance, failures, verdict.gaps);
+      }
+    }
+    return {
+      kind: "ok",
+      ran,
+      memeTransfers: transfers,
+      degraded,
+      events,
+      balances,
+      unverifiedCount,
+    };
   }
 
   async function refreshStages(): Promise<number> {
@@ -820,9 +1237,37 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
         dynamicHookPools.size === 0
           ? new Map<string, string>()
           : pairLaunch2DynamicFees(decoded.logs, dynamicHookPools);
+      // Decision 0132: LoopDynamic swaps of a direct LoopRouter call are the
+      // transaction sender's (the only transactions whose parties are read).
+      const senderCandidates = [
+        ...new Set(
+          decoded.logs
+            .filter((log) => {
+              if (log.eventName !== "Swap") return false;
+              const pool = pools.get(log.args["id"] ?? "");
+              return (
+                pool !== undefined &&
+                pool.dynamicRouter !== null &&
+                log.args["sender"] === pool.dynamicRouter
+              );
+            })
+            .map((log) => log.transactionHash),
+        ),
+      ];
+      const senderAttributions =
+        senderCandidates.length === 0 ||
+        options.chain.readTransactionParties === undefined
+          ? new Map<string, never>()
+          : pairLaunch2DynamicSenders({
+              logs: decoded.logs,
+              pools,
+              fees: dynamicFees,
+              parties:
+                await options.chain.readTransactionParties(senderCandidates),
+            });
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
-      const memeTransfers: Launch2MemeTransferRecord[] = [];
+      let memeTransfers: Launch2MemeTransferRecord[] = [];
       let ignored = decoded.ignored;
       for (const log of decoded.logs) {
         const swapPool =
@@ -892,6 +1337,12 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
                       dynamicFees.get(
                         `${log.transactionHash}:${log.logIndex}`,
                       ) ?? "0",
+                    // Decision 0132: the transaction sender, if attributable.
+                    ...senderAttributionArgs(
+                      senderAttributions.get(
+                        `${log.transactionHash}:${log.logIndex}`,
+                      ),
+                    ),
                   })
                 : Object.freeze({
                     ...log.args,
@@ -918,6 +1369,29 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           : (await options.chain.getBlock(toBlock))?.hash;
       if (toHash === undefined) {
         return result("unavailable", "LAUNCH2_BLOCK_HASH_UNAVAILABLE");
+      }
+      // Decision 0132: per-instance MEME coverage of this segment — a
+      // missing mint anchor degrades only its instance (3a); every other
+      // tracked instance is vouched for by balanceOf at toBlock (3b).
+      const coverage = await verifyMemeSegment({
+        instances,
+        untrustedTokens: new Set(first.untrustedTokens ?? []),
+        memeTransfers,
+        pools,
+        fromBlock,
+        toBlock,
+        timestamps,
+      });
+      if (coverage.kind === "moved") {
+        return result("unavailable", "LAUNCH2_BLOCK_MOVED");
+      }
+      memeTransfers = coverage.memeTransfers;
+      if (coverage.ran) {
+        // The balances were read by number: the block must still be ours.
+        const after = await options.chain.getBlock(toBlock);
+        if (after === null || after.hash !== toHash) {
+          return result("unavailable", "LAUNCH2_BLOCK_MOVED");
+        }
       }
       await options.repository.commitSegment({
         chainId: options.chainId,
@@ -956,14 +1430,26 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
                 ).toString(10),
               },
             }),
+        ...(coverage.degraded.length === 0
+          ? {}
+          : { memeCoverageDegraded: coverage.degraded }),
       });
+      for (const event of coverage.events) {
+        options.onMemeCoverageIncomplete?.(event);
+      }
+      if (coverage.unverifiedCount > 0) {
+        options.onWarning?.({
+          reasonCode: "LAUNCH2_MEME_BALANCE_UNVERIFIABLE",
+          count: coverage.unverifiedCount,
+        });
+      }
       if (ignored > 0) {
         options.onWarning?.({
           reasonCode: "LAUNCH2_EVENTS_IGNORED",
           count: ignored,
         });
       }
-      await checkMemeCoverage(toBlock);
+      await checkMemeCoverage(toBlock, coverage.balances);
       scanned = {
         fromBlockNumber: fromBlock.toString(10),
         toBlockNumber: toBlock.toString(10),

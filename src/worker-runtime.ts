@@ -792,6 +792,10 @@ export async function runReconciliationWorker(
           privateKey: hooksExecutorConfig.privateKey,
           factoryAddress: hooksExecutorConfig.factoryAddress,
           rpcUrls: launchChainConfig.rpcUrls,
+          // Decision 0132: the LoopDynamic Factory (template + read-back).
+          ...(hooksExecutorConfig.hookKind === "loopDynamic"
+            ? { hookKind: "loopDynamic" as const }
+            : {}),
         });
       } catch (error) {
         options.logger.warn(

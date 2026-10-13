@@ -442,3 +442,13 @@ NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不�
   文案：「该配置版本已被你的另一个项目使用，请重新保存配置并等待审批」，按钮引导到编辑页重新保存。
   读不到（RPC 失败）→ `503 CAPABILITY_UNAVAILABLE / HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，不放行签名。
 - 执行器侧不变：若仍撞上（例如 0127 前已提交的任务），任务以 `HOOKS_LAUNCH_ALREADY_DEPLOYED` 失败、不上链（§9.2）。
+
+## 14. 外盘 Hook 种类 `loopDynamic` 的发射（S170 / 决策 0132）
+
+服务端开关 `HOOKS_LAUNCH_HOOK_KIND=loopDynamic`（配 `LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `_CODE_HASH`）时，新项目在 LoopDynamic 工厂发射。**请求、响应形状、错误码都不变**，App 无需分支；以下是值的差异：
+
+- `PUT …/hooks-config` / `GET …/hooks-config`：`config.templateHash` 是 LoopDynamic 工厂的 `TEMPLATE_HASH`（承诺了 Hook 参数：买卖各 2 %、`POST_SWAP`、`Open` 路由、回购不计权），`fixedEconomics.officialPoolBuyTaxBps / officialPoolSellTaxBps` 取自工厂参数（测试网均为 200）。Hook 参数本身计入 `configHash`，但不在响应里回显（响应键集合不变）。
+- `GET …/signing-request`：`typedData.message.templateHash` = 上述值（照原样签即可）；`hookSalt` 按权限位 **`0x10C4`** 挖（不再是 `0x20CC`），`hookAddress` 是毕业时才部署的 Hook 的预测地址。
+- `GET …/hooks-deployments/{jobId}`：激活后 `addresses.deployed.hook` 与 `addresses.deployed.priceRecorder` 为 `0x0000000000000000000000000000000000000000`（Hook 在毕业交易里部署；预测地址见 `addresses.predicted.hook`）。不要把零地址当错误。
+- 种类与模板不一致（例如开关切换前保存的旧版本）：签名准备 / 提交 503 `HOOKS_FACTORY_TEMPLATE_MISMATCH`，提示项目方重新保存并重新审核。LoopDynamic 工厂未配置或其模板读不到：503 `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`。
+- 实例毕业后的外盘交易 / 奖励面板见 `docs/frontend-v2-launch2-api.md` §3.12。

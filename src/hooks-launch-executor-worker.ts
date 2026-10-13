@@ -43,6 +43,10 @@ export function createHooksLaunchExecutorLane(options: {
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.onStep === undefined ? {} : { onStep: options.onStep }),
     policy: {
+      // Decision 0132: absent for OfficialTax (unchanged policy object).
+      ...(options.config.hookKind === "loopDynamic"
+        ? { hookKind: "loopDynamic" as const }
+        : {}),
       factoryCodeHash: options.config.factoryCodeHash,
       confirmations: options.config.confirmations,
       maxAttempts: options.config.maxAttempts,

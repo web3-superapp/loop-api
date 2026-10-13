@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactoryHashPolicy,
   hooksLaunchRejectionReasons,
+  type HooksLaunchTemplateFactory,
 } from "./hooks-launch-project-config.js";
 
 /**
@@ -302,6 +304,8 @@ export interface HooksLaunchReviewRepository {
  */
 export interface HooksLaunchReviewExecuteContext {
   readonly nftSaleDurationSeconds?: number;
+  /** Decision 0132: a LoopDynamic target Factory's Hook parameters. */
+  readonly loopDynamic?: HooksLaunchLoopDynamicParams;
 }
 
 export interface HooksLaunchReviewService {
@@ -325,7 +329,7 @@ export interface HooksLaunchReviewService {
 export function createHooksLaunchReviewService(input: {
   readonly repository: HooksLaunchReviewRepository | null;
   /** The target Factory (Decision 0119); null fails config saves closed. */
-  readonly factory?: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
+  readonly factory?: HooksLaunchTemplateFactory | null;
   /**
    * Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; an operator save naming
    * another address is `OPS_BUYBACK_RECIPIENT_FIXED`, none configured
@@ -390,16 +394,15 @@ export function createHooksLaunchReviewService(input: {
         );
       }
       const factory = input.factory ?? null;
-      let nftSaleDurationSeconds: number;
+      let policy: Awaited<ReturnType<typeof hooksLaunchFactoryHashPolicy>>;
       try {
         if (factory === null) throw new Error("no Factory");
-        nftSaleDurationSeconds = (await factory.nftSaleDuration()).seconds;
+        policy = await hooksLaunchFactoryHashPolicy(factory);
       } catch {
         throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
       }
-      return repository.execute(operator, parsed.data, {
-        nftSaleDurationSeconds,
-      });
+      // OfficialTax: exactly the pre-0132 context (no loopDynamic key).
+      return repository.execute(operator, parsed.data, policy);
     },
   } satisfies HooksLaunchReviewService);
 }

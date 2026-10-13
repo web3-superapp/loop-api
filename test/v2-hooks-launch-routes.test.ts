@@ -7,6 +7,11 @@ import type { AccountWalletRepository } from "../src/database/account-wallet-rep
 import type { Database } from "../src/database/database.js";
 import type { HooksLaunchFactoryReader } from "../src/features/launch/hooks-launch-deployment.js";
 import {
+  hooksLaunchLoopDynamicTemplateHash,
+  parseHooksLaunchDraft,
+} from "../src/features/launch/hooks-launch-config.js";
+import { testnetLoopDynamicParams } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
+import {
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
   type HooksLaunchProjectConfigRecord,
@@ -700,7 +705,8 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(failed.body).not.toContain("rpc");
   });
 
-  it("keeps saves and signing unavailable with HOOKS_LAUNCH_HOOK_KIND=loopDynamic (Decision 0131)", async () => {
+  it("keeps saves unavailable with HOOKS_LAUNCH_HOOK_KIND=loopDynamic but no LoopDynamic Factory reader (Decision 0132)", async () => {
+    // The injected reader is an OfficialTax one: never used for loopDynamic.
     const app = await createApp({
       configs: configRepositoryFake(),
       reader: factoryReader,
@@ -717,6 +723,123 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
       detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
     });
   });
+
+  it("saves, prepares and accepts a LoopDynamic launch against the Factory template (Decision 0132)", async () => {
+    const template = {
+      params: testnetLoopDynamicParams,
+      templateHash: hooksLaunchLoopDynamicTemplateHash(
+        testnetLoopDynamicParams,
+      ).toLowerCase(),
+    };
+    const dynamicReader: HooksLaunchFactoryReader = {
+      ...factoryReader,
+      hookKind: "loopDynamic",
+      nftSaleDuration: () => Promise.resolve({ seconds: 3_600, legacy: false }),
+      loopDynamicTemplate: () => Promise.resolve(template),
+    };
+    const configs = configRepositoryFake();
+    const fake = submissionsFake();
+    const accept = vi.fn((input: Parameters<typeof fake.accept>[0]) =>
+      fake.accept(input),
+    );
+    const app = await createApp({
+      configs,
+      reader: dynamicReader,
+      submissions: submissionsFake({ accept }),
+      overrides: { ...enabled, HOOKS_LAUNCH_HOOK_KIND: "loopDynamic" },
+    });
+    const saved = (await saveDraft(app)).json<{
+      config: {
+        templateHash: string;
+        configHash: string;
+        fixedEconomics: Record<string, unknown>;
+      };
+    }>();
+    // The configHash binds the Hook parameters; the response keeps the
+    // pre-0132 shape (strict App codec): no extra keys are echoed.
+    expect(saved.config.templateHash).toBe(template.templateHash);
+    expect(saved.config.configHash).toBe(
+      parseHooksLaunchDraft(draftBody, {
+        nowUnixSeconds: "1",
+        minimumLeadSeconds: 0,
+        nftSaleDurationSeconds: 3_600,
+        loopDynamic: testnetLoopDynamicParams,
+      }).configHash,
+    );
+    expect(Object.keys(saved.config)).not.toContain("poolHookKind");
+    expect(saved.config.fixedEconomics).not.toHaveProperty("loopDynamic");
+
+    const prepared = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(prepared.statusCode).toBe(200);
+    const body = prepared.json<{
+      typedData: { message: { templateHash: string } };
+      hookAddress: string;
+      hookSalt: string;
+    }>();
+    expect(body.typedData.message.templateHash).toBe(template.templateHash);
+    expect(BigInt(body.hookAddress) & 0x3fffn).toBe(0x10c4n);
+    expect(body.hookSalt).not.toBe(`0x${"0".repeat(64)}`);
+
+    const payload = await signedSubmission(app);
+    const response = await app.inject({
+      method: "POST",
+      url: `/v2/launch/projects/${projectId}/hooks-deployments`,
+      headers: s7CommandHeaders(),
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(accept).toHaveBeenCalledTimes(1);
+    expect(BigInt(accept.mock.calls[0]![0].hookAddress) & 0x3fffn).toBe(
+      0x10c4n,
+    );
+
+    // A config saved for the OfficialTax template is never signed here.
+    const officialConfigs = configRepositoryFake();
+    const official = await createApp({
+      configs: officialConfigs,
+      reader: {
+        ...factoryReader,
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 3_600, legacy: false }),
+      },
+    });
+    await saveDraft(official);
+    const swapped = await createApp({
+      configs: officialConfigs,
+      reader: dynamicReader,
+      overrides: { ...enabled, HOOKS_LAUNCH_HOOK_KIND: "loopDynamic" },
+    });
+    const refused = await swapped.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(refused.statusCode).toBe(503);
+    expect(refused.json()).toMatchObject({
+      detailsSafe: { reasonCode: "HOOKS_FACTORY_TEMPLATE_MISMATCH" },
+    });
+    // A Factory whose template cannot be read fails the save closed.
+    const unreadable = await createApp({
+      configs: configRepositoryFake(),
+      reader: {
+        ...dynamicReader,
+        loopDynamicTemplate: () => Promise.reject(new Error("rpc down")),
+      },
+      overrides: { ...enabled, HOOKS_LAUNCH_HOOK_KIND: "loopDynamic" },
+    });
+    const failed = await unreadable.inject({
+      method: "PUT",
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+      payload: { expectedVersion: 0, config: draftBody },
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.json()).toMatchObject({
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
+    });
+  }, 60_000);
 
   it("binds the draft to the Factory sale period and refuses a config hashed for another Factory (Decision 0119)", async () => {
     const configs = configRepositoryFake();

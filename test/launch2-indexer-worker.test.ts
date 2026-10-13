@@ -14,6 +14,7 @@ import { Launch2ChainRefusedError } from "../src/integrations/launch2/launch2-ch
 import {
   createLaunch2Lane,
   pairLaunch2DynamicFees,
+  pairLaunch2DynamicSenders,
   pairLaunch2RouterSwaps,
 } from "../src/launch2-indexer-worker.js";
 import {
@@ -70,8 +71,21 @@ function harness(options: {
   readonly hookPool?: {
     readonly poolManager: string;
     readonly currency0: string;
+    /** Decision 0132: the LoopDynamic Hook's trustedRouter(). */
+    readonly trustedRouter?: string;
   };
   readonly poolRouter?: string;
+  /** Decision 0132: tx hash → parties (readTransactionParties). */
+  readonly parties?: ReadonlyMap<string, { from: string; to: string | null }>;
+  /** Decision 0132: anchor tokens the reader could not vouch for. */
+  readonly untrustedTokens?: readonly string[];
+  /** Decision 0132: the repository's ledger below a block (tracked). */
+  readonly ledger?: NonNullable<Launch2Repository["memeLedgerBalances"]>;
+  /** Decision 0132: balanceOf at the segment end; "unavailable" = refused. */
+  readonly chainBalances?:
+    NonNullable<Launch2Chain["readMemeBalances"]> | "unavailable";
+  /** Decision 0132: per-endpoint MEME Transfer answers. */
+  readonly alternatives?: readonly (readonly Launch2DecodedLog[])[];
   /** Decision 0129 §2: what listMemeCoverageChecks returns. */
   readonly coverageChecks?: Launch2MemeCoverageFacts[];
   /** Decision 0129 §2: the chain refuses a range missing a mint anchor. */
@@ -104,6 +118,7 @@ function harness(options: {
   >[0][] = [];
   const anchorsAsked: (readonly { token: string; blockNumber: bigint }[])[] =
     [];
+  const partyQueries: string[][] = [];
   let checkpoint = options.checkpoint ?? null;
   let snapshotsToVerify: Awaited<
     ReturnType<Launch2Repository["listSnapshotsToVerify"]>
@@ -151,6 +166,9 @@ function harness(options: {
       stageUpdates.push(updates);
       return Promise.resolve(updates.length);
     },
+    ...(options.ledger === undefined
+      ? {}
+      : { memeLedgerBalances: options.ledger }),
   } as unknown as Launch2Repository;
   const chain: Launch2Chain = {
     verifyChain: () => Promise.resolve("ok"),
@@ -194,6 +212,9 @@ function harness(options: {
         );
       }
       return Promise.resolve({
+        ...(options.untrustedTokens === undefined
+          ? {}
+          : { untrustedTokens: options.untrustedTokens }),
         logs: (options.logs ?? []).filter(
           (log) =>
             log.blockNumber >= input.fromBlock &&
@@ -232,6 +253,33 @@ function harness(options: {
       options.hookPool === undefined
         ? Promise.reject(new Error("unused"))
         : Promise.resolve(options.hookPool),
+    ...(options.parties === undefined
+      ? {}
+      : {
+          readTransactionParties: (hashes: readonly string[]) => {
+            partyQueries.push([...hashes]);
+            return Promise.resolve(options.parties!);
+          },
+        }),
+    ...(options.chainBalances === undefined
+      ? {}
+      : {
+          readMemeBalances:
+            options.chainBalances === "unavailable"
+              ? () =>
+                  Promise.reject(
+                    new Launch2ChainRefusedError(
+                      "LAUNCH2_RPC_STATE_UNAVAILABLE",
+                    ),
+                  )
+              : options.chainBalances,
+        }),
+    ...(options.alternatives === undefined
+      ? {}
+      : {
+          readMemeTransferAlternatives: () =>
+            Promise.resolve(options.alternatives!),
+        }),
   };
   const lane = createLaunch2Lane({
     repository,
@@ -258,6 +306,7 @@ function harness(options: {
     coverageRecords,
     coverageEvents,
     anchorsAsked,
+    partyQueries,
     commits,
     verifications,
     stageUpdates,
@@ -1352,5 +1401,398 @@ describe("launch2_event lane — LoopDynamic (Decision 0131)", () => {
       new Map([[hook, poolId]]),
     );
     expect([...paired.entries()]).toEqual([[`${hash(1n)}:4`, "31"]]);
+  });
+});
+
+describe("launch2_event lane — LoopDynamic wallet attribution (Decision 0132)", () => {
+  const poolManager = "0x" + "8".repeat(40);
+  const loopRouter = "0x" + "7".repeat(40);
+  const otherRouter = "0x" + "5".repeat(40);
+  const wallet = "0x" + "a".repeat(40);
+  const hook = `0x${"c".repeat(36)}10c4`;
+  const poolId = hash(4242n);
+  const txA = hash(0xa1n);
+  const txB = hash(0xb1n);
+  const txC = hash(0xc1n);
+
+  function graduatedDynamic() {
+    const base = laneInstance();
+    return laneInstance({
+      ...base,
+      addresses: { ...base.addresses, hook: zeroAddress },
+      graduated: true,
+      officialPoolId: poolId,
+      dynamicHook: hook,
+    });
+  }
+  const swap = (
+    tx: string,
+    sender: string,
+    logIndex: number,
+  ): Launch2DecodedLog => ({
+    contractAddress: poolManager,
+    eventName: "Swap",
+    args: {
+      id: poolId,
+      sender,
+      amount0: "-100",
+      amount1: "160000",
+      sqrtPriceX96: "1",
+    },
+    transactionHash: tx,
+    logIndex,
+    blockNumber: 300n,
+    blockHash: hash(300n),
+  });
+  const buyFee = (tx: string, logIndex: number): Launch2DecodedLog => ({
+    contractAddress: hook,
+    eventName: "BuyFeeCharged",
+    args: { buyer: wallet, grossMeme: "160000", fee: "3200" },
+    transactionHash: tx,
+    logIndex,
+    blockNumber: 300n,
+    blockHash: hash(300n),
+  });
+
+  it("attributes a direct LoopRouter swap to tx.from (net of the Hook fee) and leaves other swaps anonymous", async () => {
+    const { lane, commits, partyQueries } = harness({
+      instances: [graduatedDynamic()],
+      head: 400n,
+      logs: [
+        swap(txA, loopRouter, 1),
+        buyFee(txA, 2),
+        // Through LoopRouter, but not a direct call (e.g. the buyback).
+        swap(txB, loopRouter, 3),
+        // Another router: no transaction read at all.
+        swap(txC, otherRouter, 4),
+      ],
+      hookPool: {
+        poolManager,
+        currency0: "0x" + "2".repeat(40),
+        trustedRouter: loopRouter,
+      },
+      parties: new Map([
+        [txA, { from: wallet, to: loopRouter }],
+        [txB, { from: wallet, to: "0x" + "6".repeat(40) }],
+      ]),
+    });
+    await lane.runOnce();
+    expect(partyQueries).toEqual([[txA, txB]]);
+    const swaps = (commits[0]?.events ?? []).filter(
+      (event) => event.eventName === "Swap",
+    );
+    expect(swaps[0]?.args).toMatchObject({
+      poolHookKind: "loopDynamic",
+      dynamicFee: "3200",
+      attributionSource: "transactionSender",
+      routerPayer: wallet,
+      routerRecipient: wallet,
+      routerAmountIn: "100",
+      routerAmountOut: "156800",
+    });
+    for (const anonymous of swaps.slice(1)) {
+      expect(anonymous.args).not.toHaveProperty("routerPayer");
+      expect(anonymous.args).not.toHaveProperty("attributionSource");
+    }
+  });
+
+  it("attributes nothing without the Hook's trusted router or a transaction reader", async () => {
+    const unreported = harness({
+      instances: [graduatedDynamic()],
+      head: 400n,
+      logs: [swap(txA, loopRouter, 1)],
+      hookPool: { poolManager, currency0: "0x" + "2".repeat(40) },
+      parties: new Map([[txA, { from: wallet, to: loopRouter }]]),
+    });
+    await unreported.lane.runOnce();
+    expect(unreported.partyQueries).toEqual([]);
+    expect(unreported.commits[0]?.events[0]?.args).not.toHaveProperty(
+      "routerPayer",
+    );
+    const noReader = harness({
+      instances: [graduatedDynamic()],
+      head: 400n,
+      logs: [swap(txA, loopRouter, 1)],
+      hookPool: {
+        poolManager,
+        currency0: "0x" + "2".repeat(40),
+        trustedRouter: loopRouter,
+      },
+    });
+    await noReader.lane.runOnce();
+    expect(noReader.commits[0]?.events[0]?.args).not.toHaveProperty(
+      "routerPayer",
+    );
+  });
+
+  it("refuses two router swaps in one transaction and an output eaten by the fee", () => {
+    const pools = new Map([
+      [
+        poolId,
+        {
+          poolManager,
+          memeIsCurrency0: false,
+          dynamicHook: hook,
+          dynamicRouter: loopRouter,
+        },
+      ],
+    ]);
+    const parties = new Map([[txA, { from: wallet, to: loopRouter }]]);
+    expect(
+      pairLaunch2DynamicSenders({
+        logs: [swap(txA, loopRouter, 1), swap(txA, loopRouter, 3)],
+        pools,
+        fees: new Map(),
+        parties,
+      }).size,
+    ).toBe(0);
+    expect(
+      pairLaunch2DynamicSenders({
+        logs: [swap(txA, loopRouter, 1)],
+        pools,
+        fees: new Map([[`${txA}:1`, "160000"]]),
+        parties,
+      }).size,
+    ).toBe(0);
+    expect(
+      pairLaunch2DynamicSenders({
+        logs: [swap(txA, loopRouter, 1)],
+        pools,
+        fees: new Map(),
+        parties,
+      }).get(`${txA}:1`),
+    ).toEqual({
+      payer: wallet,
+      recipient: wallet,
+      amountIn: "100",
+      amountOut: "160000",
+    });
+  });
+});
+
+describe("launch2_event lane — per-instance MEME coverage and balance checks (Decision 0132)", () => {
+  const holder = "0x" + "9".repeat(40);
+  function tracked(
+    overrides: Partial<Launch2LaneInstance> = {},
+  ): Launch2LaneInstance {
+    return laneInstance({
+      memeTransfersTargetBlock: "150",
+      memeTransfersCoverageFailures: 0,
+      ...overrides,
+    });
+  }
+  const checkpoint = (n: bigint): Launch2Checkpoint => ({
+    lastBlockNumber: n.toString(10),
+    lastBlockHash: hash(n),
+    startedFromBlockNumber: "100",
+    updatedAt: new Date(0).toISOString(),
+  });
+  const transfer = (
+    instance: Launch2LaneInstance,
+    from: string,
+    to: string,
+    value: string,
+    logIndex: number,
+    blockNumber = 300n,
+  ): Launch2DecodedLog => ({
+    contractAddress: instance.addresses.meme,
+    eventName: "Transfer",
+    args: { from, to, value },
+    transactionHash: hash(BigInt(1_000 + logIndex)),
+    logIndex,
+    blockNumber,
+    blockHash: hash(blockNumber),
+  });
+  const coverageFacts = (instanceId: string): Launch2MemeCoverageFacts => ({
+    instanceId,
+    deployMintPresent: true,
+    negativeBalanceCount: 0,
+    failedAttempts: 0,
+  });
+
+  it("degrades only the instance whose mint anchor no endpoint returned; the segment still commits", async () => {
+    const bad = tracked({ memeTransfersTargetBlock: null });
+    const good = laneInstance();
+    const { lane, commits, coverageEvents } = harness({
+      instances: [bad, good],
+      head: 400n,
+      untrustedTokens: [bad.addresses.meme],
+      ledger: () => Promise.resolve({ balances: {}, supply: "0" }),
+      chainBalances: () => Promise.resolve({ balances: {}, totalSupply: "0" }),
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("seeded");
+    expect(commits).toHaveLength(1);
+    expect(commits[0]?.memeCoverageDegraded).toEqual([
+      { instanceId: bad.instanceId, kind: "retry", failedAttempts: 1 },
+    ]);
+    expect(coverageEvents).toEqual([
+      expect.objectContaining({
+        instanceId: bad.instanceId,
+        gaps: ["DEPLOY_MINT_UNTRUSTED"],
+        stalled: false,
+      }),
+    ]);
+  });
+
+  it("vouches for an empty or partial answer with balanceOf at the segment end and completes the coverage", async () => {
+    const instance = tracked();
+    const curve = instance.addresses.curve;
+    const ledgerCalls: unknown[] = [];
+    const balanceCalls: unknown[] = [];
+    const { lane, commits, coverageRecords } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: checkpoint(199n),
+      logs: [transfer(instance, curve, holder, "100", 1)],
+      ledger: (input) => {
+        ledgerCalls.push(input);
+        return Promise.resolve({
+          balances: { [curve]: "800" },
+          supply: "1000",
+        });
+      },
+      chainBalances: (input) => {
+        balanceCalls.push(input);
+        return Promise.resolve({
+          balances: { [curve]: "700", [holder]: "100" },
+          totalSupply: "1000",
+        });
+      },
+      coverageChecks: [coverageFacts(instance.instanceId)],
+    });
+    await lane.runOnce();
+    expect(ledgerCalls).toEqual([
+      expect.objectContaining({
+        instanceId: instance.instanceId,
+        addresses: [curve, holder],
+        beforeBlockNumber: "200",
+      }),
+    ]);
+    expect(balanceCalls).toEqual([
+      expect.objectContaining({
+        token: instance.addresses.meme,
+        blockNumber: 400n,
+      }),
+    ]);
+    expect(commits[0]?.memeCoverageDegraded).toBeUndefined();
+    expect(coverageRecords[0]?.verdicts).toEqual([
+      { kind: "complete", instanceId: instance.instanceId },
+    ]);
+  });
+
+  it("keeps the union with another endpoint's answer when it reconciles", async () => {
+    const instance = tracked();
+    const curve = instance.addresses.curve;
+    const missing = transfer(instance, curve, holder, "100", 1);
+    const { lane, commits } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: checkpoint(199n),
+      logs: [],
+      ledger: () =>
+        Promise.resolve({ balances: { [curve]: "800" }, supply: "1000" }),
+      chainBalances: () =>
+        Promise.resolve({
+          balances: { [curve]: "700" },
+          totalSupply: "1000",
+        }),
+      alternatives: [[], [missing]],
+    });
+    await lane.runOnce();
+    expect(commits[0]?.memeCoverageDegraded).toBeUndefined();
+    expect(commits[0]?.memeTransfers).toEqual([
+      expect.objectContaining({
+        instanceId: instance.instanceId,
+        from: curve,
+        to: holder,
+        amount: "100",
+        at: (1_000n + 300n).toString(10),
+      }),
+    ]);
+  });
+
+  it("degrades and re-scans when the ledger is above the chain (the one-directional gap), stalls on the third failure", async () => {
+    const instance = tracked();
+    const curve = instance.addresses.curve;
+    const run = async (failures: number) => {
+      const state = harness({
+        instances: [
+          tracked({ ...instance, memeTransfersCoverageFailures: failures }),
+        ],
+        head: 400n,
+        checkpoint: checkpoint(199n),
+        logs: [],
+        ledger: () =>
+          Promise.resolve({ balances: { [curve]: "800" }, supply: "1000" }),
+        chainBalances: () =>
+          Promise.resolve({
+            balances: { [curve]: "600" },
+            totalSupply: "1000",
+          }),
+        alternatives: [[]],
+      });
+      await state.lane.runOnce();
+      return state;
+    };
+    const first = await run(0);
+    expect(first.commits[0]?.memeCoverageDegraded).toEqual([
+      { instanceId: instance.instanceId, kind: "retry", failedAttempts: 1 },
+    ]);
+    expect(first.coverageEvents[0]).toMatchObject({
+      gaps: ["LEDGER_ABOVE_CHAIN"],
+      stalled: false,
+    });
+    const third = await run(2);
+    expect(third.commits[0]?.memeCoverageDegraded).toEqual([
+      { instanceId: instance.instanceId, kind: "stalled", failedAttempts: 3 },
+    ]);
+    // A stalled instance is no longer checked.
+    const stalled = await run(3);
+    expect(stalled.commits[0]?.memeCoverageDegraded).toBeUndefined();
+  });
+
+  it("un-marks the coverage without a failure when no endpoint serves the state, and records no verdict", async () => {
+    const instance = tracked();
+    const { lane, commits, coverageRecords, warnings } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: checkpoint(199n),
+      logs: [],
+      ledger: () => Promise.resolve({ balances: {}, supply: "0" }),
+      chainBalances: "unavailable",
+      coverageChecks: [coverageFacts(instance.instanceId)],
+    });
+    const result = await lane.runOnce();
+    expect(result.kind).toBe("advanced");
+    expect(commits[0]?.memeCoverageDegraded).toEqual([
+      {
+        instanceId: instance.instanceId,
+        kind: "unverified",
+        failedAttempts: 0,
+      },
+    ]);
+    expect(coverageRecords[0]?.verdicts).toEqual([
+      { kind: "pending", instanceId: instance.instanceId },
+    ]);
+    expect(warnings).toContainEqual({
+      reasonCode: "LAUNCH2_MEME_BALANCE_UNVERIFIABLE",
+      count: 1,
+    });
+  });
+
+  it("detects a missing mint / burn through totalSupply", async () => {
+    const instance = tracked();
+    const { lane, coverageEvents } = harness({
+      instances: [instance],
+      head: 400n,
+      checkpoint: checkpoint(199n),
+      logs: [],
+      ledger: () => Promise.resolve({ balances: {}, supply: "900" }),
+      chainBalances: () =>
+        Promise.resolve({ balances: {}, totalSupply: "1000" }),
+    });
+    await lane.runOnce();
+    expect(coverageEvents[0]).toMatchObject({ gaps: ["SUPPLY_MISMATCH"] });
   });
 });

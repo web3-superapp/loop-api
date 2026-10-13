@@ -35,6 +35,7 @@ import { createHooksLaunchSubmissionService } from "../src/features/launch/hooks
 import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks-launch-executor-chain.js";
 import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import { launchPublicationGateAbi } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
+import type { HooksLaunchOnChainFacts } from "../src/features/launch/hooks-launch-verification.js";
 import {
   anvilPrivateKey,
   deployProtocol,
@@ -482,7 +483,9 @@ describe.skipIf(skipReason !== null)(
       const tampered: HooksLaunchExecutorChain = {
         ...real,
         async readLaunch(launchId) {
-          const facts = await real.readLaunch(launchId);
+          const facts = (await real.readLaunch(
+            launchId,
+          )) as HooksLaunchOnChainFacts;
           return {
             ...facts,
             hook: facts.hook === null ? null : { ...facts.hook, taxBps: 300n },

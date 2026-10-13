@@ -342,7 +342,7 @@ describe("launch2 chain reader distrusts a log answer without the deploy-block m
     expect(calls).toEqual(["silent", "silent", "down", "archive"]);
   });
 
-  it("throws LAUNCH2_RPC_LOGS_UNTRUSTED when no endpoint has the mint", async () => {
+  it("Decision 0132: names the instance whose mint no endpoint has instead of refusing the range", async () => {
     const calls: string[] = [];
     const chain = createLaunch2Chain({
       rpcUrls: [],
@@ -351,10 +351,32 @@ describe("launch2 chain reader distrusts a log answer without the deploy-block m
         endpoint([mintLog(101)], calls, "b"),
       ],
     });
-    await expect(chain.getLogs(request)).rejects.toMatchObject({
-      name: "Launch2ChainRefusedError",
-      reasonCode: "LAUNCH2_RPC_LOGS_UNTRUSTED",
+    const result = await chain.getLogs(request);
+    expect(result.untrustedTokens).toEqual([meme.toLowerCase()]);
+    // Every endpoint was asked before giving up on the anchor.
+    expect(calls).toEqual(["a", "a", "b"]);
+  });
+
+  it("Decision 0132: keeps the answer missing the fewest anchors", async () => {
+    const calls: string[] = [];
+    const other = "0x2222222222222222222222222222222222226666";
+    const chain = createLaunch2Chain({
+      rpcUrls: [],
+      endpointTransports: [
+        endpoint([], calls, "silent"),
+        endpoint([mintLog(100)], calls, "partial"),
+      ],
     });
+    const result = await chain.getLogs({
+      ...request,
+      roles: new Map([...request.roles, [other, "meme" as const]]),
+      mintAnchors: [
+        { token: meme, blockNumber: 100n },
+        { token: other, blockNumber: 100n },
+      ],
+    });
+    expect(result.untrustedTokens).toEqual([other]);
+    expect(result.logs).toHaveLength(1);
   });
 
   it("ignores anchors outside the range and keeps one request", async () => {

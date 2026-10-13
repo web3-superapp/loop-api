@@ -12,10 +12,28 @@ import {
   mineMemeAddressSaltAsync,
   mineHooksLaunchSaltAsync,
 } from "./hooks-launch-deployment-crypto.js";
+import {
+  hooksLaunchTemplateHash,
+  type HooksLaunchLoopDynamicParams,
+} from "./hooks-launch-config.js";
 
 export interface HooksLaunchFactoryReader {
   readonly factoryAddress: string;
   readonly chainId: number;
+  /**
+   * Decision 0132: the target Factory's Hook kind (absent = officialTax).
+   * `loopDynamic` readers also answer `loopDynamicTemplate()`.
+   */
+  readonly hookKind?: "officialTax" | "loopDynamic";
+  /**
+   * Decision 0132: a LoopDynamic Factory's Hook parameters and its
+   * `TEMPLATE_HASH`, verified equal to
+   * `hooksLaunchLoopDynamicTemplateHash(params)` (immutable; cached).
+   */
+  loopDynamicTemplate?(): Promise<{
+    readonly params: HooksLaunchLoopDynamicParams;
+    readonly templateHash: string;
+  }>;
   nonce(projectOwner: string): Promise<bigint>;
   /**
    * Decision 0127: the Factory's `launchIdByOwnerVersion(keccak(owner,
@@ -90,9 +108,14 @@ export class HooksLaunchDeploymentError extends Error {
  * chain does not run. A Factory read failure propagates (unavailable).
  */
 export async function assertHooksLaunchFactoryTemplate(
-  reader: Pick<HooksLaunchFactoryReader, "nftSaleDuration">,
+  reader: Pick<
+    HooksLaunchFactoryReader,
+    "nftSaleDuration" | "hookKind" | "loopDynamicTemplate"
+  >,
   config: {
     readonly fixedEconomics?: { readonly nftSaleDurationSeconds?: unknown };
+    readonly templateHash?: unknown;
+    readonly poolHookKind?: unknown;
   },
   mismatch: () => Error,
 ): Promise<void> {
@@ -100,6 +123,56 @@ export async function assertHooksLaunchFactoryTemplate(
   if (config.fixedEconomics?.nftSaleDurationSeconds !== factory.seconds) {
     throw mismatch();
   }
+  // Decision 0132: the configHash also binds the Hook kind's template. A
+  // LoopDynamic config is never signed for an OfficialTax Factory, and a
+  // LoopDynamic Factory only signs configs hashed for its own parameters.
+  if (reader.hookKind === "loopDynamic") {
+    const template = await readHooksLaunchFactoryTemplate(reader);
+    if (
+      config.poolHookKind !== "loopDynamic" ||
+      typeof config.templateHash !== "string" ||
+      config.templateHash.toLowerCase() !== template.templateHash
+    ) {
+      throw mismatch();
+    }
+  } else if (config.poolHookKind === "loopDynamic") {
+    throw mismatch();
+  }
+}
+
+/** Decision 0132: what a config save hashes for the target Factory. */
+export interface HooksLaunchFactoryTemplate {
+  readonly hookKind: "officialTax" | "loopDynamic";
+  /** Lower-case `TEMPLATE_HASH` the project signs. */
+  readonly templateHash: string;
+  /** Present for a LoopDynamic Factory only. */
+  readonly loopDynamic?: HooksLaunchLoopDynamicParams;
+}
+
+/**
+ * Decision 0132: the target Factory's template. OfficialTax: the constant
+ * `keccak256("hooks_launch_v1")` (no chain read, unchanged). LoopDynamic:
+ * the verified on-chain parameters; a reader that cannot answer throws
+ * (the caller maps it to unavailable).
+ */
+export async function readHooksLaunchFactoryTemplate(
+  reader: Pick<HooksLaunchFactoryReader, "hookKind" | "loopDynamicTemplate">,
+): Promise<HooksLaunchFactoryTemplate> {
+  if (reader.hookKind !== "loopDynamic") {
+    return { hookKind: "officialTax", templateHash: hooksLaunchTemplateHash };
+  }
+  if (reader.loopDynamicTemplate === undefined) {
+    throw new Error("LoopDynamic Factory template unavailable");
+  }
+  const read = await reader.loopDynamicTemplate();
+  if (!/^0x[0-9a-fA-F]{64}$/u.test(read.templateHash)) {
+    throw new Error("LoopDynamic Factory template unavailable");
+  }
+  return {
+    hookKind: "loopDynamic",
+    templateHash: read.templateHash.toLowerCase(),
+    loopDynamic: read.params,
+  };
 }
 
 export interface HooksLaunchDeploymentService {
@@ -291,11 +364,17 @@ export function createHooksLaunchDeploymentService(input: {
         memeSalt: meme.salt,
       };
       const hook = await reader.hookDeployment(requestWithMemeSalt);
+      // Decision 0132: LoopDynamic Hooks carry bits 0x10C4 (salt ≠ 0).
+      const loopDynamic = reader.hookKind === "loopDynamic";
       const hookSalt = await mineHooksLaunchSaltAsync({
         deployer: hook.deployer,
         initCodeHash: hook.initCodeHash,
         maxAttempts: input.maxSaltAttempts,
+        ...(loopDynamic ? { hookKind: "loopDynamic" as const } : {}),
       });
+      const template = loopDynamic
+        ? await readHooksLaunchFactoryTemplate(reader)
+        : null;
       const typedData = createHooksLaunchDeploymentTypedData({
         chainId: reader.chainId,
         verifyingContract: reader.factoryAddress,
@@ -303,6 +382,7 @@ export function createHooksLaunchDeploymentService(input: {
           ...requestWithMemeSalt,
           nonce: nonce.toString(),
         },
+        ...(template === null ? {} : { templateHash: template.templateHash }),
       });
       const hookAddress = getCreate2Address({
         from: hook.deployer as `0x${string}`,

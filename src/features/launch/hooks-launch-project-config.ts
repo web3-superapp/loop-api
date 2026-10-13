@@ -3,7 +3,17 @@ import {
   parseHooksLaunchDraft,
   type HooksLaunchDraft,
 } from "./hooks-launch-config.js";
-import type { HooksLaunchFactoryReader } from "./hooks-launch-deployment.js";
+import {
+  readHooksLaunchFactoryTemplate,
+  type HooksLaunchFactoryReader,
+} from "./hooks-launch-deployment.js";
+import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
+
+/** Decision 0132: the reader surface a config save hashes against. */
+export type HooksLaunchTemplateFactory = Pick<
+  HooksLaunchFactoryReader,
+  "nftSaleDuration" | "hookKind" | "loopDynamicTemplate"
+>;
 
 export interface HooksLaunchProjectConfigRecord {
   readonly projectId: string;
@@ -154,6 +164,32 @@ export async function hooksLaunchFactorySaleDuration(
   }
 }
 
+/**
+ * Decision 0132: the hashing policy of a config save for the target
+ * Factory — its `nftSaleDuration()` and, for a LoopDynamic Factory, its
+ * verified Hook parameters (`parseHooksLaunchDraft({ loopDynamic })`).
+ * OfficialTax: `loopDynamic` absent, byte-identical configHash. Any read
+ * failure is unavailable, never a fallback.
+ */
+export async function hooksLaunchFactoryHashPolicy(
+  factory: HooksLaunchTemplateFactory | null,
+): Promise<{
+  readonly nftSaleDurationSeconds: number;
+  readonly loopDynamic?: HooksLaunchLoopDynamicParams;
+}> {
+  const nftSaleDurationSeconds = await hooksLaunchFactorySaleDuration(factory);
+  if (factory === null || factory.hookKind !== "loopDynamic") {
+    return { nftSaleDurationSeconds };
+  }
+  try {
+    const template = await readHooksLaunchFactoryTemplate(factory);
+    if (template.loopDynamic === undefined) throw new Error("no params");
+    return { nftSaleDurationSeconds, loopDynamic: template.loopDynamic };
+  } catch {
+    throw new HooksLaunchProjectConfigUnavailableError("factory");
+  }
+}
+
 export interface HooksLaunchProjectConfigService {
   /**
    * Decision 0120: HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS — the earliest
@@ -186,7 +222,7 @@ export interface HooksLaunchProjectConfigService {
 export function createHooksLaunchProjectConfigService(input: {
   readonly repository: HooksLaunchProjectConfigRepository | null;
   /** The target Factory (Decision 0119); null fails `saveDraft` closed. */
-  readonly factory: Pick<HooksLaunchFactoryReader, "nftSaleDuration"> | null;
+  readonly factory: HooksLaunchTemplateFactory | null;
   readonly minimumLeadSeconds: number;
   /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails saves closed. */
   readonly fixedBuybackRecipient?: string | null;
@@ -259,9 +295,8 @@ export function createHooksLaunchProjectConfigService(input: {
         {
           nowUnixSeconds: String(now()),
           minimumLeadSeconds: input.minimumLeadSeconds,
-          nftSaleDurationSeconds: await hooksLaunchFactorySaleDuration(
-            input.factory,
-          ),
+          // Decision 0132: + the LoopDynamic Hook parameters, if any.
+          ...(await hooksLaunchFactoryHashPolicy(input.factory)),
         },
       );
       return requireRepository().saveOwnedDraft({

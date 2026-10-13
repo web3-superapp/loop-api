@@ -945,6 +945,14 @@ LoopDynamic panel below. 503 on this route (any reason) for a `loopDynamic` inst
 
 - `not_applicable` / `not_graduated`: every field except `instanceId`, `hookKind`, `status`,
   `candleSeconds` is `null`.
+- Decision 0132: every dependency `503` of this route (`LAUNCH2_CHAIN_READ_FAILED`,
+  `LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED`, `_ROUTER_CODE_MISMATCH`, `_HOOK_NOT_INDEXED`,
+  `_HOOK_MISMATCH`, `_HOOK_NOT_INITIALIZED`, repository unavailable) carries
+  `detailsSafe.hookKind` (`officialTax` / `loopDynamic`, the registry row — a database fact). When
+  the first read fails, use it to pick the panel: `loopDynamic` → the LoopDynamic panel in its
+  unavailable state (exactIn only; never the OfficialTax panel). Only a `404` or a `503` before the
+  instance is read lacks the key. Example:
+  `{"code":"CAPABILITY_UNAVAILABLE",…,"detailsSafe":{"reasonCode":"LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED","hookKind":"loopDynamic"},…}`.
 - 本轮状态卡: `armed`（激活中 / 未激活）、`currentDropBps`（当前跌幅，`30.00 %`）、`potUsd1`（奖金池）、
   `viewer.currentRoundWeightUsd1`（我的本轮权重，占比 = 它 / `roundTotalBuyWeightUsd1`）、`candleEndsAt`
   （本根 K 线结束时间；出现一根收绿的 K 线本轮结束）。`rollPending: true` = the candle already ended
@@ -988,9 +996,15 @@ Same routes, query and body as §3.8 / §3.9, with these differences:
   503 `LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED`, `LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH`,
   `LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED`, `LAUNCH2_DYNAMIC_HOOK_MISMATCH`,
   `LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED`. All §3.8 / §3.9 codes still apply.
-- `…/pool/trades` is empty for `loopDynamic` instances (LoopRouter emits no event; trades are not
-  attributed to wallets in this batch). The detail's `pool` statistics (counts, volumes, `taxUsd1`
-  = real base + dynamic sell fees, `taxMeme` = buy fees) are correct.
+- `…/pool/trades` for `loopDynamic` instances (Decision 0132, 口径): LoopRouter emits no event, so a
+  pool swap is the wallet's when the swap transaction's `from` is that wallet **and** the
+  transaction called LoopRouter directly (`to` = LoopRouter, one swap in it) — which is exactly how
+  the App's `…/pool/trade/prepare` calldata is sent. `amountIn` = the input, `amountOut` = what the
+  wallet received (after the Hook fee), `taxAmount` = the Hook fee. Swaps through any other router
+  or contract (including the platform buyback) are anonymous: counted in the detail's `pool`
+  statistics, listed under no wallet. Same response shape and `poolTradeCount` as §3.11. The
+  detail's `pool` statistics (counts, volumes, `taxUsd1` = real base + dynamic sell fees, `taxMeme`
+  = buy fees) are correct.
 
 #### 3.12.3 `GET /v2/launch2/instances/{instanceId}/dynamic-pool/rewards?walletId=&limit=`
 
@@ -1055,7 +1069,10 @@ Headers: command headers (§1, `Idempotency-Key` UUIDv4). Body `{ "walletId": "�
 ```
 
 The server simulates `claim(roundId)` from the wallet first (`claim` closes an ended candle before
-paying, so a round that is closing becomes claimable in the same transaction). Errors:
+paying, so a round that is closing becomes claimable in the same transaction). Decision 0132:
+`launch2Intent.expectedOut` always equals `claim.claimableUsd1` (both are that simulation's amount,
+same formatting; an idempotent replay returns the stored intent). The amount actually paid is the
+indexed `RewardClaimed` (`…/claim/report` → `confirmed`, `amountUsd1`). Errors:
 422 `LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE` (OfficialTax), `POOL_NOT_GRADUATED`,
 `LAUNCH2_DYNAMIC_ROUND_INVALID` (roundId beyond the current round), `LAUNCH2_WALLET_NOT_EMBEDDED`;
 409 `DATA_STALE / LAUNCH2_DYNAMIC_ROUND_NOT_CLOSED` (本轮还没有结束), `DATA_STALE / LAUNCH2_DYNAMIC_HOOK_BUSY`;
@@ -1122,7 +1139,9 @@ Every LoopDynamic reason code has zh-CN copy in `launch2DynamicReasonMessagesZh`
 
 Server switches (all default off): `HOOKS_LAUNCH_HOOK_KIND` (officialTax),
 `LAUNCH2_DYNAMIC_ROUTER_ADDRESS` / `_CODE_HASH`, `LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS` (API);
-`LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `_CODE_HASH`, `LAUNCH2_DYNAMIC_POKE_*` (worker). With them
+`LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `_CODE_HASH` (API: new Hooks launches with
+`HOOKS_LAUNCH_HOOK_KIND=loopDynamic`, Decision 0132; worker: indexing and the deployment
+executor), `LAUNCH2_DYNAMIC_POKE_*` (worker). With them
 unset there are no `loopDynamic` instances and every `…/dynamic-pool` answer is `not_applicable`.
 
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)

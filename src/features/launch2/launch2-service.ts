@@ -2284,6 +2284,24 @@ export function createLaunch2Service(
     if (record.graduation === null) {
       return notApplicableDynamicPool(record, hookKind, "not_graduated");
     }
+    // Decision 0132 (S168b follow-up): every dependency 503 after the
+    // registry read names the instance's Hook kind (`pool_hook_kind`, a
+    // database fact), so an App whose first read fails still knows to
+    // draw the LoopDynamic panel (exactIn only), never the OfficialTax one.
+    const withHookKind = (error: unknown): never => {
+      if (error instanceof V2ApiError && error.statusCode === 503) {
+        throw new V2ApiError({
+          statusCode: error.statusCode,
+          code: error.code,
+          category: error.category,
+          retryable: error.retryable,
+          userMessageKey: error.userMessageKey,
+          includeBearerChallenge: error.includeBearerChallenge,
+          detailsSafe: { ...(error.detailsSafe ?? {}), hookKind },
+        });
+      }
+      throw error;
+    };
     const wallet = await walletFor(input.principal, input.walletId, false);
     const {
       chain: reader,
@@ -2293,10 +2311,11 @@ export function createLaunch2Service(
       record,
       wallet === null ? null : wallet.address.toLowerCase(),
       true,
-    );
+    ).catch(withHookKind);
     const summary = await repository()
       .dynamicRoundSummary(record.instanceId)
-      .catch(translate);
+      .catch(translate)
+      .catch(withHookKind);
     const roll = launch2DynamicRoll(state, state.blockTimestamp);
     const roundExtra =
       state.armed && state.currentRound !== null

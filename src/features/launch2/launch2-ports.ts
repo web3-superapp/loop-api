@@ -171,8 +171,10 @@ export interface Launch2Chain {
      * `Transfer` from the zero address at its instance's deploy block,
      * for every deploy block inside the range). An answer without one is
      * untrusted (a public endpoint that silently returns `[]` for old
-     * blocks): the reader asks the next endpoint, and throws
-     * `LAUNCH2_RPC_LOGS_UNTRUSTED` (`reasonCode`) when none has it.
+     * blocks): the reader asks the next endpoint. Decision 0132: when no
+     * endpoint has every anchor it keeps the answer holding the most and
+     * names the tokens still missing in `untrustedTokens` (per instance,
+     * never a refusal of the whole range).
      */
     readonly mintAnchors?: readonly {
       readonly token: string;
@@ -181,7 +183,35 @@ export interface Launch2Chain {
   }): Promise<{
     readonly logs: readonly Launch2DecodedLog[];
     readonly ignored: number;
+    /** Decision 0132: anchor tokens no endpoint answered (lower-case). */
+    readonly untrustedTokens?: readonly string[];
   }>;
+  /**
+   * Decision 0132 (lane): `balanceOf(address)` of `token` for each address
+   * and its `totalSupply()`, all at `blockNumber` (raw integer strings).
+   * Asks the endpoints in order; throws `Launch2ChainRefusedError`
+   * `LAUNCH2_RPC_STATE_UNAVAILABLE` when none serves that block's state.
+   * Absent: the instance's segments stay unverified (fail closed).
+   */
+  readMemeBalances?(input: {
+    readonly token: string;
+    readonly addresses: readonly string[];
+    readonly blockNumber: bigint;
+  }): Promise<{
+    readonly balances: Readonly<Record<string, string>>;
+    readonly totalSupply: string;
+  }>;
+  /**
+   * Decision 0132 (lane): `token`'s `Transfer` logs over the range from
+   * every endpoint separately (an endpoint that fails is skipped), decoded
+   * like the `meme` role — the second chance of a segment whose balances
+   * did not reconcile.
+   */
+  readMemeTransferAlternatives?(input: {
+    readonly token: string;
+    readonly fromBlock: bigint;
+    readonly toBlock: bigint;
+  }): Promise<readonly (readonly Launch2DecodedLog[])[]>;
   /** `publishSnapshot` signatures from the publishing transaction's input. */
   readSnapshotPublication(
     transactionHash: string,
@@ -241,7 +271,23 @@ export interface Launch2Chain {
   readDynamicHookPool(hook: string): Promise<{
     readonly poolManager: string;
     readonly currency0: string;
+    /**
+     * Decision 0132: the Hook's immutable `trustedRouter()` (the shared
+     * LoopRouter). Absent from older readers: no swap is attributed.
+     */
+    readonly trustedRouter?: string;
   }>;
+  /**
+   * Decision 0132 (lane): `from` / `to` of these transactions (lower-case;
+   * `to` null for a contract creation). A LoopDynamic pool swap is
+   * attributed to `from` only when `to` is the Hook's trusted LoopRouter.
+   * Absent: no LoopDynamic swap is attributed (fail closed).
+   */
+  readTransactionParties?(
+    transactionHashes: readonly string[],
+  ): Promise<
+    ReadonlyMap<string, { readonly from: string; readonly to: string | null }>
+  >;
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +705,12 @@ export interface Launch2LaneInstance {
    * track the coverage (no re-scan is triggered).
    */
   readonly memeTransfersTargetBlock?: string | null;
+  /**
+   * Decision 0129 §2 / 0132: consecutive failed coverage checks (3 =
+   * stalled, the lane leaves the instance to an operator). Absent when the
+   * repository does not track the coverage (no balance check runs).
+   */
+  readonly memeTransfersCoverageFailures?: number;
   /** Decision 0126: `Graduated` block (null before graduation). */
   readonly graduationBlockNumber?: string | null;
   /**
@@ -915,7 +967,34 @@ export interface Launch2Repository {
       readonly instanceIds: readonly string[];
       readonly targetBlockNumber: string;
     };
+    /**
+     * Decision 0132: instances this segment could not vouch for, applied
+     * after `memeTransferCoverage` in the same transaction — every kind
+     * un-marks `meme_transfers_complete_at`; `retry` records the failure
+     * and clears the target (re-scan from the deploy block), `stalled`
+     * records it and keeps the target, `unverified` changes nothing else.
+     */
+    readonly memeCoverageDegraded?: readonly {
+      readonly instanceId: string;
+      readonly kind: "retry" | "stalled" | "unverified";
+      readonly failedAttempts: number;
+    }[];
   }): Promise<{ readonly storedCount: number; readonly touched: number }>;
+  /**
+   * Decision 0132: an instance's indexed MEME ledger strictly below
+   * `beforeBlockNumber` (non-removed transfers): Σ(in) − Σ(out) of each
+   * address, and mints − burns. Absent: no balance check runs (a
+   * repository that does not track coverage).
+   */
+  memeLedgerBalances?(input: {
+    readonly chainId: string;
+    readonly instanceId: string;
+    readonly addresses: readonly string[];
+    readonly beforeBlockNumber: string;
+  }): Promise<{
+    readonly balances: Readonly<Record<string, string>>;
+    readonly supply: string;
+  }>;
   /**
    * Decision 0129 §2: instances whose MEME re-scan reached its target
    * (target ≤ `throughBlockNumber`), not complete, with fewer than
