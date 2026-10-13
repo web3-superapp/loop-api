@@ -766,8 +766,21 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
         loopDynamic: testnetLoopDynamicParams,
       }).configHash,
     );
-    expect(Object.keys(saved.config)).not.toContain("poolHookKind");
-    expect(saved.config.fixedEconomics).not.toHaveProperty("loopDynamic");
+    // S172: the draft echoes the template kind and its parameters so a client
+    // can tell a LoopDynamic project apart (the response schema admits both).
+    expect((saved.config as Record<string, unknown>)["poolHookKind"]).toBe(
+      "loopDynamic",
+    );
+    expect(saved.config.fixedEconomics["officialPoolHookKind"]).toBe(
+      "loopDynamic",
+    );
+    expect(saved.config.fixedEconomics["loopDynamic"]).toMatchObject({
+      router: testnetLoopDynamicParams.router.toLowerCase(),
+      buyFeePpm: testnetLoopDynamicParams.buyFeePpm,
+      priceTiming: "POST_SWAP",
+      routingPolicy: "Open",
+      excludeBuybackFromRewards: true,
+    });
 
     const prepared = await app.inject({
       url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
