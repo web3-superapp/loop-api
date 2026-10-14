@@ -1144,6 +1144,12 @@ Server switches (all default off): `HOOKS_LAUNCH_HOOK_KIND` (officialTax),
 executor), `LAUNCH2_DYNAMIC_POKE_*` (worker). With them
 unset there are no `loopDynamic` instances and every `…/dynamic-pool` answer is `not_applicable`.
 
+Decision 0133: the LoopDynamic Factory pair alone is enough to configure launch2 — without
+`HOOKS_LAUNCH_FACTORY_ADDRESS` / `_CODE_HASH` the routes still answer, capability `launch2` is
+not held back, and the worker lane indexes the LoopDynamic Factory (+ `LAUNCH2_LEGACY_FACTORIES`).
+`LAUNCH2_FACTORY_NOT_CONFIGURED` now means **neither** the OfficialTax nor the LoopDynamic pair
+is configured. Nothing in the wire format changes.
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
 | HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |

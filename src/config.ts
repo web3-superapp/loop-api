@@ -289,18 +289,26 @@ function refineLaunchChainEnvironment(
 /**
  * Decision 0122: parses `LAUNCH2_LEGACY_FACTORIES` for the worker; any
  * problem is a configuration error (boot refused), never a silent skip.
+ * Decision 0133: a legacy entry must differ from the OfficialTax Factory
+ * and from the LoopDynamic Factory (and those two from each other); either
+ * one alone is enough to check against.
  */
 function parseLaunch2LegacyFactoriesEnvironment(
   value: string | undefined,
   currentFactory: string | undefined,
+  dynamicFactory: string | undefined,
 ): readonly {
   readonly address: string;
   readonly generation: Launch2FactoryGeneration;
 }[] {
   try {
     const legacy = parseLaunch2LegacyFactories(value);
-    if (currentFactory !== undefined) {
-      launch2FactoryEntries({ current: currentFactory, legacy });
+    if (currentFactory !== undefined || dynamicFactory !== undefined) {
+      launch2FactoryEntries({
+        current: currentFactory ?? null,
+        legacy,
+        dynamic: dynamicFactory ?? null,
+      });
     }
     return legacy;
   } catch (error) {
@@ -1829,8 +1837,10 @@ export interface ReconciliationWorkerConfig {
   readonly memeIndexerEnabled: boolean;
   /**
    * Decision 0114: the `launch2_event` lane (`LAUNCH2_INDEXER_ENABLED`,
-   * default false). `factoryAddress` null (no HOOKS_LAUNCH_FACTORY_ADDRESS)
-   * keeps the lane idle with LAUNCH2_FACTORY_NOT_CONFIGURED.
+   * default false). Decision 0133: the lane needs the OfficialTax Factory
+   * (`factoryAddress`, HOOKS_LAUNCH_FACTORY_ADDRESS) **or** the LoopDynamic
+   * one (`dynamicFactoryAddress`); only with both null does it stay idle
+   * with LAUNCH2_FACTORY_NOT_CONFIGURED.
    */
   readonly launch2Indexer: {
     readonly factoryAddress: string | null;
@@ -1839,7 +1849,8 @@ export interface ReconciliationWorkerConfig {
     /**
      * Decision 0122: `LAUNCH2_LEGACY_FACTORIES` — older Factories indexed
      * read-only, each with its bytecode generation. Malformed, duplicated,
-     * or equal to HOOKS_LAUNCH_FACTORY_ADDRESS refuses boot.
+     * or equal to HOOKS_LAUNCH_FACTORY_ADDRESS or (Decision 0133)
+     * LAUNCH2_DYNAMIC_FACTORY_ADDRESS refuses boot.
      */
     readonly legacyFactories: readonly {
       readonly address: string;
@@ -1855,6 +1866,7 @@ export interface ReconciliationWorkerConfig {
     /**
      * Decision 0131: LAUNCH2_DYNAMIC_FACTORY_ADDRESS (lower-case) — the
      * LoopDynamic Factory indexed beside the current one; null = none.
+     * Decision 0133: may be the only Factory (no HOOKS_LAUNCH_FACTORY_*).
      */
     readonly dynamicFactoryAddress: string | null;
   } | null;
@@ -2539,7 +2551,9 @@ export interface TestnetFaucetConfig {
   /**
    * Which USD1 the faucet mints (S156b): `explicit` =
    * TESTNET_FAUCET_USD1_ADDRESS; `factory` = `usd1()` of the Hooks Factory
-   * (HOOKS_LAUNCH_FACTORY_ADDRESS), the USD1 every MEME v2 / launch2
+   * (HOOKS_LAUNCH_FACTORY_ADDRESS, else — Decision 0133 — the LoopDynamic
+   * Factory LAUNCH2_DYNAMIC_FACTORY_ADDRESS; both share
+   * `LoopLaunchFactoryCore.usd1()`), the USD1 every MEME v2 / launch2
    * instance trades in, read on chain at grant time; `launch` =
    * LAUNCH_USD1_ADDRESS, only while launch2 has no Factory. Null = none.
    */
@@ -2652,6 +2666,8 @@ export function parseTestnetFaucet(data: {
   readonly LAUNCH_USD1_ADDRESS?: string | undefined;
   readonly TESTNET_FAUCET_USD1_ADDRESS?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+  /** Decision 0133: the `usd1()` source when there is no OfficialTax Factory. */
+  readonly LAUNCH2_DYNAMIC_FACTORY_ADDRESS?: string | undefined;
   readonly TESTNET_FAUCET_OPERATOR_RESERVE_BNB?: string | undefined;
   readonly TESTNET_FAUCET_DAILY_MAX_GRANTS?: number | undefined;
   readonly TESTNET_FAUCET_DAILY_MAX_BNB?: string | undefined;
@@ -2702,8 +2718,13 @@ export function parseTestnetFaucet(data: {
   const key =
     ownKey !== "" ? ownKey : (data.MEME_OPERATOR_PRIVATE_KEY?.trim() ?? "");
   const launchUsd1 = data.LAUNCH_USD1_ADDRESS?.trim() ?? "";
-  const factory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
+  const officialTaxFactory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
   const evm = /^0x[0-9a-fA-F]{40}$/u;
+  // Decision 0133: the OfficialTax Factory first (unchanged), else the
+  // LoopDynamic one; both expose the same `usd1()`.
+  const factory = evm.test(officialTaxFactory)
+    ? officialTaxFactory
+    : (data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS?.trim() ?? "");
   const usd1Source: TestnetFaucetUsd1Source | null =
     explicitUsd1 !== ""
       ? { kind: "explicit", address: explicitUsd1.toLowerCase() }
@@ -2990,8 +3011,9 @@ export function parseLaunch2DynamicPoke(data: {
 /**
  * Decision 0121: the buyback keeper signs `BuybackExecutor.execute()` from
  * a Factory keeper account. `false` (default) → null. `true` refuses boot
- * without a 32-byte hex key, without HOOKS_LAUNCH_FACTORY_ADDRESS (the
- * keepers are verified against it), or off `LAUNCH_CHAIN_ID=97`. The
+ * without a 32-byte hex key, without a Factory to verify the keepers
+ * against (HOOKS_LAUNCH_FACTORY_ADDRESS, else — Decision 0133 — the
+ * LoopDynamic LAUNCH2_DYNAMIC_FACTORY_ADDRESS), or off `LAUNCH_CHAIN_ID=97`. The
  * interval floor (10 s) is enforced by the schema. No key enters a log
  * line or an error message.
  */
@@ -3000,6 +3022,8 @@ export function parseLaunch2BuybackKeeper(data: {
   readonly LAUNCH2_BUYBACK_KEEPER_ENABLED: boolean;
   readonly LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
+  readonly LAUNCH2_DYNAMIC_FACTORY_ADDRESS?: string | undefined;
+  readonly LAUNCH2_DYNAMIC_FACTORY_CODE_HASH?: string | undefined;
   readonly LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: number;
   readonly LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS: number;
 }): Launch2BuybackKeeperConfig | null {
@@ -3013,10 +3037,17 @@ export function parseLaunch2BuybackKeeper(data: {
       "LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY: a 32-byte hex key is required when LAUNCH2_BUYBACK_KEEPER_ENABLED=true",
     );
   }
-  const factory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
+  // Decision 0133: the OfficialTax Factory (unchanged), else the
+  // LoopDynamic one (complete pair); both have primary / fallback keepers.
+  const officialTaxFactory = data.HOOKS_LAUNCH_FACTORY_ADDRESS?.trim() ?? "";
+  const factory = /^0x[0-9a-fA-F]{40}$/u.test(officialTaxFactory)
+    ? officialTaxFactory
+    : data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
+      ? ""
+      : (data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS?.trim() ?? "");
   if (!/^0x[0-9a-fA-F]{40}$/u.test(factory)) {
     issues.push(
-      "LAUNCH2_BUYBACK_KEEPER_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS (the keeper is verified against the Factory keepers)",
+      "LAUNCH2_BUYBACK_KEEPER_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS or LAUNCH2_DYNAMIC_FACTORY_ADDRESS (the keeper is verified against the Factory keepers)",
     );
   }
   if (data.LAUNCH_CHAIN_ID !== "97") {
@@ -4240,6 +4271,9 @@ export function loadReconciliationWorkerConfig(
           legacyFactories: parseLaunch2LegacyFactoriesEnvironment(
             parsed.data.LAUNCH2_LEGACY_FACTORIES,
             parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS,
+            parsed.data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
+              ? undefined
+              : parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS,
           ),
           pollIntervalMs: parsed.data.LAUNCH2_INDEXER_POLL_INTERVAL_MS,
           poolRouterAddress:

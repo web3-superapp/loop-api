@@ -2149,11 +2149,15 @@ export async function buildApp(
   }
   // MEME v2 read model (Decision 0114): the launch2_event projection plus
   // block-pinned reads of the curve / NFT on the BSC Testnet launch slot.
-  // The Factory is the Hooks one (HOOKS_LAUNCH_FACTORY_ADDRESS); anything
-  // missing keeps every /v2/launch2/* route 503 with the reason.
+  // Decision 0133: launch2 is configured with the OfficialTax Factory
+  // (HOOKS_LAUNCH_FACTORY_ADDRESS) **or** the LoopDynamic one
+  // (LAUNCH2_DYNAMIC_FACTORY_*); only with neither is it
+  // LAUNCH2_FACTORY_NOT_CONFIGURED. Anything missing keeps every
+  // /v2/launch2/* route 503 with the reason.
   const launch2Registered = registeredModuleIds.includes("launch2");
   const launch2UnavailableReason: string | null =
-    config.hooksLaunch.factoryAddress === null
+    config.hooksLaunch.factoryAddress === null &&
+    config.hooksLaunch.dynamicFactory === null
       ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
       : options.launch2Chain === undefined &&
           (config.launchChain.chainId !== bscTestnetChainId ||

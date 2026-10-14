@@ -67,7 +67,10 @@ export interface Launch2FactoryEntry {
   /** Lower-case Factory address. */
   readonly address: string;
   readonly generation: Launch2FactoryGeneration;
-  /** The Factory new deployments go to (`HOOKS_LAUNCH_FACTORY_ADDRESS`). */
+  /**
+   * The OfficialTax Factory (`HOOKS_LAUNCH_FACTORY_ADDRESS`). Decision 0133:
+   * a LoopDynamic-only deployment has no entry with `current: true`.
+   */
   readonly current: boolean;
 }
 
@@ -124,11 +127,17 @@ export function parseLaunch2LegacyFactories(
 
 /**
  * The Factories the lane indexes: the current one first, then the legacy
- * ones. A legacy entry equal to the current Factory refuses (it would give
- * one address two generations).
+ * ones, then the LoopDynamic one. A legacy entry equal to the current or the
+ * LoopDynamic Factory refuses (it would give one address two generations).
+ *
+ * Decision 0133: `current` (the OfficialTax Factory,
+ * `HOOKS_LAUNCH_FACTORY_ADDRESS`) is optional — a LoopDynamic-only
+ * deployment indexes `dynamic` (+ legacy). With neither there is nothing to
+ * index: the caller keeps the lane idle (`LAUNCH2_FACTORY_NOT_CONFIGURED`)
+ * and this function refuses.
  */
 export function launch2FactoryEntries(input: {
-  readonly current: string;
+  readonly current?: string | null;
   /** HOOKS_LAUNCH_FACTORY_CODE_HASH; selects a known older generation. */
   readonly currentCodeHash?: string | null;
   readonly legacy: readonly {
@@ -142,28 +151,44 @@ export function launch2FactoryEntries(input: {
    */
   readonly dynamic?: string | null;
 }): readonly Launch2FactoryEntry[] {
-  const current = input.current.toLowerCase();
-  if (input.legacy.some((entry) => entry.address.toLowerCase() === current)) {
+  const current = input.current?.toLowerCase() ?? null;
+  const dynamic = input.dynamic?.toLowerCase() ?? null;
+  if (current === null && dynamic === null) {
+    throw new Launch2LegacyFactoriesInvalidError(
+      "neither HOOKS_LAUNCH_FACTORY_ADDRESS nor LAUNCH2_DYNAMIC_FACTORY_ADDRESS is configured",
+    );
+  }
+  if (
+    current !== null &&
+    input.legacy.some((entry) => entry.address.toLowerCase() === current)
+  ) {
     throw new Launch2LegacyFactoriesInvalidError(
       "LAUNCH2_LEGACY_FACTORIES must not list HOOKS_LAUNCH_FACTORY_ADDRESS",
     );
   }
-  const dynamic = input.dynamic?.toLowerCase() ?? null;
   if (
     dynamic !== null &&
-    (dynamic === current ||
-      input.legacy.some((entry) => entry.address.toLowerCase() === dynamic))
+    input.legacy.some((entry) => entry.address.toLowerCase() === dynamic)
   ) {
     throw new Launch2LegacyFactoriesInvalidError(
-      "LAUNCH2_DYNAMIC_FACTORY_ADDRESS must differ from HOOKS_LAUNCH_FACTORY_ADDRESS and LAUNCH2_LEGACY_FACTORIES",
+      "LAUNCH2_LEGACY_FACTORIES must not list LAUNCH2_DYNAMIC_FACTORY_ADDRESS",
+    );
+  }
+  if (dynamic !== null && dynamic === current) {
+    throw new Launch2LegacyFactoriesInvalidError(
+      "LAUNCH2_DYNAMIC_FACTORY_ADDRESS must differ from HOOKS_LAUNCH_FACTORY_ADDRESS",
     );
   }
   return Object.freeze([
-    Object.freeze({
-      address: current,
-      generation: launch2CurrentFactoryGeneration(input.currentCodeHash),
-      current: true,
-    }),
+    ...(current === null
+      ? []
+      : [
+          Object.freeze({
+            address: current,
+            generation: launch2CurrentFactoryGeneration(input.currentCodeHash),
+            current: true,
+          }),
+        ]),
     ...input.legacy.map((entry) =>
       Object.freeze({
         address: entry.address.toLowerCase(),
@@ -181,6 +206,33 @@ export function launch2FactoryEntries(input: {
           }),
         ]),
   ]);
+}
+
+/**
+ * Decision 0133: the lane's Factory list from the worker's
+ * `launch2Indexer` config — the OfficialTax Factory (if any), the legacy
+ * ones, the LoopDynamic Factory (if any). Null = neither the OfficialTax nor
+ * the LoopDynamic Factory is configured (`LAUNCH2_FACTORY_NOT_CONFIGURED`);
+ * legacy Factories alone are never enough (they take no new launches).
+ */
+export function launch2IndexerFactories(config: {
+  readonly factoryAddress: string | null;
+  readonly factoryCodeHash: string | null;
+  readonly legacyFactories: readonly {
+    readonly address: string;
+    readonly generation: Launch2FactoryGeneration;
+  }[];
+  readonly dynamicFactoryAddress?: string | null;
+}): readonly Launch2FactoryEntry[] | null {
+  const dynamic = config.dynamicFactoryAddress ?? null;
+  if (config.factoryAddress === null && dynamic === null) return null;
+  return launch2FactoryEntries({
+    current: config.factoryAddress,
+    currentCodeHash: config.factoryCodeHash,
+    legacy: config.legacyFactories,
+    // Decision 0131: the LoopDynamic Factory (v3 modules).
+    dynamic,
+  });
 }
 
 /** v2 instances have the price-protected buyback and no zero-holder opening. */

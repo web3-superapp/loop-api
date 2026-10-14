@@ -41,7 +41,7 @@ import {
 import type { HooksLaunchExecutorRepository } from "./features/launch/hooks-launch-executor.js";
 import { createHooksLaunchExecutorLane } from "./hooks-launch-executor-worker.js";
 import { createLaunch2Lane } from "./launch2-indexer-worker.js";
-import { launch2FactoryEntries } from "./features/launch2/launch2-generation.js";
+import { launch2IndexerFactories } from "./features/launch2/launch2-generation.js";
 import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
 import { createLaunch2Chain } from "./integrations/launch2/launch2-chain.js";
 import { createLaunch2TokenIdentityReader } from "./integrations/launch2/launch2-meme-asset-chain.js";
@@ -881,21 +881,27 @@ export async function runReconciliationWorker(
         );
       }
     }
-    // MEME v2 read model (Decision 0114), default off. The lane needs the
-    // Hooks Factory address and the BSC Testnet launch slot RPC; anything
-    // missing keeps it idle with the reason (never a fixture).
+    // MEME v2 read model (Decision 0114), default off. The lane needs a
+    // Factory — the OfficialTax one, the LoopDynamic one, or both (Decision
+    // 0133) — and the BSC Testnet launch slot RPC; anything missing keeps it
+    // idle with the reason (never a fixture).
     const launch2Config = options.config.launch2Indexer;
     if (launch2Config !== null) {
+      const factories = launch2IndexerFactories(launch2Config);
       const reason =
         database.launch2 === undefined
           ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
-          : launch2Config.factoryAddress === null
+          : factories === null
             ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
             : launchChainConfig.chainId !== "eip155:97" ||
                 launchChainConfig.rpcUrls.length === 0
               ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
               : null;
-      if (reason !== null || database.launch2 === undefined) {
+      if (
+        reason !== null ||
+        database.launch2 === undefined ||
+        factories === null
+      ) {
         options.logger.warn(
           {
             ...logFields(),
@@ -912,13 +918,7 @@ export async function runReconciliationWorker(
               rpcUrls: launchChainConfig.rpcUrls,
             }),
             chainId: launchChainConfig.chainId,
-            factories: launch2FactoryEntries({
-              current: launch2Config.factoryAddress as string,
-              currentCodeHash: launch2Config.factoryCodeHash,
-              legacy: launch2Config.legacyFactories,
-              // Decision 0131: the LoopDynamic Factory (v3 modules).
-              dynamic: launch2Config.dynamicFactoryAddress ?? null,
-            }),
+            factories,
             reorgDepthBlocks: launchChainConfig.reorgDepthBlocks,
             pollIntervalMs: launch2Config.pollIntervalMs,
             ...(launch2Config.poolRouterAddress === null
@@ -983,7 +983,9 @@ export async function runReconciliationWorker(
           {
             ...logFields(),
             lane: "launch2_event",
-            factoryAddress: launch2Config.factoryAddress as string,
+            // Decision 0133: the LoopDynamic Factory when it is the only one.
+            factoryAddress: (launch2Config.factoryAddress ??
+              launch2Config.dynamicFactoryAddress) as string,
             // Decision 0122: how many read-only legacy Factories are indexed.
             count: launch2Config.legacyFactories.length,
           },

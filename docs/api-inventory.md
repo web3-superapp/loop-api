@@ -431,9 +431,11 @@ reached `activated` on the configured Hooks Factory; the worker lane
 `launch2_event` (`LAUNCH2_INDEXER_ENABLED`, default off; migration 000061)
 indexes the Factory, gate, NFT, snapshot registry, curve, and buyback
 executor logs with the S116 checkpoint / reorg discipline and rebuilds the
-published snapshot from the NFT transfers. Without the Hooks Factory pair on
+published snapshot from the NFT transfers. Without a Factory pair on
 the BSC Testnet launch slot every route is `503 CAPABILITY_UNAVAILABLE`
-(`LAUNCH2_FACTORY_NOT_CONFIGURED` / `LAUNCH2_CHAIN_NOT_CONFIGURED`);
+(`LAUNCH2_FACTORY_NOT_CONFIGURED` / `LAUNCH2_CHAIN_NOT_CONFIGURED`; Decision
+0133: the OfficialTax pair `HOOKS_LAUNCH_FACTORY_*` **or** the LoopDynamic
+pair `LAUNCH2_DYNAMIC_FACTORY_*` is enough, only neither is not configured);
 prepares also need `BSC_WRITES_ENABLED`. Capability `launch2` (deferred
 until enabled; evidence pending until a BSC Testnet run). Evidence:
 `test/launch2-anvil.integration.test.ts` (anvil chain 97, real Foundry
@@ -479,6 +481,12 @@ every segment is vouched for by `balanceOf` / `totalSupply` at its last block. E
 `test/hooks-launch-loop-dynamic-anvil.integration.test.ts` (real `DeployLoopProtocol` LoopDynamic
 component on anvil: save → approve → sign → deploy → verify → activate → lane registers
 `loopDynamic`), `test/launch2-indexer-worker.test.ts`, `test/launch2-dynamic.integration.test.ts`.
+
+S172 (Decision 0133): launch2 runs with only the LoopDynamic Factory pair — routes, capability
+`launch2` and the `launch2_event` lane (Factories = LoopDynamic + legacy); a legacy entry equal to
+the LoopDynamic Factory refuses worker boot; the faucet's `usd1()` source and the buyback keeper's
+Factory fall back to the LoopDynamic Factory when there is no OfficialTax one. Evidence:
+`test/launch2-dynamic-only.test.ts`.
 
 S143 (Decision 0121): the worker lane `launch2_buyback_keeper`
 (`LAUNCH2_BUYBACK_KEEPER_ENABLED`, default off; migration 000065
