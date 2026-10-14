@@ -9,6 +9,7 @@ import { decodeFunctionData } from "viem";
 import {
   Launch2IdempotencyConflictError,
   type CreateLaunch2IntentRecord,
+  type Launch2ActivityRecord,
   type Launch2BuybackRecord,
   type Launch2Chain,
   type Launch2DynamicClaimReportRecord,
@@ -190,6 +191,8 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly trades: Map<string, Launch2TradeRecord[]>;
   readonly intents: Map<string, Launch2IntentRecord>;
   readonly builds: { count: number };
+  /** Decision 0139: returned as-is by listActivity (the service sorts / caps). */
+  readonly activity: Launch2ActivityRecord[];
   /** Decision 0126: attributed pool trades keyed `instanceId|wallet`. */
   readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
   /** Decision 0131: LoopDynamic projections keyed `instanceId|wallet`. */
@@ -224,6 +227,7 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const intents = new Map<string, Launch2IntentRecord>();
   const keys = new Map<string, { sha: string; intentId: string | null }>();
   const builds = { count: 0 };
+  const activity: Launch2ActivityRecord[] = [];
   const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
   const dynamicRewards = new Map<string, Launch2DynamicRewardRecord[]>();
   const dynamicSummaries = new Map<string, Launch2DynamicRoundSummary>();
@@ -287,6 +291,29 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
         dynamicClaims.get(
           `${input.instanceId}|${input.transactionHash}|${input.roundId}|${input.buyer.toLowerCase()}`,
         ) ?? null,
+      ),
+    activity,
+    listActivity: () => Promise.resolve([...activity]),
+    listOverviewFacts: (input) =>
+      Promise.resolve(
+        [...instances.values()]
+          .filter(
+            (row) =>
+              row.chainId === input.chainId &&
+              (row.activatedAt !== null || row.holdReason !== null),
+          )
+          .map((row) => ({
+            instanceId: row.instanceId,
+            nftSaleStart: row.nftSaleStart,
+            nftSaleEnd: row.nftSaleEnd,
+            holdReason: row.holdReason,
+            snapshot: row.snapshot,
+            graduation: row.graduation,
+            noHoldersClosure: row.noHoldersClosure,
+            openedWithoutHolders: row.openedWithoutHolders,
+            nftMintedCount: row.nftMintedCount,
+            buybackUsd1: row.buyback.usd1,
+          })),
       ),
     instances,
     positions,

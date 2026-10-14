@@ -1,4 +1,8 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131, 0139)
+
+> **S181 / 决策 0139 变化（给 App）**：新增只读路由 `GET /v2/launch2/overview`（§3.13）= 发射台「实时流」
+> （跨实例最新 30 条：内盘 / 外盘买卖、NFT 铸造、毕业、回购、奖励轮次开启、奖励领取）+「战绩」计数。
+> 纯新增，现有路由与键集合不变。随列表 60 s 轮询一起拉，不单独加定时器；`activity` 为空时整行不渲染。
 
 > **S166 / 决策 0131 变化（给 App）**：新增可选外盘 Hook 种类 **`loopDynamic`**（需求方 loop_hook_v1，
 > 买卖各 2 % + 动态卖出税 + 奖励轮次），**服务端默认关闭**，现有实例全是 `officialTax`，行为不变。
@@ -1149,6 +1153,78 @@ Decision 0133: the LoopDynamic Factory pair alone is enough to configure launch2
 not held back, and the worker lane indexes the LoopDynamic Factory (+ `LAUNCH2_LEGACY_FACTORIES`).
 `LAUNCH2_FACTORY_NOT_CONFIGURED` now means **neither** the OfficialTax nor the LoopDynamic pair
 is configured. Nothing in the wire format changes.
+
+### 3.13 `GET /v2/launch2/overview`（Decision 0139，S181）
+
+发射台整页（docs/32 §7.1 实时流、§7.5 战绩条）。鉴权与 headers 同 §3.1；无 query（带任何 query → `400`）；
+`Cache-Control: no-store`。只读已索引的读模型，**不读链**；可见范围与 §3.1 列表相同（已激活或 hold 的实例）。
+
+```json
+{
+  "activity": [
+    {
+      "kind": "curve_buy",
+      "instanceId": "8a0c…",
+      "ticker": "DOGE",
+      "name": "Doge on LOOP",
+      "logoUrl": "https://…/doge.png",
+      "actor": "0x1d2f…9b",
+      "amountUsd1": "20",
+      "at": "2027-01-15T08:00:40.000Z",
+      "transactionHash": "0xabab…"
+    },
+    {
+      "kind": "graduated",
+      "instanceId": "8a0c…",
+      "ticker": "DOGE",
+      "name": "Doge on LOOP",
+      "logoUrl": null,
+      "actor": null,
+      "amountUsd1": null,
+      "at": "2027-01-15T07:59:00.000Z",
+      "transactionHash": "0xcdcd…"
+    }
+  ],
+  "stats": {
+    "liveCount": 8,
+    "mintingCount": 2,
+    "priorityCount": 1,
+    "curveCount": 5,
+    "upcomingCount": 3,
+    "graduatedTotal": 4,
+    "graduatedThisWeek": 1,
+    "buybackUsd1Total": "1250.5",
+    "nftMintedTotal": 128
+  },
+  "observedAt": "2027-01-15T08:00:41.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+`activity`：最多 30 条，按 `at` 倒序（同秒按区块、日志序），跨实例合并。
+
+| `kind`            | 含义                                       | `actor`                                             | `amountUsd1`               |
+| ----------------- | ------------------------------------------ | --------------------------------------------------- | -------------------------- |
+| `curve_buy`       | 内盘买入；毕业后官方池用户买入（不含回购） | 买方全地址；外盘未归属（Decision 0132 匿名）为 null | 实付 USD1（内盘含 10 %税） |
+| `curve_sell`      | 内盘卖出；毕业后官方池用户卖出             | 同上                                                | 实收 USD1（扣税后）        |
+| `nft_mint`        | 铸造项目 NFT                               | 付款地址                                            | `"100"`                    |
+| `graduated`       | 毕业                                       | null                                                | null                       |
+| `buyback`         | 回购成交                                   | null                                                | 花费 USD1                  |
+| `round_activated` | LoopDynamic 奖励轮次开启                   | null                                                | null                       |
+| `reward_claimed`  | LoopDynamic 奖励领取                       | 领取地址                                            | 领取 USD1                  |
+
+- `actor` 是 0x 全地址，App 自己缩短；null 显示「有人」（交易）或不显示主语（平台动作）。
+- 点一条 → `instanceId` 的项目页。`transactionHash` 可为 null（老数据未存哈希的毕业行）。
+
+`stats`：
+
+- 阶段数按与 §3.1 **同一个**推导函数在应答时按时钟重算：`mintingCount` = `nft_sale`、`priorityCount` =
+  `priority`、`curveCount` = `public`、`upcomingCount` = `upcoming`、`graduatedTotal` = `graduated`；
+  `liveCount` = 前三者之和。`snapshot_pending` / `paused` / `closed_no_holders` 不计入任何计数。
+- `graduatedThisWeek`：`graduated` 且 `graduatedAt` ≥ 服务器 UTC 本周一 00:00。
+- `buybackUsd1Total`：所有可见实例已执行回购的 USD1 合计（十进制字符串）；`nftMintedTotal`：已索引铸造数合计。
+- 空库：`activity: []`，计数全 0，`buybackUsd1Total: "0"`。
+- 错误：`400`（带 query）、`401`、`503` 同 §5。
 
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 

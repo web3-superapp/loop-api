@@ -1,4 +1,5 @@
 import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
+import type { Launch2StageFacts } from "./launch2-ports.js";
 
 /**
  * Decision 0114 §2: the instance stage is derived, never stored as a
@@ -95,4 +96,33 @@ export function deriveLaunch2Stage(
     return { stage: "priority", nextChangeAt: roundEnd };
   }
   return { stage: "public", nextChangeAt: null };
+}
+
+function unixSeconds(iso: string): bigint {
+  return BigInt(Math.floor(Date.parse(iso) / 1000));
+}
+
+/**
+ * The stage of an instance record (or the Decision 0139 overview facts):
+ * the one mapping of stored facts onto `deriveLaunch2Stage` that the list,
+ * the detail and the overview all use.
+ */
+export function deriveLaunch2StageOf(
+  facts: Launch2StageFacts,
+  nowSeconds: bigint,
+): Launch2StageProjection {
+  return deriveLaunch2Stage({
+    nowSeconds,
+    nftSaleStart: unixSeconds(facts.nftSaleStart),
+    nftSaleEnd: unixSeconds(facts.nftSaleEnd),
+    snapshotPublishedAt:
+      facts.snapshot === null ? null : unixSeconds(facts.snapshot.publishedAt),
+    graduated: facts.graduation !== null,
+    holdReason: facts.holdReason,
+    closedNoHolders: facts.noHoldersClosure !== null,
+    openedWithoutHoldersAt:
+      facts.openedWithoutHolders === null
+        ? null
+        : unixSeconds(facts.openedWithoutHolders.openedAt),
+  });
 }

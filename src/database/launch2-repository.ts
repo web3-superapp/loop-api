@@ -20,7 +20,10 @@ import {
 import {
   Launch2IdempotencyConflictError,
   Launch2RepositoryUnavailableError,
+  launch2ActivityKinds,
   type CreateLaunch2IntentRecord,
+  type Launch2ActivityKind,
+  type Launch2ActivityRecord,
   type Launch2BuybackRecord,
   type Launch2DynamicClaimReportRecord,
   type Launch2DynamicRewardRecord,
@@ -28,6 +31,7 @@ import {
   type Launch2IntentRecord,
   type Launch2LaneEvent,
   type Launch2LaneInstance,
+  type Launch2OverviewInstanceFacts,
   type Launch2PoolTradeRecord,
   type Launch2PoolTradeStats,
   type Launch2PositionRecord,
@@ -1329,6 +1333,171 @@ async function reprojectPositions(
   });
 }
 
+/**
+ * Decision 0139: the launchpad activity feed. Each branch reads one typed
+ * fact table of the chain's listed instances (same visibility as
+ * `listInstances`), keeps its own newest `$2`, and the union keeps the
+ * newest `$2` overall. Ties order by block, log index, kind, hash.
+ *
+ * - curve_buy / curve_sell: `launch2_trades` (CurveBought / CurveSold;
+ *   buy = USD1 paid incl. tax = `usd1_gross`, sell = USD1 received =
+ *   `usd1_net`), and the official pool's user swaps `launch2_pool_swaps`
+ *   (Decision 0127 user filter, and no `BuybackCompleted` in the same
+ *   transaction; buy = USD1 in, sell = USD1 out − a USD1 fee; actor =
+ *   the Decision 0126 / 0132 attributed wallet, null when anonymous);
+ * - nft_mint: `launch2_nft_mints` (payer, `amount_usd1`);
+ * - graduated: `launch2_instances.graduated_at` (lane projection of
+ *   `Graduated`; actor / amount null);
+ * - buyback: `launch2_buybacks` with outcome `executed` (`usd1_spent`;
+ *   actor null);
+ * - round_activated: `launch2_dynamic_rounds` (projection of the non-removed
+ *   `RoundActivated`; actor / amount null);
+ * - reward_claimed: `launch2_dynamic_claims` (RewardClaimed; buyer, USD1).
+ */
+const activitySql = `
+  with visible as (
+    select instance_id, ticker, name, logo_url, graduated_at,
+      graduation_block, graduation_transaction_hash,
+      buyback_adapter_address, buyback_executor_address
+    from public.launch2_instances
+    where chain_id = $1 and (activated_at is not null or hold_reason is not null)
+  ),
+  feed as (
+    (select case t.side when 'buy' then 'curve_buy' else 'curve_sell' end as kind,
+        t.instance_id, t.trader_address as actor,
+        case t.side when 'buy' then t.usd1_gross else t.usd1_net end as amount,
+        t.traded_at as at, t.transaction_hash, t.block_number, t.log_index
+      from public.launch2_trades t
+      join visible i on i.instance_id = t.instance_id
+      where not t.removed
+      order by t.traded_at desc, t.block_number desc, t.log_index desc
+      limit $2)
+    union all
+    (select case s.side when 'buy' then 'curve_buy' else 'curve_sell' end,
+        s.instance_id, s.wallet_address,
+        case when s.side = 'buy' then s.usd1_amount
+          when s.tax_token = 'usd1' then greatest(s.usd1_amount - s.tax_amount, 0)
+          else s.usd1_amount end,
+        s.swapped_at, s.transaction_hash, s.block_number, s.log_index
+      from public.launch2_pool_swaps s
+      join visible i on i.instance_id = s.instance_id
+      where not s.removed and ${userSwap}
+        and not exists (
+          select 1 from public.launch2_buybacks b
+          where b.chain_id = s.chain_id
+            and b.transaction_hash = s.transaction_hash and not b.removed)
+      order by s.swapped_at desc, s.block_number desc, s.log_index desc
+      limit $2)
+    union all
+    (select 'nft_mint', m.instance_id, m.payer_address, m.amount_usd1,
+        m.minted_at, m.transaction_hash, m.block_number, m.log_index
+      from public.launch2_nft_mints m
+      join visible i on i.instance_id = m.instance_id
+      where not m.removed
+      order by m.minted_at desc, m.block_number desc, m.log_index desc
+      limit $2)
+    union all
+    (select 'graduated', i.instance_id, null, null, i.graduated_at,
+        i.graduation_transaction_hash, i.graduation_block, null
+      from visible i
+      where i.graduated_at is not null
+      order by i.graduated_at desc
+      limit $2)
+    union all
+    (select 'buyback', b.instance_id, null, b.usd1_spent, b.executed_at,
+        b.transaction_hash, b.block_number, b.log_index
+      from public.launch2_buybacks b
+      join visible i on i.instance_id = b.instance_id
+      where not b.removed and b.outcome = 'executed'
+      order by b.executed_at desc, b.block_number desc, b.log_index desc
+      limit $2)
+    union all
+    (select 'round_activated', r.instance_id, null, null, r.activated_at,
+        r.activated_transaction_hash, r.activated_block, null
+      from public.launch2_dynamic_rounds r
+      join visible i on i.instance_id = r.instance_id
+      order by r.activated_at desc, r.activated_block desc
+      limit $2)
+    union all
+    (select 'reward_claimed', c.instance_id, c.buyer_address, c.amount_usd1,
+        c.claimed_at, c.transaction_hash, c.block_number, c.log_index
+      from public.launch2_dynamic_claims c
+      join visible i on i.instance_id = c.instance_id
+      where not c.removed
+      order by c.claimed_at desc, c.block_number desc, c.log_index desc
+      limit $2)
+  )
+  select f.kind, f.instance_id::text, v.ticker, v.name, v.logo_url, f.actor,
+    f.amount::text as amount, f.at, f.transaction_hash,
+    f.block_number::text as block_number, f.log_index
+  from feed f
+  join visible v on v.instance_id = f.instance_id
+  order by f.at desc, f.block_number desc nulls last,
+    f.log_index desc nulls last, f.kind, f.transaction_hash
+  limit $2
+`;
+
+function activityKindOf(value: unknown): Launch2ActivityKind {
+  if (
+    typeof value !== "string" ||
+    !(launch2ActivityKinds as readonly string[]).includes(value)
+  ) {
+    throw new Launch2RepositoryUnavailableError();
+  }
+  return value as Launch2ActivityKind;
+}
+
+function mapActivity(row: Row): Launch2ActivityRecord {
+  const logIndex = row["log_index"];
+  return Object.freeze({
+    kind: activityKindOf(row["kind"]),
+    instanceId: text(row, "instance_id"),
+    ticker: text(row, "ticker"),
+    name: text(row, "name"),
+    logoUrl: nullableText(row, "logo_url"),
+    actor: nullableText(row, "actor"),
+    amountUsd1: nullableText(row, "amount"),
+    at: iso(row, "at"),
+    transactionHash: nullableText(row, "transaction_hash"),
+    blockNumber: nullableText(row, "block_number"),
+    logIndex:
+      logIndex === null || logIndex === undefined ? null : Number(logIndex),
+  });
+}
+
+/** Decision 0139: the stage inputs `mapInstance` reads, nothing else. */
+const overviewFactsSql = `
+  select instance_id::text, nft_sale_start, hold_reason,
+    snapshot_published_at, graduated_at, opened_without_holders_at,
+    nft_minted_count::text, buyback_usd1::text,
+    (select jsonb_build_object('cutoffBlock', c.cutoff_block::text,
+        'closedAt', c.created_at)
+      from public.launch2_snapshot_closures c
+      where c.instance_id = launch2_instances.instance_id) as snapshot_closure,
+    ${nftSaleEndColumn}
+  from public.launch2_instances
+  where chain_id = $1 and (activated_at is not null or hold_reason is not null)
+`;
+
+function mapOverviewFacts(row: Row): Launch2OverviewInstanceFacts {
+  const publishedAt = nullableIso(row, "snapshot_published_at");
+  const graduatedAt = nullableIso(row, "graduated_at");
+  const openedAt = nullableIso(row, "opened_without_holders_at");
+  return Object.freeze({
+    instanceId: text(row, "instance_id"),
+    nftSaleStart: iso(row, "nft_sale_start"),
+    nftSaleEnd: saleEndOf(row),
+    holdReason: holdOf(row["hold_reason"]),
+    snapshot: publishedAt === null ? null : Object.freeze({ publishedAt }),
+    graduation: graduatedAt === null ? null : Object.freeze({ graduatedAt }),
+    noHoldersClosure: closureOf(row["snapshot_closure"]),
+    openedWithoutHolders:
+      openedAt === null ? null : Object.freeze({ openedAt }),
+    nftMintedCount: text(row, "nft_minted_count"),
+    buybackUsd1: text(row, "buyback_usd1"),
+  });
+}
+
 function mapLaneInstance(row: Row): Launch2LaneInstance {
   const instance = mapInstance(row);
   return Object.freeze({
@@ -2115,6 +2284,16 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           blockNumber: text(row, "block_number"),
         }),
       );
+    },
+
+    async listActivity(input) {
+      const rows = await query<Row>(activitySql, [input.chainId, input.limit]);
+      return rows.map(mapActivity);
+    },
+
+    async listOverviewFacts(input) {
+      const rows = await query<Row>(overviewFactsSql, [input.chainId]);
+      return rows.map(mapOverviewFacts);
     },
 
     async listPoolTrades(input) {

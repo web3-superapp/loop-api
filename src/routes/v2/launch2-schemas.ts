@@ -10,6 +10,7 @@ import {
   launch2IntentKinds,
   launch2Stages,
 } from "../../features/launch2/launch2-contract.js";
+import { launch2ActivityKinds } from "../../features/launch2/launch2-ports.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
 
@@ -258,6 +259,92 @@ const instanceSummarySchema = {
   additionalProperties: false,
   required: summaryRequired,
   properties: summaryProperties,
+} as const;
+
+const overviewActivitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "kind",
+    "instanceId",
+    "ticker",
+    "name",
+    "logoUrl",
+    "actor",
+    "amountUsd1",
+    "at",
+    "transactionHash",
+  ],
+  properties: {
+    kind: { type: "string", enum: [...launch2ActivityKinds] },
+    instanceId: opaqueIdSchema,
+    ticker: summaryProperties.ticker,
+    name: summaryProperties.name,
+    logoUrl: summaryProperties.logoUrl,
+    actor: {
+      description:
+        "The full 0x address; null for platform actions (graduated, buyback, round_activated) and for anonymous official-pool swaps (Decision 0132: not through LoopRouter / OfficialPoolRouter attribution).",
+      anyOf: [addressSchema, { type: "null" }],
+    },
+    amountUsd1: {
+      description:
+        "curve_buy = USD1 paid (tax included), curve_sell = USD1 received, nft_mint = the mint price (100), buyback = USD1 spent, reward_claimed = USD1 claimed; null for graduated and round_activated.",
+      anyOf: [decimalSchema, { type: "null" }],
+    },
+    at: dateTimeSchema,
+    transactionHash: nullableTxHashSchema,
+  },
+} as const;
+
+const countSchema = { type: "integer", minimum: 0 } as const;
+
+/** Decision 0139: `GET /v2/launch2/overview`. */
+export const launch2OverviewResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["activity", "stats", "observedAt", "contractVersion"],
+  properties: {
+    activity: {
+      type: "array",
+      maxItems: 30,
+      items: overviewActivitySchema,
+    },
+    stats: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "liveCount",
+        "mintingCount",
+        "priorityCount",
+        "curveCount",
+        "upcomingCount",
+        "graduatedTotal",
+        "graduatedThisWeek",
+        "buybackUsd1Total",
+        "nftMintedTotal",
+      ],
+      properties: {
+        liveCount: {
+          ...countSchema,
+          description: "Instances in nft_sale, priority or public.",
+        },
+        mintingCount: { ...countSchema, description: "Stage nft_sale." },
+        priorityCount: { ...countSchema, description: "Stage priority." },
+        curveCount: { ...countSchema, description: "Stage public." },
+        upcomingCount: { ...countSchema, description: "Stage upcoming." },
+        graduatedTotal: { ...countSchema, description: "Stage graduated." },
+        graduatedThisWeek: {
+          ...countSchema,
+          description:
+            "Graduated instances whose graduatedAt is at or after the server's UTC Monday 00:00 of the current week.",
+        },
+        buybackUsd1Total: decimalSchema,
+        nftMintedTotal: countSchema,
+      },
+    },
+    observedAt: dateTimeSchema,
+    contractVersion: contractVersionSchema,
+  },
 } as const;
 
 export const launch2InstanceListResourceSchema = {

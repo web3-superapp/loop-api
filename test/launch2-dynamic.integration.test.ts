@@ -194,6 +194,8 @@ async function instance(generation: "v2" | "v3" = "v3"): Promise<{
 }
 
 const hook = `0x${"c".repeat(36)}10c4`;
+/** 8 hex characters unique to this run (see `event`). */
+const runTag = hex(4).slice(2);
 const buyerA = `0x${"a1".repeat(20)}`;
 const buyerB = `0x${"b2".repeat(20)}`;
 
@@ -210,7 +212,10 @@ function event(
     contractAddress,
     eventName,
     args,
-    transactionHash: `0x${blockNumber.toString(16).padStart(8, "0")}${"0".repeat(56)}`,
+    // Unique per run: the facts are keyed (chain, tx, log) and the shared
+    // test database persists, so a fixed hash would land on the previous
+    // run's rows (another instance) and leave this one unprojected.
+    transactionHash: `0x${runTag}${blockNumber.toString(16).padStart(8, "0")}${"0".repeat(48)}`,
     logIndex,
     blockNumber: String(blockNumber),
     blockHash: `0x${blockNumber.toString(16).padStart(64, "0")}`,

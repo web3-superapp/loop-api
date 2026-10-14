@@ -33,6 +33,7 @@ import {
   launch2InstanceParamsSchema,
   launch2IntentResourceSchema,
   launch2ListQuerySchema,
+  launch2OverviewResourceSchema,
   launch2NftPrepareRequestSchema,
   launch2PageQuerySchema,
   launch2PoolIntentResourceSchema,
@@ -104,6 +105,35 @@ export function registerV2Launch2Routes(
         ...(query["stage"] === undefined ? {} : { stage: query["stage"] }),
         ...(query["cursor"] === undefined ? {} : { cursor: query["cursor"] }),
         ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/overview",
+    {
+      schema: {
+        operationId: "getV2Launch2Overview",
+        summary: "Launchpad live activity feed and scoreboard",
+        description: `Decision 0139. activity = the 30 newest indexed facts across the listed instances (same visibility as GET /v2/launch2/instances), newest first: curve_buy / curve_sell (curve trades and official-pool user swaps; buybacks excluded), nft_mint, graduated, buyback (executed), round_activated and reward_claimed (LoopDynamic). Read from the launch2_event lane's tables only, never the chain. stats: stage counts re-derived from the clock with the list's derivation (liveCount = nft_sale + priority + public), graduatedThisWeek since the server's UTC Monday 00:00, buybackUsd1Total and nftMintedTotal from the lane projection. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: launch2OverviewResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await service.getOverview({
+        principal: requireAuthenticatedLoopPrincipal(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

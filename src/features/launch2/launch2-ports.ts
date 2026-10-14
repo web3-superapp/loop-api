@@ -933,6 +933,62 @@ export class Launch2IdempotencyConflictError extends Error {
   }
 }
 
+/** Decision 0139: the kinds of the launchpad activity feed. */
+export const launch2ActivityKinds = [
+  "curve_buy",
+  "curve_sell",
+  "nft_mint",
+  "graduated",
+  "buyback",
+  "round_activated",
+  "reward_claimed",
+] as const;
+export type Launch2ActivityKind = (typeof launch2ActivityKinds)[number];
+
+/**
+ * Decision 0139: one row of the cross-instance activity feed, read from the
+ * indexed facts only (never the chain). `amountUsd1` is the raw 18-decimal
+ * integer string (null for graduated / round_activated); `actor` is null for
+ * platform actions and anonymous pool swaps (Decision 0132).
+ */
+export interface Launch2ActivityRecord {
+  readonly kind: Launch2ActivityKind;
+  readonly instanceId: string;
+  readonly ticker: string;
+  readonly name: string;
+  readonly logoUrl: string | null;
+  readonly actor: string | null;
+  readonly amountUsd1: string | null;
+  readonly at: string;
+  readonly transactionHash: string | null;
+  readonly blockNumber: string | null;
+  readonly logIndex: number | null;
+}
+
+/**
+ * Decision 0139: what the stage derivation reads from an instance — the
+ * same inputs `GET /v2/launch2/instances` derives from
+ * (`Launch2InstanceRecord` satisfies it).
+ */
+export interface Launch2StageFacts {
+  readonly nftSaleStart: string;
+  readonly nftSaleEnd: string;
+  readonly holdReason: Launch2HoldReason | null;
+  readonly snapshot: { readonly publishedAt: string } | null;
+  readonly graduation: { readonly graduatedAt: string } | null;
+  readonly noHoldersClosure: { readonly closedAt: string } | null;
+  readonly openedWithoutHolders: { readonly openedAt: string } | null;
+}
+
+/** Decision 0139: one listed instance's stage inputs and ledger totals. */
+export interface Launch2OverviewInstanceFacts extends Launch2StageFacts {
+  readonly instanceId: string;
+  /** Lane projection: indexed `NftMinted` count. */
+  readonly nftMintedCount: string;
+  /** Lane projection: Σ executed buyback USD1 (raw 18-decimal integer). */
+  readonly buybackUsd1: string;
+}
+
 export interface Launch2Repository {
   // --- Lane ---
   /**
@@ -1105,6 +1161,20 @@ export interface Launch2Repository {
     readonly instanceId: string | null;
     readonly walletAddresses: readonly string[];
   }): Promise<readonly Launch2PoolTradeStats[]>;
+  /**
+   * Decision 0139: the newest `limit` activity rows across the chain's
+   * listed instances (curve trades, user pool swaps, NFT mints,
+   * graduations, executed buybacks, LoopDynamic round activations and
+   * reward claims), newest first.
+   */
+  listActivity(input: {
+    readonly chainId: string;
+    readonly limit: number;
+  }): Promise<readonly Launch2ActivityRecord[]>;
+  /** Decision 0139: every listed instance's stage inputs and totals. */
+  listOverviewFacts(input: {
+    readonly chainId: string;
+  }): Promise<readonly Launch2OverviewInstanceFacts[]>;
   // --- Decision 0131: LoopDynamic ---
   dynamicRoundSummary(instanceId: string): Promise<Launch2DynamicRoundSummary>;
   /** Rounds in which the wallet has buy weight, newest first. */

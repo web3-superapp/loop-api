@@ -102,7 +102,7 @@ import {
   type Launch2PoolMode,
   type Launch2PoolSide,
 } from "./launch2-pool.js";
-import { deriveLaunch2Stage, launch2EarlyRoundEnd } from "./launch2-stage.js";
+import { deriveLaunch2StageOf, launch2EarlyRoundEnd } from "./launch2-stage.js";
 import {
   launch2TradingHoldOf,
   launch2TradingHoldReasonCodes,
@@ -126,6 +126,10 @@ import {
   launch2HookKindOf,
   type Launch2PoolHookKind,
 } from "./launch2-dynamic.js";
+import {
+  launch2OverviewActivityLimit,
+  projectLaunch2Overview,
+} from "./launch2-overview.js";
 import { launch2ProjectProfileProjection } from "./launch2-project-profile.js";
 
 /**
@@ -222,6 +226,10 @@ export interface Launch2Service {
     readonly limit?: unknown;
   }): Promise<Resource>;
   listMyPositions(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+  }): Promise<Resource>;
+  /** Decision 0139: the launchpad activity feed and scoreboard. */
+  getOverview(input: {
     readonly principal: AuthenticatedLoopPrincipal;
   }): Promise<Resource>;
   prepareNftMint(input: {
@@ -356,20 +364,7 @@ async function chainRead<T>(read: () => Promise<T>): Promise<T> {
 }
 
 function stageOf(record: Launch2InstanceRecord, nowSeconds: bigint) {
-  return deriveLaunch2Stage({
-    nowSeconds,
-    nftSaleStart: seconds(record.nftSaleStart),
-    nftSaleEnd: seconds(record.nftSaleEnd),
-    snapshotPublishedAt:
-      record.snapshot === null ? null : seconds(record.snapshot.publishedAt),
-    graduated: record.graduation !== null,
-    holdReason: record.holdReason,
-    closedNoHolders: record.noHoldersClosure !== null,
-    openedWithoutHoldersAt:
-      record.openedWithoutHolders === null
-        ? null
-        : seconds(record.openedWithoutHolders.openedAt),
-  });
+  return deriveLaunch2StageOf(record, nowSeconds);
 }
 
 /**
@@ -899,6 +894,7 @@ export function createUnavailableLaunch2Service(
     quote: fail,
     listBuybacks: fail,
     listMyPositions: fail,
+    getOverview: fail,
     prepareNftMint: fail,
     prepareTrade: fail,
     poolQuote: fail,
@@ -2979,6 +2975,18 @@ export function createLaunch2Service(
         trades: rows.map(poolTradeOf),
         contractVersion: v2ContractVersion,
       });
+    },
+
+    async getOverview() {
+      const store = repository();
+      const [activity, facts] = await Promise.all([
+        store.listActivity({
+          chainId: deps.chainId,
+          limit: launch2OverviewActivityLimit,
+        }),
+        store.listOverviewFacts({ chainId: deps.chainId }),
+      ]).catch(translate);
+      return projectLaunch2Overview({ activity, facts, now: now() });
     },
 
     async listInstances(input) {
