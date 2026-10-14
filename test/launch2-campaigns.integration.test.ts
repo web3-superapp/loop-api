@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -246,12 +247,16 @@ describe("Decision 0140 launch desk campaigns on PostgreSQL", () => {
     ).rejects.toThrow();
   });
 
-  it("migrates down one step and up again", async () => {
+  it("migrates down through 000081 and up again", async () => {
+    // 000081 and every later migration (later ones stack on top of it).
+    const count = readdirSync(migrationsDirectory).filter(
+      (name) => /^\d{6}_.*\.ts$/u.test(name) && name >= "000081",
+    ).length;
     await runner({
       databaseUrl: url,
       dir: migrationsDirectory,
       direction: "down",
-      count: 1,
+      count,
       migrationsTable: "pgmigrations",
       log: () => undefined,
     });

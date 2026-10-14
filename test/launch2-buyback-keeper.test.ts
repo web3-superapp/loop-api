@@ -29,6 +29,8 @@ import { createLaunch2BuybackKeeperLane } from "../src/features/launch2/launch2-
 const keeper = "0x5f1175ffb0174332d86ff55eb9b8e885ce90e260";
 const fallbackKeeper = "0xcd1ed680556239d1d48822a5a8ea92c8ec1a5279";
 const factory = "0x6a69ba7a5a71c114301e20ef95f62cd83d07d9c0";
+const dynamicFactory = "0xaf077cab35385027592f959aca185f815c3c5a5a";
+const otherKeeper = `0x${"1".repeat(40)}`;
 const executor = `0x${"6".repeat(40)}`;
 const escrow = `0x${"f".repeat(40)}`;
 const wad = 10n ** 18n;
@@ -58,6 +60,7 @@ class MemoryAttempts implements Launch2BuybackAttemptRepository {
   ledger = new Map<string, string>();
   instance = {
     instanceId: randomUUID(),
+    factoryAddress: factory,
     graduated: true,
     buybackPaused: false,
   };
@@ -135,6 +138,7 @@ class MemoryAttempts implements Launch2BuybackAttemptRepository {
     return Promise.resolve([
       {
         instanceId: this.instance.instanceId,
+        factoryAddress: this.instance.factoryAddress,
         buybackExecutor: executor,
         escrow,
         graduated: this.instance.graduated,
@@ -299,8 +303,13 @@ class ScriptedChain implements Launch2BuybackKeeperChain {
       timestamp: this.timestamp,
     });
   canonical = new Map<bigint, string>();
-  factoryKeepers = vi.fn(() =>
-    Promise.resolve({ primary: this.factoryPrimary, fallback: fallbackKeeper }),
+  /** Decision 0141: per-Factory primary keepers (else `factoryPrimary`). */
+  factoryPrimaries = new Map<string, string>();
+  factoryKeepers = vi.fn((address: string) =>
+    Promise.resolve({
+      primary: this.factoryPrimaries.get(address) ?? this.factoryPrimary,
+      fallback: fallbackKeeper,
+    }),
   );
   executorFacts = vi.fn(() =>
     Promise.resolve({
@@ -350,7 +359,7 @@ class ScriptedChain implements Launch2BuybackKeeperChain {
   }
 }
 
-function setup() {
+function setup(policyOverride: Partial<Launch2BuybackKeeperPolicy> = {}) {
   const clock = new Clock();
   const store = new MemoryAttempts(clock);
   const chain = new ScriptedChain();
@@ -358,7 +367,7 @@ function setup() {
   const keeperInstance = createLaunch2BuybackKeeper({
     repository: store,
     chain,
-    policy,
+    policy: { ...policy, ...policyOverride },
     now: clock.now,
     onStep: (step) => steps.push(step),
   });
@@ -705,6 +714,80 @@ describe("Decision 0121 keeper tick", () => {
       txHash: null,
     });
     expect(chain.sent).toEqual([]);
+  });
+});
+
+describe("Decision 0141 mixed deployment: each instance against its own Factory", () => {
+  const mixed = { factoryAddresses: [factory, dynamicFactory] } as const;
+
+  for (const [authorizedOn, refusedOn] of [
+    [dynamicFactory, factory],
+    [factory, dynamicFactory],
+  ] as const) {
+    it(`boots when the key is a keeper of ${authorizedOn === factory ? "OfficialTax" : "LoopDynamic"} only; that Factory's instance executes, the other one waits`, async () => {
+      const { chain, keeper: subject, store } = setup(mixed);
+      chain.factoryPrimaries.set(refusedOn, otherKeeper);
+      expect(await subject.verifyKeeper()).toBe("ok");
+      expect(
+        chain.factoryKeepers.mock.calls.map(([address]) => address),
+      ).toEqual([factory, dynamicFactory]);
+
+      store.instance.factoryAddress = refusedOn;
+      let result = await subject.runOnce();
+      expect(result.kind).toBe("ran");
+      expect(result.waiting).toEqual({
+        [store.instance.instanceId]: "LAUNCH2_BUYBACK_NOT_KEEPER",
+      });
+      expect(chain.executorFacts).not.toHaveBeenCalled();
+      expect(chain.estimateExecute).not.toHaveBeenCalled();
+      expect(store.rows).toEqual([]);
+
+      store.instance.factoryAddress = authorizedOn;
+      result = await subject.runOnce();
+      expect(result.waiting).toEqual({});
+      expect(store.rows).toHaveLength(1);
+      expect(store.rows[0]).toMatchObject({
+        status: "broadcast",
+        keeperAddress: keeper,
+      });
+      // Factory keepers are read once (boot), not per tick.
+      expect(chain.factoryKeepers).toHaveBeenCalledTimes(2);
+    });
+  }
+
+  it("same keeper on both Factories: both instances execute (unchanged)", async () => {
+    for (const instanceFactory of [factory, dynamicFactory]) {
+      const { keeper: subject, store } = setup(mixed);
+      expect(await subject.verifyKeeper()).toBe("ok");
+      store.instance.factoryAddress = instanceFactory;
+      const result = await subject.runOnce();
+      expect(result.waiting).toEqual({});
+      expect(store.rows[0]?.status).toBe("broadcast");
+    }
+  });
+
+  it("refuses boot when the key is a keeper of neither Factory", async () => {
+    const { chain, keeper: subject, store } = setup(mixed);
+    chain.factoryPrimary = otherKeeper;
+    expect(await subject.verifyKeeper()).toBe("not_keeper");
+    expect((await subject.runOnce()).reasonCode).toBe(
+      "LAUNCH2_BUYBACK_KEEPER_NOT_AUTHORIZED",
+    );
+    expect(store.rows).toEqual([]);
+  });
+
+  it("an instance of an unconfigured (legacy) Factory is checked against that Factory's keepers", async () => {
+    const legacyFactory = `0x${"9".repeat(40)}`;
+    const { chain, keeper: subject, store } = setup();
+    chain.factoryPrimaries.set(legacyFactory, otherKeeper);
+    expect(await subject.verifyKeeper()).toBe("ok");
+    store.instance.factoryAddress = legacyFactory;
+    const result = await subject.runOnce();
+    expect(result.waiting).toEqual({
+      [store.instance.instanceId]: "LAUNCH2_BUYBACK_NOT_KEEPER",
+    });
+    expect(chain.factoryKeepers).toHaveBeenLastCalledWith(legacyFactory);
+    expect(store.rows).toEqual([]);
   });
 });
 

@@ -1304,6 +1304,7 @@ export async function runReconciliationWorker(
           policy: {
             chainId: launchChainConfig.chainId,
             factoryAddress: keeperConfig.factoryAddress,
+            factoryAddresses: keeperConfig.factoryAddresses,
             confirmations: keeperConfig.confirmations,
             intervalSeconds: keeperConfig.intervalSeconds,
             maxGasPriceWei:

@@ -92,6 +92,6 @@ describe("000075 MEME coverage integrity (Decision 0129 §2)", () => {
   });
 
   it("is the latest migration", () => {
-    expect(latestMigrationName).toBe("000081_launch2_campaigns");
+    expect(latestMigrationName).toBe("000082_launch2_overview_indexes");
   });
 });

@@ -7,9 +7,10 @@
  * guard, pause; Decision 0122: no price protection on the v3 Factory, the
  * v2 instances keep theirs):
  *
- * 1. pre-checks on chain (keeper of this executor, escrow binding, not
- *    paused, budget > 0, interval elapsed) — a failed pre-check is a
- *    waiting reason, never a row;
+ * 1. pre-checks on chain (keeper of the instance's own Factory —
+ *    Decision 0141 — and of this executor, escrow binding, not paused,
+ *    budget > 0, interval elapsed) — a failed pre-check is a waiting
+ *    reason, never a row;
  * 2. simulates `execute()` from the keeper. A refusal is classified from
  *    the contract error name and recorded as a `rejected` attempt
  *    (consecutive refusals with the same reason refresh one row and back
@@ -180,6 +181,8 @@ export interface Launch2BuybackAttemptRecord {
 
 export interface Launch2BuybackKeeperCandidate {
   readonly instanceId: string;
+  /** `launch2_instances.factory_address` — the Factory that deployed it. */
+  readonly factoryAddress: string;
   readonly buybackExecutor: string;
   readonly escrow: string;
   /** The read model says `graduated` (the lane indexed `Graduated`). */
@@ -341,7 +344,15 @@ export interface Launch2BuybackKeeperChain {
 
 export interface Launch2BuybackKeeperPolicy {
   readonly chainId: string;
+  /** The preferred configured Factory (OfficialTax, else LoopDynamic). */
   readonly factoryAddress: string;
+  /**
+   * Decision 0141: every configured Factory (OfficialTax and / or
+   * LoopDynamic). Boot passes when the key is a keeper of at least one;
+   * each instance is then checked against its own Factory. Defaults to
+   * `[factoryAddress]`.
+   */
+  readonly factoryAddresses?: readonly string[];
   readonly confirmations: number;
   readonly intervalSeconds: number;
   readonly maxGasPriceWei: bigint;
@@ -405,7 +416,10 @@ export interface Launch2KeeperTickResult {
 }
 
 export interface Launch2BuybackKeeper {
-  /** Reads the Factory keepers; `not_keeper` = this key must not run. */
+  /**
+   * Reads the configured Factories' keepers; `not_keeper` = the key is a
+   * keeper of none of them and must not run.
+   */
   verifyKeeper(): Promise<"ok" | "not_keeper">;
   runOnce(signal?: AbortSignal): Promise<Launch2KeeperTickResult>;
 }
@@ -421,6 +435,15 @@ export function createLaunch2BuybackKeeper(options: {
   const { repository, chain, policy } = options;
   const keeper = chain.keeperAddress.toLowerCase();
   const facts = new Map<string, Launch2BuybackExecutorFacts>();
+  const configuredFactories = [
+    ...new Set(
+      (policy.factoryAddresses ?? [policy.factoryAddress]).map((address) =>
+        address.toLowerCase(),
+      ),
+    ),
+  ];
+  /** Factory → this key is its primary or fallback keeper. */
+  const factoryKeeper = new Map<string, boolean>();
   let verified: "ok" | "not_keeper" | null = null;
 
   async function factsOf(
@@ -433,13 +456,26 @@ export function createLaunch2BuybackKeeper(options: {
     return read;
   }
 
-  async function verifyKeeper(): Promise<"ok" | "not_keeper"> {
-    const keepers = await chain.factoryKeepers(policy.factoryAddress);
-    verified =
+  /** Decision 0141: is the key a keeper of `factory` (read once)? */
+  async function isFactoryKeeper(factory: string): Promise<boolean> {
+    const address = factory.toLowerCase();
+    const cached = factoryKeeper.get(address);
+    if (cached !== undefined) return cached;
+    const keepers = await chain.factoryKeepers(address);
+    const authorized =
       keepers.primary.toLowerCase() === keeper ||
-      keepers.fallback.toLowerCase() === keeper
-        ? "ok"
-        : "not_keeper";
+      keepers.fallback.toLowerCase() === keeper;
+    factoryKeeper.set(address, authorized);
+    return authorized;
+  }
+
+  async function verifyKeeper(): Promise<"ok" | "not_keeper"> {
+    factoryKeeper.clear();
+    const authorized: boolean[] = [];
+    for (const factory of configuredFactories) {
+      authorized.push(await isFactoryKeeper(factory));
+    }
+    verified = authorized.includes(true) ? "ok" : "not_keeper";
     return verified;
   }
 
@@ -680,6 +716,11 @@ export function createLaunch2BuybackKeeper(options: {
       return latest.status === "rejected" && latest.reasonCode !== null
         ? latest.reasonCode
         : launch2KeeperReasonCodes.retryWait;
+    }
+    // Decision 0141: in a mixed deployment the two Factories may register
+    // different keepers; the instance's own Factory decides.
+    if (!(await isFactoryKeeper(candidate.factoryAddress))) {
+      return launch2KeeperReasonCodes.notKeeper;
     }
     const executor = await factsOf(candidate.buybackExecutor);
     if (

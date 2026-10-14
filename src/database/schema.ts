@@ -1,4 +1,4 @@
-export const latestMigrationName = "000081_launch2_campaigns";
+export const latestMigrationName = "000082_launch2_overview_indexes";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

@@ -1706,6 +1706,7 @@ describe("launch2_buyback_keeper lane (Decision 0121)", () => {
     expect(config.launch2BuybackKeeper).toEqual({
       privateKey: keeperKey,
       factoryAddress: factory,
+      factoryAddresses: [factory],
       intervalSeconds: 15,
       confirmations: 12,
     });
@@ -1785,6 +1786,7 @@ describe("launch2_buyback_keeper lane (Decision 0121)", () => {
           expect(options.policy).toMatchObject({
             chainId: "eip155:97",
             factoryAddress: factory,
+            factoryAddresses: [factory],
             confirmations: 12,
             intervalSeconds: 15,
             maxGasPriceWei: 20_000_000_000n,

@@ -349,6 +349,18 @@ describe("Decision 0133 worker config with only the LoopDynamic Factory", () => 
         HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
       }).launch2BuybackKeeper?.factoryAddress,
     ).toBe(officialTaxFactory);
+    // Decision 0141: both Factories are checked, OfficialTax first.
+    expect(
+      loadReconciliationWorkerConfig({
+        ...keeperEnv,
+        HOOKS_LAUNCH_FACTORY_ADDRESS: officialTaxFactory,
+        HOOKS_LAUNCH_FACTORY_CODE_HASH: `0x${"ab".repeat(32)}`,
+      }).launch2BuybackKeeper?.factoryAddresses,
+    ).toEqual([officialTaxFactory, dynamicFactory]);
+    expect(
+      loadReconciliationWorkerConfig(keeperEnv).launch2BuybackKeeper
+        ?.factoryAddresses,
+    ).toEqual([dynamicFactory]);
     expect(() =>
       loadReconciliationWorkerConfig({
         ...workerBase,

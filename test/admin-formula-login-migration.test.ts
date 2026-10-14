@@ -54,7 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000081_launch2_campaigns");
+    expect(latestMigrationName).toBe("000082_launch2_overview_indexes");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

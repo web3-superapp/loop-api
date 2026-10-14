@@ -139,7 +139,8 @@ export function createPostgresLaunch2BuybackAttemptRepository(
     async listCandidates(chainId) {
       const result = await pool.query<Row>(
         `
-          select i.instance_id::text, i.buyback_executor_address,
+          select i.instance_id::text, i.factory_address,
+            i.buyback_executor_address,
             i.escrow_address, i.stage = 'graduated' as graduated,
             i.buyback_paused,
             (select row_to_json(a) from (
@@ -165,6 +166,7 @@ export function createPostgresLaunch2BuybackAttemptRepository(
       return result.rows.map((row): Launch2BuybackKeeperCandidate =>
         Object.freeze({
           instanceId: row["instance_id"] as string,
+          factoryAddress: row["factory_address"] as string,
           buybackExecutor: row["buyback_executor_address"] as string,
           escrow: row["escrow_address"] as string,
           graduated: row["graduated"] === true,

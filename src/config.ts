@@ -2987,7 +2987,13 @@ export function parseLaunch2SnapshotPublisher(data: {
 
 export interface Launch2BuybackKeeperConfig {
   readonly privateKey: `0x${string}`;
+  /** The preferred Factory: OfficialTax, else LoopDynamic (Decision 0133). */
   readonly factoryAddress: string;
+  /**
+   * Decision 0141: every configured Factory (OfficialTax first, then a
+   * complete LoopDynamic pair); each instance is checked against its own.
+   */
+  readonly factoryAddresses: readonly string[];
   /** Tick interval (≥ 10 = `BuybackExecutor.MIN_SUCCESS_INTERVAL`). */
   readonly intervalSeconds: number;
   readonly confirmations: number;
@@ -3064,6 +3070,17 @@ export function parseLaunch2BuybackKeeper(data: {
     : data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
       ? ""
       : (data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS?.trim() ?? "");
+  const dynamicFactory =
+    data.LAUNCH2_DYNAMIC_FACTORY_CODE_HASH === undefined
+      ? ""
+      : (data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS?.trim() ?? "");
+  const factoryAddresses = [
+    ...new Set(
+      [factory, dynamicFactory]
+        .filter((address) => /^0x[0-9a-fA-F]{40}$/u.test(address))
+        .map((address) => address.toLowerCase()),
+    ),
+  ];
   if (!/^0x[0-9a-fA-F]{40}$/u.test(factory)) {
     issues.push(
       "LAUNCH2_BUYBACK_KEEPER_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS or LAUNCH2_DYNAMIC_FACTORY_ADDRESS (the keeper is verified against the Factory keepers)",
@@ -3085,6 +3102,7 @@ export function parseLaunch2BuybackKeeper(data: {
   return Object.freeze({
     privateKey: normalizedKey(key),
     factoryAddress: factory.toLowerCase(),
+    factoryAddresses: Object.freeze(factoryAddresses),
     intervalSeconds: data.LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS,
     confirmations: data.LAUNCH2_BUYBACK_KEEPER_CONFIRMATIONS,
   });
