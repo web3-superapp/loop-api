@@ -199,6 +199,8 @@ describe("database schema readiness contract", () => {
       "public.launch2_dynamic_rounds",
       "public.launch2_dynamic_buy_weights",
       "public.launch2_dynamic_claim_reports",
+      "public.chain_guard_incidents",
+      "public.chain_guard_cursors",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

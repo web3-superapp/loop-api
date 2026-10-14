@@ -1,3 +1,5 @@
+import { createPostgresChainGuardRepository } from "./chain-guard-repository.js";
+import type { ChainGuardRepository } from "../features/chain-guard/chain-guard-contract.js";
 import { createPostgresHooksLaunchExecutorRepository } from "./hooks-launch-executor-repository.js";
 import type { HooksLaunchExecutorRepository } from "../features/launch/hooks-launch-executor.js";
 import pg from "pg";
@@ -265,6 +267,8 @@ export interface Database {
   readonly miningSettlement?: MiningSettlementRepository;
   /** Decision 0128: testnet faucet grants. */
   readonly testnetFaucet?: TestnetFaucetRepository;
+  /** Decision 0134: chain guard incidents and log cursor. */
+  readonly chainGuard?: ChainGuardRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -515,6 +519,7 @@ export function createPostgresDatabase(
     launch2MemeAssets: createPostgresLaunch2MemeAssetRepository(pool),
     miningSettlement: createPostgresMiningSettlementRepository(pool),
     testnetFaucet: createPostgresTestnetFaucetRepository(pool),
+    chainGuard: createPostgresChainGuardRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

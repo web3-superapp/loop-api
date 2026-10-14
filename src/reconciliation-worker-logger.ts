@@ -2,6 +2,7 @@ import { launch2PublicationStatuses } from "./features/launch2/launch2-snapshot-
 import { launch2BuybackAttemptStatuses } from "./features/launch2/launch2-buyback-keeper.js";
 import { hooksLaunchDeploymentStatuses } from "./features/launch/hooks-launch-deployment-status.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
+import { chainGuardIncidentKinds } from "./features/chain-guard/chain-guard-contract.js";
 
 type WorkerLogLevel = ReconciliationWorkerConfig["logLevel"];
 type EmittedWorkerLogLevel = Exclude<WorkerLogLevel, "silent">;
@@ -47,7 +48,12 @@ const indexerLanes = new Set([
   "launch2_buyback_keeper",
   // S169 (Decision 0128 §9): closes faucet grants left pending.
   "testnet_faucet_pending_sweep",
+  // Decision 0131: the LoopDynamic poke keeper.
+  "launch2_dynamic_poke",
+  // Decision 0134: the read-only chain guard.
+  "chain_guard",
 ]);
+const chainGuardKindSet: ReadonlySet<string> = new Set(chainGuardIncidentKinds);
 const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
 const memeGraduationOutcomes = new Set([
   "confirmed",
@@ -144,7 +150,14 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP member buy feed could not reach Stream; the pass stalls"
   | "LOOP testnet faucet sweep closed a pending grant"
   | "LOOP testnet faucet sweep could not look up a hash; kept"
-  | "LOOP testnet faucet sweep stays idle";
+  | "LOOP testnet faucet sweep stays idle"
+  | "LOOP chain guard lane stays idle"
+  | "LOOP chain guard lane enabled"
+  | "LOOP chain guard lane is limited"
+  | "LOOP chain guard incident opened"
+  | "LOOP chain guard incident resolved"
+  | "LOOP chain guard hold engaged; the lane skips its ticks"
+  | "LOOP chain guard hold released";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -264,6 +277,13 @@ export interface ReconciliationWorkerLogFields {
    */
   readonly testnetFaucetGrantId?: string;
   readonly testnetFaucetStatus?: string;
+  /**
+   * Decision 0134 chain guard: the opaque incident ID, its kind, and its
+   * subject (a public contract / signer address or a 32-byte pool id).
+   */
+  readonly chainGuardIncidentId?: string;
+  readonly chainGuardKind?: string;
+  readonly chainGuardSubject?: string;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -485,6 +505,21 @@ function sanitizeFields(
     testnetFaucetSweepStatuses.has(fields.testnetFaucetStatus)
       ? fields.testnetFaucetStatus
       : undefined;
+  const chainGuardIncidentId =
+    fields.chainGuardIncidentId !== undefined &&
+    safeUuidPattern.test(fields.chainGuardIncidentId)
+      ? fields.chainGuardIncidentId
+      : undefined;
+  const chainGuardKind =
+    fields.chainGuardKind !== undefined &&
+    chainGuardKindSet.has(fields.chainGuardKind)
+      ? fields.chainGuardKind
+      : undefined;
+  const chainGuardSubject =
+    fields.chainGuardSubject !== undefined &&
+    /^0x(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(fields.chainGuardSubject)
+      ? fields.chainGuardSubject
+      : undefined;
   const hooksStatus = (value: string | undefined): string | undefined =>
     value !== undefined && hooksDeploymentStatusSet.has(value)
       ? value
@@ -556,6 +591,9 @@ function sanitizeFields(
     ...(factoryAddress === undefined ? {} : { factoryAddress }),
     ...(testnetFaucetGrantId === undefined ? {} : { testnetFaucetGrantId }),
     ...(testnetFaucetStatus === undefined ? {} : { testnetFaucetStatus }),
+    ...(chainGuardIncidentId === undefined ? {} : { chainGuardIncidentId }),
+    ...(chainGuardKind === undefined ? {} : { chainGuardKind }),
+    ...(chainGuardSubject === undefined ? {} : { chainGuardSubject }),
     ...limits,
   });
 }

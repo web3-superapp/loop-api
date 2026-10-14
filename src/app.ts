@@ -455,6 +455,7 @@ import type { MiningClaimChain } from "./features/mining/hourly-settlement-ports
 import { createMiningClaimSigner } from "./features/mining/claim-voucher.js";
 import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
 import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
+import { createAdminChainGuardService } from "./features/admin/admin-chain-guard.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
 import { createTestnetFaucetChain } from "./integrations/bsc/testnet-faucet-chain.js";
 import type { TestnetFaucetChain } from "./features/testnet-faucet/testnet-faucet-contract.js";
@@ -1036,6 +1037,11 @@ export async function buildApp(
     },
     { name: "admin-mining", description: "Mining formula versions" },
     { name: "admin-meme", description: "MEME listing and curve pause" },
+    {
+      name: "admin-chain-guard",
+      description:
+        "Chain guard incidents (Decision 0134): USD1 pause / freeze / upgrade, v4 protocol fee, signer balances",
+    },
     { name: "admin-audit", description: "Append-only console audit log" },
     {
       name: "admin-accounts",
@@ -2729,6 +2735,11 @@ export async function buildApp(
     const adminRepository =
       database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0134: chain guard incidents of the launch chain.
+      chainGuard: createAdminChainGuardService({
+        repository: database.chainGuard ?? null,
+        chainId: config.launchChain.chainId,
+      }),
       // Decision 0116: hourly settlement parameters, epochs, funding.
       miningSettlement: createAdminMiningSettlementService({
         repository: database.miningSettlement ?? null,

@@ -1,5 +1,6 @@
 import { waitFor, type PeriodicLane } from "./bsc-meme-indexer-worker.js";
 import type { HooksLaunchExecutorConfig } from "./config.js";
+import type { ChainGuardHoldCheck } from "./features/chain-guard/chain-guard-hold.js";
 import {
   createHooksLaunchExecutor,
   hooksLaunchExecutorDefaults,
@@ -27,6 +28,11 @@ export function createHooksLaunchExecutorLane(options: {
   readonly config: HooksLaunchExecutorConfig;
   readonly executorId: string;
   readonly now?: () => number;
+  /**
+   * Decision 0134: the chain guard's hold check; a non-null answer is this
+   * tick's result (`CHAIN_GUARD_HOLD`) and nothing else runs.
+   */
+  readonly chainGuardHold?: ChainGuardHoldCheck;
   readonly onStep?: (event: HooksLaunchExecutorStepEvent) => void;
   readonly onIdle?: (reason: HooksLaunchExecutorIdleReason) => void;
   readonly onInfrastructureBackoff?: (event: {
@@ -61,6 +67,8 @@ export function createHooksLaunchExecutorLane(options: {
   });
   let lastIdle: HooksLaunchExecutorIdleReason | null = null;
   async function tick(signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const held = await options.chainGuardHold?.();
+    if (held !== null && held !== undefined) return { ...held };
     const result = await executor.runOnce(signal);
     if (result.idleReason !== null && result.idleReason !== lastIdle) {
       options.onIdle?.(result.idleReason);

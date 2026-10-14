@@ -627,6 +627,55 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 | `meme.pause.requested` / `.submitted` / `.failed`           | `meme_token`（`unpause` 同理）                                                                                                                                                         |
 | `meme.pause` / `meme.unpause`                               | `meme_token`（仅 S119b 之前的历史行）                                                                                                                                                  |
 
+### 5.9 链上风险 `GET /admin/v1/chain-guard/incidents`（决策 0134）
+
+权限 `console.read`（platform_admin、auditor）；reviewer / testnet_acceptor 403 `PERMISSION_DENIED`；无 session 401 `ADMIN_SESSION_REQUIRED`。无请求参数，响应 `Cache-Control: no-store`。
+
+```json
+{
+  "chainId": "eip155:56",
+  "holdActive": true,
+  "holdKinds": ["usd1_paused", "usd1_address_frozen"],
+  "items": [
+    {
+      "incidentId": "5b0c6f0e-3d1c-4d55-9a57-0a4c3f2b7e11",
+      "kind": "usd1_address_frozen",
+      "subject": "0x4f1c…e5c0",
+      "details": {
+        "source": "state",
+        "labels": ["instance:7d3e…:escrow"]
+      },
+      "firstSeenAt": "2026-10-14T00:00:00.000Z",
+      "lastSeenAt": "2026-10-14T00:05:00.000Z",
+      "hold": true
+    },
+    {
+      "incidentId": "a2d4…",
+      "kind": "pool_protocol_fee_nonzero",
+      "subject": "0x9e1f…（32 字节 pool id）",
+      "details": {
+        "instanceId": "7d3e…",
+        "poolManager": "0x28e2…e9df",
+        "zeroForOnePips": 25,
+        "oneForZeroPips": 25,
+        "alertPips": 500
+      },
+      "firstSeenAt": "2026-10-14T00:00:00.000Z",
+      "lastSeenAt": "2026-10-14T00:05:00.000Z",
+      "hold": false
+    }
+  ],
+  "generatedAt": "2026-10-14T00:05:03.120Z"
+}
+```
+
+- 只列**未解决**事件（≤ 200，按最后一次看到倒序）。`holdActive = true` 时回购 keeper、Hooks 执行器、poke keeper 都在跳过 tick（`CHAIN_GUARD_HOLD`），页面应显著提示。
+- `kind` 全集（中文展示名建议）：`usd1_paused` USD1 全局暂停｜`usd1_address_frozen` 我方地址被冻结｜`usd1_implementation_changed` USD1 实现合约变化｜`usd1_address_mismatch` 工厂 USD1 与配置不一致｜`usd1_read_unsupported` 主网 USD1 读数异常｜`protocol_fee_controller_changed` v4 协议费控制器变化｜`pool_protocol_fee_nonzero` 池协议费非零｜`pool_protocol_fee_high` 池协议费超阈值｜`account_balance_low` 签名账户 BNB 不足｜`usd1_frozen_funds_drained` 冻结资金被没收｜`usd1_frozen_funds_reallocated` 冻结资金被转移｜`usd1_upgraded` USD1 升级事件｜`usd1_proxy_admin_changed` 代理管理员变更｜`usd1_proxy_admin_ownership_transferred` ProxyAdmin 所有者变更｜`usd1_owner_transferred` USD1 owner 变更。
+- `subject` 是小写地址或 pool id，可直接拼 BscScan 链接；`details` 是读数快照（金额十进制字符串，例如 `balanceBnb: "0.04"`、`amountRaw`），原样展示即可。
+- 事件类 kind（最后 6 个）看到后 24 小时自动消失；其余在链上条件消失后的下一次检查（默认 60 秒）消失。
+- 空列表只表示没有未解决事件，**不**表示监控在运行（`CHAIN_GUARD_ENABLED` 默认关闭）。
+- 错误：503 `CAPABILITY_UNAVAILABLE`，`detailsSafe.reasonCode = CHAIN_GUARD_REPOSITORY_UNAVAILABLE`（无数据库）。
+
 ## 6. Unavailable 行为汇总
 
 | 情况                                    | 表现                                                                                           |
@@ -636,6 +685,7 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 | 社区仓库未组装                          | 审核 503 `COMMUNITY_REVIEW_UNAVAILABLE`                                                        |
 | 暂停密钥未配 / 合约未配 / 主网 / 无 RPC | 暂停 503 + reasonCode；列表 `pause.available: false`                                           |
 | 审计表写不进去                          | 审核 / 暂停 503 `ADMIN_AUDIT_UNAVAILABLE`，不执行                                              |
+| 链上风险无数据库（0134）                | `chain-guard/incidents` 503 `CAPABILITY_UNAVAILABLE`（`CHAIN_GUARD_REPOSITORY_UNAVAILABLE`）   |
 | 未配 `INTEL_PROMOTION_IMAGE_HOSTS`      | 活动位 `imageHosts: []`，`imageUrl` 只能 null                                                  |
 | `NODE_ENV=production`                   | 批准 503 `MINING_APPROVE_FORBIDDEN_IN_PRODUCTION`；列表 `approval.available: false`            |
 

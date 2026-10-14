@@ -1,4 +1,5 @@
 import { waitFor, type PeriodicLane } from "../../bsc-meme-indexer-worker.js";
+import type { ChainGuardHoldCheck } from "../chain-guard/chain-guard-hold.js";
 import { launch2DynamicCandleSeconds } from "./launch2-dynamic.js";
 import type { Launch2Repository } from "./launch2-ports.js";
 
@@ -68,6 +69,11 @@ export function createLaunch2DynamicPokeLane(options: {
   readonly chainId: string;
   readonly expectedChainReference?: number;
   readonly intervalSeconds: number;
+  /**
+   * Decision 0134: the chain guard's hold check; a non-null answer is this
+   * tick's result (`CHAIN_GUARD_HOLD`) and nothing else runs.
+   */
+  readonly chainGuardHold?: ChainGuardHoldCheck;
   readonly onStep?: (step: Launch2DynamicPokeStep) => void;
   readonly onInfrastructureBackoff?: (event: {
     readonly lane: string;
@@ -79,6 +85,8 @@ export function createLaunch2DynamicPokeLane(options: {
   const expected = options.expectedChainReference ?? 97;
 
   async function tick(): Promise<Record<string, unknown>> {
+    const held = await options.chainGuardHold?.();
+    if (held !== null && held !== undefined) return { ...held };
     if ((await options.chain.chainId()) !== expected) {
       return { kind: "unavailable", reasonCode: "LAUNCH2_CHAIN_MISMATCH" };
     }

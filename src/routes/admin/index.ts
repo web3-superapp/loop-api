@@ -29,6 +29,11 @@ import {
 } from "./admin-role-schemas.js";
 import { registerAdminRoleRoutes } from "./role-routes.js";
 import { registerAdminMiningSettlementRoutes } from "./mining-settlement-routes.js";
+import { registerAdminChainGuardRoutes } from "./chain-guard-routes.js";
+import {
+  createAdminChainGuardService,
+  type AdminChainGuardService,
+} from "../../features/admin/admin-chain-guard.js";
 import type { AdminMiningSettlementService } from "../../features/admin/admin-mining-settlement.js";
 import type {
   AdminService,
@@ -88,6 +93,8 @@ export interface AdminRouteDependencies {
   readonly cookieSecure: boolean;
   /** Decision 0116: hourly settlement console. */
   readonly miningSettlement: AdminMiningSettlementService;
+  /** Decision 0134: chain guard incidents; absent = 503 CAPABILITY_UNAVAILABLE. */
+  readonly chainGuard?: AdminChainGuardService;
 }
 
 /** Decision 0109: `onRequest` hooks of a protected route. */
@@ -869,6 +876,13 @@ export function registerAdminRoutes(
     guard,
     guardAny,
     context,
+  });
+
+  registerAdminChainGuardRoutes(app, {
+    service:
+      dependencies.chainGuard ??
+      createAdminChainGuardService({ repository: null, chainId: "eip155:56" }),
+    guard,
   });
 
   registerAdminRoleRoutes(app, {

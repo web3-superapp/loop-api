@@ -223,6 +223,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     mining_reward_balances: "user",
     // Testnet faucet grants (Decision 0128)
     testnet_faucet_grants: "user",
+    // Decision 0134: chain guard incidents / log cursor (no user column)
+    chain_guard_incidents: "platform",
+    chain_guard_cursors: "platform",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",

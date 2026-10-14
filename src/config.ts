@@ -1912,6 +1912,12 @@ export interface ReconciliationWorkerConfig {
    */
   readonly launch2BuybackKeeper: Launch2BuybackKeeperConfig | null;
   /**
+   * Decision 0134: the read-only `chain_guard` lane. Present only with
+   * `CHAIN_GUARD_ENABLED=true`; absent or null keeps it off (and the three
+   * signing lanes unguarded).
+   */
+  readonly chainGuard?: ChainGuardConfig | null;
+  /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
    * now parses Stream configuration at all.
@@ -4293,6 +4299,9 @@ export function loadReconciliationWorkerConfig(
     hooksLaunchExecutor: parseHooksLaunchExecutor(parsed.data),
     launch2SnapshotPublisher: parseLaunch2SnapshotPublisher(parsed.data),
     launch2BuybackKeeper: parseLaunch2BuybackKeeper(parsed.data),
+    chainGuard: parseChainGuardEnabled(environment)
+      ? parseChainGuardConfig(environment)
+      : null,
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
@@ -4373,4 +4382,172 @@ export function loadReconciliationWorkerConfig(
     serviceName: "loop-reconciliation-worker",
     serviceVersion,
   });
+}
+
+/**
+ * Decision 0134: the `chain_guard` lane and `pnpm chain:preflight`. Every
+ * key is optional; an address that is malformed refuses boot. A check whose
+ * expected value is absent (implementation, fee controller) is reported as
+ * not configured, never treated as passing.
+ */
+export interface ChainGuardConfig {
+  readonly intervalSeconds: number;
+  /** CHAIN_GUARD_USD1_ADDRESS, else LAUNCH_USD1_ADDRESS; null: Factory `usd1()`. */
+  readonly usd1Address: string | null;
+  readonly expectedImplementation: string | null;
+  readonly poolManagerAddress: string | null;
+  readonly expectedProtocolFeeController: string | null;
+  readonly protocolFeeAlertPips: number;
+  /** CHAIN_GUARD_MIN_BNB as a decimal string and in wei. */
+  readonly minBnb: string;
+  readonly minBnbWei: bigint;
+  /** HOOKS_LAUNCH_FACTORY_ADDRESS + LAUNCH2_DYNAMIC_FACTORY_ADDRESS. */
+  readonly factories: readonly string[];
+  readonly poolRouterAddress: string | null;
+  readonly watch: readonly {
+    readonly address: string;
+    readonly label: string;
+  }[];
+  readonly balanceAccounts: readonly {
+    readonly address: string;
+    readonly label: string;
+  }[];
+}
+
+const chainGuardAddressPattern = /^0x[0-9a-fA-F]{40}$/u;
+const chainGuardLabelPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+const chainGuardMinBnbPattern = /^(0|[1-9][0-9]{0,8})(?:\.([0-9]{1,18}))?$/u;
+
+function chainGuardLabelledAddresses(
+  key: string,
+  raw: string | undefined,
+  issues: string[],
+): { readonly address: string; readonly label: string }[] {
+  const entries: { address: string; label: string }[] = [];
+  for (const rawEntry of (raw ?? "").split(",")) {
+    const entry = rawEntry.trim();
+    if (entry === "") continue;
+    const separator = entry.lastIndexOf(":");
+    const label = separator < 0 ? "" : entry.slice(0, separator).trim();
+    const address = separator < 0 ? entry : entry.slice(separator + 1).trim();
+    if (
+      !chainGuardLabelPattern.test(label) ||
+      !chainGuardAddressPattern.test(address)
+    ) {
+      issues.push(`${key}: each entry must be label:0x-address`);
+      continue;
+    }
+    entries.push({ address: address.toLowerCase(), label });
+  }
+  return entries;
+}
+
+export function parseChainGuardConfig(
+  environment: NodeJS.ProcessEnv,
+): ChainGuardConfig {
+  const issues: string[] = [];
+  const address = (key: string): string | null => {
+    const value = environment[key]?.trim() ?? "";
+    if (value === "") return null;
+    if (!chainGuardAddressPattern.test(value)) {
+      issues.push(`${key}: must be a 0x-prefixed 20-byte address`);
+      return null;
+    }
+    return value.toLowerCase();
+  };
+  const integer = (
+    key: string,
+    fallbackValue: number,
+    minimum: number,
+    maximum: number,
+  ): number => {
+    const value = environment[key]?.trim() ?? "";
+    if (value === "") return fallbackValue;
+    const parsed = /^[0-9]{1,9}$/u.test(value) ? Number(value) : Number.NaN;
+    if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+      issues.push(`${key}: must be an integer from ${minimum} to ${maximum}`);
+      return fallbackValue;
+    }
+    return parsed;
+  };
+  const intervalSeconds = integer(
+    "CHAIN_GUARD_INTERVAL_SECONDS",
+    60,
+    15,
+    3_600,
+  );
+  const protocolFeeAlertPips = integer(
+    "CHAIN_GUARD_PROTOCOL_FEE_ALERT_PIPS",
+    500,
+    1,
+    1_000,
+  );
+  const minBnb = environment["CHAIN_GUARD_MIN_BNB"]?.trim() || "0.05";
+  const minMatch = chainGuardMinBnbPattern.exec(minBnb);
+  let minBnbWei = 0n;
+  if (minMatch === null) {
+    issues.push(
+      "CHAIN_GUARD_MIN_BNB: must be a decimal BNB amount (≤ 18 decimals)",
+    );
+  } else {
+    minBnbWei =
+      BigInt(minMatch[1] as string) * 10n ** 18n +
+      BigInt((minMatch[2] ?? "").padEnd(18, "0"));
+  }
+  const usd1Address =
+    address("CHAIN_GUARD_USD1_ADDRESS") ?? address("LAUNCH_USD1_ADDRESS");
+  const factories = [
+    address("HOOKS_LAUNCH_FACTORY_ADDRESS"),
+    address("LAUNCH2_DYNAMIC_FACTORY_ADDRESS"),
+  ].filter((value): value is string => value !== null);
+  const config = Object.freeze({
+    intervalSeconds,
+    usd1Address,
+    expectedImplementation: address("CHAIN_GUARD_USD1_IMPLEMENTATION"),
+    poolManagerAddress: address("CHAIN_GUARD_POOL_MANAGER_ADDRESS"),
+    expectedProtocolFeeController: address(
+      "CHAIN_GUARD_PROTOCOL_FEE_CONTROLLER",
+    ),
+    protocolFeeAlertPips,
+    minBnb,
+    minBnbWei,
+    factories: Object.freeze([...new Set(factories)]),
+    poolRouterAddress: address("LAUNCH2_POOL_ROUTER_ADDRESS"),
+    watch: Object.freeze(
+      chainGuardLabelledAddresses(
+        "CHAIN_GUARD_WATCH_ADDRESSES",
+        environment["CHAIN_GUARD_WATCH_ADDRESSES"],
+        issues,
+      ),
+    ),
+    balanceAccounts: Object.freeze(
+      chainGuardLabelledAddresses(
+        "CHAIN_GUARD_BALANCE_ACCOUNTS",
+        environment["CHAIN_GUARD_BALANCE_ACCOUNTS"],
+        issues,
+      ),
+    ),
+  });
+  if (issues.length > 0) throw new ConfigurationError(issues);
+  return config;
+}
+
+/** Decision 0134: CHAIN_GUARD_ENABLED (`true` / `false`, default false). */
+export function parseChainGuardEnabled(
+  environment: NodeJS.ProcessEnv,
+): boolean {
+  const value = environment["CHAIN_GUARD_ENABLED"]?.trim() ?? "";
+  if (value === "" || value === "false") return false;
+  if (value === "true") return true;
+  throw new ConfigurationError(["CHAIN_GUARD_ENABLED: must be true or false"]);
+}
+
+/** The launch slot's RPC endpoints for an operator script (Decision 0134). */
+export function parseLaunchSlotRpcUrls(
+  environment: NodeJS.ProcessEnv,
+): readonly string[] {
+  return parseLaunchChainIdEnvironment(environment["LAUNCH_CHAIN_ID"]) ===
+    bscTestnetChainId
+    ? parseBscRpcUrls(environment["LAUNCH_BSC_RPC_URLS"], "LAUNCH_BSC_RPC_URLS")
+    : parseBscRpcUrls(environment["BSC_RPC_URLS"]);
 }

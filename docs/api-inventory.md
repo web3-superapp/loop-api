@@ -1174,6 +1174,19 @@ both reviews; the `pnpm mining:approve-formula` CLI records `cli:<name>`
 | `POST /admin/v1/launch/projects/{id}/reject` (0122)                 | `Idempotency-Key` (= rejectionId); `{materialVersion, reasonCode, note?}`                            | Reviewer rejection of `submitted` / `in_review` catalog material (CAS on material version); applicant edits and resubmits                                                                                                                                                                                                                                                                                                                    | `implemented` | `implemented`; reviewer only (`launch.approve`)                                                                 |
 | `POST /admin/v1/launch/projects/{id}/snapshot/retry` (0120)         | `Idempotency-Key` (= releaseId); `{reason}`                                                          | Append-only retry grant for a `failed` / `mismatch` MEME v2 snapshot publication; next tick = attempt N + 1; detail adds `snapshotReleases[]` + `snapshotClosure`                                                                                                                                                                                                                                                                            | `implemented` | `implemented`; platform_admin only (`console.write`); no chain write by the route                               |
 | `POST /admin/v1/launch/projects/{id}/testnet-acceptance` (0109)     | `Idempotency-Key` (= acceptanceId); acceptance record                                                | BSC Testnet acceptance; editor / owner refused (`OPS_SELF_ACCEPTANCE`)                                                                                                                                                                                                                                                                                                                                                                       | `implemented` | `implemented`; testnet_acceptor only (`testnet.accept`)                                                         |
+| `GET /admin/v1/chain-guard/incidents` (0134)                        | cookie (`console.read`)                                                                              | unresolved `chain_guard` incidents of the launch chain (≤ 200, newest sighting first): `{chainId, holdActive, holdKinds, items[{incidentId, kind, subject, details, firstSeenAt, lastSeenAt, hold}], generatedAt}`; read-only                                                                                                                                                                                                                | `implemented` | `implemented`; 503 `CAPABILITY_UNAVAILABLE` (`CHAIN_GUARD_REPOSITORY_UNAVAILABLE`) without database             |
+
+Decision 0134 (S174): the read-only `chain_guard` worker lane
+(`CHAIN_GUARD_ENABLED`, default off; migration `000079_chain_guard`,
+tables `chain_guard_incidents` / `chain_guard_cursors`) watches USD1
+`paused()` / `frozen()` of every address we depend on / the EIP-1967
+implementation / ProxyAdmin and owner changes / frozen-fund seizure logs,
+the Uniswap v4 protocol fee controller and each graduated pool's protocol
+fee, and the BNB balance of the signer accounts. An unresolved USD1 pause
+or freeze of one of our addresses makes `launch2_buyback_keeper`,
+`hooks_launch_executor`, and `launch2_dynamic_poke` skip their ticks with
+`CHAIN_GUARD_HOLD`. `pnpm chain:preflight` runs the same checks before a
+deployment (exit 0 / 1 failed / 2 could not run; `--dry` for the testnet).
 
 ### V2 module gate (Decision 0029)
 

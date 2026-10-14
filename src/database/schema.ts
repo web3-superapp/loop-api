@@ -1,4 +1,4 @@
-export const latestMigrationName = "000078_hooks_launch_loop_dynamic_config";
+export const latestMigrationName = "000079_chain_guard";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -175,4 +175,6 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_dynamic_rounds",
   "public.launch2_dynamic_buy_weights",
   "public.launch2_dynamic_claim_reports",
+  "public.chain_guard_incidents",
+  "public.chain_guard_cursors",
 ] as const);

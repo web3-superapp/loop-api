@@ -1,4 +1,5 @@
 import { waitFor, type PeriodicLane } from "../../bsc-meme-indexer-worker.js";
+import type { ChainGuardHoldCheck } from "../chain-guard/chain-guard-hold.js";
 import {
   createLaunch2BuybackKeeper,
   launch2BuybackKeeperLane,
@@ -27,6 +28,11 @@ export function createLaunch2BuybackKeeperLane(options: {
   readonly chain: Launch2BuybackKeeperChain;
   readonly policy: Launch2BuybackKeeperPolicy;
   readonly now?: () => Date;
+  /**
+   * Decision 0134: the chain guard's hold check; a non-null answer is this
+   * tick's result (`CHAIN_GUARD_HOLD`) and nothing else runs.
+   */
+  readonly chainGuardHold?: ChainGuardHoldCheck;
   readonly onStep?: (step: Launch2KeeperStep) => void;
   readonly onWaiting?: (event: {
     readonly instanceId: string | null;
@@ -52,6 +58,8 @@ export function createLaunch2BuybackKeeperLane(options: {
   let lastUnavailable: string | null = null;
 
   async function tick(signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const held = await options.chainGuardHold?.();
+    if (held !== null && held !== undefined) return { ...held };
     const result = await keeper.runOnce(signal);
     if (result.kind === "unavailable") {
       if (result.reasonCode !== null && result.reasonCode !== lastUnavailable) {

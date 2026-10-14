@@ -58,6 +58,27 @@ import {
 import { createLaunch2SnapshotPublisherLane } from "./launch2-snapshot-publisher-worker.js";
 import type { TestnetFaucetRepository } from "./features/testnet-faucet/testnet-faucet-contract.js";
 import {
+  chainGuardIncidentReasonCode,
+  chainGuardLane,
+  chainGuardReasonCodes,
+  type ChainGuardRepository,
+} from "./features/chain-guard/chain-guard-contract.js";
+import {
+  createChainGuardHoldCheck,
+  createChainGuardHoldGate,
+  type ChainGuardHoldCheck,
+  type ChainGuardHoldGate,
+} from "./features/chain-guard/chain-guard-hold.js";
+import { createChainGuardLane } from "./features/chain-guard/chain-guard-lane.js";
+import {
+  ChainGuardChainRefusedError,
+  createChainGuardChain,
+} from "./integrations/chain-guard/chain-guard-chain.js";
+import {
+  chainGuardSignerAccounts,
+  chainGuardTargets,
+} from "./integrations/chain-guard/chain-guard-targets.js";
+import {
   TestnetFaucetChainRefusedError,
   createTestnetFaucetTransactionLookup,
 } from "./integrations/bsc/testnet-faucet-chain.js";
@@ -272,6 +293,8 @@ export interface ReconciliationWorkerDatabase {
   readonly voiceRoomReaper?: VoiceRoomReaperRepository;
   /** S169 `testnet_faucet_pending_sweep` lane; absent keeps it off. */
   readonly testnetFaucet?: TestnetFaucetRepository;
+  /** Decision 0134 `chain_guard` lane and the signing lanes' hold; absent keeps both off. */
+  readonly chainGuard?: ChainGuardRepository;
   /** `community_member_buy_feed` lane (Decision 0097); absent keeps it off. */
   readonly memberBuyFeed?: MemberBuyFeedRepository;
   readonly ping: () => Promise<void>;
@@ -366,6 +389,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createLaunch2BuybackKeeperLane?: typeof createLaunch2BuybackKeeperLane;
   /** Decision 0131: test seam for the LoopDynamic poke keeper client. */
   readonly createLaunch2DynamicPokeChain?: typeof createLaunch2DynamicPokeChain;
+  /** Decision 0134 test seam: the chain guard's chain reader. */
+  readonly createChainGuardChain?: typeof createChainGuardChain;
   /** S169 test seam: the faucet sweep's hash lookup. */
   readonly createTestnetFaucetTransactionLookup?: typeof createTestnetFaucetTransactionLookup;
   readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
@@ -777,6 +802,51 @@ export async function runReconciliationWorker(
         );
       }
     }
+    // Decision 0134: with the chain guard on, the three signing lanes ask
+    // its incidents (read-only) before every tick and skip the tick while
+    // a USD1 pause or a freeze of one of our addresses is unresolved.
+    const chainGuardConfig = options.config.chainGuard ?? null;
+    const chainGuardGate: ChainGuardHoldGate | undefined =
+      chainGuardConfig !== null && database.chainGuard !== undefined
+        ? createChainGuardHoldGate(
+            database.chainGuard,
+            launchChainConfig.chainId,
+          )
+        : undefined;
+    const chainGuardHold = (
+      lane: string,
+    ): { readonly chainGuardHold?: ChainGuardHoldCheck } =>
+      chainGuardGate === undefined
+        ? {}
+        : {
+            chainGuardHold: createChainGuardHoldCheck(
+              lane,
+              chainGuardGate,
+              (event) => {
+                const fields = {
+                  ...logFields(),
+                  lane: event.lane,
+                  reasonCode: event.reasonCode,
+                  count: event.holds.length,
+                  ...(event.holds[0] === undefined
+                    ? {}
+                    : {
+                        chainGuardIncidentId: event.holds[0].incidentId,
+                        chainGuardKind: event.holds[0].kind,
+                        chainGuardSubject: event.holds[0].subject,
+                      }),
+                };
+                if (event.held) {
+                  options.logger.error(
+                    fields,
+                    "LOOP chain guard hold engaged; the lane skips its ticks",
+                  );
+                } else {
+                  options.logger.warn(fields, "LOOP chain guard hold released");
+                }
+              },
+            ),
+          };
     // Hooks deployment executor (Decision 0112), default off. Config load
     // already refused boot for `on` without a key / Factory / chain 97.
     const hooksExecutorConfig = options.config.hooksLaunchExecutor;
@@ -832,6 +902,7 @@ export async function runReconciliationWorker(
             chain,
             config: hooksExecutorConfig,
             executorId,
+            ...chainGuardHold("hooks_launch_executor"),
             onStep: (event) => {
               const log =
                 event.errorCode === null
@@ -1172,6 +1243,7 @@ export async function runReconciliationWorker(
         )({
           repository: database.launch2BuybackAttempts,
           chain: keeperChain,
+          ...chainGuardHold("launch2_buyback_keeper"),
           policy: {
             chainId: launchChainConfig.chainId,
             factoryAddress: keeperConfig.factoryAddress,
@@ -1295,6 +1367,7 @@ export async function runReconciliationWorker(
             chain: pokeChain,
             chainId: launchChainConfig.chainId,
             intervalSeconds: pokeConfig.intervalSeconds,
+            ...chainGuardHold("launch2_dynamic_poke"),
             onStep: (step) => {
               const log =
                 step.outcome === "poked"
@@ -1331,6 +1404,140 @@ export async function runReconciliationWorker(
             executorAddress: pokeChain.pokerAddress,
           },
           "LOOP launch2 dynamic poke keeper enabled",
+        );
+      }
+    }
+    // Decision 0134: the read-only chain guard, default off. It reads the
+    // launch slot (56 or 97); without a repository or RPC it stays idle.
+    if (chainGuardConfig !== null) {
+      let refused: string | null =
+        database.chainGuard === undefined
+          ? chainGuardReasonCodes.repositoryUnavailable
+          : launchChainConfig.rpcUrls.length === 0
+            ? chainGuardReasonCodes.chainNotConfigured
+            : null;
+      let guardChain: ReturnType<typeof createChainGuardChain> | null = null;
+      if (refused === null) {
+        try {
+          guardChain = (options.createChainGuardChain ?? createChainGuardChain)(
+            {
+              rpcUrls: launchChainConfig.rpcUrls,
+              chainReference: launchChainConfig.chainReference,
+            },
+          );
+        } catch (error) {
+          refused =
+            error instanceof ChainGuardChainRefusedError
+              ? error.reasonCode
+              : chainGuardReasonCodes.chainNotConfigured;
+        }
+      }
+      if (
+        refused !== null ||
+        guardChain === null ||
+        database.chainGuard === undefined
+      ) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane: chainGuardLane,
+            reasonCode: refused ?? chainGuardReasonCodes.repositoryUnavailable,
+          },
+          "LOOP chain guard lane stays idle",
+        );
+      } else {
+        const signers = chainGuardSignerAccounts([
+          {
+            label: "hooksLaunchExecutor",
+            privateKey: options.config.hooksLaunchExecutor?.privateKey,
+          },
+          {
+            label: "launch2BuybackKeeper",
+            privateKey: options.config.launch2BuybackKeeper?.privateKey,
+          },
+          {
+            label: "launch2SnapshotSubmitter",
+            privateKey:
+              options.config.launch2SnapshotPublisher?.submitterPrivateKey,
+          },
+          {
+            label: "launch2DynamicPoke",
+            privateKey: options.config.launch2DynamicPoke?.privateKey,
+          },
+        ]);
+        const targets = chainGuardTargets({
+          config: chainGuardConfig,
+          chainId: launchChainConfig.chainId,
+          chainReference: launchChainConfig.chainReference,
+          signers,
+        });
+        memeLanes.push(
+          createChainGuardLane({
+            repository: database.chainGuard,
+            chain: guardChain,
+            targets,
+            policy: {
+              expectedImplementation: chainGuardConfig.expectedImplementation,
+              expectedProtocolFeeController:
+                chainGuardConfig.expectedProtocolFeeController,
+              protocolFeeAlertPips: chainGuardConfig.protocolFeeAlertPips,
+              minBnbWei: chainGuardConfig.minBnbWei,
+            },
+            confirmations: launchChainConfig.confirmations,
+            intervalSeconds: chainGuardConfig.intervalSeconds,
+            onIncident: (event) => {
+              const fields = {
+                ...logFields(),
+                lane: chainGuardLane,
+                reasonCode:
+                  event.change === "opened"
+                    ? chainGuardIncidentReasonCode(event.incident.kind)
+                    : chainGuardReasonCodes.resolved,
+                chainGuardIncidentId: event.incident.incidentId,
+                chainGuardKind: event.incident.kind,
+                chainGuardSubject: event.incident.subject,
+              };
+              if (event.change === "opened") {
+                options.logger.error(
+                  fields,
+                  "LOOP chain guard incident opened",
+                );
+              } else {
+                options.logger.warn(
+                  fields,
+                  "LOOP chain guard incident resolved",
+                );
+              }
+            },
+            onNotice: (event) => {
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane: chainGuardLane,
+                  reasonCode: event.reasonCode,
+                  ...(event.detail === null
+                    ? {}
+                    : { detailReasonCode: event.detail.replaceAll(",", ".") }),
+                },
+                "LOOP chain guard lane is limited",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: chainGuardLane,
+            count: targets.balanceAccounts.length,
+            confirmations: launchChainConfig.confirmations,
+          },
+          "LOOP chain guard lane enabled",
         );
       }
     }

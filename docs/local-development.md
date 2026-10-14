@@ -526,6 +526,47 @@ With no due work, the process only performs its bounded polling cycles until
 PostgreSQL cleanly. A real nonempty Testnet account and deployed worker remain
 unverified.
 
+### Chain guard lane and deployment preflight (Decision 0134)
+
+Default off. It only reads the launch slot (`LAUNCH_CHAIN_ID` 56 or 97, the
+same RPC list as the other launch lanes) and writes `chain_guard_incidents`
+(migration `000079`). Operator keys in the environment are only used to
+derive the signer addresses whose BNB balance it watches; they are never
+logged and nothing is signed.
+
+```text
+CHAIN_GUARD_ENABLED=true
+CHAIN_GUARD_INTERVAL_SECONDS=60            # 15..3600
+CHAIN_GUARD_USD1_ADDRESS=                  # else LAUNCH_USD1_ADDRESS, else Factory usd1()
+CHAIN_GUARD_USD1_IMPLEMENTATION=0x694Aa534bdef8eD63244eB902E7914e527891F08   # mainnet
+CHAIN_GUARD_POOL_MANAGER_ADDRESS=          # only before a Factory exists
+CHAIN_GUARD_PROTOCOL_FEE_CONTROLLER=       # expected v4 controller (read it from chain first)
+CHAIN_GUARD_PROTOCOL_FEE_ALERT_PIPS=500    # the Hook tolerates <= 1000
+CHAIN_GUARD_MIN_BNB=0.05
+CHAIN_GUARD_WATCH_ADDRESSES=loopRouter:0x...,feeVault:0x...      # extra frozen() subjects
+CHAIN_GUARD_BALANCE_ACCOUNTS=snapshotPublisher:0x...             # signer without a key here
+```
+
+What to watch in the worker log (`~/Library/Logs/LOOP` on the dev stack):
+`LOOP chain guard incident opened` (error, `reasonCode=CHAIN_GUARD_<KIND>`),
+`LOOP chain guard hold engaged; the lane skips its ticks` (error, the keeper /
+executor / poke lane is stopped), `LOOP chain guard lane is limited`
+(a check is not configured). The open incidents are also at
+`GET /admin/v1/chain-guard/incidents` (console.read). A hold ends by itself
+when the next check sees the pause / freeze cleared; nothing has to be reset.
+
+Before a deployment, and before each project goes on chain:
+
+```sh
+pnpm chain:preflight            # exit 0 pass, 1 a check failed, 2 could not run
+pnpm chain:preflight --dry      # print the same table, exit 0 (testnet mock USD1)
+pnpm chain:preflight --json --no-database
+```
+
+On BSC Mainnet an unset `CHAIN_GUARD_USD1_IMPLEMENTATION` or a USD1 that
+does not answer `paused()` / `frozen()` fails the preflight; on the testnet
+they are warnings.
+
 ## Development user reset (Decision 0113)
 
 Used once when LOOP moves to a new Privy app (docs/14 §8): every stored

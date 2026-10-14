@@ -13,6 +13,7 @@
     "admin:hash-password": "tsx scripts/admin-hash-password.ts",
     "asset:register": "node --env-file-if-exists=.env.local --import tsx scripts/asset-register.ts",
     "build": "tsc -p tsconfig.build.json",
+    "chain:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/chain-preflight.ts",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm openapi:check && pnpm test && pnpm build",
     "community:persona-backfill": "node --env-file-if-exists=.env.local --import tsx scripts/community-persona-backfill.ts",
     "community:provision-channels": "node --env-file-if-exists=.env.local --import tsx scripts/community-provision-channels.ts",

@@ -1316,6 +1316,7 @@ describe("committed OpenAPI artifact", () => {
       "DELETE /admin/v1/session",
       "GET /admin/v1/accounts",
       "GET /admin/v1/audit",
+      "GET /admin/v1/chain-guard/incidents",
       "GET /admin/v1/communities",
       "GET /admin/v1/communities/{communityId}",
       "GET /admin/v1/launch/projects",

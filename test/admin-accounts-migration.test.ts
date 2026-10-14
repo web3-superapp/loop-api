@@ -64,7 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000078_hooks_launch_loop_dynamic_config");
+    expect(latestMigrationName).toBe("000079_chain_guard");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",
