@@ -66,6 +66,7 @@ import {
 import {
   createChainGuardHoldCheck,
   createChainGuardHoldGate,
+  createChainGuardHoldTracker,
   type ChainGuardHoldCheck,
   type ChainGuardHoldGate,
 } from "./features/chain-guard/chain-guard-hold.js";
@@ -846,6 +847,8 @@ export async function runReconciliationWorker(
             launchChainConfig.chainId,
           )
         : undefined;
+    /** Decision 0135: one hold state per worker (one launch chain). */
+    const chainGuardHoldChange = createChainGuardHoldTracker();
     const chainGuardHold = (
       lane: string,
     ): { readonly chainGuardHold?: ChainGuardHoldCheck } =>
@@ -877,8 +880,13 @@ export async function runReconciliationWorker(
                 } else {
                   options.logger.warn(fields, "LOOP chain guard hold released");
                 }
+                // Decision 0135: one alert per change of the chain's hold
+                // (the first lane to see it engages, the last to see it
+                // cleared releases); the log lines above stay per lane.
+                const change = chainGuardHoldChange(event);
+                if (change === null) return;
                 void chainGuardAlerts?.notify({
-                  type: event.held ? "hold_engaged" : "hold_released",
+                  type: change === "engaged" ? "hold_engaged" : "hold_released",
                   chainId: launchChainConfig.chainId,
                   lane: event.lane,
                   kind: event.holds[0]?.kind ?? null,

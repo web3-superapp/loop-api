@@ -86,3 +86,23 @@ export function createChainGuardHoldCheck(
     });
   };
 }
+
+/**
+ * Decision 0135: the chain's hold as one state across the signing lanes —
+ * `engaged` when the first lane turns held, `released` when the last held
+ * lane turns released, null for every other per-lane transition. Alerts
+ * are sent on these; the per-lane log lines are not deduplicated.
+ */
+export function createChainGuardHoldTracker(): (
+  event: Pick<ChainGuardHoldTransition, "lane" | "held">,
+) => "engaged" | "released" | null {
+  const held = new Set<string>();
+  return (event) => {
+    const before = held.size > 0;
+    if (event.held) held.add(event.lane);
+    else held.delete(event.lane);
+    const after = held.size > 0;
+    if (before === after) return null;
+    return after ? "engaged" : "released";
+  };
+}

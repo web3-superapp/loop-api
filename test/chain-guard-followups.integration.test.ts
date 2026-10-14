@@ -106,6 +106,32 @@ describe("Decision 0135 chain guard follow-ups on PostgreSQL", () => {
     ).toEqual({ [resolvedBefore]: "auto", [openBefore]: null });
   });
 
+  it("defaults both admin_accounts timestamps to one now()", async () => {
+    const defaults = await pool.query<{ column_name: string; d: string }>(
+      `select column_name, column_default as d from information_schema.columns
+       where table_schema = 'public' and table_name = 'admin_accounts'
+         and column_name in ('created_at', 'credentials_changed_at')
+       order by column_name`,
+    );
+    expect(defaults.rows).toEqual([
+      { column_name: "created_at", d: "now()" },
+      { column_name: "credentials_changed_at", d: "now()" },
+    ]);
+    // Many default-only inserts in one statement: never out of order.
+    const rows = await pool.query<{ n: number }>(
+      `with inserted as (
+         insert into public.admin_accounts (id, username, password_hash, role, created_by)
+         select gen_random_uuid(), 'auditor-' || g, $1, 'auditor', 'operator'
+         from generate_series(1, 2000) as g
+         returning created_at, credentials_changed_at
+       )
+       select count(*)::int as n from inserted
+       where created_at = credentials_changed_at`,
+      ["$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g"],
+    );
+    expect(rows.rows[0]?.n).toBe(2000);
+  });
+
   it("enforces the resolution shape and accepts the policy kinds", async () => {
     const insert = (values: {
       kind?: string;

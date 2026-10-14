@@ -12,6 +12,12 @@ import type { MigrationBuilder } from "node-pg-migrate";
  *   for the ADMIN_USERNAME bootstrap administrator and for 'auto'; no
  *   foreign key into admin_accounts, like every console fact), and
  *   `resolution_note` (required for 'manual', 1–500 characters).
+ * - `admin_accounts.created_at` / `credentials_changed_at` default to
+ *   `now()` instead of `clock_timestamp()`: two `clock_timestamp()` column
+ *   defaults are evaluated separately, in column order, so an insert relying
+ *   on both could get `credentials_changed_at` a few microseconds before
+ *   `created_at` and trip `admin_accounts_timestamp_check`. `now()` is one
+ *   value per transaction. (Folded in here: 000080 had not run anywhere.)
  */
 
 const chainGuardIncidentKindsV2 = [
@@ -63,6 +69,9 @@ export function up(pgm: MigrationBuilder): void {
         and (resolution = 'manual' or (resolved_by is null and resolution_note is null))
         and (resolution is distinct from 'manual' or resolution_note is not null)
       );
+    alter table public.admin_accounts
+      alter column created_at set default now(),
+      alter column credentials_changed_at set default now();
     comment on column public.chain_guard_incidents.resolution is
       'Decision 0135: auto (the lane saw the condition cleared / the 24 h event window passed) or manual (POST /admin/v1/chain-guard/incidents/{id}/resolve); null while open.';
     comment on column public.chain_guard_incidents.resolved_by is
@@ -81,6 +90,9 @@ export function down(pgm: MigrationBuilder): void {
         raise exception 'chain guard policy / manual incidents exist; refusing to roll back 000080';
       end if;
     end $$;
+    alter table public.admin_accounts
+      alter column created_at set default clock_timestamp(),
+      alter column credentials_changed_at set default clock_timestamp();
     alter table public.chain_guard_incidents
       drop constraint chain_guard_incidents_resolution_shape,
       drop column resolution_note,

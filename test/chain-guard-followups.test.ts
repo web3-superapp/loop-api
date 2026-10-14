@@ -16,6 +16,7 @@ import {
 } from "../src/config.js";
 import { chainGuardPolicyLimitedReasons } from "../src/features/chain-guard/chain-guard-contract.js";
 import { chainGuardLogFindings } from "../src/features/chain-guard/chain-guard-evaluate.js";
+import { createChainGuardHoldTracker } from "../src/features/chain-guard/chain-guard-hold.js";
 import {
   createChainGuardLane,
   type ChainGuardIncidentEvent,
@@ -484,6 +485,24 @@ describe("chain guard viem reader (Decision 0135)", () => {
       ["ProtocolFeeUpdated", { id: poolId, protocolFee: "600" }],
       ["ProtocolFeeControllerUpdated", { protocolFeeController: controller }],
     ]);
+  });
+});
+
+describe("hold alerts across lanes (Decision 0135 D)", () => {
+  it("engages once for the first held lane and releases once after the last", () => {
+    const change = createChainGuardHoldTracker();
+    const keeper = "launch2_buyback_keeper";
+    const executor = "hooks_launch_executor";
+    const poke = "launch2_dynamic_poke";
+    expect([
+      change({ lane: keeper, held: true }),
+      change({ lane: executor, held: true }),
+      change({ lane: poke, held: true }),
+      change({ lane: executor, held: false }),
+      change({ lane: keeper, held: false }),
+      change({ lane: poke, held: false }),
+      change({ lane: executor, held: true }),
+    ]).toEqual(["engaged", null, null, null, null, "released", "engaged"]);
   });
 });
 
