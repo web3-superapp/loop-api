@@ -364,8 +364,10 @@ describe("launch2_event lane (Decision 0114)", () => {
     expect(result.kind).toBe("seeded");
     expect(result.fromBlockNumber).toBe("120");
     expect(result.toBlockNumber).toBe("400");
-    // The foreign Factory deployment is ignored, never attributed.
-    expect(result.ignoredCount).toBe(1);
+    // The foreign Factory deployment is skipped as not ours (Decision
+    // 0135), never attributed, and is not an "ignored" unknown topic.
+    expect(result.ignoredCount).toBe(0);
+    expect(result.skippedForeignCount).toBe(1);
     const events = commits[0]?.events ?? [];
     expect(events.map((event) => [event.instanceId, event.eventName])).toEqual([
       [b.instanceId, "CurveBought"],

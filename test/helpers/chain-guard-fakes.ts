@@ -14,6 +14,10 @@ import type {
   ChainGuardFactoryReading,
 } from "../../src/features/chain-guard/chain-guard-collect.js";
 import type { ChainGuardLog } from "../../src/features/chain-guard/chain-guard-evaluate.js";
+import {
+  launch2PoolId,
+  launch2PoolKey,
+} from "../../src/features/launch2/launch2-pool.js";
 
 export const guardAddress = (n: number): string =>
   `0x${n.toString(16).padStart(40, "0")}`;
@@ -26,6 +30,18 @@ export const poolManager = guardAddress(0x9001);
 export const controller = guardAddress(0xc0c0);
 export const proxyAdmin = guardAddress(0xad);
 
+/** A MEME address (vanity suffix `6666`, like the Factory's). */
+export const guardMeme = (n: number): string =>
+  `0x${(0x3000 + n).toString(16).padStart(36, "0")}6666`;
+export const guardHook = (n: number): string => guardAddress(0x4000 + n);
+
+/** The pool id the launch2 PoolKey of instance `n` hashes to. */
+export function guardInstancePoolId(n: number): string {
+  return launch2PoolId(
+    launch2PoolKey({ meme: guardMeme(n), usd1, hook: guardHook(n) }),
+  );
+}
+
 export function instanceRecord(n: number): ChainGuardInstanceRecord {
   return {
     instanceId: randomUUID(),
@@ -35,7 +51,9 @@ export function instanceRecord(n: number): ChainGuardInstanceRecord {
     graduationAdapter: guardAddress(0x1000 + n * 16 + 4),
     buybackAdapter: guardAddress(0x1000 + n * 16 + 5),
     buybackExecutor: guardAddress(0x1000 + n * 16 + 6),
-    poolId: guardPoolId(0x5000 + n),
+    poolId: guardInstancePoolId(n),
+    meme: guardMeme(n),
+    poolHook: guardHook(n),
   };
 }
 
@@ -48,11 +66,20 @@ export interface FakeChainGuardChainState {
   frozenSupported: boolean;
   controller: string;
   protocolFee: Map<string, number>;
+  /**
+   * Decision 0135: `protocolFeeForPool` by pool id (packed uint24; absent =
+   * 0); `policySupported: false` makes every read revert (null).
+   */
+  policy: Map<string, number>;
+  policySupported: boolean;
+  policyQueries: string[];
   balances: Map<string, bigint>;
   defaultBalance: bigint;
   logs: ChainGuardLog[];
   factory: ChainGuardFactoryReading | null;
   logQueries: { fromBlock: bigint; toBlock: bigint }[];
+  /** Decision 0135: the PoolManagers each log query named. */
+  logPoolManagers: (readonly string[])[];
 }
 
 /** slot0 with only the protocolFee bits set. */
@@ -72,6 +99,10 @@ export function createFakeChainGuardChain(
     frozenSupported: true,
     controller,
     protocolFee: new Map(),
+    policy: new Map(),
+    policySupported: true,
+    policyQueries: [],
+    logPoolManagers: [],
     balances: new Map(),
     defaultBalance: 10n ** 18n,
     logs: [],
@@ -119,6 +150,12 @@ export function createFakeChainGuardChain(
       const fee = state.protocolFee.get(poolId) ?? 0;
       return Promise.resolve(slot0WithFee(fee, fee));
     },
+    readProtocolFeePolicy: (_controller, key) => {
+      const poolId = launch2PoolId(key);
+      state.policyQueries.push(poolId);
+      if (!state.policySupported) return Promise.resolve(null);
+      return Promise.resolve(state.policy.get(poolId) ?? 0);
+    },
     readBalances: (addresses) =>
       Promise.resolve(
         new Map(
@@ -128,13 +165,17 @@ export function createFakeChainGuardChain(
           ]),
         ),
       ),
-    getLogs: ({ fromBlock, toBlock }) => {
+    getLogs: ({ fromBlock, toBlock, poolManagers: managers }) => {
       state.logQueries.push({ fromBlock, toBlock });
+      state.logPoolManagers.push(managers);
       return Promise.resolve(
         state.logs.filter(
           (log) =>
             BigInt(log.blockNumber) >= fromBlock &&
-            BigInt(log.blockNumber) <= toBlock,
+            BigInt(log.blockNumber) <= toBlock &&
+            (log.address === usd1 ||
+              log.address === proxyAdmin ||
+              managers.includes(log.address)),
         ),
       );
     },
@@ -147,8 +188,20 @@ export function createInMemoryChainGuardRepository(
   readonly rows: ChainGuardIncidentRecord[];
   readonly cursors: Map<string, bigint>;
   readonly instances: ChainGuardInstanceRecord[];
+  readonly audits: {
+    readonly actor: string;
+    readonly actorAccountId: string | null;
+    readonly requestId: string;
+    readonly incidentId: string;
+  }[];
 } {
   const rows: ChainGuardIncidentRecord[] = [];
+  const audits: {
+    actor: string;
+    actorAccountId: string | null;
+    requestId: string;
+    incidentId: string;
+  }[] = [];
   const cursors = new Map<string, bigint>();
   const open = (chainId: string) =>
     rows.filter((row) => row.chainId === chainId && row.resolvedAt === null);
@@ -156,6 +209,7 @@ export function createInMemoryChainGuardRepository(
     rows,
     cursors,
     instances,
+    audits,
     listWatchInstances: () => Promise.resolve([...instances]),
     openOrTouch: (input) => {
       const index = rows.findIndex(
@@ -184,6 +238,9 @@ export function createInMemoryChainGuardRepository(
         firstSeenAt: at,
         lastSeenAt: at,
         resolvedAt: null,
+        resolution: null,
+        resolvedBy: null,
+        resolutionNote: null,
       };
       rows.push(incident);
       return Promise.resolve({ incident, opened: true });
@@ -205,7 +262,11 @@ export function createInMemoryChainGuardRepository(
           ? new Date(row.lastSeenAt) < input.eventsSeenBefore
           : isState && !keep.has(chainGuardIncidentKey(row.kind, row.subject));
         if (!due) continue;
-        const done = { ...row, resolvedAt: input.now.toISOString() };
+        const done = {
+          ...row,
+          resolvedAt: input.now.toISOString(),
+          resolution: "auto" as const,
+        };
         rows[index] = done;
         resolved.push(done);
       }
@@ -225,6 +286,40 @@ export function createInMemoryChainGuardRepository(
       Promise.resolve(
         open(chainId).filter((row) => chainGuardHoldKinds.includes(row.kind)),
       ),
+    resolveManually: (input) => {
+      const index = rows.findIndex(
+        (row) =>
+          row.incidentId === input.incidentId && row.chainId === input.chainId,
+      );
+      const row = rows[index];
+      if (row === undefined) {
+        return Promise.resolve({ status: "not_found" as const });
+      }
+      if (row.resolvedAt !== null) {
+        return Promise.resolve({
+          status: "already_resolved" as const,
+          incident: row,
+        });
+      }
+      const done: ChainGuardIncidentRecord = {
+        ...row,
+        resolvedAt: input.now.toISOString(),
+        resolution: "manual",
+        resolvedBy: input.audit.actorAccountId,
+        resolutionNote: input.note,
+      };
+      rows[index] = done;
+      audits.push({ ...input.audit, incidentId: done.incidentId });
+      return Promise.resolve({
+        status: "resolved" as const,
+        incident: done,
+        audit: {
+          auditId: randomUUID(),
+          seq: audits.length,
+          at: input.now.toISOString(),
+        },
+      });
+    },
     getCursor: (chainId) => Promise.resolve(cursors.get(chainId) ?? null),
     setCursor: (input) => {
       cursors.set(input.chainId, input.blockNumber);

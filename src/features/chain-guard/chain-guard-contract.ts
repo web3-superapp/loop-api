@@ -23,6 +23,13 @@ export const chainGuardStateKinds = Object.freeze([
   "pool_protocol_fee_nonzero",
   "pool_protocol_fee_high",
   "account_balance_low",
+  /**
+   * Decision 0135: the fee controller's `protocolFeeForPool(key)` is
+   * nonzero (or ≥ the alert threshold) while the pool's slot0 fee has not
+   * reached it yet — an early warning before `setProtocolFee`.
+   */
+  "pool_protocol_fee_policy_nonzero",
+  "pool_protocol_fee_policy_high",
 ] as const);
 
 /**
@@ -77,6 +84,25 @@ export const chainGuardReasonCodes = Object.freeze({
   checkNotConfigured: "CHAIN_GUARD_CHECK_NOT_CONFIGURED",
   repositoryUnavailable: "CHAIN_GUARD_REPOSITORY_UNAVAILABLE",
   chainNotConfigured: "CHAIN_GUARD_CHAIN_NOT_CONFIGURED",
+  /** Decision 0135: the fee policy could not be read this tick. */
+  policyLimited: "CHAIN_GUARD_POLICY_LIMITED",
+  /** Decision 0135 (manual resolve). */
+  incidentNotFound: "CHAIN_GUARD_INCIDENT_NOT_FOUND",
+  incidentAlreadyResolved: "CHAIN_GUARD_INCIDENT_ALREADY_RESOLVED",
+  noteInvalid: "CHAIN_GUARD_RESOLUTION_NOTE_INVALID",
+});
+
+/**
+ * Decision 0135: why the fee policy of a pool was not read
+ * (`detailReasonCode` of CHAIN_GUARD_POLICY_LIMITED, tick `policyLimited`).
+ */
+export const chainGuardPolicyLimitedReasons = Object.freeze({
+  /** `protocolFeeController()` is the zero address. */
+  controllerUnset: "CHAIN_GUARD_POLICY_CONTROLLER_UNSET",
+  /** `protocolFeeForPool` reverted or the controller has no such function. */
+  unsupported: "CHAIN_GUARD_POLICY_UNSUPPORTED",
+  /** The instance's MEME / hook do not rebuild its pool id. */
+  poolKeyUnknown: "CHAIN_GUARD_POLICY_POOL_KEY_UNKNOWN",
 });
 
 /** `CHAIN_GUARD_USD1_PAUSED` … — the log reason code of an incident kind. */
@@ -96,6 +122,9 @@ export type ChainGuardDetails = Readonly<
   Record<string, string | number | boolean | null | readonly string[]>
 >;
 
+/** Decision 0135: how a resolved incident was closed (null while open). */
+export type ChainGuardResolution = "auto" | "manual";
+
 export interface ChainGuardIncidentRecord {
   readonly incidentId: string;
   readonly chainId: string;
@@ -105,6 +134,11 @@ export interface ChainGuardIncidentRecord {
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
   readonly resolvedAt: string | null;
+  /** Decision 0135: null while open. */
+  readonly resolution: ChainGuardResolution | null;
+  /** Decision 0135: `admin_accounts.id` of a manual resolve (null: bootstrap admin or auto). */
+  readonly resolvedBy: string | null;
+  readonly resolutionNote: string | null;
 }
 
 /** The addresses of one registered launch2 instance the lane watches. */
@@ -118,6 +152,20 @@ export interface ChainGuardInstanceRecord {
   readonly buybackExecutor: string;
   /** OfficialTax `Graduated.officialPoolId` or the LoopDynamic pool id. */
   readonly poolId: string | null;
+  /** Decision 0135: the MEME token (a PoolKey currency). */
+  readonly meme: string;
+  /**
+   * Decision 0135: the hook of the graduated pool (OfficialTax hook or the
+   * bound LoopDynamic hook); null without a pool.
+   */
+  readonly poolHook: string | null;
+}
+
+/** Decision 0135: the audit row a manual resolve appends (admin_audit_log). */
+export interface ChainGuardManualResolveAudit {
+  readonly actor: string;
+  readonly actorAccountId: string | null;
+  readonly requestId: string;
 }
 
 export interface ChainGuardRepository {
@@ -157,6 +205,33 @@ export interface ChainGuardRepository {
   }): Promise<readonly ChainGuardIncidentRecord[]>;
   /** Unresolved incidents of `chainGuardHoldKinds` (read-only). */
   listHolds(chainId: string): Promise<readonly ChainGuardIncidentRecord[]>;
+  /**
+   * Decision 0135: closes one unresolved incident by hand and appends its
+   * `admin_audit_log` row in the same transaction. `not_found`: no such
+   * incident on `chainId`; `already_resolved`: nothing written.
+   */
+  resolveManually(input: {
+    readonly chainId: string;
+    readonly incidentId: string;
+    readonly note: string;
+    readonly now: Date;
+    readonly audit: ChainGuardManualResolveAudit;
+  }): Promise<
+    | {
+        readonly status: "resolved";
+        readonly incident: ChainGuardIncidentRecord;
+        readonly audit: {
+          readonly auditId: string;
+          readonly seq: number;
+          readonly at: string;
+        };
+      }
+    | { readonly status: "not_found" }
+    | {
+        readonly status: "already_resolved";
+        readonly incident: ChainGuardIncidentRecord;
+      }
+  >;
   getCursor(chainId: string): Promise<bigint | null>;
   setCursor(input: {
     readonly chainId: string;

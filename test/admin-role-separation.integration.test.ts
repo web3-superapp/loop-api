@@ -259,7 +259,7 @@ describe("Decision 0109 console accounts (000055)", () => {
     ).rejects.toThrow(/never deleted/u);
     await expect(
       pool.query(
-        "insert into public.admin_accounts (id, username, password_hash, role, created_by) values ($1, 'bad-reviewer', $2, 'reviewer', 'operator')",
+        "insert into public.admin_accounts (id, username, password_hash, role, created_by, created_at, credentials_changed_at) values ($1, 'bad-reviewer', $2, 'reviewer', 'operator', now(), now())",
         [
           randomUUID(),
           (

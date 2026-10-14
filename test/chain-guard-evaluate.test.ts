@@ -65,6 +65,8 @@ function snapshot(
         poolManager: guardAddress(0x28e2),
         zeroForOnePips: 0,
         oneForZeroPips: 0,
+        policy: null,
+        policyLimited: "CHAIN_GUARD_POLICY_CONTROLLER_UNSET",
       },
     ],
     balances: [
@@ -157,6 +159,8 @@ describe("chain guard judgments (Decision 0134)", () => {
             poolManager: guardAddress(0x28e2),
             zeroForOnePips: 500,
             oneForZeroPips: 0,
+            policy: null,
+            policyLimited: "CHAIN_GUARD_POLICY_CONTROLLER_UNSET",
           },
         ],
         balances: [
@@ -190,6 +194,8 @@ describe("chain guard judgments (Decision 0134)", () => {
             poolManager: guardAddress(0x28e2),
             zeroForOnePips: 25,
             oneForZeroPips: 499,
+            policy: null,
+            policyLimited: "CHAIN_GUARD_POLICY_CONTROLLER_UNSET",
           },
         ],
       }),
@@ -453,6 +459,8 @@ describe("chain:preflight verdict (Decision 0134)", () => {
             poolManager: guardAddress(0x28e2),
             zeroForOnePips: 25,
             oneForZeroPips: 25,
+            policy: null,
+            policyLimited: "CHAIN_GUARD_POLICY_CONTROLLER_UNSET",
           },
         ],
         balances: [

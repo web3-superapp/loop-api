@@ -11,7 +11,12 @@ import {
   type ChainGuardInstanceRecord,
   type ChainGuardRepository,
 } from "../features/chain-guard/chain-guard-contract.js";
-import { toIsoString, toNullableIsoString } from "./v2-command-support.js";
+import { insertAdminAuditRow } from "./admin-repository.js";
+import {
+  toIsoString,
+  toNullableIsoString,
+  withV2Transaction,
+} from "./v2-command-support.js";
 
 /**
  * Decision 0134: PostgreSQL side of the chain guard (migration 000079).
@@ -30,7 +35,8 @@ export class ChainGuardRepositoryUnavailableError extends Error {
 type Row = Record<string, unknown>;
 
 const columns = `incident_id, chain_id, kind, subject, details, first_seen_at,
-  last_seen_at, resolved_at`;
+  last_seen_at, resolved_at, resolution, resolved_by::text as resolved_by,
+  resolution_note`;
 
 function text(row: Row, key: string): string {
   const value = row[key];
@@ -47,6 +53,15 @@ function timestamp(row: Row, key: string): string {
   return toIsoString(value);
 }
 
+function nullableText(row: Row, key: string): string | null {
+  const value = row[key];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new ChainGuardRepositoryUnavailableError();
+  }
+  return value;
+}
+
 function mapIncident(row: Row): ChainGuardIncidentRecord {
   const kind = text(row, "kind");
   if (!(chainGuardIncidentKinds as readonly string[]).includes(kind)) {
@@ -61,6 +76,10 @@ function mapIncident(row: Row): ChainGuardIncidentRecord {
     throw new ChainGuardRepositoryUnavailableError();
   }
   const resolved = row["resolved_at"];
+  const resolution = nullableText(row, "resolution");
+  if (resolution !== null && resolution !== "auto" && resolution !== "manual") {
+    throw new ChainGuardRepositoryUnavailableError();
+  }
   return Object.freeze({
     incidentId: text(row, "incident_id"),
     chainId: text(row, "chain_id"),
@@ -73,6 +92,9 @@ function mapIncident(row: Row): ChainGuardIncidentRecord {
       resolved === null || resolved === undefined
         ? null
         : toNullableIsoString(resolved as Date | string),
+    resolution,
+    resolvedBy: nullableText(row, "resolved_by"),
+    resolutionNote: nullableText(row, "resolution_note"),
   });
 }
 
@@ -84,8 +106,12 @@ export function createPostgresChainGuardRepository(
       const result = await pool.query<Row>(
         `select instance_id::text as instance_id, escrow_address, nft_address,
            curve_address, graduation_adapter_address, buyback_adapter_address,
-           buyback_executor_address,
-           coalesce(official_pool_id, dynamic_pool_id) as pool_id
+           buyback_executor_address, meme_address,
+           coalesce(official_pool_id, dynamic_pool_id) as pool_id,
+           case
+             when official_pool_id is not null then hook_address
+             when dynamic_pool_id is not null then dynamic_hook_address
+           end as pool_hook
          from public.launch2_instances
          where chain_id = $1
          order by registered_at, instance_id`,
@@ -101,6 +127,8 @@ export function createPostgresChainGuardRepository(
           buybackAdapter: text(row, "buyback_adapter_address"),
           buybackExecutor: text(row, "buyback_executor_address"),
           poolId: row["pool_id"] === null ? null : text(row, "pool_id"),
+          meme: text(row, "meme_address"),
+          poolHook: nullableText(row, "pool_hook"),
         }),
       );
     },
@@ -139,7 +167,8 @@ export function createPostgresChainGuardRepository(
       );
       const result = await pool.query<Row>(
         `update public.chain_guard_incidents
-           set resolved_at = greatest($5::timestamptz, first_seen_at)
+           set resolved_at = greatest($5::timestamptz, first_seen_at),
+             resolution = 'auto'
          where chain_id = $1
            and resolved_at is null
            and (
@@ -181,6 +210,72 @@ export function createPostgresChainGuardRepository(
         [chainId, [...chainGuardHoldKinds]],
       );
       return result.rows.map(mapIncident);
+    },
+
+    async resolveManually(input) {
+      return withV2Transaction(
+        pool,
+        () => new ChainGuardRepositoryUnavailableError(),
+        async (client) => {
+          const current = await client.query<Row>(
+            `select ${columns}
+             from public.chain_guard_incidents
+             where incident_id = $1 and chain_id = $2
+             for update`,
+            [input.incidentId, input.chainId],
+          );
+          const row = current.rows[0];
+          if (row === undefined) return { status: "not_found" as const };
+          const before = mapIncident(row);
+          if (before.resolvedAt !== null) {
+            return { status: "already_resolved" as const, incident: before };
+          }
+          const updated = await client.query<Row>(
+            `update public.chain_guard_incidents
+               set resolved_at = greatest($2::timestamptz, first_seen_at),
+                 resolution = 'manual',
+                 resolved_by = $3,
+                 resolution_note = $4
+             where incident_id = $1 and resolved_at is null
+             returning ${columns}`,
+            [
+              input.incidentId,
+              input.now,
+              input.audit.actorAccountId,
+              input.note,
+            ],
+          );
+          const resolvedRow = updated.rows[0];
+          if (resolvedRow === undefined) {
+            throw new ChainGuardRepositoryUnavailableError();
+          }
+          const incident = mapIncident(resolvedRow);
+          const audit = await insertAdminAuditRow(client, {
+            actor: input.audit.actor,
+            actorAccountId: input.audit.actorAccountId,
+            action: "chain_guard.incident.resolve",
+            targetType: "chain_guard_incident",
+            targetId: incident.incidentId,
+            before: {
+              kind: before.kind,
+              subject: before.subject,
+              lastSeenAt: before.lastSeenAt,
+              resolvedAt: null,
+            },
+            after: {
+              resolvedAt: incident.resolvedAt,
+              resolution: incident.resolution,
+              note: incident.resolutionNote,
+            },
+            requestId: input.audit.requestId,
+          });
+          return {
+            status: "resolved" as const,
+            incident,
+            audit: { auditId: audit.auditId, seq: audit.seq, at: audit.at },
+          };
+        },
+      );
     },
 
     async getCursor(chainId) {

@@ -1,7 +1,13 @@
-import type { ChainGuardInstanceRecord } from "./chain-guard-contract.js";
+import { launch2PoolId, launch2PoolKey } from "../launch2/launch2-pool.js";
 import {
+  chainGuardPolicyLimitedReasons,
+  type ChainGuardInstanceRecord,
+} from "./chain-guard-contract.js";
+import {
+  decodePackedProtocolFee,
   decodeProtocolFee,
   mergeWatchedAddresses,
+  zeroAddress,
   type ChainGuardLog,
   type ChainGuardSnapshot,
   type ChainGuardWatchedAddress,
@@ -45,12 +51,29 @@ export interface ChainGuardChain {
   readProtocolFeeController(poolManager: string): Promise<string>;
   /** The packed v4 `slot0` word of a pool (0 for an unknown pool). */
   readPoolSlot0(poolManager: string, poolId: string): Promise<bigint>;
+  /**
+   * Decision 0135: `IProtocolFeeController.protocolFeeForPool(key)` (the
+   * packed uint24, 12 bits per direction); null when it reverts or the
+   * controller has no such function.
+   */
+  readProtocolFeePolicy(
+    controller: string,
+    key: {
+      readonly currency0: string;
+      readonly currency1: string;
+      readonly fee: number;
+      readonly tickSpacing: number;
+      readonly hooks: string;
+    },
+  ): Promise<number | null>;
   readBalances(
     addresses: readonly string[],
   ): Promise<ReadonlyMap<string, bigint>>;
   getLogs(input: {
     readonly usd1: string;
     readonly proxyAdmin: string | null;
+    /** Decision 0135: `ProtocolFeeUpdated` / `ProtocolFeeControllerUpdated`. */
+    readonly poolManagers: readonly string[];
     readonly fromBlock: bigint;
     readonly toBlock: bigint;
   }): Promise<readonly ChainGuardLog[]>;
@@ -200,15 +223,50 @@ export async function collectChainGuardSnapshot(input: {
   const pools: ChainGuardSnapshot["pools"][number][] = [];
   for (const instance of instances) {
     if (instance.poolId === null) continue;
+    const poolId = instance.poolId.toLowerCase();
+    // Decision 0135: the PoolKey the fee policy is asked about, rebuilt the
+    // way the launch2 pool routes do (launch2PoolKey) and checked against
+    // the indexed pool id.
+    const candidate =
+      instance.poolHook === null
+        ? null
+        : launch2PoolKey({
+            meme: instance.meme,
+            usd1,
+            hook: instance.poolHook,
+          });
+    const key =
+      candidate !== null && launch2PoolId(candidate) === poolId
+        ? candidate
+        : null;
     for (const manager of poolManagers) {
       const fee = decodeProtocolFee(
         await chain.readPoolSlot0(manager.address, instance.poolId),
       );
+      let policy: ChainGuardSnapshot["pools"][number]["policy"] = null;
+      let policyLimited: string | null = null;
+      if (manager.protocolFeeController === zeroAddress) {
+        policyLimited = chainGuardPolicyLimitedReasons.controllerUnset;
+      } else if (key === null) {
+        policyLimited = chainGuardPolicyLimitedReasons.poolKeyUnknown;
+      } else {
+        const packed = await chain.readProtocolFeePolicy(
+          manager.protocolFeeController,
+          key,
+        );
+        if (packed === null) {
+          policyLimited = chainGuardPolicyLimitedReasons.unsupported;
+        } else {
+          policy = decodePackedProtocolFee(packed);
+        }
+      }
       pools.push({
         poolId: instance.poolId,
         instanceId: instance.instanceId,
         poolManager: manager.address,
         ...fee,
+        policy,
+        policyLimited,
       });
     }
   }

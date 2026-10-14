@@ -182,7 +182,13 @@ export interface Launch2Chain {
     }[];
   }): Promise<{
     readonly logs: readonly Launch2DecodedLog[];
+    /** A tracked address's log with a topic its role does not know. */
     readonly ignored: number;
+    /**
+     * Decision 0135: logs of addresses outside the tracked set, skipped
+     * before decoding (absent = 0).
+     */
+    readonly skippedForeign?: number;
     /** Decision 0132: anchor tokens no endpoint answered (lower-case). */
     readonly untrustedTokens?: readonly string[];
   }>;

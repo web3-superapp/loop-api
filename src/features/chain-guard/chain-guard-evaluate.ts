@@ -1,5 +1,6 @@
 import {
   chainGuardIncidentKey,
+  chainGuardPolicyLimitedReasons,
   type ChainGuardDetails,
   type ChainGuardEventKind,
   type ChainGuardStateKind,
@@ -71,6 +72,15 @@ export interface ChainGuardSnapshot {
     readonly poolManager: string;
     readonly zeroForOnePips: number;
     readonly oneForZeroPips: number;
+    /**
+     * Decision 0135: the fee controller's `protocolFeeForPool(key)`; null
+     * when not read (`policyLimited` says why).
+     */
+    readonly policy: {
+      readonly zeroForOnePips: number;
+      readonly oneForZeroPips: number;
+    } | null;
+    readonly policyLimited: string | null;
   }[];
   readonly balances: readonly (ChainGuardWatchedAddress & {
     readonly wei: bigint;
@@ -102,6 +112,14 @@ export interface ChainGuardEvaluation {
   readonly notConfigured: readonly string[];
   /** Reads the token does not implement (testnet: informational). */
   readonly unsupported: readonly string[];
+  /**
+   * Decision 0135: incident keys (`kind|subject`) whose condition was not
+   * read this tick (a fee policy that reverted / a pool key that does not
+   * rebuild): kept open, never resolved by a missing read.
+   */
+  readonly retained: readonly string[];
+  /** Decision 0135: distinct reasons a fee policy was not read. */
+  readonly policyLimited: readonly string[];
 }
 
 /** `slot0` bits 184..207 → per-direction protocol fee (pips). */
@@ -109,7 +127,19 @@ export function decodeProtocolFee(slot0: bigint): {
   readonly zeroForOnePips: number;
   readonly oneForZeroPips: number;
 } {
-  const fee = Number((slot0 >> 184n) & 0xffffffn);
+  return decodePackedProtocolFee(Number((slot0 >> 184n) & 0xffffffn));
+}
+
+/**
+ * A v4 packed protocol fee (uint24: low 12 bits zeroForOne, high 12 bits
+ * oneForZero) — slot0's field, `ProtocolFeeUpdated.protocolFee`, and
+ * `protocolFeeForPool`'s return value.
+ */
+export function decodePackedProtocolFee(packed: number): {
+  readonly zeroForOnePips: number;
+  readonly oneForZeroPips: number;
+} {
+  const fee = packed & 0xffffff;
   return Object.freeze({
     zeroForOnePips: fee & 0xfff,
     oneForZeroPips: fee >> 12,
@@ -152,8 +182,12 @@ export function evaluateChainGuardSnapshot(
     "pool_protocol_fee_nonzero",
     "pool_protocol_fee_high",
     "account_balance_low",
+    "pool_protocol_fee_policy_nonzero",
+    "pool_protocol_fee_policy_high",
   ]);
   const notConfigured: string[] = [];
+  const retained: string[] = [];
+  const policyLimited = new Set<string>();
   const unsupported: string[] = [];
   const usd1 = snapshot.usd1.address;
   const mainnet = snapshot.chainReference === 56;
@@ -259,6 +293,59 @@ export function evaluateChainGuardSnapshot(
     }
   }
 
+  // Decision 0135: the fee policy ahead of slot0. A controller at the zero
+  // address has no policy (nothing to warn about, open ones resolve); a
+  // policy that could not be read keeps whatever is open for that pool.
+  for (const pool of snapshot.pools) {
+    if (pool.policyLimited !== null) policyLimited.add(pool.policyLimited);
+    if (pool.policy === null) {
+      if (
+        pool.policyLimited !== null &&
+        pool.policyLimited !== chainGuardPolicyLimitedReasons.controllerUnset
+      ) {
+        retained.push(
+          chainGuardIncidentKey(
+            "pool_protocol_fee_policy_nonzero",
+            pool.poolId,
+          ),
+          chainGuardIncidentKey("pool_protocol_fee_policy_high", pool.poolId),
+        );
+      }
+      continue;
+    }
+    const current = Math.max(pool.zeroForOnePips, pool.oneForZeroPips);
+    const planned = Math.max(
+      pool.policy.zeroForOnePips,
+      pool.policy.oneForZeroPips,
+    );
+    const details = {
+      instanceId: pool.instanceId,
+      poolManager: pool.poolManager,
+      policyZeroForOnePips: pool.policy.zeroForOnePips,
+      policyOneForZeroPips: pool.policy.oneForZeroPips,
+      zeroForOnePips: pool.zeroForOnePips,
+      oneForZeroPips: pool.oneForZeroPips,
+      alertPips: policy.protocolFeeAlertPips,
+    };
+    if (planned > 0 && current === 0) {
+      findings.push({
+        kind: "pool_protocol_fee_policy_nonzero",
+        subject: pool.poolId,
+        details,
+      });
+    }
+    if (
+      planned >= policy.protocolFeeAlertPips &&
+      current < policy.protocolFeeAlertPips
+    ) {
+      findings.push({
+        kind: "pool_protocol_fee_policy_high",
+        subject: pool.poolId,
+        details,
+      });
+    }
+  }
+
   for (const balance of snapshot.balances) {
     if (balance.wei < policy.minBnbWei) {
       findings.push({
@@ -278,6 +365,8 @@ export function evaluateChainGuardSnapshot(
     evaluatedKinds: Object.freeze([...evaluated]),
     notConfigured: Object.freeze(notConfigured),
     unsupported: Object.freeze(unsupported),
+    retained: Object.freeze([...new Set(retained)]),
+    policyLimited: Object.freeze([...policyLimited].sort()),
   });
 }
 
@@ -295,7 +384,7 @@ function dedupeFindings<
   return result;
 }
 
-/** A decoded USD1 / ProxyAdmin log (lower-case addresses, decimal amounts). */
+/** A decoded USD1 / ProxyAdmin / PoolManager log (lower-case addresses, decimal amounts). */
 export interface ChainGuardLog {
   readonly name:
     | "Paused"
@@ -306,7 +395,10 @@ export interface ChainGuardLog {
     | "FrozenFundsReallocated"
     | "Upgraded"
     | "AdminChanged"
-    | "OwnershipTransferred";
+    | "OwnershipTransferred"
+    /** Decision 0135: PoolManager (v4 `IProtocolFees`). */
+    | "ProtocolFeeUpdated"
+    | "ProtocolFeeControllerUpdated";
   readonly address: string;
   readonly blockNumber: string;
   readonly transactionHash: string;
@@ -329,7 +421,18 @@ export function chainGuardLogFindings(input: {
   readonly usd1: string;
   readonly proxyAdmin: string | null;
   readonly watched: ReadonlySet<string>;
+  /** Decision 0135: the PoolManagers whose fee logs count. */
+  readonly poolManagers?: ReadonlySet<string>;
+  /** Decision 0135: our graduated pools (pool id → instance id). */
+  readonly graduatedPools?: ReadonlyMap<string, string>;
+  /** Decision 0135: thresholds for the fee / controller logs. */
+  readonly policy?: Pick<
+    ChainGuardPolicy,
+    "protocolFeeAlertPips" | "expectedProtocolFeeController"
+  >;
 }): ChainGuardLogFindings {
+  const poolManagers = input.poolManagers ?? new Set<string>();
+  const graduatedPools = input.graduatedPools ?? new Map<string, string>();
   const state: ChainGuardFinding[] = [];
   const events: ChainGuardFinding<ChainGuardEventKind>[] = [];
   for (const log of input.logs) {
@@ -415,6 +518,60 @@ export function chainGuardLogFindings(input: {
           });
         }
         break;
+      case "ProtocolFeeUpdated": {
+        // Decision 0135: only our graduated pools, only a known PoolManager.
+        const poolId = args["id"] ?? "";
+        const instanceId = graduatedPools.get(poolId);
+        if (
+          !poolManagers.has(log.address) ||
+          instanceId === undefined ||
+          input.policy === undefined
+        ) {
+          break;
+        }
+        const fee = decodePackedProtocolFee(Number(args["protocolFee"] ?? "0"));
+        const highest = Math.max(fee.zeroForOnePips, fee.oneForZeroPips);
+        if (highest === 0) break;
+        const details = {
+          ...at,
+          instanceId,
+          poolManager: log.address,
+          zeroForOnePips: fee.zeroForOnePips,
+          oneForZeroPips: fee.oneForZeroPips,
+          alertPips: input.policy.protocolFeeAlertPips,
+        };
+        state.push({
+          kind: "pool_protocol_fee_nonzero",
+          subject: poolId,
+          details,
+        });
+        if (highest >= input.policy.protocolFeeAlertPips) {
+          state.push({
+            kind: "pool_protocol_fee_high",
+            subject: poolId,
+            details,
+          });
+        }
+        break;
+      }
+      case "ProtocolFeeControllerUpdated": {
+        const expected = input.policy?.expectedProtocolFeeController ?? null;
+        const observed = args["protocolFeeController"];
+        if (
+          !poolManagers.has(log.address) ||
+          expected === null ||
+          observed === undefined ||
+          observed === expected
+        ) {
+          break;
+        }
+        state.push({
+          kind: "protocol_fee_controller_changed",
+          subject: log.address,
+          details: { ...at, expected, observed },
+        });
+        break;
+      }
       case "Unpaused":
       case "Unfreeze":
         // Cleared conditions are resolved by the state read.

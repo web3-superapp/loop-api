@@ -101,6 +101,7 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP launch2_event lane is idle"
   | "LOOP launch2_event lane enabled"
   | "LOOP launch2_event lane skipped facts"
+  | "LOOP launch2_event lane skipped foreign logs"
   | "LOOP launch2_event MEME transfer coverage incomplete; re-scanning"
   | "LOOP launch2_event MEME transfer coverage incomplete after 3 re-scans; operator required"
   | "LOOP launch2 snapshot publisher stays idle"
@@ -157,7 +158,8 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP chain guard incident opened"
   | "LOOP chain guard incident resolved"
   | "LOOP chain guard hold engaged; the lane skips its ticks"
-  | "LOOP chain guard hold released";
+  | "LOOP chain guard hold released"
+  | "LOOP chain guard alert was not delivered";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {
@@ -284,6 +286,11 @@ export interface ReconciliationWorkerLogFields {
   readonly chainGuardIncidentId?: string;
   readonly chainGuardKind?: string;
   readonly chainGuardSubject?: string;
+  /**
+   * Decision 0135: which alert outlet failed (`webhook` / `telegram`); its
+   * host goes in `rpcUrlHost`, its HTTP status in `rpcStatus`.
+   */
+  readonly chainGuardAlertOutlet?: string;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -520,6 +527,11 @@ function sanitizeFields(
     /^0x(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(fields.chainGuardSubject)
       ? fields.chainGuardSubject
       : undefined;
+  const chainGuardAlertOutlet =
+    fields.chainGuardAlertOutlet === "webhook" ||
+    fields.chainGuardAlertOutlet === "telegram"
+      ? fields.chainGuardAlertOutlet
+      : undefined;
   const hooksStatus = (value: string | undefined): string | undefined =>
     value !== undefined && hooksDeploymentStatusSet.has(value)
       ? value
@@ -594,6 +606,7 @@ function sanitizeFields(
     ...(chainGuardIncidentId === undefined ? {} : { chainGuardIncidentId }),
     ...(chainGuardKind === undefined ? {} : { chainGuardKind }),
     ...(chainGuardSubject === undefined ? {} : { chainGuardSubject }),
+    ...(chainGuardAlertOutlet === undefined ? {} : { chainGuardAlertOutlet }),
     ...limits,
   });
 }

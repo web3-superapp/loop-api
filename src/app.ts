@@ -456,6 +456,7 @@ import { createMiningClaimSigner } from "./features/mining/claim-voucher.js";
 import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
 import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
 import { createAdminChainGuardService } from "./features/admin/admin-chain-guard.js";
+import { createChainGuardAlertNotifier } from "./integrations/chain-guard/chain-guard-alerts.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
 import { createTestnetFaucetChain } from "./integrations/bsc/testnet-faucet-chain.js";
 import type { TestnetFaucetChain } from "./features/testnet-faucet/testnet-faucet-contract.js";
@@ -2739,6 +2740,25 @@ export async function buildApp(
       chainGuard: createAdminChainGuardService({
         repository: database.chainGuard ?? null,
         chainId: config.launchChain.chainId,
+        // Decision 0135: a manual resolve is announced on the optional
+        // webhook / Telegram outlets (none configured: null).
+        alerts: createChainGuardAlertNotifier({
+          config: config.chainGuardAlerts,
+          onFailure: (event) => {
+            app.log.warn(
+              {
+                reasonCode: event.reasonCode,
+                chainGuardAlertOutlet: event.outlet,
+                host: event.host,
+                ...(event.status === null ? {} : { statusCode: event.status }),
+                ...(event.errorClass === null
+                  ? {}
+                  : { errorClass: event.errorClass }),
+              },
+              "LOOP chain guard alert was not delivered",
+            );
+          },
+        }),
       }),
       // Decision 0116: hourly settlement parameters, epochs, funding.
       miningSettlement: createAdminMiningSettlementService({

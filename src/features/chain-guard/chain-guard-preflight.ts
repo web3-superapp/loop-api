@@ -127,6 +127,27 @@ export function chainPreflightReport(input: {
     });
   }
 
+  // Decision 0135: the fee controller's policy for each pool — a warning
+  // when it is ahead of slot0 (a fee about to be switched on); not read
+  // (zero controller, revert, key not rebuilt) is shown, never a failure.
+  for (const pool of snapshot.pools) {
+    const current = Math.max(pool.zeroForOnePips, pool.oneForZeroPips);
+    const planned =
+      pool.policy === null
+        ? null
+        : Math.max(pool.policy.zeroForOnePips, pool.policy.oneForZeroPips);
+    rows.push({
+      check: "pool.protocolFeePolicy",
+      subject: `${pool.poolId} [instance ${pool.instanceId}]`,
+      observed:
+        pool.policy === null
+          ? `not read (${pool.policyLimited ?? "unknown"})`
+          : `${pool.policy.zeroForOnePips}/${pool.policy.oneForZeroPips} pips (slot0 ${pool.zeroForOnePips}/${pool.oneForZeroPips}, alert ≥ ${policy.protocolFeeAlertPips})`,
+      status:
+        planned !== null && planned > current && planned > 0 ? "warn" : "ok",
+    });
+  }
+
   for (const balance of snapshot.balances) {
     rows.push({
       check: "account.bnb",

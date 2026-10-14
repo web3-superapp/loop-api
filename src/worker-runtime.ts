@@ -71,6 +71,10 @@ import {
 } from "./features/chain-guard/chain-guard-hold.js";
 import { createChainGuardLane } from "./features/chain-guard/chain-guard-lane.js";
 import {
+  createChainGuardAlertNotifier,
+  type ChainGuardAlertFetch,
+} from "./integrations/chain-guard/chain-guard-alerts.js";
+import {
   ChainGuardChainRefusedError,
   createChainGuardChain,
 } from "./integrations/chain-guard/chain-guard-chain.js";
@@ -391,6 +395,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createLaunch2DynamicPokeChain?: typeof createLaunch2DynamicPokeChain;
   /** Decision 0134 test seam: the chain guard's chain reader. */
   readonly createChainGuardChain?: typeof createChainGuardChain;
+  /** Decision 0135: test seam of the chain guard alert outlets. */
+  readonly chainGuardAlertFetch?: ChainGuardAlertFetch;
   /** S169 test seam: the faucet sweep's hash lookup. */
   readonly createTestnetFaucetTransactionLookup?: typeof createTestnetFaucetTransactionLookup;
   readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
@@ -806,6 +812,33 @@ export async function runReconciliationWorker(
     // its incidents (read-only) before every tick and skip the tick while
     // a USD1 pause or a freeze of one of our addresses is unresolved.
     const chainGuardConfig = options.config.chainGuard ?? null;
+    // Decision 0135: optional webhook / Telegram outlets (none configured:
+    // null, and nothing below calls them).
+    const chainGuardAlerts =
+      chainGuardConfig === null
+        ? null
+        : createChainGuardAlertNotifier({
+            config: options.config.chainGuardAlerts,
+            ...(options.chainGuardAlertFetch === undefined
+              ? {}
+              : { fetch: options.chainGuardAlertFetch }),
+            onFailure: (event) => {
+              options.logger.warn(
+                {
+                  ...logFields(),
+                  lane: chainGuardLane,
+                  reasonCode: event.reasonCode,
+                  chainGuardAlertOutlet: event.outlet,
+                  rpcUrlHost: event.host,
+                  ...(event.status === null ? {} : { rpcStatus: event.status }),
+                  ...(event.errorClass === null
+                    ? {}
+                    : { errorClass: event.errorClass }),
+                },
+                "LOOP chain guard alert was not delivered",
+              );
+            },
+          });
     const chainGuardGate: ChainGuardHoldGate | undefined =
       chainGuardConfig !== null && database.chainGuard !== undefined
         ? createChainGuardHoldGate(
@@ -844,6 +877,15 @@ export async function runReconciliationWorker(
                 } else {
                   options.logger.warn(fields, "LOOP chain guard hold released");
                 }
+                void chainGuardAlerts?.notify({
+                  type: event.held ? "hold_engaged" : "hold_released",
+                  chainId: launchChainConfig.chainId,
+                  lane: event.lane,
+                  kind: event.holds[0]?.kind ?? null,
+                  subject: event.holds[0]?.subject ?? null,
+                  holdCount: event.holds.length,
+                  at: new Date().toISOString(),
+                });
               },
             ),
           };
@@ -1010,6 +1052,13 @@ export async function runReconciliationWorker(
               options.logger.warn(
                 { ...logFields(), lane: "launch2_event", ...warning },
                 "LOOP launch2_event lane skipped facts",
+              );
+            },
+            // Decision 0135: logs that are not ours are routine (debug).
+            onSkippedForeign: (count) => {
+              options.logger.debug(
+                { ...logFields(), lane: "launch2_event", count },
+                "LOOP launch2_event lane skipped foreign logs",
               );
             },
             onIdle: (reasonCode) => {
@@ -1508,6 +1557,24 @@ export async function runReconciliationWorker(
                   "LOOP chain guard incident resolved",
                 );
               }
+              void chainGuardAlerts?.notify({
+                type:
+                  event.change === "opened"
+                    ? "incident_opened"
+                    : "incident_resolved",
+                chainId: event.incident.chainId,
+                incidentId: event.incident.incidentId,
+                kind: event.incident.kind,
+                subject: event.incident.subject,
+                details: event.incident.details,
+                ...(event.change === "resolved"
+                  ? { resolution: event.incident.resolution ?? "auto" }
+                  : {}),
+                at:
+                  event.change === "opened"
+                    ? event.incident.firstSeenAt
+                    : (event.incident.resolvedAt ?? new Date().toISOString()),
+              });
             },
             onNotice: (event) => {
               options.logger.warn(

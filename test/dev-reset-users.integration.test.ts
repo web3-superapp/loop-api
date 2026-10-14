@@ -355,9 +355,12 @@ describe("Decision 0113 dev user reset on PostgreSQL", () => {
       [randomUUID(), bob, ids.project],
     );
     await q(
-      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by)
-       values ($1, 'reviewer-s133', $3, 'reviewer', $4, 'operator'),
-              ($2, 'auditor-s133', $3, 'auditor', null, 'operator')`,
+      // Both timestamps from one now(): two clock_timestamp() column
+      // defaults differ by microseconds under load and trip
+      // admin_accounts_timestamp_check (credentials_changed_at >= created_at).
+      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by, created_at, credentials_changed_at)
+       values ($1, 'reviewer-s133', $3, 'reviewer', $4, 'operator', now(), now()),
+              ($2, 'auditor-s133', $3, 'auditor', null, 'operator', now(), now())`,
       [ids.reviewerAccount, ids.auditorAccount, argonHash, carol],
     );
     await q(

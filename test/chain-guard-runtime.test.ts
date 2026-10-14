@@ -203,6 +203,94 @@ describe("chain guard worker composition (Decision 0134)", () => {
     expect(logged).not.toContain("61".repeat(32));
   });
 
+  it("sends opened incidents and hold transitions to the configured webhook (Decision 0135)", async () => {
+    const logger = fakeLogger();
+    const signals = signalSource();
+    const repository = createInMemoryChainGuardRepository();
+    const chain = createFakeChainGuardChain({ paused: true });
+    chain.state.factory = {
+      ...(chain.state.factory as NonNullable<typeof chain.state.factory>),
+      factory,
+      usd1: environment.CHAIN_GUARD_USD1_ADDRESS,
+    };
+    const head = chain.head.bind(chain);
+    chain.head = () => {
+      setTimeout(() => signals.emit("SIGTERM"), 0);
+      return head();
+    };
+    const posted: { url: string; body: Record<string, unknown> }[] = [];
+    let keeperHold: unknown = null;
+    await runReconciliationWorker({
+      config: loadReconciliationWorkerConfig({
+        ...environment,
+        CHAIN_GUARD_WEBHOOK_URL: "https://hooks.example.com/loop/secret-path",
+      }),
+      logger,
+      signalSource: signals,
+      createDatabase: () => database(repository),
+      createWorker: () => ({
+        workerId: "00000000-0000-4000-8000-000000000001",
+        runOnce: vi.fn(),
+        run: (signal: AbortSignal) =>
+          new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve());
+          }),
+      }),
+      createLaunch2BuybackKeeperChain: () => keeperChain,
+      createLaunch2BuybackKeeperLane: (options) => {
+        keeperHold = options.chainGuardHold;
+        return {
+          lane: "launch2_buyback_keeper",
+          keeper: {
+            verifyKeeper: () => Promise.resolve("ok" as const),
+            runOnce: vi.fn(),
+          },
+          runOnce: vi.fn(),
+          run: vi.fn(() => Promise.resolve()),
+        };
+      },
+      createChainGuardChain: () => chain,
+      chainGuardAlertFetch: (url, init) => {
+        posted.push({
+          url,
+          body: JSON.parse(init.body) as Record<string, unknown>,
+        });
+        return Promise.resolve({ ok: false, status: 500 });
+      },
+    });
+    await (keeperHold as () => Promise<unknown>)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posted.map((entry) => [entry.url, entry.body["type"]])).toEqual([
+      ["https://hooks.example.com/loop/secret-path", "incident_opened"],
+      ["https://hooks.example.com/loop/secret-path", "hold_engaged"],
+    ]);
+    expect(posted[0]?.body).toMatchObject({
+      chainId: "eip155:97",
+      kind: "usd1_paused",
+      subject: environment.CHAIN_GUARD_USD1_ADDRESS,
+    });
+    expect(posted[1]?.body).toMatchObject({
+      lane: "launch2_buyback_keeper",
+      holdCount: 1,
+    });
+    // A refused delivery is one warn line with the host only.
+    const failures = vi
+      .mocked(logger.warn)
+      .mock.calls.filter(
+        ([, message]) => message === "LOOP chain guard alert was not delivered",
+      );
+    expect(failures).toHaveLength(2);
+    expect(failures[0]?.[0]).toMatchObject({
+      reasonCode: "CHAIN_GUARD_ALERT_DELIVERY_FAILED",
+      chainGuardAlertOutlet: "webhook",
+      rpcUrlHost: "hooks.example.com",
+      rpcStatus: 500,
+    });
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(
+      "secret-path",
+    );
+  });
+
   it("without the repository the guard idles and the keeper is unguarded", async () => {
     const logger = fakeLogger();
     let keeperOptions: Record<string, unknown> = {};

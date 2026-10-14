@@ -236,8 +236,8 @@ describe("Decision 0134 chain guard incidents on PostgreSQL", () => {
     }) =>
       pool.query(
         `insert into public.chain_guard_incidents
-           (incident_id, chain_id, kind, subject, details, first_seen_at, last_seen_at, resolved_at)
-         values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+           (incident_id, chain_id, kind, subject, details, first_seen_at, last_seen_at, resolved_at, resolution)
+         values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
         [
           randomUUID(),
           values.chain ?? chainId,
@@ -247,6 +247,10 @@ describe("Decision 0134 chain guard incidents on PostgreSQL", () => {
           values.first ?? at(0),
           values.last ?? at(0),
           values.resolved ?? null,
+          // Decision 0135: resolution is set exactly when resolved.
+          values.resolved === undefined || values.resolved === null
+            ? null
+            : "auto",
         ],
       );
     await expect(insert({ kind: "made_up" })).rejects.toThrow();

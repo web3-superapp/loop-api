@@ -23,7 +23,10 @@ import type { ChainGuardLog } from "../../features/chain-guard/chain-guard-evalu
  * Event signatures are StablecoinV2's (Sourcify `exact_match` of the BSC
  * USD1 implementation, verified 2025-11-09; docs/24 §7.1.2), the OZ
  * TransparentUpgradeableProxy's `Upgraded` / `AdminChanged`, and the OZ
- * `Ownable` `OwnershipTransferred` of the ProxyAdmin and the token. A
+ * `Ownable` `OwnershipTransferred` of the ProxyAdmin and the token, and
+ * (Decision 0135) the PoolManager's `ProtocolFeeUpdated` /
+ * `ProtocolFeeControllerUpdated` plus the fee controller's
+ * `protocolFeeForPool`. A
  * `paused()` / `frozen()` that reverts or returns no data (the testnet mock
  * token implements neither) is `null`, never `false`. It never signs or
  * sends.
@@ -51,7 +54,36 @@ export const chainGuardEventsAbi = parseAbi([
   "event Upgraded(address indexed implementation)",
   "event AdminChanged(address previousAdmin, address newAdmin)",
   "event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)",
+  // Decision 0135: Uniswap v4-core `IProtocolFees` (PoolId is bytes32).
+  "event ProtocolFeeUpdated(bytes32 indexed id, uint24 protocolFee)",
+  "event ProtocolFeeControllerUpdated(address indexed protocolFeeController)",
 ]);
+
+/**
+ * Decision 0135: Uniswap v4-core `IProtocolFeeController` (the PoolKey
+ * tuple: currency0, currency1, fee, tickSpacing, hooks).
+ */
+const protocolFeeControllerAbi = [
+  {
+    type: "function",
+    name: "protocolFeeForPool",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "poolKey",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+    ],
+    outputs: [{ name: "protocolFee", type: "uint24" }],
+  },
+] as const;
 
 const factoryAbi = parseAbi([
   "function usd1() view returns (address)",
@@ -260,6 +292,25 @@ export function createChainGuardChain(input: {
       return BigInt(word);
     },
 
+    async readProtocolFeePolicy(controller, key) {
+      return optional(() =>
+        client.readContract({
+          address: controller as Address,
+          abi: protocolFeeControllerAbi,
+          functionName: "protocolFeeForPool",
+          args: [
+            {
+              currency0: key.currency0 as Address,
+              currency1: key.currency1 as Address,
+              fee: key.fee,
+              tickSpacing: key.tickSpacing,
+              hooks: key.hooks as Address,
+            },
+          ],
+        }),
+      );
+    },
+
     async readBalances(addresses) {
       const values = await Promise.all(
         addresses.map((account) =>
@@ -271,8 +322,16 @@ export function createChainGuardChain(input: {
       );
     },
 
-    async getLogs({ usd1, proxyAdmin, fromBlock, toBlock }) {
-      const addresses = [usd1, ...(proxyAdmin === null ? [] : [proxyAdmin])];
+    async getLogs({ usd1, proxyAdmin, poolManagers, fromBlock, toBlock }) {
+      // Decision 0135: USD1 + ProxyAdmin + each PoolManager (usually 3, at most 5
+      // addresses — well under the 10-address limit of a public endpoint).
+      const addresses = [
+        ...new Set([
+          usd1,
+          ...(proxyAdmin === null ? [] : [proxyAdmin]),
+          ...poolManagers,
+        ]),
+      ];
       const logs = await client.getLogs({
         address: addresses as Address[],
         events: chainGuardEventsAbi,

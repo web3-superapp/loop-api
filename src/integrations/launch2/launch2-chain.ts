@@ -271,7 +271,7 @@ export function createLaunch2Chain(input: {
         pools.every(([, ids]) => ids.length === 0) &&
         routerIds.length === 0
       ) {
-        return { logs: [], ignored: 0 };
+        return { logs: [], ignored: 0, skippedForeign: 0 };
       }
       const addresses = [...roles.keys()] as Address[];
       let queries = 0;
@@ -359,10 +359,14 @@ export function createLaunch2Chain(input: {
       }
       const logs: Launch2DecodedLog[] = [];
       let ignored = 0;
+      // Decision 0135: a log of an address outside the tracked set (an
+      // endpoint answering beyond the filter) is skipped before decoding and
+      // counted apart; `ignored` is a tracked address's unknown topic only.
+      let skippedForeign = 0;
       for (const log of raw) {
         const role = poolRoles.get(lower(log.address));
         if (role === undefined) {
-          ignored += 1;
+          skippedForeign += 1;
           continue;
         }
         const spec = roleAbis[role];
@@ -404,6 +408,7 @@ export function createLaunch2Chain(input: {
       return {
         logs,
         ignored,
+        skippedForeign,
         ...(untrusted.length === 0 ? {} : { untrustedTokens: untrusted }),
       };
     },

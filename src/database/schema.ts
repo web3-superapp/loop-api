@@ -1,4 +1,4 @@
-export const latestMigrationName = "000079_chain_guard";
+export const latestMigrationName = "000080_chain_guard_followups";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

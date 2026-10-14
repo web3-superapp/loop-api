@@ -112,6 +112,18 @@ function mapAudit(raw: unknown): AdminAuditRecord {
   });
 }
 
+/**
+ * Decision 0135: the same audit insert for a console write whose change
+ * lives in another repository (the chain guard's manual resolve); the
+ * caller runs it inside the transaction of that change.
+ */
+export function insertAdminAuditRow(
+  client: Queryable,
+  input: AdminAuditInput,
+): Promise<AdminAuditRecord> {
+  return insertAudit(client, input);
+}
+
 async function insertAudit(
   client: Queryable,
   input: AdminAuditInput,

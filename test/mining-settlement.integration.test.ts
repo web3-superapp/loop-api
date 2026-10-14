@@ -446,8 +446,11 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     );
     const reviewerId = randomUUID();
     await pool.query(
-      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by)
-       values ($1, 's138-reviewer', $2, 'reviewer', $3, 'operator')`,
+      // Both timestamps from one now(): two clock_timestamp() column
+      // defaults differ by microseconds under load and trip
+      // admin_accounts_timestamp_check (credentials_changed_at >= created_at).
+      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by, created_at, credentials_changed_at)
+       values ($1, 's138-reviewer', $2, 'reviewer', $3, 'operator', now(), now())`,
       [reviewerId, hash, reviewerUser],
     );
     const audit = (action: string) => ({
@@ -559,8 +562,11 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     );
     const reviewerId = randomUUID();
     await pool.query(
-      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by)
-       values ($1, 's147-reviewer', $2, 'reviewer', $3, 'operator')`,
+      // Both timestamps from one now(): two clock_timestamp() column
+      // defaults differ by microseconds under load and trip
+      // admin_accounts_timestamp_check (credentials_changed_at >= created_at).
+      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by, created_at, credentials_changed_at)
+       values ($1, 's147-reviewer', $2, 'reviewer', $3, 'operator', now(), now())`,
       [reviewerId, hash, reviewerUser],
     );
     const audit = (action: string) => ({

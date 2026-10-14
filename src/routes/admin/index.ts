@@ -883,6 +883,7 @@ export function registerAdminRoutes(
       dependencies.chainGuard ??
       createAdminChainGuardService({ repository: null, chainId: "eip155:56" }),
     guard,
+    context,
   });
 
   registerAdminRoleRoutes(app, {

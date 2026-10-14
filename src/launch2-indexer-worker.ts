@@ -96,7 +96,14 @@ export type Launch2LaneResult = {
   readonly fromBlockNumber: string | null;
   readonly toBlockNumber: string | null;
   readonly eventCount: number;
+  /** A tracked address's log whose topic its role does not know. */
   readonly ignoredCount: number;
+  /**
+   * Decision 0135: logs that are not ours — an address outside the tracked
+   * set, or a tracked Factory / PoolManager / router log of an instance
+   * LOOP did not register. Debug-level, never a warning.
+   */
+  readonly skippedForeignCount: number;
   readonly registered: number;
   readonly snapshotsChecked: number;
   readonly stagesChanged: number;
@@ -139,6 +146,8 @@ export interface Launch2LaneOptions {
     readonly instanceId?: string;
   }) => void;
   readonly onIdle?: (reasonCode: string) => void;
+  /** Decision 0135: per tick, the count of logs that are not ours (debug). */
+  readonly onSkippedForeign?: (count: number) => void;
   /**
    * Decision 0129 §2: a MEME transfer coverage check failed. `stalled`:
    * the third consecutive failure, the lane stops re-scanning the instance
@@ -518,6 +527,7 @@ function result(
     toBlockNumber: null,
     eventCount: 0,
     ignoredCount: 0,
+    skippedForeignCount: 0,
     registered: 0,
     snapshotsChecked: 0,
     stagesChanged: 0,
@@ -1220,6 +1230,8 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               : 1,
         ),
         ignored: first.ignored + (second?.ignored ?? 0),
+        skippedForeign:
+          (first.skippedForeign ?? 0) + (second?.skippedForeign ?? 0),
       };
       if (aborted(signal)) return result("aborted", null);
       const attributions =
@@ -1268,7 +1280,8 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
       let memeTransfers: Launch2MemeTransferRecord[] = [];
-      let ignored = decoded.ignored;
+      const ignored = decoded.ignored;
+      let skippedForeign = decoded.skippedForeign;
       for (const log of decoded.logs) {
         const swapPool =
           log.eventName === "Swap"
@@ -1289,8 +1302,10 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
                   : undefined
                 : owners.get(log.contractAddress);
         if (instanceId === undefined) {
-          // Factory deployments that are not LOOP-registered instances.
-          ignored += 1;
+          // Factory deployments that are not LOOP-registered instances (and
+          // pool / router logs of pools that are not ours): not ours, not
+          // an unknown fact — Decision 0135 counts them apart.
+          skippedForeign += 1;
           continue;
         }
         let at = timestamps.get(log.blockNumber);
@@ -1449,12 +1464,16 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           count: ignored,
         });
       }
+      if (skippedForeign > 0) {
+        options.onSkippedForeign?.(skippedForeign);
+      }
       await checkMemeCoverage(toBlock, coverage.balances);
       scanned = {
         fromBlockNumber: fromBlock.toString(10),
         toBlockNumber: toBlock.toString(10),
         eventCount: events.length + memeTransfers.length,
         ignoredCount: ignored,
+        skippedForeignCount: skippedForeign,
       };
     } else {
       kind = "idle";

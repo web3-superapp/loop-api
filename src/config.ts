@@ -1745,6 +1745,11 @@ export interface AppConfig {
   readonly miningMockHoldingsEnabled: boolean;
   /** Decision 0116: hourly settlement (claim signer, contract, test trigger). */
   readonly miningSettlement: MiningSettlementApiConfig;
+  /**
+   * Decision 0135: chain guard alert outlets (a console manual resolve is
+   * announced from the API process); absent / null = none.
+   */
+  readonly chainGuardAlerts?: ChainGuardAlertConfig | null;
   readonly walletGasReserve: WalletGasReserveConfig;
   /** Passkey association files published at `/.well-known` (Decision 0063). */
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
@@ -1917,6 +1922,8 @@ export interface ReconciliationWorkerConfig {
    * signing lanes unguarded).
    */
   readonly chainGuard?: ChainGuardConfig | null;
+  /** Decision 0135: chain guard alert outlets; absent / null = none. */
+  readonly chainGuardAlerts?: ChainGuardAlertConfig | null;
   /**
    * `community-channel-sync` lane (Decision 0032). Default off; enabling it
    * requires the complete Stream credential pair, which is why this process
@@ -4005,6 +4012,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     miningSettlement: parseMiningSettlementApi(parsed.data),
+    chainGuardAlerts: parseChainGuardAlertConfig(environment),
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty,
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
@@ -4302,6 +4310,7 @@ export function loadReconciliationWorkerConfig(
     chainGuard: parseChainGuardEnabled(environment)
       ? parseChainGuardConfig(environment)
       : null,
+    chainGuardAlerts: parseChainGuardAlertConfig(environment),
     market: parseMarketConfig(parsed.data),
     push: parsePushConfig(parsed.data),
     alertEvaluator: parsed.data.ALERT_EVALUATOR_ENABLED
@@ -4530,6 +4539,76 @@ export function parseChainGuardConfig(
   });
   if (issues.length > 0) throw new ConfigurationError(issues);
   return config;
+}
+
+/**
+ * Decision 0135: where chain guard alerts go besides the worker log — a
+ * generic JSON webhook and / or a Telegram bot chat. Both optional; the
+ * values are secrets (never logged; a refusal names only the key).
+ */
+export interface ChainGuardAlertConfig {
+  readonly webhookUrl: string | null;
+  readonly telegram: {
+    readonly botToken: string;
+    readonly chatId: string;
+  } | null;
+}
+
+const chainGuardTelegramTokenPattern = /^[0-9]{1,20}:[A-Za-z0-9_-]{20,100}$/u;
+const chainGuardTelegramChatPattern =
+  /^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,63})$/u;
+
+function chainGuardWebhookUrl(raw: string, issues: string[]): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    issues.push("CHAIN_GUARD_WEBHOOK_URL: must be an absolute URL");
+    return null;
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (
+    !(url.protocol === "https:" || (url.protocol === "http:" && local)) ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    issues.push(
+      "CHAIN_GUARD_WEBHOOK_URL: must be https (http only for localhost), without credentials",
+    );
+    return null;
+  }
+  return url.toString();
+}
+
+/** Decision 0135: null when neither outlet is configured. */
+export function parseChainGuardAlertConfig(
+  environment: NodeJS.ProcessEnv,
+): ChainGuardAlertConfig | null {
+  const issues: string[] = [];
+  const rawUrl = environment["CHAIN_GUARD_WEBHOOK_URL"]?.trim() ?? "";
+  const webhookUrl =
+    rawUrl === "" ? null : chainGuardWebhookUrl(rawUrl, issues);
+  const token = environment["CHAIN_GUARD_TELEGRAM_BOT_TOKEN"]?.trim() ?? "";
+  const chatId = environment["CHAIN_GUARD_TELEGRAM_CHAT_ID"]?.trim() ?? "";
+  let telegram: ChainGuardAlertConfig["telegram"] = null;
+  if (token !== "" || chatId !== "") {
+    if (token === "" || chatId === "") {
+      issues.push(
+        "CHAIN_GUARD_TELEGRAM_BOT_TOKEN and CHAIN_GUARD_TELEGRAM_CHAT_ID: set both or neither",
+      );
+    } else if (!chainGuardTelegramTokenPattern.test(token)) {
+      issues.push("CHAIN_GUARD_TELEGRAM_BOT_TOKEN: must be a Bot API token");
+    } else if (!chainGuardTelegramChatPattern.test(chatId)) {
+      issues.push(
+        "CHAIN_GUARD_TELEGRAM_CHAT_ID: must be a numeric chat id or @channel",
+      );
+    } else {
+      telegram = Object.freeze({ botToken: token, chatId });
+    }
+  }
+  if (issues.length > 0) throw new ConfigurationError(issues);
+  if (webhookUrl === null && telegram === null) return null;
+  return Object.freeze({ webhookUrl, telegram });
 }
 
 /** Decision 0134: CHAIN_GUARD_ENABLED (`true` / `false`, default false). */

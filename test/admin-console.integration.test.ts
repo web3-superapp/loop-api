@@ -568,10 +568,13 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       [`did:privy:admin-s119-reviewer:${randomUUID()}`],
     );
     await pool.query(
+      // Both timestamps from one now(): two clock_timestamp() column
+      // defaults differ by microseconds under load and trip
+      // admin_accounts_timestamp_check (credentials_changed_at >= created_at).
       `insert into public.admin_accounts (
          id, username, password_hash, role, operator_user_id,
-         password_must_change, created_by
-       ) values ($1, 'reviewer-s119', $2, 'reviewer', $3, false, 'operator')`,
+         password_must_change, created_by, created_at, credentials_changed_at
+       ) values ($1, 'reviewer-s119', $2, 'reviewer', $3, false, 'operator', now(), now())`,
       [
         reviewerAccountId,
         "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",

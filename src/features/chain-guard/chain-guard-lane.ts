@@ -32,7 +32,7 @@ import {
  *    ProjectNFT / CurveEngine / two adapters / BuybackExecutor, the
  *    Factories' PoolManager / tax receivers / routers / keepers, the
  *    OfficialPoolRouter, the configured signer accounts);
- * 2. reads USD1 / ProxyAdmin logs since the cursor (≤ 2,000 blocks per
+ * 2. reads USD1 / ProxyAdmin / PoolManager (Decision 0135) logs since the cursor (≤ 2,000 blocks per
  *    query, ≤ 5 queries per tick, `confirmations` behind the head);
  * 3. reads `paused()`, `frozen()` of each watched address, the EIP-1967
  *    implementation, `protocolFeeController()`, each graduated pool's
@@ -89,6 +89,7 @@ export function createChainGuardLane(
     options.maxLogRangesPerTick ?? chainGuardDefaults.maxLogRangesPerTick;
   const { repository, chain, targets } = options;
   let lastNotice: string | null = null;
+  let lastPolicyNotice = "";
 
   function notice(reasonCode: string, detail: string | null): void {
     const key = `${reasonCode}:${detail ?? ""}`;
@@ -100,6 +101,7 @@ export function createChainGuardLane(
   async function readLogs(
     usd1: string,
     proxyAdmin: string | null,
+    poolManagers: readonly string[],
   ): Promise<{ logs: ChainGuardLog[]; cursor: bigint | null }> {
     const head = await chain.head();
     const safe = head - BigInt(options.confirmations);
@@ -118,6 +120,7 @@ export function createChainGuardLane(
         ...(await chain.getLogs({
           usd1,
           proxyAdmin,
+          poolManagers,
           fromBlock: from,
           toBlock: to,
         })),
@@ -155,15 +158,24 @@ export function createChainGuardLane(
       }
       throw error;
     }
+    const poolManagers = collected.snapshot.poolManagers.map(
+      (manager) => manager.address,
+    );
     const { logs, cursor } = await readLogs(
       collected.usd1,
       collected.proxyAdmin,
+      poolManagers,
     );
     const fromLogs = chainGuardLogFindings({
       logs,
       usd1: collected.usd1,
       proxyAdmin: collected.proxyAdmin,
       watched: new Set(collected.watched.map((entry) => entry.address)),
+      poolManagers: new Set(poolManagers),
+      graduatedPools: new Map(
+        collected.snapshot.pools.map((pool) => [pool.poolId, pool.instanceId]),
+      ),
+      policy: options.policy,
     });
     const evaluation = evaluateChainGuardSnapshot(
       collected.snapshot,
@@ -175,12 +187,44 @@ export function createChainGuardLane(
         evaluation.notConfigured.join(","),
       );
     }
+    // Decision 0135: a fee policy that could not be read is reported once
+    // per distinct reason set (its own channel, so it never re-logs the
+    // notices above) and opens nothing.
+    const policyKey = evaluation.policyLimited.join(",");
+    if (policyKey !== lastPolicyNotice) {
+      lastPolicyNotice = policyKey;
+      if (policyKey !== "") {
+        options.onNotice?.({
+          reasonCode: chainGuardReasonCodes.policyLimited,
+          detail: policyKey,
+        });
+      }
+    }
     const at = now();
     let opened = 0;
+    // Decision 0135: a log sighting of a condition the state read confirms
+    // in the same tick is one write — the readings, with the log's source /
+    // block / transaction kept for forensics.
+    const stateFindings = new Map(
+      evaluation.findings.map((finding) => [
+        chainGuardIncidentKey(finding.kind, finding.subject),
+        finding,
+      ]),
+    );
+    const logState = fromLogs.state.filter((finding) => {
+      const key = chainGuardIncidentKey(finding.kind, finding.subject);
+      const confirmed = stateFindings.get(key);
+      if (confirmed === undefined) return true;
+      stateFindings.set(key, {
+        ...confirmed,
+        details: { ...confirmed.details, ...finding.details },
+      });
+      return false;
+    });
     for (const finding of [
-      ...fromLogs.state,
+      ...logState,
       ...fromLogs.events,
-      ...evaluation.findings,
+      ...stateFindings.values(),
     ]) {
       const result = await repository.openOrTouch({
         incidentId: createId(),
@@ -198,9 +242,12 @@ export function createChainGuardLane(
     const resolved = await repository.resolve({
       chainId: targets.chainId,
       kinds: [...evaluation.evaluatedKinds, ...chainGuardEventKinds],
-      keep: evaluation.findings.map((finding) =>
-        chainGuardIncidentKey(finding.kind, finding.subject),
-      ),
+      keep: [
+        ...evaluation.findings.map((finding) =>
+          chainGuardIncidentKey(finding.kind, finding.subject),
+        ),
+        ...evaluation.retained,
+      ],
       eventsSeenBefore: new Date(
         at.getTime() - chainGuardEventIncidentTtlSeconds * 1000,
       ),
@@ -225,6 +272,7 @@ export function createChainGuardLane(
       openedCount: opened,
       resolvedCount: resolved.length,
       unsupported: evaluation.unsupported,
+      policyLimited: evaluation.policyLimited,
     };
   }
 
