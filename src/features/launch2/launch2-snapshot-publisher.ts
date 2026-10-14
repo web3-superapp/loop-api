@@ -6,6 +6,11 @@ import {
   type Launch2FactoryGeneration,
 } from "./launch2-generation.js";
 import type { Launch2Repository } from "./launch2-ports.js";
+import {
+  createLaunch2ExitProbe,
+  launch2ExitReasonCodes,
+  type Launch2ExitTiming,
+} from "./launch2-escrow-exit.js";
 
 /**
  * Decision 0118: the `launch2_snapshot_publisher` lane. For every activated
@@ -54,6 +59,13 @@ export const launch2SnapshotPublisherLane = "launch2_snapshot_publisher";
 export const launch2PublicationActions = Object.freeze([
   "publish_snapshot",
   "open_without_holders",
+  /**
+   * Decision 0137 (S175 Factories): `openPublicAfterTimeout()` — the
+   * fallback once `snapshotTimeoutAt()` passed and this lane could not
+   * publish (same row shape as `open_without_holders`; the cutoff columns
+   * hold the head block the decision was taken at).
+   */
+  "open_after_timeout",
 ] as const);
 export type Launch2PublicationAction =
   (typeof launch2PublicationActions)[number];
@@ -177,6 +189,23 @@ export interface Launch2PublicationCandidate {
   readonly generation: Launch2FactoryGeneration;
   /** Decision 0122: `PublicRoundOpenedWithoutHolders` is indexed. */
   readonly openedWithoutHolders: boolean;
+  /**
+   * Decision 0137: the deploying Factory (exit-path capability probe).
+   * Absent: never probed (no timeout opening).
+   */
+  readonly factoryAddress?: string;
+  /** Decision 0137: `PublicRoundOpenedAfterTimeout` is indexed. */
+  readonly openedAfterTimeout?: boolean;
+  /**
+   * Decision 0137: the `open_after_timeout` rows since the latest release:
+   * retryable failures, whether one failed for good (or mismatched), and
+   * the newest failure time. Absent = none.
+   */
+  readonly timeoutOpen?: {
+    readonly retryableFailures: number;
+    readonly blocked: boolean;
+    readonly lastFailedAt: string | null;
+  };
   /** The indexed on-chain snapshot (null until `SnapshotPublished`). */
   readonly snapshotRoot: string | null;
   readonly snapshotVerification: "verified" | "mismatch" | null;
@@ -316,6 +345,27 @@ export interface Launch2PublisherChain {
       readonly gasPrice: bigint;
     },
   ): Promise<{ readonly txHash: string; readonly rawTx: string }>;
+  /**
+   * Decision 0137: `LoopLaunchFactory.snapshotTimeout()` / `refundDelay()`,
+   * null for a Factory without exit paths (revert / no selector); throws on
+   * an RPC failure. Absent (older chains): no timeout opening.
+   */
+  exitTiming?(factory: string): Promise<Launch2ExitTiming | null>;
+  /** Decision 0137: `SnapshotRegistry.snapshotTimeoutAt()`; null on a revert. */
+  registrySnapshotTimeoutAt?(snapshots: string): Promise<bigint | null>;
+  /**
+   * Decision 0137: simulates then estimates `openPublicAfterTimeout()`;
+   * throws `Launch2PublisherRevertError`.
+   */
+  estimateOpenAfterTimeout?(snapshots: string): Promise<bigint>;
+  signOpenAfterTimeout?(
+    snapshots: string,
+    tx: {
+      readonly nonce: bigint;
+      readonly gas: bigint;
+      readonly gasPrice: bigint;
+    },
+  ): Promise<{ readonly txHash: string; readonly rawTx: string }>;
   gasPrice(): Promise<bigint>;
   pendingNonce(): Promise<bigint>;
   signPublish(
@@ -358,6 +408,13 @@ export interface Launch2PublisherPolicy {
   readonly gasLimitCap: bigint;
   readonly maxAttempts: number;
   readonly retryDelaySeconds: number;
+  /**
+   * Decision 0137: `LAUNCH2_TIMEOUT_OPEN_ENABLED` — send
+   * `openPublicAfterTimeout()` when the timeout passed and this lane cannot
+   * publish. Absent / false: the due opening is only logged
+   * (`LAUNCH2_TIMEOUT_OPEN_SKIPPED`).
+   */
+  readonly timeoutOpenEnabled?: boolean;
 }
 
 /** `ProjectNFT` MIN / MAX_SALE_DURATION (loop-contracts S141). */
@@ -549,12 +606,15 @@ export function createLaunch2SnapshotPublisher(options: {
       return null;
     }
     const opening = record.action === "open_without_holders";
+    const timeoutOpening = record.action === "open_after_timeout";
     const call = callOf(record);
     let estimate: bigint;
     try {
-      estimate = opening
-        ? await chain.estimateOpenWithoutHolders(record.snapshots)
-        : await chain.estimatePublish(call);
+      estimate = timeoutOpening
+        ? await requireTimeoutCalls().estimate(record.snapshots)
+        : opening
+          ? await chain.estimateOpenWithoutHolders(record.snapshots)
+          : await chain.estimatePublish(call);
     } catch (error) {
       if (error instanceof Launch2PublisherRevertError) {
         const failure = contractFailureCode(error.errorName);
@@ -592,13 +652,19 @@ export function createLaunch2SnapshotPublisher(options: {
       submitterAddress: chain.submitterAddress,
       chainPendingNonce,
       sign: (nonce) =>
-        opening
-          ? chain.signOpenWithoutHolders(record.snapshots, {
+        timeoutOpening
+          ? requireTimeoutCalls().sign(record.snapshots, {
               nonce,
               gas,
               gasPrice,
             })
-          : chain.signPublish(call, { nonce, gas, gasPrice }),
+          : opening
+            ? chain.signOpenWithoutHolders(record.snapshots, {
+                nonce,
+                gas,
+                gasPrice,
+              })
+            : chain.signPublish(call, { nonce, gas, gasPrice }),
     });
     if (signed === null) return null;
     await sendSigned(signed);
@@ -629,7 +695,10 @@ export function createLaunch2SnapshotPublisher(options: {
       return;
     }
     if (receipt.status === "reverted") {
-      if (record.action === "open_without_holders") {
+      if (
+        record.action === "open_without_holders" ||
+        record.action === "open_after_timeout"
+      ) {
         // Anyone may open; a reverted call after another opening is not ours
         // to repeat (the lane indexes the other transaction's event).
         const opened =
@@ -698,6 +767,13 @@ export function createLaunch2SnapshotPublisher(options: {
     ) {
       return;
     }
+    // Decision 0137: likewise once `PublicRoundOpenedAfterTimeout` is indexed.
+    if (
+      record.action === "open_after_timeout" &&
+      candidate.openedAfterTimeout === true
+    ) {
+      return;
+    }
     if (candidate.snapshotRoot !== null) {
       if (candidate.snapshotRoot !== record.root) {
         await move(record, "mismatch", {
@@ -725,6 +801,115 @@ export function createLaunch2SnapshotPublisher(options: {
     if (receipt !== null && receipt.blockHash === record.blockHash) return;
     const reopened = await move(record, "broadcast", { inclusion: null });
     if (reopened !== null) await chain.sendRaw(record.rawTx);
+  }
+
+  /** Decision 0137: the two timeout-opening calls (present on S175 chains). */
+  function requireTimeoutCalls(): {
+    readonly estimate: (snapshots: string) => Promise<bigint>;
+    readonly sign: NonNullable<Launch2PublisherChain["signOpenAfterTimeout"]>;
+  } {
+    const estimate = chain.estimateOpenAfterTimeout?.bind(chain);
+    const sign = chain.signOpenAfterTimeout?.bind(chain);
+    if (estimate === undefined || sign === undefined) {
+      throw new Error("The publisher chain cannot open after the timeout");
+    }
+    return { estimate, sign };
+  }
+
+  const exitProbe = createLaunch2ExitProbe(
+    chain.exitTiming === undefined
+      ? undefined
+      : (factory) =>
+          (
+            chain.exitTiming as NonNullable<Launch2PublisherChain["exitTiming"]>
+          )(factory),
+  );
+  /** `snapshotTimeoutAt()` per registry (an immutable sum). */
+  const timeoutAts = new Map<string, bigint | null>();
+
+  /**
+   * Decision 0137: the snapshot-timeout fallback. Only for an instance of a
+   * Factory with exit paths, whose sale had holders, still unopened at or
+   * after `snapshotTimeoutAt()`, while the normal path did not start a
+   * publication this tick. Null = nothing to do here (keep the normal
+   * reason); otherwise the waiting reason.
+   */
+  async function timeoutOpen(
+    candidate: Launch2PublicationCandidate,
+    head: {
+      readonly number: bigint;
+      readonly hash: string;
+      readonly timestamp: bigint;
+    },
+  ): Promise<string | null> {
+    if (
+      candidate.factoryAddress === undefined ||
+      chain.registrySnapshotTimeoutAt === undefined ||
+      chain.estimateOpenAfterTimeout === undefined ||
+      chain.signOpenAfterTimeout === undefined
+    ) {
+      return null;
+    }
+    if ((await exitProbe.timingOf(candidate.factoryAddress)) === null) {
+      return null;
+    }
+    let timeoutAt = timeoutAts.get(candidate.snapshots);
+    if (timeoutAt === undefined) {
+      timeoutAt = await chain.registrySnapshotTimeoutAt(candidate.snapshots);
+      timeoutAts.set(candidate.snapshots, timeoutAt);
+    }
+    if (timeoutAt === null || head.timestamp < timeoutAt) return null;
+    // Zero mints is the Decision 0122 opening's case, not this one.
+    if ((await chain.totalMintedAt(candidate.nft, head.number)) === 0n) {
+      return null;
+    }
+    if ((await chain.registryPublishedAt(candidate.snapshots)) !== 0n) {
+      return launch2PublisherReasonCodes.alreadyOnChain;
+    }
+    const skipped = launch2ExitReasonCodes.timeoutOpenSkipped;
+    if (policy.timeoutOpenEnabled !== true) return skipped;
+    const budget = candidate.timeoutOpen;
+    if (budget !== undefined) {
+      if (budget.blocked || budget.retryableFailures >= policy.maxAttempts) {
+        return skipped;
+      }
+      if (
+        budget.lastFailedAt !== null &&
+        Date.parse(budget.lastFailedAt) + policy.retryDelaySeconds * 1000 >
+          now().getTime()
+      ) {
+        return skipped;
+      }
+    }
+    const registry = await factsOf(candidate.snapshots);
+    const opening = await repository.insertPending({
+      action: "open_after_timeout",
+      instanceId: candidate.instanceId,
+      chainId: policy.chainId,
+      attempt: candidate.lastAttempt + 1,
+      snapshots: candidate.snapshots,
+      cutoffBlock: head.number.toString(10),
+      cutoffBlockHash: head.hash,
+      saleEndAt: new Date(Number(registry.nftSaleEnd) * 1000).toISOString(),
+      members: [],
+      root: zeroBytes32,
+      dataHash: zeroBytes32,
+      signerAddresses: [],
+      signatures: [],
+      submitterAddress: chain.submitterAddress,
+    });
+    if (opening === null) return null;
+    options.onStep?.({
+      instanceId: opening.instanceId,
+      publicationId: opening.publicationId,
+      from: null,
+      to: "pending",
+      txHash: null,
+      failureCode: null,
+    });
+    return (
+      (await advancePending(opening)) ?? launch2ExitReasonCodes.timeoutOpenSent
+    );
   }
 
   async function start(
@@ -942,12 +1127,24 @@ export function createLaunch2SnapshotPublisher(options: {
         if (
           candidate.snapshotRoot !== null ||
           candidate.openedWithoutHolders ||
+          candidate.openedAfterTimeout === true ||
           candidate.holdReason !== null ||
           candidate.graduated
         ) {
           continue;
         }
         reason = await start(candidate, head);
+        // Decision 0137: the normal path is stuck (signatures refused,
+        // retries exhausted, indexer gaps, …) — past the snapshot timeout
+        // the registry can be opened without a snapshot.
+        if (
+          reason !== null &&
+          reason !== launch2PublisherReasonCodes.alreadyOnChain &&
+          reason !== launch2PublisherReasonCodes.saleOpen &&
+          reason !== launch2PublisherReasonCodes.saleEndMismatch
+        ) {
+          reason = (await timeoutOpen(candidate, head)) ?? reason;
+        }
       } else if (active.status === "pending") {
         if (candidate.holdReason !== null && active.txHash === null) {
           reason = candidate.holdReason;

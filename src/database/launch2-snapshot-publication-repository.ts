@@ -55,7 +55,9 @@ function mapPublication(row: Row): Launch2PublicationRecord {
     action:
       row["action"] === "open_without_holders"
         ? "open_without_holders"
-        : "publish_snapshot",
+        : row["action"] === "open_after_timeout"
+          ? "open_after_timeout"
+          : "publish_snapshot",
     attempt: Number(row["attempt"]),
     status: row["status"] as Launch2PublicationStatus,
     snapshots: row["snapshots_address"] as string,
@@ -115,6 +117,22 @@ export function createPostgresLaunch2PublicationRepository(
             i.nft_sale_start, i.hold_reason, i.graduated_at is not null as graduated,
             i.snapshot_root, i.snapshot_verification, i.factory_generation,
             i.opened_without_holders_at is not null as opened_without_holders,
+            i.factory_address,
+            i.opened_after_timeout_at is not null as opened_after_timeout,
+            -- Decision 0137: the open_after_timeout rows' own retry budget.
+            (select count(*)::integer from public.launch2_snapshot_publications p
+              where p.instance_id = i.instance_id and p.action = 'open_after_timeout'
+                and p.status = 'failed' and p.failure_retryable
+                and p.attempt > r.released_through) as timeout_retryable_failures,
+            exists (select 1 from public.launch2_snapshot_publications p
+              where p.instance_id = i.instance_id and p.action = 'open_after_timeout'
+                and p.attempt > r.released_through
+                and (p.status = 'mismatch' or (p.status = 'failed' and not p.failure_retryable)))
+              as timeout_blocked,
+            (select max(p.updated_at) from public.launch2_snapshot_publications p
+              where p.instance_id = i.instance_id and p.action = 'open_after_timeout'
+                and p.status = 'failed' and p.attempt > r.released_through)
+              as timeout_last_failed_at,
             coalesce((select max(p.attempt) from public.launch2_snapshot_publications p
               where p.instance_id = i.instance_id), 0) as last_attempt,
             (select count(*)::integer from public.launch2_snapshot_publications p
@@ -149,7 +167,9 @@ export function createPostgresLaunch2PublicationRepository(
                 where p.instance_id = i.instance_id and p.status in ('pending', 'broadcast'))
               or (i.graduated_at is null and i.snapshot_verification is distinct from 'verified'
                 -- Decision 0122: an indexed zero-holder opening needs nothing more.
-                and i.opened_without_holders_at is null))
+                and i.opened_without_holders_at is null
+                -- Decision 0137: nor an indexed snapshot-timeout opening.
+                and i.opened_after_timeout_at is null))
           order by i.nft_sale_start, i.instance_id
         `,
         [chainId],
@@ -166,6 +186,17 @@ export function createPostgresLaunch2PublicationRepository(
           graduated: row["graduated"] === true,
           generation: row["factory_generation"] === "v2" ? "v2" : "v3",
           openedWithoutHolders: row["opened_without_holders"] === true,
+          factoryAddress: row["factory_address"] as string,
+          openedAfterTimeout: row["opened_after_timeout"] === true,
+          timeoutOpen: Object.freeze({
+            retryableFailures: Number(row["timeout_retryable_failures"] ?? 0),
+            blocked: row["timeout_blocked"] === true,
+            lastFailedAt:
+              row["timeout_last_failed_at"] === null ||
+              row["timeout_last_failed_at"] === undefined
+                ? null
+                : iso(row["timeout_last_failed_at"]),
+          }),
           snapshotRoot: textOrNull(row["snapshot_root"]),
           snapshotVerification: textOrNull(row["snapshot_verification"]) as
             "verified" | "mismatch" | null,

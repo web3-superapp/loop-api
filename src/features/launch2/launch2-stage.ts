@@ -18,6 +18,9 @@ import { launch2Template, type Launch2Stage } from "./launch2-contract.js";
  * - Decision 0122 (v3 Factory): `PublicRoundOpenedWithoutHolders` seen →
  *   `public` (the sale ended with no mint; the contract opened the public
  *   round with no early round, `earlyRoundEndsAt = openedAt`);
+ * - Decision 0137 (S175 Factory): `PublicRoundOpenedAfterTimeout` seen →
+ *   `public` as well (anyone opened after the snapshot timeout; holders
+ *   lose the early round, the contract sets `earlyRoundEndsAt = openedAt`);
  * - sale over, no `SnapshotPublished`, and the publisher recorded that the
  *   sale ended with no holder (Decision 0120: `ProjectNFT.totalMinted()` = 0
  *   at the confirmed cutoff) → `closed_no_holders` (terminal). Since
@@ -47,6 +50,11 @@ export interface Launch2StageInput {
    * `PublicRoundOpenedWithoutHolders` (v3); absent / null = not opened.
    */
   readonly openedWithoutHoldersAt?: bigint | null;
+  /**
+   * Decision 0137: Unix seconds of the indexed
+   * `PublicRoundOpenedAfterTimeout`; absent / null = not opened that way.
+   */
+  readonly openedAfterTimeoutAt?: bigint | null;
 }
 
 export interface Launch2StageProjection {
@@ -69,8 +77,10 @@ export function deriveLaunch2Stage(
     return { stage: "graduated", nextChangeAt: null };
   }
   if (
-    input.openedWithoutHoldersAt !== undefined &&
-    input.openedWithoutHoldersAt !== null &&
+    ((input.openedWithoutHoldersAt !== undefined &&
+      input.openedWithoutHoldersAt !== null) ||
+      (input.openedAfterTimeoutAt !== undefined &&
+        input.openedAfterTimeoutAt !== null)) &&
     input.snapshotPublishedAt === null
   ) {
     // A chain fact: block.timestamp ≥ saleEnd when it was emitted.

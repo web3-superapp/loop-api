@@ -31,6 +31,7 @@ import {
   officialPoolRouterAbi,
   projectNFTAbi,
 } from "../../integrations/launch/hooks-launch-protocol-abi.generated.js";
+import { launch2ExitNftEscrowAbi } from "../../integrations/launch/hooks-launch-protocol-abi-escrow-exit.js";
 import {
   assetIdForAddress,
   bscChainId,
@@ -46,6 +47,13 @@ import {
   dailyCanaryAdmission,
   enforceCanaryCeiling,
 } from "../wallet-intents/intent-preparation.js";
+import {
+  createLaunch2ExitProbe,
+  deriveLaunch2ExitPaths,
+  launch2ExitReasonCodes,
+  parseLaunch2TokenId,
+  type Launch2ExitTiming,
+} from "./launch2-escrow-exit.js";
 import {
   formatLaunch2Amount,
   isLaunch2Stage,
@@ -286,6 +294,20 @@ export interface Launch2Service {
     readonly body: unknown;
     readonly idempotencyKey: string;
   }): Promise<Resource>;
+  /** Decision 0137: `NftEscrow.claimRefund(tokenId)` for the device exit. */
+  prepareNftRefund(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource>;
+  /** Decision 0137: the device reports the refund transaction hash. */
+  reportNftRefund(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource>;
 }
 
 const maximumDeadlineSeconds = 600;
@@ -300,7 +322,10 @@ const fallbackGas: Readonly<Record<Launch2IntentKind, bigint>> = Object.freeze({
   pool_buy: 300_000n,
   pool_sell: 300_000n,
   dynamic_claim: 200_000n,
+  nft_refund: 150_000n,
 });
+/** Decision 0137: at most this many held NFTs are quoted per detail answer. */
+const maximumViewerRefundTokens = 50;
 /** The last buy builds the pool atomically; its gas is far above a plain buy. */
 const graduatingBuyGas = 3_000_000n;
 
@@ -368,6 +393,10 @@ function stageOf(record: Launch2InstanceRecord, nowSeconds: bigint) {
       record.openedWithoutHolders === null
         ? null
         : seconds(record.openedWithoutHolders.openedAt),
+    ...(record.openedAfterTimeout === undefined ||
+    record.openedAfterTimeout === null
+      ? {}
+      : { openedAfterTimeoutAt: seconds(record.openedAfterTimeout.openedAt) }),
   });
 }
 
@@ -903,6 +932,8 @@ export function createUnavailableLaunch2Service(
     listDynamicRewards: fail,
     prepareDynamicClaim: fail,
     reportDynamicClaim: fail,
+    prepareNftRefund: fail,
+    reportNftRefund: fail,
   });
 }
 
@@ -2767,7 +2798,389 @@ export function createLaunch2Service(
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Decision 0137: escrow exit paths (S175 Factories)
+  // -------------------------------------------------------------------------
+
+  const exitProbe = createLaunch2ExitProbe(
+    deps.chain?.readExitTiming === undefined
+      ? undefined
+      : (factory) =>
+          (
+            deps.chain?.readExitTiming as NonNullable<
+              Launch2Chain["readExitTiming"]
+            >
+          )(factory),
+  );
+
+  /** The Factory's exit timings; null = unsupported. Throws on RPC failure. */
+  async function exitTimingOf(
+    record: Launch2InstanceRecord,
+  ): Promise<Launch2ExitTiming | null> {
+    if (deps.chain === null || deps.chain.readExitTiming === undefined) {
+      return null;
+    }
+    return exitProbe.timingOf(record.factoryAddress);
+  }
+
+  /** Route gate: 503 LAUNCH2_EXIT_PATHS_UNSUPPORTED (fail closed). */
+  async function requireExitPaths(
+    record: Launch2InstanceRecord,
+  ): Promise<Launch2ExitTiming> {
+    const timing = await chainRead(() => exitTimingOf(record));
+    if (timing === null || deps.chain?.readNftRefunds === undefined) {
+      return unavailableWith(launch2ExitReasonCodes.unsupported);
+    }
+    return timing;
+  }
+
+  function exitPathsOf(
+    record: Launch2InstanceRecord,
+    timing: Launch2ExitTiming,
+    at: bigint,
+  ): Resource {
+    const openedAt =
+      record.snapshot !== null
+        ? seconds(record.snapshot.publishedAt)
+        : record.openedWithoutHolders !== null
+          ? seconds(record.openedWithoutHolders.openedAt)
+          : null;
+    const timeout = record.openedAfterTimeout ?? null;
+    const paths = deriveLaunch2ExitPaths({
+      nowSeconds: at,
+      nftSaleEnd: seconds(record.nftSaleEnd),
+      timing,
+      openedAt,
+      openedAfterTimeoutAt: timeout === null ? null : seconds(timeout.openedAt),
+      graduated: record.graduation !== null,
+      totalMinted: BigInt(record.nftMintedCount),
+      refundedCount: BigInt(record.nftRefundedCount ?? "0"),
+    });
+    return Object.freeze({
+      snapshotTimeoutAt: isoOf(paths.snapshotTimeoutAt),
+      timeoutOpenState: paths.timeoutOpenState,
+      refundOpensAt: isoOf(paths.refundOpensAt),
+      refundState: paths.refundState,
+      refundedCount: Number(paths.refundedCount),
+      totalMinted: Number(paths.totalMinted),
+    });
+  }
+
+  /**
+   * Decision 0137: `exitPaths` and `viewerNftRefunds` of the detail. Both
+   * null when the Factory has no exit paths or its capability cannot be
+   * read; `viewerNftRefunds` is [] without a wallet or a held NFT, null when
+   * the chain quote fails (never a guessed amount).
+   */
+  async function exitViewOf(
+    record: Launch2InstanceRecord,
+    wallet: AccountWalletRecord | null,
+    at: bigint,
+  ): Promise<{
+    readonly exitPaths: Resource | null;
+    readonly viewerNftRefunds: readonly Resource[] | null;
+  }> {
+    let timing: Launch2ExitTiming | null;
+    try {
+      timing = await exitTimingOf(record);
+    } catch {
+      timing = null;
+    }
+    if (timing === null) return { exitPaths: null, viewerNftRefunds: null };
+    const exitPaths = exitPathsOf(record, timing, at);
+    if (wallet === null) return { exitPaths, viewerNftRefunds: [] };
+    const store = deps.repository;
+    const reader = deps.chain;
+    if (
+      store === null ||
+      store.listHeldNftTokens === undefined ||
+      reader === null ||
+      reader.readNftRefunds === undefined
+    ) {
+      return { exitPaths, viewerNftRefunds: null };
+    }
+    const address = wallet.address.toLowerCase();
+    let tokenIds: readonly string[];
+    try {
+      tokenIds = await store.listHeldNftTokens({
+        instanceId: record.instanceId,
+        holderAddress: address,
+        limit: maximumViewerRefundTokens,
+      });
+    } catch {
+      return { exitPaths, viewerNftRefunds: null };
+    }
+    if (tokenIds.length === 0) return { exitPaths, viewerNftRefunds: [] };
+    try {
+      const state = await reader.readNftRefunds({
+        escrow: record.addresses.escrow,
+        nft: record.addresses.nft,
+        curve: record.addresses.curve,
+        tokenIds: tokenIds.map((tokenId) => BigInt(tokenId)),
+      });
+      return {
+        exitPaths,
+        viewerNftRefunds: state.tokens
+          // The chain is the judge of ownership (the index may lag a transfer).
+          .filter((token) => token.owner === address)
+          .map((token) =>
+            Object.freeze({
+              tokenId: token.tokenId,
+              refunded: token.refunded,
+              claimable: token.claimable,
+              amount: formatLaunch2Amount(token.amount),
+              opensAt: isoOf(token.opensAt),
+            }),
+          ),
+      };
+    } catch {
+      return { exitPaths, viewerNftRefunds: null };
+    }
+  }
+
+  async function prepareNftRefund(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource> {
+    const writes = writesOrUnavailable();
+    const body = input.body;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body) ||
+      Object.keys(body).some((key) => key !== "walletId" && key !== "tokenId")
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const value = body as Record<string, unknown>;
+    if (
+      typeof value["walletId"] !== "string" ||
+      !isOpaqueId(value["walletId"])
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const walletId = value["walletId"];
+    const tokenId = parseLaunch2TokenId(value["tokenId"]);
+    if (tokenId === null) throw V2ApiError.invalidRequest();
+    const record = await visibleInstance(input.instanceId);
+    await requireNoTradingHold();
+    await requireExitPaths(record);
+    const reader = chain();
+    const wallet = await signingWallet(input.principal, walletId);
+    const requestSha256 = requestDigest([
+      record.instanceId,
+      wallet.walletId,
+      "nft_refund",
+      tokenId.toString(10),
+    ]);
+    const intent = await createIntentRecord(
+      input.principal,
+      input.idempotencyKey,
+      requestSha256,
+      writes,
+      async () => {
+        const address = wallet.address.toLowerCase();
+        if (record.holdReason !== null) {
+          refuse("DATA_STALE", launch2ReasonCodes.instancePaused, {
+            holdReason: record.holdReason,
+          });
+        }
+        const state = await chainRead(() =>
+          (
+            reader.readNftRefunds as NonNullable<Launch2Chain["readNftRefunds"]>
+          )({
+            escrow: record.addresses.escrow,
+            nft: record.addresses.nft,
+            curve: record.addresses.curve,
+            tokenIds: [tokenId],
+          }),
+        );
+        const token = state.tokens[0];
+        if (token === undefined) {
+          return unavailableWith(launch2ReasonCodes.chainReadFailed);
+        }
+        // The contract's own order: owner, window, graduation, once, amount.
+        if (token.owner !== address) {
+          refuse("POLICY_BLOCKED", launch2ExitReasonCodes.refundNotOwner);
+        }
+        if (state.blockTimestamp < state.refundOpensAt) {
+          refuse("DATA_STALE", launch2ExitReasonCodes.refundNotOpen, {
+            opensAt: isoOf(state.refundOpensAt),
+          });
+        }
+        if (state.graduated) {
+          refuse("DATA_STALE", launch2ExitReasonCodes.refundGraduated);
+        }
+        if (token.refunded) {
+          refuse("DATA_STALE", launch2ExitReasonCodes.refundAlreadyClaimed);
+        }
+        if (token.amount === 0n) {
+          refuse("INSUFFICIENT_BALANCE", launch2ExitReasonCodes.refundNothing);
+        }
+        return sealIntent({
+          principal: input.principal,
+          record,
+          wallet,
+          writes,
+          kind: "nft_refund",
+          state: {
+            usd1: state.usd1,
+            blockNumber: state.blockNumber,
+            blockHash: state.blockHash,
+          },
+          contract: record.addresses.escrow,
+          data: encodeFunctionData({
+            abi: launch2ExitNftEscrowAbi,
+            functionName: "claimRefund",
+            args: [tokenId],
+          }),
+          approval: null,
+          amountIn: 0n,
+          expectedOut: token.amount,
+          minOut: 0n,
+          tax: 0n,
+          refund: 0n,
+          valueUsd: token.amount,
+          deadline: nowSeconds() + tradeDeadlineSeconds,
+          gasHint: fallbackGas.nft_refund,
+          policyExtra: {
+            nftRefund: {
+              tokenId: tokenId.toString(10),
+              escrow: record.addresses.escrow,
+              amountUsd1: formatLaunch2Amount(token.amount),
+              opensAt: isoOf(state.refundOpensAt),
+            },
+          },
+        });
+      },
+    );
+    return Object.freeze({
+      launch2Intent: intent.resource["launch2Intent"],
+      refund: intent.record.policy["nftRefund"],
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  async function reportNftRefund(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly body: unknown;
+    readonly idempotencyKey: string;
+  }): Promise<Resource> {
+    const body = input.body;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body) ||
+      Object.keys(body).some(
+        (key) =>
+          key !== "intentId" &&
+          key !== "transactionHash" &&
+          key !== "walletId" &&
+          key !== "tokenId",
+      )
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const value = body as Record<string, unknown>;
+    const intentId = value["intentId"];
+    const transactionHash = value["transactionHash"];
+    const echoedWalletId = value["walletId"];
+    const echoedTokenId = value["tokenId"];
+    if (
+      (echoedWalletId !== undefined &&
+        (typeof echoedWalletId !== "string" || !isOpaqueId(echoedWalletId))) ||
+      (echoedTokenId !== undefined &&
+        parseLaunch2TokenId(echoedTokenId) === null)
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    if (
+      typeof intentId !== "string" ||
+      !isOpaqueId(intentId) ||
+      typeof transactionHash !== "string" ||
+      !/^0x[0-9a-fA-F]{64}$/u.test(transactionHash)
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    const record = await visibleInstance(input.instanceId);
+    const store = repository();
+    if (
+      store.getNftRefundIntent === undefined ||
+      store.recordNftRefundReport === undefined ||
+      store.listNftRefunds === undefined
+    ) {
+      return unavailableWith(launch2ReasonCodes.repositoryUnavailable);
+    }
+    const intent = await store
+      .getNftRefundIntent({ intentId, ownerUserId: input.principal.userId })
+      .catch(translate);
+    const refund = intent?.policy["nftRefund"] as
+      { readonly tokenId?: unknown } | undefined;
+    if (
+      intent === null ||
+      intent.instanceId !== record.instanceId ||
+      typeof refund?.tokenId !== "string" ||
+      (echoedWalletId !== undefined && echoedWalletId !== intent.walletId) ||
+      (echoedTokenId !== undefined && echoedTokenId !== refund.tokenId)
+    ) {
+      throw V2ApiError.fromCode("NOT_FOUND", {
+        reasonCode: launch2ExitReasonCodes.refundIntentNotFound,
+      });
+    }
+    const recorded = await store
+      .recordNftRefundReport({
+        intentId,
+        ownerUserId: input.principal.userId,
+        instanceId: record.instanceId,
+        walletId: intent.walletId,
+        walletAddress: intent.walletAddress,
+        tokenId: refund.tokenId,
+        transactionHash: transactionHash.toLowerCase(),
+      })
+      .catch(translate);
+    if (recorded.outcome === "conflict") {
+      throw V2ApiError.fromCode("RESOURCE_CONFLICT", {
+        reasonCode: launch2ExitReasonCodes.refundTransactionConflict,
+      });
+    }
+    const indexed = (
+      await store
+        .listNftRefunds({
+          instanceId: record.instanceId,
+          tokenIds: [refund.tokenId],
+        })
+        .catch(translate)
+    ).find(
+      (row) =>
+        row.transactionHash === recorded.report.transactionHash &&
+        row.ownerAddress === intent.walletAddress,
+    );
+    return Object.freeze({
+      nftRefundReport: Object.freeze({
+        intentId,
+        instanceId: record.instanceId,
+        walletId: intent.walletId,
+        tokenId: refund.tokenId,
+        transactionHash: recorded.report.transactionHash,
+        status: indexed === undefined ? "submitted" : "confirmed",
+        amountUsd1:
+          indexed === undefined
+            ? null
+            : formatLaunch2Amount(BigInt(indexed.amountUsd1)),
+        refundedAt: indexed?.refundedAt ?? null,
+        blockNumber: indexed?.blockNumber ?? null,
+        reportedAt: recorded.report.reportedAt,
+      }),
+      contractVersion: v2ContractVersion,
+    });
+  }
+
   return Object.freeze<Launch2Service>({
+    prepareNftRefund,
+    reportNftRefund,
     async poolQuote(input) {
       const record = await visibleInstance(input.instanceId);
       await requireNoTradingHold();
@@ -3097,6 +3510,7 @@ export function createLaunch2Service(
           : walletBalancesOf(record, wallet.address),
         tradingHoldForView(),
       ]);
+      const exitView = await exitViewOf(record, wallet, at);
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
       const snapshot = record.snapshot;
@@ -3133,8 +3547,11 @@ export function createLaunch2Service(
             earlyRoundEndsAt:
               snapshot !== null
                 ? isoOf(launch2EarlyRoundEnd(seconds(snapshot.publishedAt)))
-                : // Decision 0122: no early round after a zero-holder opening.
-                  (record.openedWithoutHolders?.openedAt ?? null),
+                : // Decision 0122: no early round after a zero-holder opening
+                  // (Decision 0137: nor after a snapshot-timeout opening).
+                  (record.openedWithoutHolders?.openedAt ??
+                  record.openedAfterTimeout?.openedAt ??
+                  null),
             memberCount: snapshot?.memberCount ?? null,
             signers: snapshot?.signers ?? null,
             publication:
@@ -3231,6 +3648,8 @@ export function createLaunch2Service(
                   ...poolTradeStatsOf(poolStats[0]),
                 }),
           tradingHold,
+          exitPaths: exitView.exitPaths,
+          viewerNftRefunds: exitView.viewerNftRefunds,
           projectedAt: record.projectedAt,
         }),
         contractVersion: v2ContractVersion,

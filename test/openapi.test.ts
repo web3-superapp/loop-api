@@ -140,6 +140,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/launch2/instances/{instanceId}/dynamic-pool/claim/report",
       "/v2/launch2/instances/{instanceId}/dynamic-pool/rewards",
       "/v2/launch2/instances/{instanceId}/nft/prepare",
+      "/v2/launch2/instances/{instanceId}/nft/refund/prepare",
+      "/v2/launch2/instances/{instanceId}/nft/refund/report",
       "/v2/launch2/instances/{instanceId}/pool/quote",
       "/v2/launch2/instances/{instanceId}/pool/trade/prepare",
       "/v2/launch2/instances/{instanceId}/pool/trades",
@@ -237,7 +239,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(189);
+    expect(operationIds).toHaveLength(191);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

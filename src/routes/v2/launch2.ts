@@ -22,6 +22,10 @@ import {
   launch2DynamicClaimPrepareRequestSchema,
   launch2DynamicClaimReportRequestSchema,
   launch2DynamicClaimReportResourceSchema,
+  launch2NftRefundIntentResourceSchema,
+  launch2NftRefundPrepareRequestSchema,
+  launch2NftRefundReportRequestSchema,
+  launch2NftRefundReportResourceSchema,
   launch2DynamicCommandErrors,
   launch2DynamicPoolQuerySchema,
   launch2DynamicPoolResourceSchema,
@@ -116,7 +120,7 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "getV2Launch2Instance",
         summary: "Get one MEME v2 launch instance",
-        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one; Decision 0126: graduated instances add the wallet's memeBalance / usd1Balance at one block with ≤ 15 s cache and balanceStatus, plus poolTradeCount / lastPoolTradeAt of its own attributed pool trades). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Decision 0136: tradingHold = {kind: usd1_paused | address_frozen, since} while the chain guard holds the launch chain (chain-wide; usd1_paused wins), else null (also null when CHAIN_GUARD_ENABLED is off or the hold cannot be read); the write routes refuse meanwhile. Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
+        description: `Stage and nextChangeAt, the fixed template (read-only), every module address, NFT sale progress, the snapshot (root, cutoff, verification: the lane rebuilt the holder list from the NFT transfers and the root/cutoff reproduce), curve readings, graduation (official pool id, hook, fee), the buyback ledger summary, the 20 latest curve trades, and the viewer block (walletId query or the active wallet; null without one; Decision 0126: graduated instances add the wallet's memeBalance / usd1Balance at one block with ≤ 15 s cache and balanceStatus, plus poolTradeCount / lastPoolTradeAt of its own attributed pool trades). Decision 0122: a sale that ended with no NFT minted on a v3 Factory opens straight into public (snapshot.status opened_without_holders, snapshot.openedWithoutHolders); closed_no_holders is deprecated (pre-S144 Factories only). Decision 0136: tradingHold = {kind: usd1_paused | address_frozen, since} while the chain guard holds the launch chain (chain-wide; usd1_paused wins), else null (also null when CHAIN_GUARD_ENABLED is off or the hold cannot be read); the write routes refuse meanwhile. Decision 0137 (loop-contracts S175 Factories): exitPaths = {snapshotTimeoutAt, timeoutOpenState, refundOpensAt, refundState, refundedCount, totalMinted} and viewerNftRefunds = the viewer wallet's held NFTs with refundQuote ([] without a wallet / NFT); both null when the Factory has no exit paths (every Factory deployed before S175) or that cannot be read; after a snapshot-timeout opening the stage is public and snapshot.earlyRoundEndsAt = the opening time. Not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. ${unavailableNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -211,6 +215,76 @@ export function registerV2Launch2Routes(
       });
       reply.header("cache-control", "no-store");
       return reply.code(201).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch2/instances/:instanceId/nft/refund/prepare",
+    {
+      schema: {
+        operationId: "prepareV2Launch2NftRefund",
+        summary: "Prepare the pre-graduation refund of one project NFT",
+        description: `Decision 0137 (loop-contracts S175 Factories only). Pre-checks at one block what NftEscrow.claimRefund(tokenId) enforces and returns the unsigned claimRefund(tokenId) transaction for the device signing exit (no approve; the escrow pays the current owner refundQuote's amount, normally 100 USD1, once per NFT, before graduation; the NFT is neither burned nor locked). 503 CAPABILITY_UNAVAILABLE / LAUNCH2_EXIT_PATHS_UNSUPPORTED when the instance's Factory has no exit paths (every Factory deployed before S175); 403 POLICY_BLOCKED / LAUNCH2_REFUND_NOT_OWNER (the wallet is not ownerOf(tokenId), or no such token); 409 DATA_STALE / LAUNCH2_REFUND_NOT_OPEN (detailsSafe.opensAt) | LAUNCH2_REFUND_GRADUATED | LAUNCH2_REFUND_ALREADY_CLAIMED | LAUNCH2_INSTANCE_PAUSED; 409 INSUFFICIENT_BALANCE / LAUNCH2_REFUND_NOTHING_TO_REFUND (escrow balance gone) | LAUNCH2_GAS_INSUFFICIENT; 403 POLICY_BLOCKED (Decision 0065 canary, Decision 0117 counterparties); 503 LAUNCH2_WRITES_DISABLED while BSC_WRITES_ENABLED is off. Idempotency-Key replays the same Intent. ${unavailableNote} ${holdNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launch2NftRefundPrepareRequestSchema,
+        response: {
+          201: launch2NftRefundIntentResourceSchema,
+          ...launch2CommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const resource = await service.prepareNftRefund({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(201).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/launch2/instances/:instanceId/nft/refund/report",
+    {
+      schema: {
+        operationId: "reportV2Launch2NftRefund",
+        summary: "Report the hash of a sent NFT refund transaction",
+        description: `Decision 0137. Records the device's transaction hash for one of the caller's nft_refund intents of this instance (once; re-reporting the same hash is idempotent, another hash is 409 RESOURCE_CONFLICT / LAUNCH2_REFUND_TRANSACTION_CONFLICT; an unknown / foreign intent is 404 NOT_FOUND / LAUNCH2_REFUND_INTENT_NOT_FOUND). status confirmed once the launch2_event lane indexed that transaction's RefundClaimed for (token, wallet) — amountUsd1, refundedAt, blockNumber — else submitted (report again; the indexed log stays the truth, the report never moves money). Not refused by the chain guard hold (a sent transaction must reconcile). ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: emptyQueryStringSchema,
+        body: launch2NftRefundReportRequestSchema,
+        response: {
+          200: launch2NftRefundReportResourceSchema,
+          ...launch2DynamicCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const resource = await service.reportNftRefund({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        body: request.body,
+        idempotencyKey: idempotencyKey(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
     },
   );
 

@@ -1228,6 +1228,7 @@ const reconciliationWorkerEnvironmentSchema = z
     ),
     HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI: positiveIntegerString(1, 1_000),
     LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: booleanString,
+    LAUNCH2_TIMEOUT_OPEN_ENABLED: booleanString,
     LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS: optionalOpaqueSecret(1, 1_024),
     LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY: optionalOpaqueSecret(64, 66),
     LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS: positiveIntegerString(
@@ -2914,6 +2915,11 @@ export interface Launch2SnapshotPublisherConfig {
   readonly pollIntervalMs: number;
   readonly confirmations: number;
   readonly maxGasPriceGwei: number;
+  /**
+   * Decision 0137: `LAUNCH2_TIMEOUT_OPEN_ENABLED=true` — the publisher may
+   * send `openPublicAfterTimeout()` (S175 Factories). Present only when true.
+   */
+  readonly timeoutOpenEnabled?: true;
 }
 
 function normalizedKey(key: string): `0x${string}` {
@@ -2939,6 +2945,7 @@ export function parseLaunch2SnapshotPublisher(data: {
   readonly LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS: number;
   readonly LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS: number;
   readonly LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI: number;
+  readonly LAUNCH2_TIMEOUT_OPEN_ENABLED?: boolean | undefined;
 }): Launch2SnapshotPublisherConfig | null {
   if (!data.LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED) {
     return null;
@@ -2982,6 +2989,9 @@ export function parseLaunch2SnapshotPublisher(data: {
     pollIntervalMs: data.LAUNCH2_SNAPSHOT_PUBLISHER_POLL_INTERVAL_MS,
     confirmations: data.LAUNCH2_SNAPSHOT_PUBLISHER_CONFIRMATIONS,
     maxGasPriceGwei: data.LAUNCH2_SNAPSHOT_PUBLISHER_MAX_GAS_PRICE_GWEI,
+    ...(data.LAUNCH2_TIMEOUT_OPEN_ENABLED === true
+      ? { timeoutOpenEnabled: true as const }
+      : {}),
   });
 }
 
@@ -4179,6 +4189,9 @@ export function loadReconciliationWorkerConfig(
       environment["HOOKS_LAUNCH_EXECUTOR_MAX_GAS_PRICE_GWEI"] ?? "20",
     LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED:
       environment["LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED"] ?? "false",
+    // Decision 0137: the publisher's snapshot-timeout fallback (S175).
+    LAUNCH2_TIMEOUT_OPEN_ENABLED:
+      environment["LAUNCH2_TIMEOUT_OPEN_ENABLED"] ?? "false",
     LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS:
       environment["LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS"],
     LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY:

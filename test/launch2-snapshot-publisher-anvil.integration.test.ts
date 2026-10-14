@@ -49,6 +49,10 @@ import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-clie
 import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks-launch-executor-chain.js";
 import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import { snapshotRegistryAbi } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
+import {
+  launch2ExitNftEscrowAbi,
+  launch2ExitSnapshotRegistryAbi,
+} from "../src/integrations/launch/hooks-launch-protocol-abi-escrow-exit.js";
 import { createLaunch2Chain } from "../src/integrations/launch2/launch2-chain.js";
 import {
   createLaunch2PublisherChain,
@@ -1073,6 +1077,278 @@ describe.skipIf(skipReason !== null)(
         txHash: null,
         cutoffBlock: rows[0]!.cutoff_block,
         memberCount: 1,
+      });
+    }, 900_000);
+
+    /**
+     * Decision 0137 (loop-contracts S175 Factories only; skipped against a
+     * Factory without `snapshotTimeout()`): the normal publication is
+     * refused (unregistered signer) → past `snapshotTimeoutAt()` the
+     * publisher sends `openPublicAfterTimeout()` → the lane indexes the
+     * opening (stage public, no early round) → after `refundOpensAt()` the
+     * holder's `claimRefund(tokenId)` intent is prepared, signed, sent and
+     * reported → the lane indexes `RefundClaimed` and the report confirms
+     * it; the read model reconciles with the escrow.
+     */
+    it("timeout opening → refund → reconciliation (Decision 0137)", async (context) => {
+      const probeChain = createLaunch2Chain({ rpcUrls: [chain.rpcUrl] });
+      const timing = await probeChain.readExitTiming!(deployed.factory);
+      if (timing === null) {
+        process.stderr.write(
+          "[skip] Decision 0137 anvil case: the Factory has no snapshotTimeout() (loop-contracts before S175; set LOOP_PROTOCOL_DIR to the S175 protocol)\n",
+        );
+        context.skip();
+        return;
+      }
+      const launch = await activatedLaunch("EXIT");
+      const repository = createPostgresLaunch2Repository(pool);
+      const lane = laneFor(repository);
+      const service = createLaunch2Service({
+        repository,
+        chain: createLaunch2Chain({ rpcUrls: [chain.rpcUrl] }),
+        readClient: anvilCallClient(chain.rpcUrl),
+        wallets,
+        writes: {
+          configVersion: "bscWriteCanaryV1",
+          canaryAssetIds: [`eip155:97:${deployed.usd1}`],
+          canaryMaxUsd: "100000",
+          canaryDailyMaxUsd: null,
+          canaryCounterpartyAddresses: [],
+          swapFeeBps: null,
+        },
+        cursorCodec: createV2CursorCodec({
+          secret: new TextEncoder().encode("0123456789abcdef0123456789abcdef"),
+        }),
+        chainId: "eip155:97",
+        unavailableReason: null,
+        quoteTtlSeconds: 60,
+        defaultSlippageBps: 100,
+        now: () => new Date(Number(chainNow) * 1000),
+      });
+      await refreshNow();
+      await lane.runOnce();
+      const instanceId = await instanceOf(launch.projectId);
+      const record = (await repository.getInstance(instanceId))!;
+      const holderKey = anvilPrivateKey(14);
+      const holderUser = await user(holderKey);
+      const holderWallet = walletIdOf(holderUser);
+      const exitPublisher = createLaunch2SnapshotPublisher({
+        repository: createPostgresLaunch2PublicationRepository(pool),
+        launch2: repository,
+        chain: createLaunch2PublisherChain({
+          privateKey: deployed.executorKey,
+          rpcUrls: [chain.rpcUrl],
+        }),
+        // One unregistered key: the normal publication is refused.
+        signers: createLaunch2SnapshotSigners({
+          privateKeys: [anvilPrivateKey(9), generatePrivateKey()],
+          chainId: 97,
+        }),
+        policy: { ...policy, timeoutOpenEnabled: true },
+      });
+      const detail = async () =>
+        (
+          (await service.getInstance({
+            principal: principal(holderUser),
+            instanceId,
+            walletId: holderWallet,
+          })) as { instance: Record<string, unknown> }
+        ).instance;
+
+      await warpTo(launch.saleStart + 10n);
+      await mintNft(holderKey, record.addresses.nft);
+      const saleEnd = await registrySaleEnd(record.addresses.snapshots);
+      await warpTo(saleEnd);
+      await chain.mine(3);
+      await lane.runOnce();
+      await exitPublisher.runOnce();
+      expect((await exitPublisher.runOnce()).waiting[instanceId]).toBe(
+        "LAUNCH2_SNAPSHOT_PUBLICATION_BLOCKED",
+      );
+      expect(await detail()).toMatchObject({
+        stage: "snapshot_pending",
+        exitPaths: {
+          snapshotTimeoutAt: new Date(
+            Number(saleEnd + timing.snapshotTimeout) * 1000,
+          ).toISOString(),
+          timeoutOpenState: "waiting",
+          refundState: "waiting",
+          refundedCount: 0,
+          totalMinted: 1,
+        },
+        viewerNftRefunds: [
+          { tokenId: "1", refunded: false, claimable: false, amount: "100" },
+        ],
+      });
+
+      // Past the timeout: the fallback opens the public round.
+      const timeoutAt = await publicClient().readContract({
+        address: record.addresses.snapshots as Address,
+        abi: launch2ExitSnapshotRegistryAbi,
+        functionName: "snapshotTimeoutAt",
+      });
+      expect(timeoutAt).toBe(saleEnd + timing.snapshotTimeout);
+      await warpTo(timeoutAt);
+      const nonceBefore = await submitterNonce();
+      expect((await exitPublisher.runOnce()).waiting[instanceId]).toBe(
+        "LAUNCH2_TIMEOUT_OPEN_SENT",
+      );
+      const opening = await pool.query<{ tx_hash: string; action: string }>(
+        `select tx_hash, action from public.launch2_snapshot_publications
+         where instance_id = $1 and action = 'open_after_timeout'`,
+        [instanceId],
+      );
+      expect(opening.rows).toHaveLength(1);
+      await minedReceipt(opening.rows[0]!.tx_hash);
+      expect(await submitterNonce()).toBe(nonceBefore + 1);
+      await chain.mine(3);
+      await exitPublisher.runOnce();
+      await lane.runOnce();
+      const opened = (await repository.getInstance(instanceId))!;
+      expect(opened.openedAfterTimeout).toMatchObject({ totalMinted: "1" });
+      expect(opened.stage).toBe("public");
+      const afterOpen = await detail();
+      expect(afterOpen).toMatchObject({
+        stage: "public",
+        exitPaths: {
+          timeoutOpenState: "opened_by_timeout",
+          refundState: "waiting",
+        },
+      });
+      expect(
+        (afterOpen["snapshot"] as Record<string, unknown>)["earlyRoundEndsAt"],
+      ).toBe(opened.openedAfterTimeout?.openedAt);
+      expect((await exitPublisher.runOnce()).waiting).toEqual({});
+
+      // Refund window: prepare → device sends → report → lane → confirmed.
+      const opensAt = await publicClient().readContract({
+        address: record.addresses.escrow as Address,
+        abi: launch2ExitNftEscrowAbi,
+        functionName: "refundOpensAt",
+      });
+      expect(BigInt(opensAt)).toBe(
+        BigInt(
+          Math.floor(Date.parse(opened.openedAfterTimeout!.openedAt) / 1000),
+        ) + timing.refundDelay,
+      );
+      await expect(
+        service.prepareNftRefund({
+          principal: principal(holderUser),
+          instanceId,
+          body: { walletId: holderWallet, tokenId: "1" },
+          idempotencyKey: randomUUID(),
+        }),
+      ).rejects.toMatchObject({
+        code: "DATA_STALE",
+        detailsSafe: { reasonCode: "LAUNCH2_REFUND_NOT_OPEN" },
+      });
+      await warpTo(BigInt(opensAt));
+      const prepared = (await service.prepareNftRefund({
+        principal: principal(holderUser),
+        instanceId,
+        body: { walletId: holderWallet, tokenId: "1" },
+        idempotencyKey: randomUUID(),
+      })) as {
+        launch2Intent: {
+          intentId: string;
+          kind: string;
+          contractAddress: string;
+          approval: unknown;
+          calldata: { to: string; data: Hex };
+          simulation: { status: string };
+        };
+        refund: Record<string, unknown>;
+      };
+      expect(prepared.launch2Intent).toMatchObject({
+        kind: "nft_refund",
+        contractAddress: record.addresses.escrow,
+        approval: null,
+        simulation: { status: "passed" },
+      });
+      expect(prepared.refund).toMatchObject({
+        tokenId: "1",
+        amountUsd1: "100",
+      });
+      const holder = privateKeyToAccount(holderKey).address;
+      const before = await publicClient().readContract({
+        address: deployed.usd1,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [holder],
+      });
+      const wallet = createWalletClient({
+        account: privateKeyToAccount(holderKey),
+        chain: bscTestnet,
+        transport: http(chain.rpcUrl),
+      });
+      const refundTx = await wallet.sendTransaction({
+        to: prepared.launch2Intent.calldata.to as Address,
+        data: prepared.launch2Intent.calldata.data,
+      });
+      await minedReceipt(refundTx);
+      const after = await publicClient().readContract({
+        address: deployed.usd1,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [holder],
+      });
+      expect(after - before).toBe(100n * wad);
+      const reportBody = {
+        intentId: prepared.launch2Intent.intentId,
+        transactionHash: refundTx,
+        walletId: holderWallet,
+        tokenId: "1",
+      };
+      const submitted = (await service.reportNftRefund({
+        principal: principal(holderUser),
+        instanceId,
+        body: reportBody,
+        idempotencyKey: randomUUID(),
+      })) as { nftRefundReport: Record<string, unknown> };
+      expect(submitted.nftRefundReport["status"]).toBe("submitted");
+      await lane.runOnce();
+      const confirmed = (await service.reportNftRefund({
+        principal: principal(holderUser),
+        instanceId,
+        body: reportBody,
+        idempotencyKey: randomUUID(),
+      })) as { nftRefundReport: Record<string, unknown> };
+      expect(confirmed.nftRefundReport).toMatchObject({
+        status: "confirmed",
+        amountUsd1: "100",
+        tokenId: "1",
+      });
+      // Reconciliation: read model = escrow.
+      const [refundedCount, refunded] = await Promise.all([
+        publicClient().readContract({
+          address: record.addresses.escrow as Address,
+          abi: launch2ExitNftEscrowAbi,
+          functionName: "refundedCount",
+        }),
+        publicClient().readContract({
+          address: record.addresses.escrow as Address,
+          abi: launch2ExitNftEscrowAbi,
+          functionName: "refunded",
+          args: [1n],
+        }),
+      ]);
+      expect(refundedCount).toBe(1n);
+      expect(refunded).toBe(true);
+      expect(await detail()).toMatchObject({
+        exitPaths: { refundState: "open", refundedCount: 1, totalMinted: 1 },
+        viewerNftRefunds: [
+          { tokenId: "1", refunded: true, claimable: false, amount: "0" },
+        ],
+      });
+      await expect(
+        service.prepareNftRefund({
+          principal: principal(holderUser),
+          instanceId,
+          body: { walletId: holderWallet, tokenId: "1" },
+          idempotencyKey: randomUUID(),
+        }),
+      ).rejects.toMatchObject({
+        detailsSafe: { reasonCode: "LAUNCH2_REFUND_ALREADY_CLAIMED" },
       });
     }, 900_000);
   },

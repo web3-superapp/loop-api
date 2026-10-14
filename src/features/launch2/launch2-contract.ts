@@ -64,6 +64,8 @@ export const launch2IntentKinds = Object.freeze([
   "pool_sell",
   /** Decision 0131: `LoopDynamicHook.claim(roundId)`. */
   "dynamic_claim",
+  /** Decision 0137: `NftEscrow.claimRefund(tokenId)` (S175 Factories). */
+  "nft_refund",
 ] as const);
 
 export type Launch2IntentKind = (typeof launch2IntentKinds)[number];

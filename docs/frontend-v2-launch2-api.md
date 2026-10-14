@@ -1150,6 +1150,28 @@ not held back, and the worker lane indexes the LoopDynamic Factory (+ `LAUNCH2_L
 `LAUNCH2_FACTORY_NOT_CONFIGURED` now means **neither** the OfficialTax nor the LoopDynamic pair
 is configured. Nothing in the wire format changes.
 
+### Escrow exit paths (Decision 0137, loop-contracts S175 Factories only)
+
+- `GET …/instances/{instanceId}` adds `instance.exitPaths` (`snapshotTimeoutAt`,
+  `timeoutOpenState` `not_applicable | waiting | available | opened_by_timeout`,
+  `refundOpensAt`, `refundState` `not_applicable | waiting | open | closed_graduated`,
+  `refundedCount`, `totalMinted`) and `instance.viewerNftRefunds`
+  (`[{tokenId, refunded, claimable, amount, opensAt}]`, `[]` without a wallet or NFT).
+  Both are `null` on every Factory deployed before S175. After a timeout opening
+  the stage is `public` (no early round) and `snapshot.earlyRoundEndsAt` is the
+  opening time.
+- `POST …/nft/refund/prepare` `{walletId, tokenId}` → `{launch2Intent, refund:
+{tokenId, escrow, amountUsd1, opensAt}}`; `launch2Intent.kind = nft_refund`,
+  `contractAddress` / `calldata.to` = `contracts.escrow` (`claimRefund(tokenId)`),
+  `approval: null`. Refusals: 503 `LAUNCH2_EXIT_PATHS_UNSUPPORTED`; 403
+  `LAUNCH2_REFUND_NOT_OWNER`; 409 `LAUNCH2_REFUND_NOT_OPEN` (`opensAt`) |
+  `LAUNCH2_REFUND_GRADUATED` | `LAUNCH2_REFUND_ALREADY_CLAIMED`; 409
+  INSUFFICIENT_BALANCE `LAUNCH2_REFUND_NOTHING_TO_REFUND`; the Decision 0136 hold.
+- `POST …/nft/refund/report` `{intentId, transactionHash, walletId?, tokenId?}` →
+  `{nftRefundReport: {intentId, …, status: submitted | confirmed, amountUsd1,
+refundedAt, blockNumber, reportedAt}}`; 404 `LAUNCH2_REFUND_INTENT_NOT_FOUND`,
+  409 RESOURCE_CONFLICT `LAUNCH2_REFUND_TRANSACTION_CONFLICT`.
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
 | HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |

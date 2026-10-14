@@ -24,6 +24,7 @@ import {
 } from "./features/launch2/launch2-meme-assets.js";
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
+import { createLaunch2ExitProbe } from "./features/launch2/launch2-escrow-exit.js";
 import { launch2HookKindOf } from "./features/launch2/launch2-dynamic.js";
 import { launch2PoolSwapFacts } from "./features/launch2/launch2-pool.js";
 import {
@@ -176,6 +177,8 @@ function aborted(signal: AbortSignal | undefined): boolean {
 function rolesOf(
   factories: readonly Launch2FactoryEntry[],
   instances: readonly Launch2LaneInstance[],
+  /** Decision 0137: instances whose Factory has the S175 exit paths. */
+  exitInstances: ReadonlySet<string> = new Set(),
 ): {
   readonly roles: Map<string, Launch2ContractRole>;
   readonly owners: Map<string, string>;
@@ -209,6 +212,11 @@ function rolesOf(
       ]);
       const hook = instance.dynamicHook ?? null;
       if (hook !== null) entries.push([hook, "dynamicHook"]);
+    }
+    // Decision 0137: `RefundClaimed` of an S175 escrow (no other Factory's
+    // escrow emits it, so its address is never added to the log filter).
+    if (exitInstances.has(instance.instanceId)) {
+      entries.push([instance.addresses.escrow, "escrow"]);
     }
     for (const [address, role] of entries) {
       roles.set(address, role);
@@ -1000,6 +1008,15 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
             : BigInt(
                 Math.floor(Date.parse(instance.openedWithoutHoldersAt) / 1000),
               ),
+        // Decision 0137: the snapshot-timeout opening (S175 Factories).
+        ...(instance.openedAfterTimeoutAt === undefined ||
+        instance.openedAfterTimeoutAt === null
+          ? {}
+          : {
+              openedAfterTimeoutAt: BigInt(
+                Math.floor(Date.parse(instance.openedAfterTimeoutAt) / 1000),
+              ),
+            }),
       });
       const nextChangeAt =
         projection.nextChangeAt === null
@@ -1017,6 +1034,35 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       }
     }
     return updates.length === 0 ? 0 : options.repository.updateStages(updates);
+  }
+
+  /**
+   * Decision 0137: instances whose Factory answers `snapshotTimeout()`
+   * (cached per Factory; an RPC failure fails the tick, never a silent
+   * "unsupported" that would skip their `RefundClaimed` logs).
+   */
+  const exitProbe = createLaunch2ExitProbe(
+    options.chain.readExitTiming === undefined
+      ? undefined
+      : (factory) =>
+          (
+            options.chain.readExitTiming as NonNullable<
+              Launch2Chain["readExitTiming"]
+            >
+          )(factory),
+  );
+  async function exitInstancesOf(
+    instances: readonly Launch2LaneInstance[],
+  ): Promise<ReadonlySet<string>> {
+    const supported = new Set<string>();
+    if (options.chain.readExitTiming === undefined) return supported;
+    for (const instance of instances) {
+      if (instance.factoryAddress === undefined) continue;
+      if ((await exitProbe.timingOf(instance.factoryAddress)) !== null) {
+        supported.add(instance.instanceId);
+      }
+    }
+    return supported;
   }
 
   async function tick(signal?: AbortSignal): Promise<Launch2LaneResult> {
@@ -1108,7 +1154,11 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
       const maximumTo = fromBlock + maxRange - 1n;
       const toBlock =
         maximumTo < head.blockNumber ? maximumTo : head.blockNumber;
-      const { roles, owners, byLaunchId } = rolesOf(factories, instances);
+      const { roles, owners, byLaunchId } = rolesOf(
+        factories,
+        instances,
+        await exitInstancesOf(instances),
+      );
       // Decision 0124: the official pools of graduated instances (Swap logs
       // by pool id); a graduation inside this very segment is read in a
       // second pass over the same range.

@@ -23,6 +23,7 @@ import {
   type CreateLaunch2IntentRecord,
   type Launch2BuybackRecord,
   type Launch2DynamicClaimReportRecord,
+  type Launch2NftRefundReportRecord,
   type Launch2DynamicRewardRecord,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
@@ -173,6 +174,11 @@ const instanceColumns = `
   graduated_at, graduation_block::text, graduation_transaction_hash,
   official_pool_id, opened_without_holders_at,
   opened_without_holders_block::text, opened_without_holders_tx,
+  opened_after_timeout_at, opened_after_timeout_block::text,
+  opened_after_timeout_tx, opened_after_timeout_total_minted::text,
+  (select count(*)::text from public.launch2_nft_refunds r
+    where r.instance_id = launch2_instances.instance_id and not r.removed)
+    as nft_refunded_count,
   buyback_paused, buyback_count::text, buyback_usd1::text,
   buyback_meme::text, last_buyback_at, projected_at, registered_at,
   pool_trade_count::text, pool_buy_count::text, pool_sell_count::text,
@@ -395,6 +401,17 @@ function mapInstance(row: Row): Launch2InstanceRecord {
             blockNumber: text(row, "opened_without_holders_block"),
             transactionHash: text(row, "opened_without_holders_tx"),
           }),
+    // Decision 0137: the snapshot-timeout opening (S175 Factories).
+    openedAfterTimeout:
+      nullableIso(row, "opened_after_timeout_at") === null
+        ? null
+        : Object.freeze({
+            openedAt: iso(row, "opened_after_timeout_at"),
+            blockNumber: text(row, "opened_after_timeout_block"),
+            transactionHash: text(row, "opened_after_timeout_tx"),
+            totalMinted: text(row, "opened_after_timeout_total_minted"),
+          }),
+    nftRefundedCount: nullableText(row, "nft_refunded_count") ?? "0",
     graduation:
       graduatedAt === null
         ? null
@@ -797,6 +814,29 @@ async function insertFact(
         at,
       ],
     });
+  } else if (event.eventName === "RefundClaimed") {
+    // Decision 0137: NftEscrow.RefundClaimed (S175 Factories).
+    await client.query({
+      text: `
+        insert into public.launch2_nft_refunds (
+          chain_id, transaction_hash, log_index, block_number, block_hash,
+          instance_id, escrow_address, token_id, owner_address, amount_usd1,
+          remaining_recorded_usd1, refunded_at
+        )
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, $8::numeric, $9,
+          $10::numeric, $11::numeric, $12::timestamptz)
+        ${upsertTail}
+      `,
+      values: [
+        ...base,
+        event.contractAddress,
+        a["tokenId"],
+        a["owner"],
+        a["amount"],
+        a["remainingRecorded"],
+        at,
+      ],
+    });
   } else if (event.eventName === "BuybackCompleted") {
     await client.query({
       text: `
@@ -863,6 +903,12 @@ async function reproject(
           from public.launch2_events
           where instance_id = $1 and not removed and event_name = 'Graduated'
           order by block_number, log_index limit 1) as graduated,
+        (select jsonb_build_object('payload', payload, 'block', block_number::text,
+            'tx', transaction_hash)
+          from public.launch2_events
+          where instance_id = $1 and not removed
+            and event_name = 'PublicRoundOpenedAfterTimeout'
+          order by block_number, log_index limit 1) as opened_after_timeout,
         (select event_name from public.launch2_events
           where instance_id = $1 and not removed
             and event_name in ('BuybackPausedEvent', 'BuybackResumed')
@@ -942,6 +988,20 @@ async function reproject(
     tx: string;
     at: string;
   } | null;
+  // Decision 0137: the snapshot-timeout opening (exclusive with a snapshot
+  // and a zero-holder opening on chain: `rootPublishedAt != 0`).
+  const timeoutFact = row["opened_after_timeout"] as {
+    payload: Record<string, string>;
+    block: string;
+    tx: string;
+  } | null;
+  const openedAfterTimeout =
+    timeoutFact !== null &&
+    snapshot === null &&
+    opened === null &&
+    row["factory_generation"] !== "v2"
+      ? timeoutFact
+      : null;
   const buybacks = row["buybacks"] as {
     count: string;
     usd1: string;
@@ -1043,6 +1103,10 @@ async function reproject(
         pool_user_trade_count = $41::numeric,
         pool_user_buy_volume_usd1 = $42::numeric,
         pool_user_sell_volume_usd1 = $43::numeric,
+        opened_after_timeout_at = $44::timestamptz,
+        opened_after_timeout_block = $45::numeric,
+        opened_after_timeout_tx = $46,
+        opened_after_timeout_total_minted = $47::numeric,
         projected_at = clock_timestamp()
       where instance_id = $1
     `,
@@ -1096,6 +1160,17 @@ async function reproject(
       poolCounted ? poolSwaps.userCount : "0",
       poolCounted ? poolSwaps.userBuyUsd1 : "0",
       poolCounted ? poolSwaps.userSellUsd1 : "0",
+      openedAfterTimeout === null
+        ? null
+        : secondsToTimestamp(openedAfterTimeout.payload["openedAt"] ?? "0"),
+      openedAfterTimeout === null
+        ? null
+        : (openedAfterTimeout.payload["openedBlock"] ??
+          openedAfterTimeout.block),
+      openedAfterTimeout?.tx ?? null,
+      openedAfterTimeout === null
+        ? null
+        : (openedAfterTimeout.payload["totalMinted"] ?? "0"),
     ],
   });
   await reprojectPositions(client, instanceId);
@@ -1318,6 +1393,9 @@ function mapLaneInstance(row: Row): Launch2LaneInstance {
     snapshotPublishedAt: instance.snapshot?.publishedAt ?? null,
     closedNoHolders: instance.noHoldersClosure !== null,
     openedWithoutHoldersAt: instance.openedWithoutHolders?.openedAt ?? null,
+    // Decision 0137: the exit-path capability is probed per Factory.
+    openedAfterTimeoutAt: instance.openedAfterTimeout?.openedAt ?? null,
+    factoryAddress: instance.factoryAddress,
     activatedAt: instance.activatedAt,
     stage: instance.stage,
     nextChangeAt: instance.nextChangeAt,
@@ -1640,6 +1718,8 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               "launch2_dynamic_fees",
               "launch2_dynamic_candles",
               "launch2_dynamic_claims",
+              // Decision 0137: escrow refunds.
+              "launch2_nft_refunds",
             ]) {
               const rewound = await client.query<{ instance_id: string }>({
                 text: `
@@ -2336,6 +2416,115 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             blockNumber: text(row, "block_number"),
             claimedAt: iso(row, "claimed_at"),
           });
+    },
+
+    // Decision 0137: escrow exit paths.
+    async listHeldNftTokens(input) {
+      const rows = await query<{ token_id: string }>(
+        `
+          select token_id::text from (
+            select distinct on ((e.payload ->> 'tokenId')::numeric)
+              (e.payload ->> 'tokenId')::numeric as token_id,
+              e.payload ->> 'to' as holder
+            from public.launch2_events e
+            join public.launch2_instances i on i.instance_id = e.instance_id
+            where e.instance_id = $1 and not e.removed
+              and e.event_name = 'Transfer' and e.contract_address = i.nft_address
+            order by (e.payload ->> 'tokenId')::numeric, e.block_number desc,
+              e.log_index desc
+          ) latest
+          where holder = $2
+          order by token_id
+          limit $3
+        `,
+        [input.instanceId, input.holderAddress.toLowerCase(), input.limit],
+      );
+      return rows.map((row) => row.token_id);
+    },
+
+    async listNftRefunds(input) {
+      const rows = await query<Row>(
+        `
+          select token_id::text, owner_address, amount_usd1::text,
+            remaining_recorded_usd1::text, transaction_hash,
+            block_number::text, refunded_at
+          from public.launch2_nft_refunds
+          where instance_id = $1 and not removed
+            and (cardinality($2::numeric[]) = 0 or token_id = any($2::numeric[]))
+          order by token_id
+        `,
+        [input.instanceId, [...input.tokenIds]],
+      );
+      return rows.map((row) =>
+        Object.freeze({
+          tokenId: text(row, "token_id"),
+          ownerAddress: text(row, "owner_address"),
+          amountUsd1: text(row, "amount_usd1"),
+          remainingRecordedUsd1: text(row, "remaining_recorded_usd1"),
+          transactionHash: text(row, "transaction_hash"),
+          blockNumber: text(row, "block_number"),
+          refundedAt: iso(row, "refunded_at"),
+        }),
+      );
+    },
+
+    async getNftRefundIntent(input) {
+      const rows = await query<Row>(
+        `select ${intentColumns} from public.launch2_intents
+         where intent_id = $1 and owner_user_id = $2 and kind = 'nft_refund'`,
+        [input.intentId, input.ownerUserId],
+      );
+      return rows[0] === undefined ? null : mapIntent(rows[0]);
+    },
+
+    async recordNftRefundReport(input) {
+      const mapReport = (row: Row): Launch2NftRefundReportRecord =>
+        Object.freeze({
+          intentId: text(row, "intent_id"),
+          instanceId: text(row, "instance_id"),
+          walletId: text(row, "wallet_id"),
+          walletAddress: text(row, "wallet_address"),
+          tokenId: text(row, "token_id"),
+          transactionHash: text(row, "transaction_hash"),
+          reportedAt: iso(row, "reported_at"),
+        });
+      const columns = `intent_id::text, instance_id::text, wallet_id::text,
+        wallet_address, token_id::text, transaction_hash, reported_at`;
+      const inserted = await query<Row>(
+        `insert into public.launch2_nft_refund_reports (
+           intent_id, owner_user_id, instance_id, wallet_id, wallet_address,
+           token_id, transaction_hash
+         ) values ($1, $2, $3, $4, $5, $6::numeric, $7)
+         on conflict (intent_id) do nothing
+         returning ${columns}`,
+        [
+          input.intentId,
+          input.ownerUserId,
+          input.instanceId,
+          input.walletId,
+          input.walletAddress.toLowerCase(),
+          input.tokenId,
+          input.transactionHash.toLowerCase(),
+        ],
+      );
+      if (inserted[0] !== undefined) {
+        return { outcome: "created", report: mapReport(inserted[0]) };
+      }
+      const existing = await query<Row>(
+        `select ${columns} from public.launch2_nft_refund_reports
+         where intent_id = $1`,
+        [input.intentId],
+      );
+      if (existing[0] === undefined)
+        throw new Launch2RepositoryUnavailableError();
+      const report = mapReport(existing[0]);
+      return {
+        outcome:
+          report.transactionHash === input.transactionHash.toLowerCase()
+            ? "same"
+            : "conflict",
+        report,
+      };
     },
 
     async createIntent(input) {

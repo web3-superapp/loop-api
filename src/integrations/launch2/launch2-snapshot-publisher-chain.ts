@@ -32,12 +32,18 @@ import {
   projectNFTAbi,
   snapshotRegistryAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
+import { launch2ExitSnapshotRegistryAbi } from "../launch/hooks-launch-protocol-abi-escrow-exit.js";
+import {
+  isLaunch2CapabilityRevert,
+  readLaunch2ExitTiming,
+} from "./launch2-chain.js";
 
 /**
  * Decision 0118: the snapshot publisher's BSC Testnet client and signer
  * keys. The submitter signs exactly two call shapes on an instance's
  * `SnapshotRegistry` — `publishSnapshot`, and (Decision 0122, v3 Factory)
- * the argument-free `openPublicWithoutSnapshot()` — locally (legacy, chain 97), so the
+ * the argument-free `openPublicWithoutSnapshot()` (Decision 0137: and on
+ * an S175 registry `openPublicAfterTimeout()`) — locally (legacy, chain 97), so the
  * transaction hash is persisted before the bytes are sent. Snapshot signer
  * keys only produce EIP-712 `LOOP NFT Snapshot` v1 signatures. Keys live in
  * these closures only; no result, error, or log carries a key or RPC URL.
@@ -125,6 +131,12 @@ function publishData(call: Launch2PublishCall): Hex {
     ],
   });
 }
+
+/** Decision 0137 (S175 registries): `openPublicAfterTimeout()`. */
+const openAfterTimeoutData: Hex = encodeFunctionData({
+  abi: launch2ExitSnapshotRegistryAbi,
+  functionName: "openPublicAfterTimeout",
+});
 
 const openWithoutHoldersData: Hex = encodeFunctionData({
   abi: snapshotRegistryAbi,
@@ -304,6 +316,68 @@ export function createLaunch2PublisherChain(input: {
         type: "legacy",
         to: snapshots as Address,
         data: openWithoutHoldersData,
+        value: 0n,
+        nonce: Number(tx.nonce),
+        gas: tx.gas,
+        gasPrice: tx.gasPrice,
+      });
+      return { txHash: lower(keccak256(rawTx)), rawTx: lower(rawTx) };
+    },
+    exitTiming: (factory) =>
+      readLaunch2ExitTiming(
+        (request) => client.readContract({ ...request, args: [] }),
+        factory,
+      ),
+    async registrySnapshotTimeoutAt(snapshots) {
+      try {
+        return BigInt(
+          await read<bigint>(
+            snapshots,
+            launch2ExitSnapshotRegistryAbi,
+            "snapshotTimeoutAt",
+          ),
+        );
+      } catch (error) {
+        if (isLaunch2CapabilityRevert(error)) return null;
+        throw error;
+      }
+    },
+    async estimateOpenAfterTimeout(snapshots) {
+      try {
+        await client.simulateContract({
+          account: account.address,
+          address: snapshots as Address,
+          abi: launch2ExitSnapshotRegistryAbi,
+          functionName: "openPublicAfterTimeout",
+          args: [],
+        });
+      } catch (error) {
+        const reason = revertReasonOf(error);
+        if (reason !== null) throw new Launch2PublisherRevertError(reason);
+        throw error;
+      }
+      try {
+        return await client.estimateGas({
+          account: account.address,
+          to: snapshots as Address,
+          data: openAfterTimeoutData,
+          value: 0n,
+        });
+      } catch (error) {
+        const reason = revertReasonOf(error);
+        if (reason !== null) throw new Launch2PublisherRevertError(reason);
+        throw error;
+      }
+    },
+    async signOpenAfterTimeout(snapshots, tx) {
+      if (tx.nonce > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error("Submitter nonce out of range");
+      }
+      const rawTx = await account.signTransaction({
+        chainId,
+        type: "legacy",
+        to: snapshots as Address,
+        data: openAfterTimeoutData,
         value: 0n,
         nonce: Number(tx.nonce),
         gas: tx.gas,

@@ -1,4 +1,6 @@
 import {
+  BaseError,
+  ContractFunctionZeroDataError,
   createPublicClient,
   decodeEventLog,
   decodeFunctionData,
@@ -39,6 +41,78 @@ import {
   snapshotRegistryAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
 import { legacyV2BuybackExecutorAbi } from "../launch/hooks-launch-protocol-abi-legacy-v2.js";
+import {
+  launch2ExitFactoryAbi,
+  launch2ExitNftEscrowAbi,
+  launch2ExitProjectNftAbi,
+  launch2ExitSnapshotRegistryAbi,
+} from "../launch/hooks-launch-protocol-abi-escrow-exit.js";
+import { revertReasonOf } from "../launch/hooks-launch-executor-chain.js";
+
+/**
+ * Decision 0137: a contract revert or an empty answer (no such selector on
+ * a pre-S175 Factory) — the only failures that mean "no exit paths".
+ */
+export function isLaunch2CapabilityRevert(error: unknown): boolean {
+  return (
+    revertReasonOf(error) !== null ||
+    (error instanceof BaseError &&
+      error.walk((cause) => cause instanceof ContractFunctionZeroDataError) !==
+        null)
+  );
+}
+
+/** Decision 0137: `snapshotTimeout()` / `refundDelay()` or null (pre-S175). */
+export async function readLaunch2ExitTiming(
+  readContract: (request: {
+    readonly address: Address;
+    readonly abi: Abi;
+    readonly functionName: string;
+  }) => Promise<unknown>,
+  factory: string,
+): Promise<{ snapshotTimeout: bigint; refundDelay: bigint } | null> {
+  let snapshotTimeout: bigint;
+  try {
+    snapshotTimeout = BigInt(
+      (await readContract({
+        address: factory as Address,
+        abi: launch2ExitFactoryAbi,
+        functionName: "snapshotTimeout",
+      })) as bigint,
+    );
+  } catch (error) {
+    if (isLaunch2CapabilityRevert(error)) return null;
+    throw error;
+  }
+  let refundDelay: bigint;
+  try {
+    refundDelay = BigInt(
+      (await readContract({
+        address: factory as Address,
+        abi: launch2ExitFactoryAbi,
+        functionName: "refundDelay",
+      })) as bigint,
+    );
+  } catch (error) {
+    if (isLaunch2CapabilityRevert(error)) return null;
+    throw error;
+  }
+  // A zero timing is not an S175 Factory (its constructor refuses < 1 h).
+  if (snapshotTimeout <= 0n || refundDelay <= 0n) return null;
+  return { snapshotTimeout, refundDelay };
+}
+
+/**
+ * Decision 0137: the snapshots role also decodes the S175 timeout opening
+ * (a pre-S175 registry never emits that topic).
+ */
+const snapshotsRoleAbi: Abi = [
+  ...(snapshotRegistryAbi as Abi),
+  ...(launch2ExitSnapshotRegistryAbi as Abi).filter(
+    (item) =>
+      item.type === "event" && item.name === "PublicRoundOpenedAfterTimeout",
+  ),
+];
 
 /**
  * Decision 0114: the launch slot (BSC Testnet, chain 97) reader of the
@@ -70,9 +144,15 @@ const roleAbis: Readonly<
   gate: { abi: launchPublicationGateAbi, events: ["LaunchActivated"] },
   nft: { abi: projectNFTAbi, events: ["NftMinted", "Transfer"] },
   snapshots: {
-    abi: snapshotRegistryAbi,
-    events: ["SnapshotPublished", "PublicRoundOpenedWithoutHolders"],
+    abi: snapshotsRoleAbi,
+    events: [
+      "SnapshotPublished",
+      "PublicRoundOpenedWithoutHolders",
+      "PublicRoundOpenedAfterTimeout",
+    ],
   },
+  // Decision 0137: an S175 escrow (only instances of a supporting Factory).
+  escrow: { abi: launch2ExitNftEscrowAbi, events: ["RefundClaimed"] },
   curve: {
     abi: curveEngineAbi,
     events: ["CurveBought", "CurveSold", "Graduated"],
@@ -736,6 +816,66 @@ export function createLaunch2Chain(input: {
         poolManager: lower(manager),
         currency0: BigInt(a) < BigInt(b) ? a : b,
         trustedRouter: lower(trustedRouter),
+      };
+    },
+
+    readExitTiming: (factory) =>
+      readLaunch2ExitTiming(
+        (request) => client.readContract({ ...request, args: [] }),
+        factory,
+      ),
+
+    async readNftRefunds(request) {
+      const block = await client.getBlock({ blockTag: "latest" });
+      const at = block.number;
+      const escrowAbi = launch2ExitNftEscrowAbi as Abi;
+      const curveAbi = curveEngineAbi as Abi;
+      const [graduated, usd1, opensAt] = await Promise.all([
+        read<boolean>(request.curve, curveAbi, "graduated", [], at),
+        read<string>(request.curve, curveAbi, "usd1", [], at),
+        read<bigint>(request.escrow, escrowAbi, "refundOpensAt", [], at),
+      ]);
+      const tokens = await Promise.all(
+        request.tokenIds.map(async (tokenId) => {
+          const [quote, refunded, owner] = await Promise.all([
+            read<readonly [boolean, bigint, bigint]>(
+              request.escrow,
+              escrowAbi,
+              "refundQuote",
+              [tokenId],
+              at,
+            ),
+            read<boolean>(request.escrow, escrowAbi, "refunded", [tokenId], at),
+            read<string>(
+              request.nft,
+              launch2ExitProjectNftAbi as Abi,
+              "ownerOf",
+              [tokenId],
+              at,
+            ).catch((error: unknown) => {
+              // ERC721NonexistentToken: no owner (a contract revert only).
+              if (revertReasonOf(error) !== null) return null;
+              throw error;
+            }),
+          ]);
+          return Object.freeze({
+            tokenId: tokenId.toString(10),
+            owner: owner === null ? null : lower(owner),
+            refunded,
+            claimable: quote[0],
+            amount: BigInt(quote[1]),
+            opensAt: BigInt(quote[2]),
+          });
+        }),
+      );
+      return {
+        blockNumber: at,
+        blockHash: lower(block.hash),
+        blockTimestamp: block.timestamp,
+        graduated,
+        usd1: lower(usd1),
+        refundOpensAt: BigInt(opensAt),
+        tokens,
       };
     },
 

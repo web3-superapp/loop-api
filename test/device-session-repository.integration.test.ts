@@ -97,6 +97,8 @@ describe("PostgreSQL V2 device-session migration and repository", () => {
     public.launch2_snapshot_closures,
     public.launch2_buyback_attempts,
     public.launch2_dynamic_claim_reports,
+    public.launch2_nft_refund_reports,
+    public.launch2_nft_refunds,
     public.launch2_dynamic_buy_weights,
     public.launch2_dynamic_rounds,
     public.launch2_dynamic_claims,

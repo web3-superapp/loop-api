@@ -207,6 +207,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_dynamic_rounds: "user",
     launch2_dynamic_buy_weights: "user",
     launch2_dynamic_claim_reports: "user",
+    // Decision 0137: escrow refunds / refund reports of a launch2 instance
+    launch2_nft_refunds: "user",
+    launch2_nft_refund_reports: "user",
     // Decision 0120: no-holder closures and retry grants of those instances
     launch2_snapshot_closures: "user",
     launch2_snapshot_publication_releases: "user",
@@ -377,6 +380,12 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "launch2_dynamic_claim_reports",
     `${ownedBy()} or instance_id in ${doomedLaunch2Instances}`,
   ),
+  // Decision 0137: refund reports reference intents and instances.
+  del(
+    "launch2_nft_refund_reports",
+    `${ownedBy()} or instance_id in ${doomedLaunch2Instances}`,
+  ),
+  del("launch2_nft_refunds", `instance_id in ${doomedLaunch2Instances}`),
   del(
     "launch2_intents",
     `${ownedBy()} or instance_id in ${doomedLaunch2Instances}

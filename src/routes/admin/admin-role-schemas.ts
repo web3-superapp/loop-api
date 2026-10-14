@@ -928,9 +928,9 @@ const snapshotPublicationSchema = {
     jobId: uuidSchema,
     action: {
       type: "string",
-      enum: ["publish_snapshot", "open_without_holders"],
+      enum: ["publish_snapshot", "open_without_holders", "open_after_timeout"],
       description:
-        "Decision 0122 (optional in the schema, always present): open_without_holders = the v3 zero-holder openPublicWithoutSnapshot() call (memberCount 0, zero root / dataHash, no signers).",
+        "Decision 0122 (optional in the schema, always present): open_without_holders = the v3 zero-holder openPublicWithoutSnapshot() call (memberCount 0, zero root / dataHash, no signers). Decision 0137: open_after_timeout = the S175 openPublicAfterTimeout() fallback (same shape; cutoff = the head block the decision was taken at).",
     },
     attempt: { type: "integer", minimum: 1 },
     status: {

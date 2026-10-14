@@ -226,7 +226,11 @@ export interface AdminLaunchSnapshotPublication {
    * `openPublicWithoutSnapshot()` (member count 0, zero root / dataHash,
    * no signers).
    */
-  readonly action: "publish_snapshot" | "open_without_holders";
+  readonly action:
+    | "publish_snapshot"
+    | "open_without_holders"
+    /** Decision 0137: the S175 `openPublicAfterTimeout()` fallback. */
+    | "open_after_timeout";
   readonly attempt: number;
   readonly status:
     "pending" | "broadcast" | "confirmed" | "failed" | "mismatch";

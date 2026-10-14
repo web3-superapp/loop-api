@@ -46,7 +46,12 @@ export type Launch2ContractRole =
    */
   | "dynamicGraduationAdapter"
   /** Decision 0131: the per-project `LoopDynamicHook` (rounds, fees, claims). */
-  | "dynamicHook";
+  | "dynamicHook"
+  /**
+   * Decision 0137: the instance's `NftEscrow` (`RefundClaimed` only) — in
+   * the role map only for instances whose Factory has the S175 exit paths.
+   */
+  | "escrow";
 
 export const launch2EventNames = Object.freeze([
   "LaunchDeployed",
@@ -55,6 +60,8 @@ export const launch2EventNames = Object.freeze([
   "Transfer",
   "SnapshotPublished",
   "PublicRoundOpenedWithoutHolders",
+  /** Decision 0137 (S175 Factories): the snapshot-timeout opening. */
+  "PublicRoundOpenedAfterTimeout",
   "CurveBought",
   "CurveSold",
   "Graduated",
@@ -75,6 +82,8 @@ export const launch2EventNames = Object.freeze([
   "BuyCredited",
   "BuyNotCredited",
   "RewardClaimed",
+  /** Decision 0137 (S175 Factories): `NftEscrow.RefundClaimed`. */
+  "RefundClaimed",
 ] as const);
 
 export type Launch2EventName = (typeof launch2EventNames)[number];
@@ -138,6 +147,32 @@ export interface Launch2BuybackChainState {
 
 export interface Launch2SnapshotPublication {
   readonly signatures: readonly string[];
+}
+
+/** Decision 0137: one token's `NftEscrow.refundQuote` / `refunded` / owner. */
+export interface Launch2NftRefundQuote {
+  readonly tokenId: string;
+  /** `ProjectNFT.ownerOf(tokenId)`; null when the token does not exist. */
+  readonly owner: string | null;
+  readonly refunded: boolean;
+  readonly claimable: boolean;
+  /** Raw USD1 (18 decimals) `claimRefund` would pay now. */
+  readonly amount: bigint;
+  /** `refundOpensAt()` (Unix seconds). */
+  readonly opensAt: bigint;
+}
+
+/** Decision 0137: escrow / curve / NFT facts of a refund at one block. */
+export interface Launch2NftRefundState {
+  readonly blockNumber: bigint;
+  readonly blockHash: string;
+  readonly blockTimestamp: bigint;
+  /** `CurveEngine.graduated()` (the escrow reads the MEME's flag; same fact). */
+  readonly graduated: boolean;
+  /** `CurveEngine.usd1()` (the Factory's USD1). */
+  readonly usd1: string;
+  readonly refundOpensAt: bigint;
+  readonly tokens: readonly Launch2NftRefundQuote[];
 }
 
 export interface Launch2Chain {
@@ -294,6 +329,27 @@ export interface Launch2Chain {
   ): Promise<
     ReadonlyMap<string, { readonly from: string; readonly to: string | null }>
   >;
+  /**
+   * Decision 0137: `LoopLaunchFactory.snapshotTimeout()` / `refundDelay()`;
+   * null when the Factory has no exit paths (the call reverts or the
+   * selector is missing — every pre-S175 Factory); throws on an RPC
+   * failure. Absent: no Factory supports them (fail closed).
+   */
+  readExitTiming?(factory: string): Promise<{
+    readonly snapshotTimeout: bigint;
+    readonly refundDelay: bigint;
+  } | null>;
+  /**
+   * Decision 0137 (route-facing): `refundQuote` / `refunded` / `ownerOf`
+   * of each token plus `refundOpensAt`, the curve's `graduated` and `usd1`,
+   * all at the latest block.
+   */
+  readNftRefunds?(input: {
+    readonly escrow: string;
+    readonly nft: string;
+    readonly curve: string;
+    readonly tokenIds: readonly bigint[];
+  }): Promise<Launch2NftRefundState>;
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +652,19 @@ export interface Launch2InstanceRecord {
     readonly blockNumber: string;
     readonly transactionHash: string;
   } | null;
+  /**
+   * Decision 0137 (S175 Factories): the indexed
+   * `PublicRoundOpenedAfterTimeout` — public round from `openedAt`, no
+   * early round. Absent / null = not opened that way.
+   */
+  readonly openedAfterTimeout?: {
+    readonly openedAt: string;
+    readonly blockNumber: string;
+    readonly transactionHash: string;
+    readonly totalMinted: string;
+  } | null;
+  /** Decision 0137: distinct token ids with an indexed `RefundClaimed`. */
+  readonly nftRefundedCount?: string;
   readonly graduation: {
     readonly graduatedAt: string;
     readonly blockNumber: string | null;
@@ -701,6 +770,13 @@ export interface Launch2LaneInstance {
   readonly closedNoHolders: boolean;
   /** Decision 0122: the indexed zero-holder public opening (ISO). */
   readonly openedWithoutHoldersAt: string | null;
+  /** Decision 0137: the indexed snapshot-timeout opening (ISO). */
+  readonly openedAfterTimeoutAt?: string | null;
+  /**
+   * Decision 0137: the deploying Factory (lower-case) — the exit-path
+   * capability is probed per Factory. Absent: never probed (unsupported).
+   */
+  readonly factoryAddress?: string;
   readonly activatedAt: string | null;
   readonly stage: Launch2Stage;
   readonly nextChangeAt: string | null;
@@ -773,6 +849,28 @@ export interface Launch2DynamicClaimReportRecord {
   readonly walletId: string;
   readonly walletAddress: string;
   readonly roundId: string;
+  readonly transactionHash: string;
+  readonly reportedAt: string;
+}
+
+/** Decision 0137: an indexed `NftEscrow.RefundClaimed`. */
+export interface Launch2NftRefundRecord {
+  readonly tokenId: string;
+  readonly ownerAddress: string;
+  readonly amountUsd1: string;
+  readonly remainingRecordedUsd1: string;
+  readonly transactionHash: string;
+  readonly blockNumber: string;
+  readonly refundedAt: string;
+}
+
+/** Decision 0137: a reported `nft_refund` transaction. */
+export interface Launch2NftRefundReportRecord {
+  readonly intentId: string;
+  readonly instanceId: string;
+  readonly walletId: string;
+  readonly walletAddress: string;
+  readonly tokenId: string;
   readonly transactionHash: string;
   readonly reportedAt: string;
 }
@@ -1135,6 +1233,35 @@ export interface Launch2Repository {
     readonly blockNumber: string;
     readonly claimedAt: string;
   } | null>;
+  // --- Decision 0137: escrow exit paths (absent = repository predates it) ---
+  /**
+   * Token ids whose latest non-removed NFT `Transfer` names this holder
+   * (ascending, at most `limit`).
+   */
+  listHeldNftTokens?(input: {
+    readonly instanceId: string;
+    readonly holderAddress: string;
+    readonly limit: number;
+  }): Promise<readonly string[]>;
+  /** Non-removed `RefundClaimed` of these tokens (empty list = all of them). */
+  listNftRefunds?(input: {
+    readonly instanceId: string;
+    readonly tokenIds: readonly string[];
+  }): Promise<readonly Launch2NftRefundRecord[]>;
+  /** The caller's `nft_refund` intent (null when not theirs / not one). */
+  getNftRefundIntent?(input: {
+    readonly intentId: string;
+    readonly ownerUserId: string;
+  }): Promise<Launch2IntentRecord | null>;
+  /** Records the hash once (`created` / `same` / `conflict`). */
+  recordNftRefundReport?(
+    input: Omit<Launch2NftRefundReportRecord, "reportedAt"> & {
+      readonly ownerUserId: string;
+    },
+  ): Promise<{
+    readonly outcome: "created" | "same" | "conflict";
+    readonly report: Launch2NftRefundReportRecord;
+  }>;
   // --- Intents ---
   createIntent(input: {
     readonly ownerUserId: string;

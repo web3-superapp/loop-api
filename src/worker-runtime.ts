@@ -1189,6 +1189,10 @@ export async function runReconciliationWorker(
               gasLimitCap: launch2PublisherDefaults.gasLimitCap,
               maxAttempts: launch2PublisherDefaults.maxAttempts,
               retryDelaySeconds: launch2PublisherDefaults.retryDelaySeconds,
+              // Decision 0137: LAUNCH2_TIMEOUT_OPEN_ENABLED (default off).
+              ...(publisherConfig.timeoutOpenEnabled === true
+                ? { timeoutOpenEnabled: true }
+                : {}),
             },
             pollIntervalMs: publisherConfig.pollIntervalMs,
             onStep: (step) => {

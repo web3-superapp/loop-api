@@ -199,6 +199,8 @@ describe("database schema readiness contract", () => {
       "public.launch2_dynamic_rounds",
       "public.launch2_dynamic_buy_weights",
       "public.launch2_dynamic_claim_reports",
+      "public.launch2_nft_refunds",
+      "public.launch2_nft_refund_reports",
       "public.chain_guard_incidents",
       "public.chain_guard_cursors",
     ]);

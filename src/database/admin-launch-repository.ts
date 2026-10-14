@@ -540,7 +540,9 @@ function mapPublication(
     action:
       row["action"] === "open_without_holders"
         ? "open_without_holders"
-        : "publish_snapshot",
+        : row["action"] === "open_after_timeout"
+          ? "open_after_timeout"
+          : "publish_snapshot",
     attempt: Number(row["attempt"]),
     status: row["status"] as AdminLaunchSnapshotPublication["status"],
     cutoffBlock: String(row["cutoff_block"]),

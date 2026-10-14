@@ -11,6 +11,10 @@ import {
   launch2Stages,
 } from "../../features/launch2/launch2-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import {
+  launch2RefundStates,
+  launch2TimeoutOpenStates,
+} from "../../features/launch2/launch2-escrow-exit.js";
 import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
 
 /**
@@ -759,6 +763,87 @@ const tradingHoldSchema = {
   ],
 } as const;
 
+/**
+ * Decision 0137: the S175 escrow exit paths; null when the instance's
+ * Factory has none (every Factory deployed before S175) or its capability
+ * cannot be read.
+ */
+const exitPathsSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "snapshotTimeoutAt",
+        "timeoutOpenState",
+        "refundOpensAt",
+        "refundState",
+        "refundedCount",
+        "totalMinted",
+      ],
+      properties: {
+        snapshotTimeoutAt: {
+          ...dateTimeSchema,
+          description:
+            "SnapshotRegistry.snapshotTimeoutAt() = nftSaleEnd + LoopLaunchFactory.snapshotTimeout(): from then anyone may call openPublicAfterTimeout() while no snapshot was published.",
+        },
+        timeoutOpenState: {
+          type: "string",
+          enum: [...launch2TimeoutOpenStates],
+          description:
+            "not_applicable: the NFT sale is still open or the curve opened through the snapshot / zero-holder path; waiting: sale over, not opened, before snapshotTimeoutAt; available: snapshotTimeoutAt passed and still not opened; opened_by_timeout: PublicRoundOpenedAfterTimeout indexed (public round, no early round).",
+        },
+        refundOpensAt: {
+          ...dateTimeSchema,
+          description:
+            "NftEscrow.refundOpensAt() = min(rootPublishedAt, snapshotTimeoutAt) + LoopLaunchFactory.refundDelay() (rootPublishedAt only once the curve opened).",
+        },
+        refundState: {
+          type: "string",
+          enum: [...launch2RefundStates],
+          description:
+            "not_applicable: no NFT was minted; closed_graduated: the curve graduated, refunds are closed for good; waiting: before refundOpensAt; open: claimRefund(tokenId) is callable by each NFT's current owner, once per NFT.",
+        },
+        refundedCount: { type: "integer", minimum: 0 },
+        totalMinted: { type: "integer", minimum: 0 },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
+/**
+ * Decision 0137: the viewer wallet's held NFTs (indexed transfers, owner
+ * confirmed on chain) with `NftEscrow.refundQuote` read at one block. []
+ * without a wallet or a held NFT; null when the Factory has no exit paths
+ * or the chain read fails.
+ */
+const viewerNftRefundsSchema = {
+  anyOf: [
+    {
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tokenId", "refunded", "claimable", "amount", "opensAt"],
+        properties: {
+          tokenId: uintStringSchema,
+          refunded: { type: "boolean" },
+          claimable: { type: "boolean" },
+          amount: {
+            ...decimalSchema,
+            description:
+              "USD1 claimRefund(tokenId) would pay now (refundQuote; 100 unless the escrow balance was cut, 0 once refunded).",
+          },
+          opensAt: dateTimeSchema,
+        },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
 const detailProperties = {
   ...summaryProperties,
   viewerIsProjectOwner: { type: "boolean" },
@@ -774,6 +859,8 @@ const detailProperties = {
   recentTrades: { type: "array", maxItems: 20, items: tradeItemSchema },
   viewer: viewerSchema,
   tradingHold: tradingHoldSchema,
+  exitPaths: exitPathsSchema,
+  viewerNftRefunds: viewerNftRefundsSchema,
   projectedAt: dateTimeSchema,
 } as const;
 
@@ -1800,6 +1887,103 @@ export const launch2DynamicClaimReportResourceSchema = {
         },
         amountUsd1: nullableDecimalSchema,
         claimedAt: nullableDateTimeSchema,
+        blockNumber: nullableUintStringSchema,
+        reportedAt: dateTimeSchema,
+      },
+    },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Decision 0137: NFT escrow refund (S175 Factories)
+// ---------------------------------------------------------------------------
+
+export const launch2NftRefundPrepareRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["walletId", "tokenId"],
+  properties: {
+    walletId: opaqueIdSchema,
+    tokenId: uintStringSchema,
+  },
+} as const;
+
+export const launch2NftRefundIntentResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["launch2Intent", "refund", "contractVersion"],
+  properties: {
+    launch2Intent: launch2IntentResourceSchema.properties.launch2Intent,
+    refund: {
+      type: "object",
+      additionalProperties: false,
+      required: ["tokenId", "escrow", "amountUsd1", "opensAt"],
+      properties: {
+        tokenId: uintStringSchema,
+        escrow: addressSchema,
+        amountUsd1: decimalSchema,
+        opensAt: dateTimeSchema,
+      },
+    },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const launch2NftRefundReportRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intentId", "transactionHash"],
+  properties: {
+    intentId: opaqueIdSchema,
+    transactionHash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+    walletId: {
+      ...opaqueIdSchema,
+      description:
+        "Optional echo of the intent's wallet; a mismatch is 404 LAUNCH2_REFUND_INTENT_NOT_FOUND.",
+    },
+    tokenId: {
+      ...uintStringSchema,
+      description:
+        "Optional echo of the intent's token; a mismatch is 404 LAUNCH2_REFUND_INTENT_NOT_FOUND.",
+    },
+  },
+} as const;
+
+export const launch2NftRefundReportResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["nftRefundReport", "contractVersion"],
+  properties: {
+    nftRefundReport: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "intentId",
+        "instanceId",
+        "walletId",
+        "tokenId",
+        "transactionHash",
+        "status",
+        "amountUsd1",
+        "refundedAt",
+        "blockNumber",
+        "reportedAt",
+      ],
+      properties: {
+        intentId: opaqueIdSchema,
+        instanceId: opaqueIdSchema,
+        walletId: opaqueIdSchema,
+        tokenId: uintStringSchema,
+        transactionHash: txHashSchema,
+        status: {
+          type: "string",
+          enum: ["submitted", "confirmed"],
+          description:
+            "confirmed: the launch2_event lane indexed this transaction's RefundClaimed for (token, wallet); submitted: not indexed yet (report again later).",
+        },
+        amountUsd1: nullableDecimalSchema,
+        refundedAt: nullableDateTimeSchema,
         blockNumber: nullableUintStringSchema,
         reportedAt: dateTimeSchema,
       },
