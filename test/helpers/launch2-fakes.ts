@@ -90,6 +90,10 @@ export function instanceFixture(
     name: "Frog Launch",
     ticker: "FROG",
     logoUrl: "https://example.com/frog.png",
+    projectProfile: {
+      description: "A frog launch.",
+      links: ["https://example.com/frog"],
+    },
     addresses: {
       meme: `0x${"a".repeat(36)}6666`,
       hook: address("b"),

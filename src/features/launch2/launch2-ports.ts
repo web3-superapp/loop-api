@@ -9,6 +9,7 @@ import type {
 } from "./launch2-contract.js";
 import type { Launch2CurveState } from "./launch2-curve-math.js";
 import type { Launch2PoolHookKind } from "./launch2-dynamic.js";
+import type { Launch2ProjectProfile } from "./launch2-project-profile.js";
 import type { Launch2FactoryGeneration } from "./launch2-generation.js";
 
 /**
@@ -545,6 +546,11 @@ export interface Launch2InstanceRecord {
   readonly name: string;
   readonly ticker: string;
   readonly logoUrl: string | null;
+  /**
+   * Decision 0138: the instance's Hooks launch config `description` /
+   * `links` (project_id + config_version); null when no config row joins.
+   */
+  readonly projectProfile: Launch2ProjectProfile | null;
   readonly addresses: Launch2InstanceAddresses;
   readonly buybackRecipient: string;
   readonly nftSaleStart: string;

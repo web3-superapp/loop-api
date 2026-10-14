@@ -126,6 +126,7 @@ import {
   launch2HookKindOf,
   type Launch2PoolHookKind,
 } from "./launch2-dynamic.js";
+import { launch2ProjectProfileProjection } from "./launch2-project-profile.js";
 
 /**
  * Decision 0114: the `/v2/launch2/*` service. Lists and details come from
@@ -413,6 +414,8 @@ function summaryOf(
   const stage = stageOf(record, nowSeconds);
   const sold = BigInt(record.soldSupply);
   const reserve = BigInt(record.reserveUsd1);
+  // Decision 0138: null / [] when no config row joins (orphan, legacy).
+  const profile = launch2ProjectProfileProjection(record.projectProfile);
   return Object.freeze({
     instanceId: record.instanceId,
     projectId: record.projectId,
@@ -421,6 +424,8 @@ function summaryOf(
     name: record.name,
     ticker: record.ticker,
     logoUrl: record.logoUrl,
+    summary: profile.summary,
+    links: profile.links,
     memeAddress: record.addresses.meme,
     stage: stage.stage,
     nextChangeAt:

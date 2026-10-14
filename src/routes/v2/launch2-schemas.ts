@@ -225,6 +225,18 @@ const summaryProperties = {
   name: { type: "string", minLength: 1, maxLength: 64 },
   ticker: { type: "string", pattern: "^[A-Z0-9]{2,12}$" },
   logoUrl: { anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }] },
+  summary: {
+    description:
+      "Decision 0138: the project description (whitespace collapsed) cut to 60 Unicode characters, with … appended when longer; null when empty or no project config joins.",
+    anyOf: [{ type: "string", minLength: 1, maxLength: 61 }, { type: "null" }],
+  },
+  links: {
+    description:
+      "Decision 0138: the project's saved links verbatim, http(s) URLs only, at most 5; [] when none or no project config joins.",
+    type: "array",
+    maxItems: 5,
+    items: { type: "string", minLength: 1, maxLength: 2048 },
+  },
   memeAddress: addressSchema,
   stage: stageSchema,
   nextChangeAt: nullableDateTimeSchema,

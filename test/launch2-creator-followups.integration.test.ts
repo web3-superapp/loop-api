@@ -305,6 +305,8 @@ describe("Decision 0120: no-holder closure (000064)", () => {
 
     const record = await launch2.getInstance(target.instanceId);
     expect(record?.noHoldersClosure).toMatchObject({ cutoffBlock: "123" });
+    // Decision 0138: the deployed config's description / links join in.
+    expect(record?.projectProfile).toEqual({ description: "Test", links: [] });
     const lane = (await launch2.listLaneInstances(chainId)).find(
       (entry) => entry.instanceId === target.instanceId,
     );

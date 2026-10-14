@@ -265,6 +265,55 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     ).toBe(400);
   });
 
+  it("carries the project summary and links on list rows and the detail (Decision 0138)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const described = instanceFixture({
+      projectProfile: {
+        description: `  Frog\n\nlaunch ${"x".repeat(80)}`,
+        links: [
+          "https://x.com/frog",
+          "javascript:alert(1)",
+          "http://frog.example",
+          "https://a.example",
+          "https://b.example",
+          "https://c.example",
+          "https://d.example",
+        ],
+      },
+    });
+    const orphan = instanceFixture({ projectProfile: null });
+    repository.instances.set(described.instanceId, described);
+    repository.instances.set(orphan.instanceId, orphan);
+    const { app } = await createApp({ repository });
+    const rows = (await get(app, "/v2/launch2/instances"))
+      .json<{ instances: Record<string, unknown>[] }>()
+      .instances.reduce<Record<string, Record<string, unknown>>>(
+        (byId, row) => ({ ...byId, [row["instanceId"] as string]: row }),
+        {},
+      );
+    const summary = `Frog launch ${"x".repeat(48)}…`;
+    const links = [
+      "https://x.com/frog",
+      "http://frog.example",
+      "https://a.example",
+      "https://b.example",
+      "https://c.example",
+    ];
+    expect(rows[described.instanceId]).toMatchObject({ summary, links });
+    expect(rows[orphan.instanceId]).toMatchObject({
+      summary: null,
+      links: [],
+    });
+    const detail = (
+      await get(app, `/v2/launch2/instances/${described.instanceId}`)
+    ).json<{ instance: Record<string, unknown> }>();
+    expect(detail.instance).toMatchObject({ summary, links });
+    const orphanDetail = (
+      await get(app, `/v2/launch2/instances/${orphan.instanceId}`)
+    ).json<{ instance: Record<string, unknown> }>();
+    expect(orphanDetail.instance).toMatchObject({ summary: null, links: [] });
+  });
+
   it("ends the NFT sale at the instance's own saleEnd: 1 hour on the testnet Factory (Decision 0119)", async () => {
     const repository = createInMemoryLaunch2Repository();
     const selling = instanceFixture(

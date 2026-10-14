@@ -34,6 +34,7 @@ import {
   type Launch2Repository,
   type Launch2TradeRecord,
 } from "../features/launch2/launch2-ports.js";
+import type { Launch2ProjectProfile } from "../features/launch2/launch2-project-profile.js";
 import {
   launch2FactoryGenerations,
   type Launch2FactoryGeneration,
@@ -211,8 +212,33 @@ const instanceColumns = `
       'closedAt', c.created_at)
     from public.launch2_snapshot_closures c
     where c.instance_id = launch2_instances.instance_id) as snapshot_closure,
+  (select jsonb_build_object('description', v.config -> 'description',
+      'links', v.config -> 'links')
+    from public.hooks_launch_project_config_versions v
+    where v.project_id = launch2_instances.project_id
+      and v.config_version = launch2_instances.config_version)
+    as project_profile,
   ${nftSaleEndColumn}
 `;
+
+/**
+ * Decision 0138: the joined config's description / links, read leniently
+ * (a malformed value degrades to null / [] rather than failing the read).
+ */
+function projectProfileOf(value: unknown): Launch2ProjectProfile | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const description = record["description"];
+  const links = record["links"];
+  return Object.freeze({
+    description: typeof description === "string" ? description : null,
+    links: Object.freeze(
+      Array.isArray(links)
+        ? links.filter((link): link is string => typeof link === "string")
+        : [],
+    ),
+  });
+}
 
 /** Decision 0121: the newest buyback keeper attempt, if any. */
 function keeperOf(value: unknown): Launch2InstanceRecord["buybackKeeper"] {
@@ -332,6 +358,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     name: text(row, "name"),
     ticker: text(row, "ticker"),
     logoUrl: nullableText(row, "logo_url"),
+    projectProfile: projectProfileOf(row["project_profile"]),
     addresses: Object.freeze({
       meme: text(row, "meme_address"),
       hook: text(row, "hook_address"),
