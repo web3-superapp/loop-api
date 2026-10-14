@@ -104,6 +104,13 @@ import {
 } from "./launch2-pool.js";
 import { deriveLaunch2Stage, launch2EarlyRoundEnd } from "./launch2-stage.js";
 import {
+  launch2TradingHoldOf,
+  launch2TradingHoldReasonCodes,
+  type Launch2TradingHold,
+} from "./launch2-trading-hold.js";
+import type { ChainGuardHoldGate } from "../chain-guard/chain-guard-hold.js";
+import { chainGuardReasonCodes } from "../chain-guard/chain-guard-contract.js";
+import {
   classifyLaunch2DynamicRevert,
   encodeLaunch2DynamicClaim,
   encodeLaunch2DynamicSwap,
@@ -174,6 +181,12 @@ export interface Launch2ServiceDependencies {
   readonly tradeDeadlineSeconds?: number;
   /** Decision 0126: wallet balance cache lifetime (≤ 15 s, default 15 s). */
   readonly balanceCacheMs?: number;
+  /**
+   * Decision 0136: the chain guard's hold query for the launch chain;
+   * absent / null (CHAIN_GUARD_ENABLED off, or no repository) = no hold
+   * is ever applied and the instance detail shows `tradingHold: null`.
+   */
+  readonly chainGuardHolds?: ChainGuardHoldGate | null;
   readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly logger?: Launch2ServiceLogger;
@@ -964,6 +977,66 @@ export function createLaunch2Service(
 
   function nowSeconds(): bigint {
     return BigInt(Math.floor(now().getTime() / 1000));
+  }
+
+  /** Decision 0136: one warn per failure streak of the hold query. */
+  let holdReadFailing = false;
+
+  /**
+   * Decision 0136: the chain guard hold, read once per request. Null when
+   * the guard is off; throws when the query fails (callers decide).
+   */
+  async function readTradingHold(): Promise<Launch2TradingHold | null> {
+    const gate = deps.chainGuardHolds ?? null;
+    if (gate === null) return null;
+    try {
+      const hold = launch2TradingHoldOf(await gate.holds());
+      holdReadFailing = false;
+      return hold;
+    } catch (error) {
+      if (!holdReadFailing) {
+        holdReadFailing = true;
+        deps.logger?.warn(
+          {
+            event: "launch2.chain_guard_hold_unreadable",
+            reasonCode: chainGuardReasonCodes.repositoryUnavailable,
+            errorClass: error instanceof Error ? error.name : typeof error,
+          },
+          "LOOP launch2 could not read the chain guard hold",
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Decision 0136: every launch2 write path (quote / prepare) is refused
+   * while a hold exists — 503 CAPABILITY_UNAVAILABLE, like
+   * LAUNCH2_WRITES_DISABLED — and while the hold cannot be read (never
+   * sign unguarded).
+   */
+  async function requireNoTradingHold(): Promise<void> {
+    let hold: Launch2TradingHold | null;
+    try {
+      hold = await readTradingHold();
+    } catch {
+      return unavailableWith(chainGuardReasonCodes.repositoryUnavailable);
+    }
+    if (hold !== null) {
+      throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+        reasonCode: launch2TradingHoldReasonCodes[hold.kind],
+        since: hold.since,
+      });
+    }
+  }
+
+  /** Decision 0136: the detail's `tradingHold`; an unreadable hold is null. */
+  async function tradingHoldForView(): Promise<Launch2TradingHold | null> {
+    try {
+      return await readTradingHold();
+    } catch {
+      return null;
+    }
   }
 
   function repository(): Launch2Repository {
@@ -2491,6 +2564,7 @@ export function createLaunch2Service(
     const walletId = value["walletId"];
     const roundId = parseRoundId(value["roundId"]);
     const record = await visibleInstance(input.instanceId);
+    await requireNoTradingHold();
     if (hookKindOf(record) !== "loopDynamic") {
       refuse("VALIDATION_FAILED", launch2DynamicReasonCodes.notApplicable);
     }
@@ -2696,6 +2770,7 @@ export function createLaunch2Service(
   return Object.freeze<Launch2Service>({
     async poolQuote(input) {
       const record = await visibleInstance(input.instanceId);
+      await requireNoTradingHold();
       const request = parsePoolRequest({
         side: input.side,
         mode: input.mode,
@@ -2729,6 +2804,7 @@ export function createLaunch2Service(
       const writes = writesOrUnavailable();
       const body = parsePoolTradeBody(input.body);
       const record = await visibleInstance(input.instanceId);
+      await requireNoTradingHold();
       if (hookKindOf(record) === "loopDynamic") {
         return prepareDynamicPoolTrade({
           principal: input.principal,
@@ -2973,46 +3049,54 @@ export function createLaunch2Service(
       const store = repository();
       const at = nowSeconds();
       const wallet = await walletFor(input.principal, input.walletId, false);
-      const [latest, trades, positions, member, poolStats, balances] =
-        await Promise.all([
-          store
-            .listBuybacks({
-              instanceId: record.instanceId,
-              after: null,
-              limit: 1,
-            })
-            .catch(translate),
-          store
-            .listTrades({ instanceId: record.instanceId, limit: 20 })
-            .catch(translate),
-          wallet === null
-            ? Promise.resolve([] as readonly Launch2PositionRecord[])
-            : store
-                .listPositions({
-                  holderAddresses: [wallet.address],
-                  instanceId: record.instanceId,
-                })
-                .catch(translate),
-          wallet === null
-            ? Promise.resolve(null)
-            : store
-                .getSnapshotMember({
-                  instanceId: record.instanceId,
-                  address: wallet.address,
-                })
-                .catch(translate),
-          wallet === null || record.graduation === null
-            ? Promise.resolve([] as readonly Launch2PoolTradeStats[])
-            : store
-                .poolTradeStats({
-                  instanceId: record.instanceId,
-                  walletAddresses: [wallet.address],
-                })
-                .catch(translate),
-          wallet === null
-            ? Promise.resolve(notGraduatedBalances)
-            : walletBalancesOf(record, wallet.address),
-        ]);
+      const [
+        latest,
+        trades,
+        positions,
+        member,
+        poolStats,
+        balances,
+        tradingHold,
+      ] = await Promise.all([
+        store
+          .listBuybacks({
+            instanceId: record.instanceId,
+            after: null,
+            limit: 1,
+          })
+          .catch(translate),
+        store
+          .listTrades({ instanceId: record.instanceId, limit: 20 })
+          .catch(translate),
+        wallet === null
+          ? Promise.resolve([] as readonly Launch2PositionRecord[])
+          : store
+              .listPositions({
+                holderAddresses: [wallet.address],
+                instanceId: record.instanceId,
+              })
+              .catch(translate),
+        wallet === null
+          ? Promise.resolve(null)
+          : store
+              .getSnapshotMember({
+                instanceId: record.instanceId,
+                address: wallet.address,
+              })
+              .catch(translate),
+        wallet === null || record.graduation === null
+          ? Promise.resolve([] as readonly Launch2PoolTradeStats[])
+          : store
+              .poolTradeStats({
+                instanceId: record.instanceId,
+                walletAddresses: [wallet.address],
+              })
+              .catch(translate),
+        wallet === null
+          ? Promise.resolve(notGraduatedBalances)
+          : walletBalancesOf(record, wallet.address),
+        tradingHoldForView(),
+      ]);
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
       const snapshot = record.snapshot;
@@ -3146,6 +3230,7 @@ export function createLaunch2Service(
                   ...balances,
                   ...poolTradeStatsOf(poolStats[0]),
                 }),
+          tradingHold,
           projectedAt: record.projectedAt,
         }),
         contractVersion: v2ContractVersion,
@@ -3154,6 +3239,7 @@ export function createLaunch2Service(
 
     async quote(input) {
       const record = await visibleInstance(input.instanceId);
+      await requireNoTradingHold();
       if (input.side !== "buy" && input.side !== "sell") {
         throw V2ApiError.invalidRequest();
       }
@@ -3446,6 +3532,7 @@ export function createLaunch2Service(
       const writes = writesOrUnavailable();
       const body = parseWalletBody(input.body);
       const record = await visibleInstance(input.instanceId);
+      await requireNoTradingHold();
       const wallet = await signingWallet(input.principal, body.walletId);
       const requestSha256 = requestDigest([
         record.instanceId,
@@ -3517,6 +3604,7 @@ export function createLaunch2Service(
       const writes = writesOrUnavailable();
       const body = parseTradeBody(input.body);
       const record = await visibleInstance(input.instanceId);
+      await requireNoTradingHold();
       const at = nowSeconds();
       if (body.deadline <= at) {
         refuse("QUOTE_EXPIRED", launch2ReasonCodes.quoteExpired);

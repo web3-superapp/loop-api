@@ -457,6 +457,7 @@ import { createMiningSettlementRunner } from "./features/mining/hourly-settlemen
 import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
 import { createAdminChainGuardService } from "./features/admin/admin-chain-guard.js";
 import { createChainGuardAlertNotifier } from "./integrations/chain-guard/chain-guard-alerts.js";
+import { createChainGuardHoldGate } from "./features/chain-guard/chain-guard-hold.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
 import { createTestnetFaucetChain } from "./integrations/bsc/testnet-faucet-chain.js";
 import type { TestnetFaucetChain } from "./features/testnet-faucet/testnet-faucet-contract.js";
@@ -2262,6 +2263,15 @@ export async function buildApp(
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,
+          // Decision 0136: the chain guard hold refuses launch2 writes.
+          chainGuardHolds:
+            config.chainGuardEnabled === true &&
+            database.chainGuard !== undefined
+              ? createChainGuardHoldGate(
+                  database.chainGuard,
+                  config.launchChain.chainId,
+                )
+              : null,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),
         })

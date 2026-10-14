@@ -739,6 +739,26 @@ const poolSummarySchema = {
   ],
 } as const;
 
+/**
+ * Decision 0136: a chain-wide chain guard hold (unresolved USD1 pause, or
+ * one of our addresses frozen); null when none. `since` = the incident's
+ * `first_seen_at`; `usd1_paused` wins when both exist.
+ */
+const tradingHoldSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "since"],
+      properties: {
+        kind: { type: "string", enum: ["usd1_paused", "address_frozen"] },
+        since: dateTimeSchema,
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+
 const detailProperties = {
   ...summaryProperties,
   viewerIsProjectOwner: { type: "boolean" },
@@ -753,6 +773,7 @@ const detailProperties = {
   buyback: buybackSummarySchema,
   recentTrades: { type: "array", maxItems: 20, items: tradeItemSchema },
   viewer: viewerSchema,
+  tradingHold: tradingHoldSchema,
   projectedAt: dateTimeSchema,
 } as const;
 

@@ -1750,6 +1750,12 @@ export interface AppConfig {
    * announced from the API process); absent / null = none.
    */
   readonly chainGuardAlerts?: ChainGuardAlertConfig | null;
+  /**
+   * Decision 0136: `CHAIN_GUARD_ENABLED` (the worker's switch) also makes
+   * the launch2 routes refuse writes under a chain guard hold; absent /
+   * false = no hold is applied (behaviour before 0136).
+   */
+  readonly chainGuardEnabled?: boolean;
   readonly walletGasReserve: WalletGasReserveConfig;
   /** Passkey association files published at `/.well-known` (Decision 0063). */
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
@@ -4013,6 +4019,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     miningSettlement: parseMiningSettlementApi(parsed.data),
     chainGuardAlerts: parseChainGuardAlertConfig(environment),
+    chainGuardEnabled: parseChainGuardEnabled(environment),
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty,
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
