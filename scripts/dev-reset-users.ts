@@ -226,6 +226,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     // Decision 0134: chain guard incidents / log cursor (no user column)
     chain_guard_incidents: "platform",
     chain_guard_cursors: "platform",
+    // Decision 0140: launch desk campaigns (console-written, no user column)
+    launch2_campaigns: "platform",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",

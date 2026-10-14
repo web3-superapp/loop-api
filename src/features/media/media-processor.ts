@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import sharp, { type OutputInfo } from "sharp";
 
 import {
+  campaignCoverHeight,
+  campaignCoverMaximumUploadBytes,
+  campaignCoverMinimumHeight,
+  campaignCoverMinimumWidth,
+  campaignCoverWidth,
   mediaMaximumInputPixels,
   mediaMaximumUploadBytes,
   mediaMinimumInputSide,
@@ -123,6 +128,67 @@ export async function processMediaUpload(
     output = await sharp(input, options)
       .rotate()
       .resize(mediaOutputSize, mediaOutputSize, { fit: "cover" })
+      .webp({ quality: mediaOutputQuality })
+      .toBuffer({ resolveWithObject: true });
+  } catch {
+    throw new MediaRejectedError(mediaReasonCodes.decodeFailed);
+  }
+  return Object.freeze({
+    bytes: output.data,
+    width: output.info.width,
+    height: output.info.height,
+    sha256: sha256Hex(output.data),
+    inputFormat,
+  });
+}
+
+/**
+ * Decision 0140: one console campaign cover → the stored 1200 x 600 WebP
+ * (2:1 centre crop, metadata stripped). PNG / JPEG / WebP only (by magic
+ * bytes; HEIC is refused), at most 2 MiB, at least 600 x 300.
+ */
+export async function processCampaignCoverUpload(
+  input: Buffer,
+): Promise<ProcessedMedia> {
+  if (input.length === 0) {
+    throw new MediaRejectedError(mediaReasonCodes.typeUnsupported);
+  }
+  if (input.length > campaignCoverMaximumUploadBytes) {
+    throw new MediaRejectedError(mediaReasonCodes.tooLarge);
+  }
+  const inputFormat = sniffMediaFormat(input);
+  if (inputFormat === null || inputFormat === "heic") {
+    throw new MediaRejectedError(mediaReasonCodes.typeUnsupported);
+  }
+  const options = {
+    limitInputPixels: mediaMaximumInputPixels,
+    failOn: "error",
+  } as const;
+  let width: number;
+  let height: number;
+  try {
+    const metadata = await sharp(input, options).metadata();
+    // EXIF orientations 5–8 swap the displayed sides.
+    const swapped = (metadata.orientation ?? 1) >= 5;
+    width = swapped ? metadata.height : metadata.width;
+    height = swapped ? metadata.width : metadata.height;
+  } catch {
+    throw new MediaRejectedError(mediaReasonCodes.decodeFailed);
+  }
+  if (
+    width < campaignCoverMinimumWidth ||
+    height < campaignCoverMinimumHeight
+  ) {
+    throw new MediaRejectedError(mediaReasonCodes.dimensionsTooSmall);
+  }
+  let output: { data: Buffer; info: OutputInfo };
+  try {
+    output = await sharp(input, options)
+      .rotate()
+      .resize(campaignCoverWidth, campaignCoverHeight, {
+        fit: "cover",
+        position: "centre",
+      })
       .webp({ quality: mediaOutputQuality })
       .toBuffer({ resolveWithObject: true });
   } catch {

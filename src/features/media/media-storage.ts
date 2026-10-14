@@ -1,4 +1,4 @@
-import type { MediaKind } from "./media-contract.js";
+import type { MediaKind, StoredMediaKind } from "./media-contract.js";
 
 /**
  * Storage port for uploaded media (Decision 0095). PostgreSQL implements it
@@ -8,8 +8,9 @@ import type { MediaKind } from "./media-contract.js";
 
 export interface MediaObjectMetadata {
   readonly mediaId: string;
-  readonly ownerUserId: string;
-  readonly kind: MediaKind;
+  /** Decision 0140: null exactly for a `campaign_cover` (console upload). */
+  readonly ownerUserId: string | null;
+  readonly kind: StoredMediaKind;
   readonly contentType: "image/webp";
   readonly width: number;
   readonly height: number;

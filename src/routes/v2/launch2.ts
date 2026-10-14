@@ -14,6 +14,7 @@ import {
   validateCommonHeaders,
 } from "./community-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
+import { createLaunch2CampaignPublicService } from "../../features/launch2/launch2-campaigns.js";
 import {
   launch2BuybacksResourceSchema,
   launch2CommandErrors,
@@ -33,6 +34,7 @@ import {
   launch2InstanceParamsSchema,
   launch2IntentResourceSchema,
   launch2ListQuerySchema,
+  launch2CampaignListResourceSchema,
   launch2OverviewResourceSchema,
   launch2NftPrepareRequestSchema,
   launch2PageQuerySchema,
@@ -133,6 +135,43 @@ export function registerV2Launch2Routes(
     },
     async (request, reply) => {
       const resource = await service.getOverview({
+        principal: requireAuthenticatedLoopPrincipal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  const campaignService =
+    dependencies.launch2CampaignService ??
+    createLaunch2CampaignPublicService({
+      repository: null,
+      publicBaseUrl: "http://localhost",
+    });
+
+  app.get(
+    "/v2/launch2/campaigns",
+    {
+      schema: {
+        operationId: "listV2Launch2Campaigns",
+        summary: "Launch desk operator campaign cards",
+        description:
+          "Decision 0140: the operator campaigns the console published, with endsAt > now and startsAt ≤ now + 7 days, at most 10, ordered pinned first, then sortOrder ascending, then startsAt ascending. state = live (startsAt ≤ now) | upcoming. coverUrl is the absolute cover URL (GET /v2/media/{id}.webp) or null. link.kind route = an App route string; url = an https URL. Read from the database only (independent of the Factory configuration); without it 503 CAPABILITY_UNAVAILABLE / LAUNCH2_REPOSITORY_UNAVAILABLE, never an empty list.",
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: launch2CampaignListResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyOrQueryV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await campaignService.listCampaigns({
         principal: requireAuthenticatedLoopPrincipal(request),
       });
       reply.header("cache-control", "no-store");

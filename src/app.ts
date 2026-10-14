@@ -456,6 +456,8 @@ import { createMiningClaimSigner } from "./features/mining/claim-voucher.js";
 import { createMiningSettlementRunner } from "./features/mining/hourly-settlement-runner.js";
 import { createAdminMiningSettlementService } from "./features/admin/admin-mining-settlement.js";
 import { createAdminChainGuardService } from "./features/admin/admin-chain-guard.js";
+import { createAdminLaunch2CampaignService } from "./features/admin/admin-launch2-campaigns.js";
+import { createLaunch2CampaignPublicService } from "./features/launch2/launch2-campaigns.js";
 import { createChainGuardAlertNotifier } from "./integrations/chain-guard/chain-guard-alerts.js";
 import { createChainGuardHoldGate } from "./features/chain-guard/chain-guard-hold.js";
 import { createMiningRewardClaimChain } from "./integrations/mining/reward-claim-chain.js";
@@ -2726,6 +2728,13 @@ export async function buildApp(
       referralService,
       memeService,
       launch2Service,
+      // Decision 0140: launch desk campaigns, independent of the Factory
+      // configuration (database only).
+      launch2CampaignService: createLaunch2CampaignPublicService({
+        repository: database.launch2Campaigns ?? null,
+        publicBaseUrl: config.publicBaseUrl,
+        now: options.walletIntentNow ?? ((): Date => new Date()),
+      }),
       deviceService,
       pushTokenService,
       securityService,
@@ -2746,6 +2755,12 @@ export async function buildApp(
     const adminRepository =
       database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0140: launch desk campaigns (console-written).
+      launch2Campaigns: createAdminLaunch2CampaignService({
+        repository: database.launch2Campaigns ?? null,
+        publicBaseUrl: config.publicBaseUrl,
+        ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
+      }),
       // Decision 0134: chain guard incidents of the launch chain.
       chainGuard: createAdminChainGuardService({
         repository: database.chainGuard ?? null,

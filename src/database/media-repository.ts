@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { z } from "zod";
 
-import { mediaKinds } from "../features/media/media-contract.js";
+import { storedMediaKinds } from "../features/media/media-contract.js";
 import {
   MediaIdempotencyConflictError,
   MediaStorageUnavailableError,
@@ -26,8 +26,8 @@ const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const metadataRowSchema = z
   .object({
     media_id: uuidSchema,
-    owner_user_id: uuidSchema,
-    kind: z.enum(mediaKinds),
+    owner_user_id: uuidSchema.nullable(),
+    kind: z.enum(storedMediaKinds),
     content_type: z.literal("image/webp"),
     width: z.number().int().min(1),
     height: z.number().int().min(1),

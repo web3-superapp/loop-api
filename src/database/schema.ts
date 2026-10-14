@@ -1,4 +1,4 @@
-export const latestMigrationName = "000080_chain_guard_followups";
+export const latestMigrationName = "000081_launch2_campaigns";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -177,4 +177,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_dynamic_claim_reports",
   "public.chain_guard_incidents",
   "public.chain_guard_cursors",
+  "public.launch2_campaigns",
 ] as const);

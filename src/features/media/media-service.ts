@@ -74,10 +74,13 @@ export function mediaRejected(
   return V2ApiError.fromCode("VALIDATION_FAILED", { reasonCode });
 }
 
-function project(metadata: MediaObjectMetadata): MediaUploadResource {
+function project(
+  metadata: MediaObjectMetadata,
+  kind: MediaKind,
+): MediaUploadResource {
   return Object.freeze({
     mediaId: metadata.mediaId,
-    ref: mediaRef(metadata.kind, metadata.mediaId),
+    ref: mediaRef(kind, metadata.mediaId),
     url: mediaPath(metadata.mediaId),
     width: metadata.width,
     height: metadata.height,
@@ -135,7 +138,7 @@ export function createMediaService(options: {
           ) {
             throw new MediaIdempotencyConflictError();
           }
-          return project(earlier);
+          return project(earlier, input.kind);
         }
         await options.quota.consume(ownerUserId);
         const processed = await processMediaUpload(input.bytes);
@@ -150,7 +153,7 @@ export function createMediaService(options: {
           idempotencyKey: input.idempotencyKey,
           requestSha256,
         });
-        return project(stored);
+        return project(stored, input.kind);
       } catch (error) {
         return mapFailure(error);
       }

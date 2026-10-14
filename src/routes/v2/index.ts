@@ -36,6 +36,7 @@ import type { MiningService } from "../../features/mining/mining-service.js";
 import type { ReferralService } from "../../features/referral/referral-service.js";
 import type { MemeService } from "../../features/meme/meme-service.js";
 import type { Launch2Service } from "../../features/launch2/launch2-service.js";
+import type { Launch2CampaignPublicService } from "../../features/launch2/launch2-campaigns.js";
 import type { AdminSettingsReader } from "../../features/admin/admin-settings-reader.js";
 import { registerV2ApprovalRoutes } from "./approvals.js";
 import { registerV2ChainRoutes } from "./chain.js";
@@ -113,6 +114,8 @@ export interface V2RouteDependencies {
   readonly memeService: MemeService;
   /** MEME v2 read model (Decision 0114). */
   readonly launch2Service: Launch2Service;
+  /** Decision 0140: launch desk campaigns (absent: 503). */
+  readonly launch2CampaignService?: Launch2CampaignPublicService;
   /**
    * Decision 0102: operator overrides (recommended communities, intel
    * promotions). Absent or null: the shipped constants are in force.

@@ -7,6 +7,16 @@
 
 export const mediaKinds = Object.freeze(["avatar", "community_logo"] as const);
 export type MediaKind = (typeof mediaKinds)[number];
+/**
+ * Decision 0140: every kind a stored object can have. `campaign_cover` is
+ * uploaded from the operator console (no LOOP user owner) and is never
+ * referenced by a profile or community ref.
+ */
+export const storedMediaKinds = Object.freeze([
+  ...mediaKinds,
+  "campaign_cover",
+] as const);
+export type StoredMediaKind = (typeof storedMediaKinds)[number];
 
 export const mediaContentType = "image/webp" as const;
 export const mediaOutputSize = 512;
@@ -16,6 +26,16 @@ export const mediaMinimumInputSide = 64;
 export const mediaMaximumUploadBytes = 5 * 1024 * 1024;
 /** Decoder guard against decompression bombs (50 megapixels). */
 export const mediaMaximumInputPixels = 50_000_000;
+/**
+ * Decision 0140: console campaign covers. PNG / JPEG / WebP by content,
+ * at most 2 MiB, at least 600 x 300, stored as a 1200 x 600 cover WebP
+ * (2:1, centre crop).
+ */
+export const campaignCoverWidth = 1200;
+export const campaignCoverHeight = 600;
+export const campaignCoverMinimumWidth = 600;
+export const campaignCoverMinimumHeight = 300;
+export const campaignCoverMaximumUploadBytes = 2 * 1024 * 1024;
 /** Shared by both upload routes, per user per minute. */
 export const mediaUploadsPerMinute = 6;
 

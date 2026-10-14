@@ -201,6 +201,7 @@ describe("database schema readiness contract", () => {
       "public.launch2_dynamic_claim_reports",
       "public.chain_guard_incidents",
       "public.chain_guard_cursors",
+      "public.launch2_campaigns",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

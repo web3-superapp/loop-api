@@ -132,6 +132,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/launch/{launchId}/intents",
       "/v2/launch/{launchId}/intents/{launchIntentId}",
       "/v2/launch/{launchId}/intents/{launchIntentId}/broadcast-report",
+      "/v2/launch2/campaigns",
       "/v2/launch2/instances",
       "/v2/launch2/instances/{instanceId}",
       "/v2/launch2/instances/{instanceId}/buybacks",
@@ -238,7 +239,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(190);
+    expect(operationIds).toHaveLength(191);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
@@ -1322,6 +1323,8 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/communities/{communityId}",
       "GET /admin/v1/launch/projects",
       "GET /admin/v1/launch/projects/{projectId}",
+      "GET /admin/v1/launch2/campaigns",
+      "GET /admin/v1/launch2/campaigns/{campaignId}",
       "GET /admin/v1/meme/tokens",
       "GET /admin/v1/mining/epochs",
       "GET /admin/v1/mining/epochs/{epochId}",
@@ -1333,6 +1336,7 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/session",
       "GET /admin/v1/settings/intel-promotions",
       "GET /admin/v1/settings/recommended-communities",
+      "PATCH /admin/v1/launch2/campaigns/{campaignId}",
       "POST /admin/v1/accounts",
       "POST /admin/v1/accounts/{accountId}/disable",
       "POST /admin/v1/accounts/{accountId}/reset-password",
@@ -1345,6 +1349,10 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/launch/projects/{projectId}/testnet-acceptance",
       "POST /admin/v1/launch/projects/{projectId}/versions/{version}/approve",
       "POST /admin/v1/launch/projects/{projectId}/versions/{version}/reject",
+      "POST /admin/v1/launch2/campaigns",
+      "POST /admin/v1/launch2/campaigns/cover",
+      "POST /admin/v1/launch2/campaigns/{campaignId}/archive",
+      "POST /admin/v1/launch2/campaigns/{campaignId}/publish",
       "POST /admin/v1/meme/tokens/{memeTokenId}/listing",
       "POST /admin/v1/meme/tokens/{memeTokenId}/pause",
       "POST /admin/v1/meme/tokens/{memeTokenId}/unpause",

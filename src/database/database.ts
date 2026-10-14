@@ -57,6 +57,8 @@ import {
 } from "./notification-repository.js";
 import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
+import { createPostgresLaunch2CampaignRepository } from "./launch2-campaign-repository.js";
+import type { Launch2CampaignRepository } from "../features/launch2/launch2-campaigns.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
 import { createPostgresLaunch2PublicationRepository } from "./launch2-snapshot-publication-repository.js";
@@ -269,6 +271,8 @@ export interface Database {
   readonly testnetFaucet?: TestnetFaucetRepository;
   /** Decision 0134: chain guard incidents and log cursor. */
   readonly chainGuard?: ChainGuardRepository;
+  /** Decision 0140: launch desk operator campaigns (console-written). */
+  readonly launch2Campaigns?: Launch2CampaignRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -520,6 +524,7 @@ export function createPostgresDatabase(
     miningSettlement: createPostgresMiningSettlementRepository(pool),
     testnetFaucet: createPostgresTestnetFaucetRepository(pool),
     chainGuard: createPostgresChainGuardRepository(pool),
+    launch2Campaigns: createPostgresLaunch2CampaignRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

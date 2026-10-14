@@ -299,6 +299,64 @@ const overviewActivitySchema = {
 const countSchema = { type: "integer", minimum: 0 } as const;
 
 /** Decision 0139: `GET /v2/launch2/overview`. */
+/** Decision 0140: `GET /v2/launch2/campaigns`. */
+export const launch2CampaignListResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["items", "observedAt", "contractVersion"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "campaignId",
+          "title",
+          "subtitle",
+          "coverUrl",
+          "startsAt",
+          "endsAt",
+          "ctaLabel",
+          "link",
+          "pinned",
+          "sortOrder",
+          "state",
+        ],
+        properties: {
+          campaignId: { type: "string", format: "uuid" },
+          title: { type: "string", minLength: 1, maxLength: 24 },
+          subtitle: {
+            anyOf: [
+              { type: "string", minLength: 1, maxLength: 60 },
+              { type: "null" },
+            ],
+          },
+          coverUrl: { anyOf: [{ type: "string" }, { type: "null" }] },
+          startsAt: { type: "string", format: "date-time" },
+          endsAt: { type: "string", format: "date-time" },
+          ctaLabel: { type: "string", minLength: 1, maxLength: 8 },
+          link: {
+            type: "object",
+            additionalProperties: false,
+            required: ["kind", "value"],
+            properties: {
+              kind: { type: "string", enum: ["route", "url"] },
+              value: { type: "string", minLength: 1, maxLength: 1024 },
+            },
+          },
+          pinned: { type: "boolean" },
+          sortOrder: { type: "integer" },
+          state: { type: "string", enum: ["live", "upcoming"] },
+        },
+      },
+    },
+    observedAt: { type: "string", format: "date-time" },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
 export const launch2OverviewResourceSchema = {
   type: "object",
   additionalProperties: false,

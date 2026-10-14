@@ -30,6 +30,11 @@ import {
 import { registerAdminRoleRoutes } from "./role-routes.js";
 import { registerAdminMiningSettlementRoutes } from "./mining-settlement-routes.js";
 import { registerAdminChainGuardRoutes } from "./chain-guard-routes.js";
+import { registerAdminLaunch2CampaignRoutes } from "./launch2-campaign-routes.js";
+import {
+  createAdminLaunch2CampaignService,
+  type AdminLaunch2CampaignService,
+} from "../../features/admin/admin-launch2-campaigns.js";
 import {
   createAdminChainGuardService,
   type AdminChainGuardService,
@@ -95,6 +100,8 @@ export interface AdminRouteDependencies {
   readonly miningSettlement: AdminMiningSettlementService;
   /** Decision 0134: chain guard incidents; absent = 503 CAPABILITY_UNAVAILABLE. */
   readonly chainGuard?: AdminChainGuardService;
+  /** Decision 0140: launch desk campaigns; absent = 503 CAPABILITY_UNAVAILABLE. */
+  readonly launch2Campaigns?: AdminLaunch2CampaignService;
 }
 
 /** Decision 0109: `onRequest` hooks of a protected route. */
@@ -882,6 +889,17 @@ export function registerAdminRoutes(
     service:
       dependencies.chainGuard ??
       createAdminChainGuardService({ repository: null, chainId: "eip155:56" }),
+    guard,
+    context,
+  });
+
+  registerAdminLaunch2CampaignRoutes(app, {
+    service:
+      dependencies.launch2Campaigns ??
+      createAdminLaunch2CampaignService({
+        repository: null,
+        publicBaseUrl: "http://localhost",
+      }),
     guard,
     context,
   });
