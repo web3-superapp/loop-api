@@ -15,6 +15,8 @@ import {
 } from "./community-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
 import {
+  memeBestTradesQuerySchema,
+  memeBestTradesResourceSchema,
   memeCandleQuerySchema,
   memeCandlesResourceSchema,
   memeCommandErrors,
@@ -142,6 +144,34 @@ export function registerV2MemeRoutes(
       const resource = await service.getToken({
         principal: requireAuthenticatedLoopPrincipal(request),
         memeTokenId: params.memeTokenId,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/meme/best-trades",
+    {
+      schema: {
+        operationId: "listV2MemeBestTrades",
+        summary: "List the week's best MEME trades",
+        description: `Decision 0142: at most 10 (wallet, token) pairs ranked by realized USD1, highest first. realizedUsd1 = the wallet's curve sell proceeds of the token in the last 7 days − the tokens sold × the wallet's average curve buy price of that token (all its buys up to the computation time); only positive results. Curve (inner market) trades only: DEX swaps of graduated classic MEME tokens are not indexed. A pair without a curve buy has no cost basis and is left out. The wallet must belong to a LOOP account with an active public profile and a trade history visible to everyone; anonymous wallets never appear. Operator-hidden tokens are left out. The same for every caller; computed on read and cached for 5 minutes per API process (observedAt is the computation time). window accepts only 7d (default). ${unavailableNote}`,
+        tags: ["meme"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: memeBestTradesQuerySchema,
+        response: { 200: memeBestTradesResourceSchema, ...memeReadErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.listBestTrades({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        ...(query["window"] === undefined ? {} : { window: query["window"] }),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

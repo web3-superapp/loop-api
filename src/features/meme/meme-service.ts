@@ -30,6 +30,7 @@ import {
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   MemeMetadataInvalidError,
+  memeBestTradeWindows,
   memeCandleIntervals,
   memeCreateRequestParts,
   memeListTabs,
@@ -37,10 +38,12 @@ import {
   memeReasonCodes,
   memeRules,
   parseMemeTokenMetadata,
+  type MemeBestTradeWindow,
   type MemeCandleInterval,
   type MemeListTab,
 } from "./meme-contract.js";
 import { randomMemeSalt } from "./meme-create2.js";
+import { mediaAbsoluteUrl } from "../media/media-contract.js";
 import {
   MemeSellExceedsSoldError,
   exceedsRelativeDifference,
@@ -122,6 +125,11 @@ export interface MemeService {
   getToken(input: {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly memeTokenId: string;
+  }): Promise<Record<string, unknown>>;
+  /** Decision 0142: the weekly best realized trades (5-minute cache). */
+  listBestTrades(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly window?: unknown;
   }): Promise<Record<string, unknown>>;
   listTrades(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -252,6 +260,11 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
   let hotCache: {
     readonly expiresAt: number;
     readonly ids: readonly { memeTokenId: string; volumeRaw: string }[];
+  } | null = null;
+
+  let bestTradesCache: {
+    readonly expiresAt: number;
+    readonly resource: Record<string, unknown>;
   } | null = null;
 
   function contractOrUnavailable() {
@@ -702,6 +715,72 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
         observedAt,
         contractVersion: v2ContractVersion,
       });
+    },
+
+    async listBestTrades(input) {
+      const contract = contractOrUnavailable();
+      const window: MemeBestTradeWindow =
+        input.window === undefined
+          ? "7d"
+          : typeof input.window === "string" &&
+              (memeBestTradeWindows as readonly string[]).includes(input.window)
+            ? (input.window as MemeBestTradeWindow)
+            : (() => {
+                throw V2ApiError.invalidRequest();
+              })();
+      const at = now();
+      if (
+        bestTradesCache !== null &&
+        at.getTime() < bestTradesCache.expiresAt
+      ) {
+        return bestTradesCache.resource;
+      }
+      const observedAt = at.toISOString();
+      let records;
+      try {
+        records = await deps.repository.rankBestTrades({
+          chainId: deps.contract.chainId,
+          contractAddress: contract.address,
+          since: new Date(
+            at.getTime() - memeRules.bestTradesWindowSeconds * 1000,
+          ).toISOString(),
+          until: observedAt,
+          limit: memeRules.bestTradesLimit,
+        });
+      } catch (error) {
+        return translateMemeError(error);
+      }
+      const resource = Object.freeze({
+        window,
+        items: records.map((record, index) =>
+          Object.freeze({
+            rank: index + 1,
+            user: Object.freeze({
+              userId: record.publicProfileId,
+              loopId: record.loopId,
+              alias: record.alias,
+              avatar: record.avatarRef,
+            }),
+            token: Object.freeze({
+              memeTokenId: record.memeTokenId,
+              symbol: record.symbol,
+              logoUrl:
+                record.imageMediaId === null
+                  ? null
+                  : mediaAbsoluteUrl(deps.publicBaseUrl, record.imageMediaId),
+            }),
+            realizedUsd1: formatE18(BigInt(record.realizedRaw)),
+            observedAt,
+          }),
+        ),
+        observedAt,
+        contractVersion: v2ContractVersion,
+      });
+      bestTradesCache = {
+        expiresAt: at.getTime() + memeRules.bestTradesCacheMs,
+        resource,
+      };
+      return resource;
     },
 
     async getToken(input) {
@@ -1299,6 +1378,7 @@ export function createUnavailableMemeService(
   return Object.freeze({
     listTokens: fail,
     getToken: fail,
+    listBestTrades: fail,
     listTrades: fail,
     listCandles: fail,
     listHolders: fail,

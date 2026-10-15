@@ -134,6 +134,46 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 - `change1hPct`：与 1 小时前最后一笔成交价（没有则与开盘价 V0/T0）相比；毕业后为 `null`。
 - `progressBps`：进度条；`status = graduated` 时显示「已毕业」标签代替进度条。
 - 空列表 = 真的没有（「还没有代币，来创建第一个」）；不可用时是 503，不是空列表。
+- （决策 0142）`createdAt`：上链后为 TokenCreated 区块时间（「上线时长」用它），草稿 / 待上链为草稿创建时间；
+  `volume24hUsd1`：最近 24 小时（不含 now − 24h 那一刻）内盘买卖的钱包侧 USD1 之和；**只算内盘**——经典 MEME
+  毕业后的 DEX 外盘成交不索引，已毕业代币通常为 `"0"`；`holderCount`：内盘净持仓为正的钱包数（毕业冻结）。
+  三个字段列表四个 tab 与详情都有，恒非空。
+
+### 3.1 每周最佳交易 `GET /v2/meme/best-trades?window=7d`（决策 0142）
+
+`window` 只接受 `7d`（默认）；其他值 / 其他参数 400。所有调用方结果相同，按读计算、每个 API 进程缓存 5 分钟。
+
+```json
+{
+  "window": "7d",
+  "items": [
+    {
+      "rank": 1,
+      "user": {
+        "userId": "<publicProfileId>",
+        "loopId": "LOOP-ABCDEFGH",
+        "alias": "frogmaker",
+        "avatar": "avatar:media/…"
+      },
+      "token": {
+        "memeTokenId": "…",
+        "symbol": "FROG",
+        "logoUrl": "https://…/v2/media/….webp"
+      },
+      "realizedUsd1": "12.5",
+      "observedAt": "2026-10-15T12:00:00.000Z"
+    }
+  ],
+  "observedAt": "2026-10-15T12:00:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+- 每行是一个（钱包, 代币）对，同一用户可出现多次；≤ 10 行，按 `realizedUsd1` 降序，只列正收益；空数组 = 本周没有。
+- `realizedUsd1` = 该钱包近 7 天内盘卖出所得 USD1 − 卖出数量 × 该钱包对该代币的内盘买入均价（截至计算时刻的全部买入，
+  含手续费；成本向上取整）。没有内盘买入（转账得来）的不列。
+- `user.userId` 是公开资料 ID（点进 `/v2/profiles/{publicProfileId}`）；`avatar` 是存储的 avatarRef，渲染同公开资料。
+  钱包映射不到账号、账号没有激活公开资料、或交易记录设为仅自己可见的，都不列。运营隐藏的代币不列。
 
 ## 4. 代币详情 `GET /v2/meme/tokens/{memeTokenId}`
 

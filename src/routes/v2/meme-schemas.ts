@@ -7,6 +7,7 @@ import {
   transactionHashPatternSource,
 } from "../../features/chain/chain-contract.js";
 import {
+  memeBestTradeWindows,
   memeCandleIntervals,
   memeIntentKinds,
   memeIntentStates,
@@ -309,10 +310,23 @@ const tokenRowProperties = {
   priceUsd1: nullableDecimalStringSchema,
   marketCapUsd1: nullableDecimalStringSchema,
   change1hPct: percentSchema,
-  volume24hUsd1: decimalStringSchema,
-  holderCount: { type: "integer", minimum: 0 },
+  volume24hUsd1: {
+    ...decimalStringSchema,
+    description:
+      "Decision 0142: wallet-side USD1 of the curve buys and sells in the last 24 hours (now − 24 h, exclusive, to now), summed from the indexed Trade logs; reorged-out logs excluded. Curve (inner market) only: LOOP does not index DEX swaps of graduated classic MEME tokens, so a graduated token reads the curve trades of the window (usually 0 after graduation).",
+  },
+  holderCount: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "Wallets with a positive net curve position (buys − sells); frozen at graduation; wallet-to-wallet transfers are not tracked.",
+  },
   tradeCount: { type: "integer", minimum: 0 },
-  createdAt: dateTimeSchema,
+  createdAt: {
+    ...dateTimeSchema,
+    description:
+      "Decision 0142: the chain creation time (the TokenCreated block time) once on chain; a draft or pending_chain token carries its draft creation time.",
+  },
   graduatedAt: nullableDateTimeSchema,
   pool: nullableAddressSchema,
   priceSource: {
@@ -1008,6 +1022,86 @@ export const memeIntentResourceSchema = {
         },
       },
     },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+export const memeBestTradesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    window: {
+      type: "string",
+      enum: [...memeBestTradeWindows],
+      description: "Optional, default 7d (the only window).",
+    },
+  },
+} as const;
+
+export const memeBestTradesResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["window", "items", "observedAt", "contractVersion"],
+  properties: {
+    window: { type: "string", enum: [...memeBestTradeWindows] },
+    items: {
+      type: "array",
+      maxItems: memeRules.bestTradesLimit,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["rank", "user", "token", "realizedUsd1", "observedAt"],
+        properties: {
+          rank: {
+            type: "integer",
+            minimum: 1,
+            maximum: memeRules.bestTradesLimit,
+          },
+          user: {
+            type: "object",
+            additionalProperties: false,
+            required: ["userId", "loopId", "alias", "avatar"],
+            properties: {
+              userId: {
+                ...opaqueIdSchema,
+                description:
+                  "The public profile id (GET /v2/public-profiles/{publicProfileId}); never the internal account id.",
+              },
+              loopId: { type: "string", minLength: 1, maxLength: 64 },
+              alias: { anyOf: [{ type: "string" }, { type: "null" }] },
+              avatar: {
+                anyOf: [{ type: "string" }, { type: "null" }],
+                description:
+                  "The stored avatarRef (avatar:media/{mediaId} or avatar:preset/*), rendered like the public profile's.",
+              },
+            },
+          },
+          token: {
+            type: "object",
+            additionalProperties: false,
+            required: ["memeTokenId", "symbol", "logoUrl"],
+            properties: {
+              memeTokenId: opaqueIdSchema,
+              symbol: { type: "string" },
+              logoUrl: {
+                anyOf: [{ type: "string", format: "uri" }, { type: "null" }],
+              },
+            },
+          },
+          realizedUsd1: {
+            ...decimalStringSchema,
+            description:
+              "USD1 received by the wallet's curve sells of this token in the window minus the sold tokens valued at the wallet's average curve buy price (all its buys up to observedAt, fee included; cost rounded up). Always positive.",
+          },
+          observedAt: {
+            ...dateTimeSchema,
+            description: "When the ranking was computed.",
+          },
+        },
+      },
+    },
+    observedAt: dateTimeSchema,
     contractVersion: contractVersionSchema,
   },
 } as const;

@@ -39,6 +39,7 @@ import {
   MemeIntentReportConflictError,
   MemeRepositoryUnavailableError,
   type CreateMemeIntentRecord,
+  type MemeBestTradeRecord,
   type MemeIntentRecord,
   type MemeRepository,
   type MemeTokenListRecord,
@@ -356,6 +357,9 @@ function listRecord(token: MemeTokenRecord): MemeTokenListRecord {
 export interface InMemoryMemeRepository extends MemeRepository {
   readonly tokens: Map<string, MemeTokenRecord>;
   readonly intents: Map<string, MemeIntentRecord>;
+  /** What `rankBestTrades` answers; `bestTradeCalls` records each read. */
+  bestTrades: readonly MemeBestTradeRecord[];
+  readonly bestTradeCalls: Parameters<MemeRepository["rankBestTrades"]>[0][];
   rateLimited: boolean;
   /** What `sumRecentExposureUsd` answers (the pre-check). */
   exposureUsd: string;
@@ -379,6 +383,12 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
   const repository: InMemoryMemeRepository = {
     tokens,
     intents,
+    bestTrades: [],
+    bestTradeCalls: [],
+    rankBestTrades: (input) => {
+      repository.bestTradeCalls.push(input);
+      return Promise.resolve(repository.bestTrades);
+    },
     rateLimited: false,
     exposureUsd: "0",
     insertExposureUsd: null,

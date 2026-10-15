@@ -15,6 +15,7 @@ import {
 import type { BscChainCallClient } from "../src/integrations/bsc/rpc-client.js";
 import { memeCurveAbiV1 } from "../src/integrations/meme/meme-abi.v1.js";
 import {
+  memeBestTradesResourceSchema,
   memeCandlesResourceSchema,
   memeHoldersResourceSchema,
   memeIntentResourceSchema,
@@ -156,6 +157,7 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       ["GET", `/v2/meme/tokens/${walletId}`],
       ["GET", `/v2/meme/quote?tokenId=${walletId}&side=buy&amount=1`],
       ["GET", `/v2/meme/intents/${walletId}`],
+      ["GET", "/v2/meme/best-trades"],
     ] as const) {
       const response = await app.inject({
         method,
@@ -386,6 +388,136 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     ).toBe(400);
     const hot = await get(app, "/v2/meme/tokens?tab=hot");
     expect(hot.json<{ items: unknown[] }>().items).toHaveLength(2);
+  });
+
+  it("carries createdAt, volume24hUsd1, and holderCount on list rows and the detail (Decision 0142)", async () => {
+    const { app, repository, chain } = await createApp();
+    const token = seedTrading(repository, chain, {
+      memeTokenId: "aaaaaaaa-9999-4999-8999-999999999999",
+      holderCount: 7,
+    });
+    for (const tab of ["new", "hot", "graduating"]) {
+      const row = (await get(app, `/v2/meme/tokens?tab=${tab}`)).json<{
+        items: Record<string, unknown>[];
+      }>().items[0];
+      expect(row, tab).toMatchObject({
+        createdAt: token.chainCreatedAt,
+        volume24hUsd1: "0",
+        holderCount: 7,
+      });
+    }
+    const detail = (
+      await get(app, `/v2/meme/tokens/${token.memeTokenId}`)
+    ).json<{ memeToken: Record<string, unknown> }>().memeToken;
+    expect(detail).toMatchObject({
+      createdAt: token.chainCreatedAt,
+      volume24hUsd1: "5",
+      holderCount: 7,
+    });
+    const rowSchema = memeTokenListResourceSchema.properties.items.items;
+    expect(rowSchema.required).toEqual(
+      expect.arrayContaining(["createdAt", "volume24hUsd1", "holderCount"]),
+    );
+    expect(rowSchema.properties.volume24hUsd1.description).toContain(
+      "does not index DEX swaps",
+    );
+  });
+
+  it("serves the weekly best trades with the projected user and token, cached for 5 minutes (Decision 0142)", async () => {
+    const { app, repository } = await createApp();
+    repository.bestTrades = [
+      {
+        wallet: "0x000000000000000000000000000000000000000a",
+        memeTokenId: "aaaaaaaa-1111-4111-8111-111111111111",
+        symbol: "FROG",
+        imageMediaId: "cccccccc-1111-4111-8111-111111111111",
+        publicProfileId: "dddddddd-1111-4111-8111-111111111111",
+        loopId: "LOOP-ABCDEFGH",
+        alias: "frogmaker",
+        avatarRef: "avatar:preset/frog",
+        realizedRaw: "12500000000000000000",
+      },
+      {
+        wallet: "0x000000000000000000000000000000000000000b",
+        memeTokenId: "bbbbbbbb-1111-4111-8111-111111111111",
+        symbol: "TOAD",
+        imageMediaId: null,
+        publicProfileId: "eeeeeeee-1111-4111-8111-111111111111",
+        loopId: "LOOP-BCDEFGHJ",
+        alias: null,
+        avatarRef: null,
+        realizedRaw: "1",
+      },
+    ];
+    const response = await get(app, "/v2/meme/best-trades?window=7d");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    const body = response.json<
+      { items: Record<string, unknown>[]; observedAt: string } & Record<
+        string,
+        unknown
+      >
+    >();
+    expectKeys(body, requiredOf(memeBestTradesResourceSchema, []));
+    expect(body["window"]).toBe("7d");
+    expect(body.items).toEqual([
+      {
+        rank: 1,
+        user: {
+          userId: "dddddddd-1111-4111-8111-111111111111",
+          loopId: "LOOP-ABCDEFGH",
+          alias: "frogmaker",
+          avatar: "avatar:preset/frog",
+        },
+        token: {
+          memeTokenId: "aaaaaaaa-1111-4111-8111-111111111111",
+          symbol: "FROG",
+          logoUrl: expect.stringContaining(
+            "/v2/media/cccccccc-1111-4111-8111-111111111111",
+          ) as unknown,
+        },
+        realizedUsd1: "12.5",
+        observedAt: body.observedAt,
+      },
+      {
+        rank: 2,
+        user: {
+          userId: "eeeeeeee-1111-4111-8111-111111111111",
+          loopId: "LOOP-BCDEFGHJ",
+          alias: null,
+          avatar: null,
+        },
+        token: {
+          memeTokenId: "bbbbbbbb-1111-4111-8111-111111111111",
+          symbol: "TOAD",
+          logoUrl: null,
+        },
+        realizedUsd1: "0.000000000000000001",
+        observedAt: body.observedAt,
+      },
+    ]);
+    expect(repository.bestTradeCalls).toHaveLength(1);
+    const call = repository.bestTradeCalls[0]!;
+    expect(call).toMatchObject({
+      chainId: "eip155:97",
+      contractAddress: memeCurveAddress,
+      limit: 10,
+      until: body.observedAt,
+    });
+    expect(Date.parse(call.until) - Date.parse(call.since)).toBe(
+      7 * 86_400_000,
+    );
+    // Default window, same cached ranking: no second read.
+    const again = await get(app, "/v2/meme/best-trades");
+    expect(again.json()).toEqual(body);
+    expect(repository.bestTradeCalls).toHaveLength(1);
+    for (const url of [
+      "/v2/meme/best-trades?window=30d",
+      "/v2/meme/best-trades?window=24h",
+      "/v2/meme/best-trades?limit=5",
+    ]) {
+      expect((await get(app, url)).statusCode, url).toBe(400);
+    }
   });
 
   it("drops operator-hidden tokens from every list but keeps the detail (Decision 0102)", async () => {

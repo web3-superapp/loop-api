@@ -63,6 +63,7 @@ function laneRepository(
     getToken: reject,
     listTokens: reject,
     rankHotTokens: reject,
+    rankBestTrades: reject,
     listTokensByIds: reject,
     tokenStats: reject,
     listTrades: reject,

@@ -30,6 +30,7 @@ import {
   memeIntentIdempotencyScope,
   type CommitMemeSegmentInput,
   type CreateMemeIntentRecord,
+  type MemeBestTradeRecord,
   type MemeCandleRecord,
   type MemeCheckpointRecord,
   type MemeCreatorProjection,
@@ -304,6 +305,97 @@ function mapListToken(raw: unknown): MemeTokenListRecord {
     ...token,
     volume24hRaw: stats.volume_24h,
     price1hAgoE18: stats.price_1h_ago,
+  });
+}
+
+/**
+ * Decision 0142: the weekly best trades. `sells` reads the window through
+ * `meme_trades_sell_window_idx`; `buys` reads each selling pair's cost
+ * basis through `meme_trades_wallet_buy_idx`. The cost of the sold tokens
+ * is rounded up (never overstates the gain). A pair without any buy (tokens
+ * that arrived by transfer) has no cost basis and is left out. The wallet
+ * maps to the earliest active `account_wallets` row (the `accountJoin`
+ * rule); the account needs an active public profile and a trade history
+ * visible to everyone.
+ */
+const bestTradesSql = `
+  with sells as (
+    select tr.wallet, tr.meme_token_id,
+      sum(tr.usd1_amount) as sell_usd1,
+      sum(tr.token_amount) as sell_tokens,
+      max(tr.traded_at) as last_sell_at
+    from public.meme_trades as tr
+    join public.meme_tokens as t on t.meme_token_id = tr.meme_token_id
+    where not tr.removed and not tr.is_buy
+      and tr.traded_at > $3::timestamptz and tr.traded_at <= $4::timestamptz
+      and t.chain_id = $1 and t.contract_address = $2
+      and t.listing = 'listed' and t.status = any($6::text[])
+    group by tr.wallet, tr.meme_token_id
+  ),
+  buys as (
+    select b.wallet, b.meme_token_id,
+      sum(b.usd1_amount) as buy_usd1,
+      sum(b.token_amount) as buy_tokens
+    from public.meme_trades as b
+    join sells as s on s.wallet = b.wallet and s.meme_token_id = b.meme_token_id
+    where not b.removed and b.is_buy and b.traded_at <= $4::timestamptz
+    group by b.wallet, b.meme_token_id
+  ),
+  scored as (
+    select s.wallet, s.meme_token_id, s.last_sell_at,
+      s.sell_usd1
+        - div(s.sell_tokens * b.buy_usd1 + b.buy_tokens - 1, b.buy_tokens)
+        as realized
+    from sells as s
+    join buys as b on b.wallet = s.wallet and b.meme_token_id = s.meme_token_id
+    where b.buy_tokens > 0
+  )
+  select sc.wallet, sc.meme_token_id, t.symbol, t.image_media_id::text as image_media_id,
+    acct.public_profile_id::text as public_profile_id, acct.loop_id,
+    acct.alias, acct.avatar_ref, sc.realized::text as realized
+  from scored as sc
+  join public.meme_tokens as t on t.meme_token_id = sc.meme_token_id
+  join lateral (
+    select p.public_profile_id, u.loop_id, p.alias, p.avatar_ref,
+      coalesce(pv.trade_history_visibility, 'everyone') as trade_visibility
+    from public.account_wallets as w
+    join public.loop_users as u on u.id = w.owner_user_id
+    join public.user_profiles as p
+      on p.owner_user_id = w.owner_user_id and p.profile_status = 'active'
+    left join public.privacy_preferences_v2 as pv on pv.owner_user_id = w.owner_user_id
+    where w.address = sc.wallet and w.status = 'active'
+    order by w.first_seen_at asc, w.wallet_id asc
+    limit 1
+  ) as acct on true
+  where sc.realized > 0 and acct.trade_visibility = 'everyone'
+  order by sc.realized desc, sc.last_sell_at desc, sc.wallet asc, sc.meme_token_id asc
+  limit $5
+`;
+
+const bestTradeRowSchema = z.object({
+  wallet: addressSchema,
+  meme_token_id: uuidSchema,
+  symbol: z.string(),
+  image_media_id: z.string().nullable(),
+  public_profile_id: z.string(),
+  loop_id: z.string(),
+  alias: z.string().nullable(),
+  avatar_ref: z.string().nullable(),
+  realized: rawSchema,
+});
+
+function mapBestTrade(raw: unknown): MemeBestTradeRecord {
+  const row = bestTradeRowSchema.parse(raw);
+  return Object.freeze({
+    wallet: row.wallet,
+    memeTokenId: row.meme_token_id,
+    symbol: row.symbol,
+    imageMediaId: row.image_media_id,
+    publicProfileId: row.public_profile_id,
+    loopId: row.loop_id,
+    alias: row.alias,
+    avatarRef: row.avatar_ref,
+    realizedRaw: row.realized,
   });
 }
 
@@ -881,6 +973,25 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
           ],
         });
         return Object.freeze(result.rows.map((row) => mapListToken(row)));
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async rankBestTrades(input) {
+      try {
+        const result = await pool.query({
+          text: bestTradesSql,
+          values: [
+            input.chainId,
+            addressSchema.parse(input.contractAddress),
+            new Date(input.since).toISOString(),
+            new Date(input.until).toISOString(),
+            input.limit,
+            [...memeOnChainStatuses],
+          ],
+        });
+        return Object.freeze(result.rows.map((row) => mapBestTrade(row)));
       } catch (error) {
         return translate(error);
       }
@@ -2222,6 +2333,7 @@ export function createUnavailableMemeRepository(): MemeRepository {
     getToken: fail,
     listTokens: fail,
     rankHotTokens: fail,
+    rankBestTrades: fail,
     listTokensByIds: fail,
     tokenStats: fail,
     listTrades: fail,

@@ -1,4 +1,5 @@
-export const latestMigrationName = "000082_launch2_overview_indexes";
+export const latestMigrationName =
+  "000083_meme_list_volume_best_trades_indexes";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

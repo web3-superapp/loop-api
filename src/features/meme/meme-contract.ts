@@ -83,6 +83,10 @@ export const memeRules = Object.freeze({
   hotWindowSeconds: 3_600,
   hotCacheMs: 60_000,
   hotCandidateLimit: 500,
+  /** Decision 0142: weekly best trades (window, size, query cache). */
+  bestTradesWindowSeconds: 7 * 86_400,
+  bestTradesLimit: 10,
+  bestTradesCacheMs: 300_000,
   intentDefaultDeadlineSeconds: 300,
   intentMinimumDeadlineSeconds: 30,
   intentMaximumDeadlineSeconds: 1_800,
@@ -94,6 +98,10 @@ export const memeRules = Object.freeze({
   /** Recomputation vs. chain quote: more than 0.1% is a logged warning. */
   quoteDriftWarningBps: 10n,
 });
+
+/** Decision 0142: `GET /v2/meme/best-trades?window=`. */
+export const memeBestTradeWindows = ["7d"] as const;
+export type MemeBestTradeWindow = (typeof memeBestTradeWindows)[number];
 
 export const memeReasonCodes = Object.freeze({
   tokenNotFound: "MEME_TOKEN_NOT_FOUND",

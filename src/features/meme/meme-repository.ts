@@ -106,6 +106,24 @@ export interface MemeTradeRecord {
   readonly account: MemeCreatorProjection | null;
 }
 
+/**
+ * Decision 0142: one (wallet, token) pair of the weekly best trades. The
+ * wallet maps to an account with an active public profile whose trade
+ * history is visible to everyone; anonymous wallets never appear.
+ */
+export interface MemeBestTradeRecord {
+  readonly wallet: string;
+  readonly memeTokenId: string;
+  readonly symbol: string;
+  readonly imageMediaId: string | null;
+  readonly publicProfileId: string;
+  readonly loopId: string;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+  /** Window sell proceeds minus the sold tokens at the average buy cost, raw. */
+  readonly realizedRaw: string;
+}
+
 export interface MemeTradeKey {
   readonly blockNumber: string;
   readonly logIndex: number;
@@ -406,6 +424,19 @@ export interface MemeRepository {
     readonly memeTokenIds: readonly string[];
     readonly now: string;
   }): Promise<readonly MemeTokenListRecord[]>;
+  /**
+   * Decision 0142: (wallet, token) pairs with sells in `(since, until]`,
+   * realized = sells − sold tokens × the pair's average buy price (all
+   * non-removed buys at or before `until`, cost rounded up); positive only,
+   * mapped wallets only, realized desc, at most `limit`.
+   */
+  rankBestTrades(input: {
+    readonly chainId: LaunchChainId;
+    readonly contractAddress: string;
+    readonly since: string;
+    readonly until: string;
+    readonly limit: number;
+  }): Promise<readonly MemeBestTradeRecord[]>;
   /** Trade aggregates of one token for the detail row. */
   tokenStats(input: {
     readonly memeTokenId: string;
