@@ -318,6 +318,15 @@ describe("LoopDynamic arithmetic (Decision 0131)", () => {
       dynamicFee: (294n * wad) / 10n,
       dynamicTaxBps: 3000,
     });
+    // S194 L1: the Hook floors a capped fee to the wei (one wei under 20 %
+    // of the post-base amount); the bps rounds to the cap instead of 1999.
+    const capped = launch2DynamicSellSplit({
+      netActual: 98n * wad - ((98n * wad * 2n) / 10n - 1n),
+      netNeutral: 98n * wad,
+      baseSellFeePpm: ppm,
+    });
+    expect(capped.dynamicFee).toBe((98n * wad * 2n) / 10n - 1n);
+    expect(capped.dynamicTaxBps).toBe(2000);
     expect(
       launch2DynamicClaimable({
         allocation: 30n * wad,

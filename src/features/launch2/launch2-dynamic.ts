@@ -437,7 +437,11 @@ export function launch2DynamicSellSplit(input: {
   readonly gross: bigint;
   readonly baseFee: bigint;
   readonly dynamicFee: bigint;
-  /** Dynamic fee over the post-base amount, in bps (floor). */
+  /**
+   * Dynamic fee over the post-base amount, in bps, rounded to the nearest
+   * bps. The Hook floors its fee to the wei, so a capped sell charges one
+   * wei under 20 % and a floor here printed 1999 for it (S194 L1).
+   */
   readonly dynamicTaxBps: number;
 } {
   const dynamicFee =
@@ -452,7 +456,9 @@ export function launch2DynamicSellSplit(input: {
   const dynamicTaxBps =
     input.netNeutral === 0n
       ? 0
-      : Number((dynamicFee * 10_000n) / input.netNeutral);
+      : Number(
+          (dynamicFee * 10_000n + input.netNeutral / 2n) / input.netNeutral,
+        );
   return { gross, baseFee, dynamicFee, dynamicTaxBps };
 }
 
