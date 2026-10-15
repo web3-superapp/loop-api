@@ -428,12 +428,14 @@ describe("Decision 0143 square timeline on PostgreSQL", () => {
     });
     await desk.update(consoleContext, id, { pinned: false });
     await desk.archive(consoleContext, id);
+    // Thunks, not promises: a promise created eagerly here rejects before
+    // the loop reaches it and vitest reports an unhandled rejection.
     for (const attempt of [
-      desk.archive(consoleContext, id),
-      desk.publish(consoleContext, id),
-      desk.update(consoleContext, id, { text: "x" }),
+      () => desk.archive(consoleContext, id),
+      () => desk.publish(consoleContext, id),
+      () => desk.update(consoleContext, id, { text: "x" }),
     ]) {
-      expect(await rejection(attempt)).toMatchObject({
+      expect(await rejection(attempt())).toMatchObject({
         code: "ADMIN_CONFLICT",
         detailsSafe: { reasonCode: squareReasonCodes.statusConflict },
       });
