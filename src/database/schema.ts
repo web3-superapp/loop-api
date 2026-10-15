@@ -1,4 +1,4 @@
-export const latestMigrationName = "000084_square_feed";
+export const latestMigrationName = "000085_wallet_networth_snapshots";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -180,4 +180,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_campaigns",
   "public.square_posts",
   "public.square_post_likes",
+  "public.wallet_networth_snapshots",
 ] as const);

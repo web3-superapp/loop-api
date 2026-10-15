@@ -89,6 +89,11 @@ import {
 } from "./integrations/bsc/testnet-faucet-chain.js";
 import { createTestnetFaucetSweepLane } from "./testnet-faucet-sweep-worker.js";
 import { createSquareFeedIngestLane } from "./square-feed-ingest-worker.js";
+import {
+  createWalletNetWorthSnapshotLane,
+  walletNetWorthSnapshotLane,
+} from "./wallet-networth-snapshot-worker.js";
+import type { WalletNetWorthSnapshotRepository } from "./database/wallet-networth-snapshot-repository.js";
 import type { SquareFeedIngestRepository } from "./features/square/square-ingest.js";
 import {
   launch2BuybackKeeperDefaults,
@@ -306,6 +311,8 @@ export interface ReconciliationWorkerDatabase {
   readonly memberBuyFeed?: MemberBuyFeedRepository;
   /** Decision 0143 `square_feed_ingest` lane; absent keeps it off. */
   readonly squareFeed?: SquareFeedIngestRepository;
+  /** Decision 0145 `wallet_networth_snapshot` lane; absent keeps it off. */
+  readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -406,6 +413,7 @@ export interface RunReconciliationWorkerOptions {
   readonly createTestnetFaucetTransactionLookup?: typeof createTestnetFaucetTransactionLookup;
   readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
   readonly createSquareFeedIngestLane?: typeof createSquareFeedIngestLane;
+  readonly createWalletNetWorthSnapshotLane?: typeof createWalletNetWorthSnapshotLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -843,6 +851,81 @@ export async function runReconciliationWorker(
           },
         }),
       );
+    }
+    // Decision 0145: hourly wallet net worth snapshots. Needs the BSC read
+    // client, the registry, and the market fact cache; without one of them
+    // the lane stays idle and says so once.
+    const netWorthConfig = options.config.walletNetWorthSnapshot ?? null;
+    if (netWorthConfig !== null) {
+      const netWorthRepository = database.walletNetWorthSnapshots;
+      const netWorthRegistry = database.chainRegistry;
+      const netWorthCache = database.marketFacts;
+      if (
+        netWorthRepository === undefined ||
+        netWorthRegistry === undefined ||
+        netWorthCache === undefined ||
+        indexerReadClient === null
+      ) {
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: walletNetWorthSnapshotLane,
+            reasonCode:
+              indexerReadClient === null
+                ? "BSC_RPC_NOT_CONFIGURED"
+                : "WALLET_NETWORTH_HISTORY_UNAVAILABLE",
+          },
+          "LOOP wallet net worth snapshot lane stays idle",
+        );
+      } else {
+        const netWorthFacts = createMarketFactService({
+          config: options.config.market,
+          cache: netWorthCache,
+          pairsProvider: createMarketProviders(options.config.market, "worker")
+            .pairs,
+          securityProvider: null,
+          candlesProvider: null,
+        });
+        memeLanes.push(
+          (
+            options.createWalletNetWorthSnapshotLane ??
+            createWalletNetWorthSnapshotLane
+          )({
+            repository: netWorthRepository,
+            listAssets: () => netWorthRegistry.listReadableAssets(bscChainId),
+            readPrices: (assets, signal) =>
+              netWorthFacts.readAssetPrices(
+                assets,
+                signal === undefined ? {} : { signal },
+              ),
+            readClient: indexerReadClient,
+            intervalMs: netWorthConfig.intervalMs,
+            batchSize: netWorthConfig.batchSize,
+            onPass: (result) => {
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane: walletNetWorthSnapshotLane,
+                  count: result.candidateCount,
+                  inserted: result.writtenCount,
+                  unvaluedCount: result.unvaluedCount,
+                  failedCount: result.failedCount,
+                  ...(result.priceReadFailed
+                    ? { reasonCode: "MARKET_PROVIDER_UNREACHABLE" }
+                    : {}),
+                },
+                "LOOP wallet net worth snapshot pass finished",
+              );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+      }
     }
     // Decision 0134: with the chain guard on, the three signing lanes ask
     // its incidents (read-only) before every tick and skip the tick while

@@ -620,3 +620,58 @@ PUT /v2/watchlist
 原型 `wallet` 页的"安全中心 / 授权盘点 / DApp 浏览器"三行副标题（MFA 状态、
 授权数量、已启用链数）在本步没有后端，属于 D16/D20，必须显示 unavailable 或
 不渲染副标题，不能写死数字。
+
+## 12. `GET /v2/wallets/{walletId}/networth/history` → 钱包总览小折线 / 大图（S199 / 决策 0145）
+
+`?range=1d|7d|30d|180d|360d`（必填，其他值或多余参数 400 `INVALID_REQUEST`）。只能读自己的
+钱包，别人的 404。不新增能力位：快照表读不到时 503 `CAPABILITY_UNAVAILABLE`，
+`detailsSafe.reasonCode = WALLET_NETWORTH_HISTORY_UNAVAILABLE`；既没有实时值也没有任何快照时
+`WALLET_NETWORTH_CURRENT_UNAVAILABLE`。
+
+```json
+{
+  "walletId": "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+  "range": "7d",
+  "points": [
+    {
+      "at": "2026-10-14T15:00:00.000Z",
+      "netWorthUsd": "6500",
+      "quality": "fresh"
+    },
+    {
+      "at": "2026-10-15T11:00:00.000Z",
+      "netWorthUsd": "6100.5",
+      "quality": "partial"
+    }
+  ],
+  "current": {
+    "netWorthUsd": "6352.815",
+    "at": "2026-10-15T12:20:00.000Z",
+    "quality": "fresh",
+    "origin": "live"
+  },
+  "change24h": {
+    "usd": "352.815",
+    "pct": "5.8803",
+    "baselineAt": "2026-10-14T12:00:00.000Z"
+  },
+  "high": { "at": "2026-10-14T15:00:00.000Z", "netWorthUsd": "6500" },
+  "low": { "at": "2026-10-15T11:00:00.000Z", "netWorthUsd": "6100.5" },
+  "fiat": { "currency": "CNY", "rate": "7.113", "amount": "45187.57" },
+  "source": "dexscreener",
+  "observedAt": "2026-10-15T12:20:00.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+- `points`：每小时整点快照，按档降采样取每段最后一个（1d 每小时、7d 每 4 小时、30d 每天、
+  180d 每 3 天、360d 每 7 天，按 UTC 对齐），最多 120 点，旧在前。**上线前没有历史，`points`
+  为空数组，画「暂无」**；`current` 不重复放进 `points`，画线时可自行把 `current` 接在末尾。
+- `quality`：`fresh` / `stale`（有过期价格）/ `partial`（有资产估不了价，值不含它）。估值全失败的
+  小时不写快照（不会出现 0）。
+- `current`：与 `balances.netWorth.valueUsd` 同一套估值（四舍五入到 6 位）；`origin: snapshot`
+  表示这次实时读失败、用的是最新快照（quality 至多 `stale`）。
+- `change24h` =「今日盈亏」：`current` − 24 h 前最近一个快照（只找 24–48 h 前的点），没有就是
+  `null`；该快照为 0 时 `pct` 为 `null`。
+- `high` / `low`：区间内非 `partial` 快照与非 `partial` 的 `current` 中的最高 / 最低，标注大图。
+- `fiat`：后端配了固定汇率 `FIAT_CNY_PER_USD` 才有，保留 2 位；`null` 就不画「≈ ¥」那一行。

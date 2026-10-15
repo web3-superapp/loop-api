@@ -59,6 +59,10 @@ import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresLaunch2CampaignRepository } from "./launch2-campaign-repository.js";
 import { createPostgresSquareRepository } from "./square-repository.js";
+import {
+  createPostgresWalletNetWorthSnapshotRepository,
+  type WalletNetWorthSnapshotRepository,
+} from "./wallet-networth-snapshot-repository.js";
 import type { SquareRepository } from "../features/square/square-contract.js";
 import type { Launch2CampaignRepository } from "../features/launch2/launch2-campaigns.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
@@ -277,6 +281,8 @@ export interface Database {
   readonly launch2Campaigns?: Launch2CampaignRepository;
   /** Decision 0143: square timeline posts, likes, and the ingest lane. */
   readonly squareFeed?: SquareRepository;
+  /** Decision 0145: hourly wallet net worth snapshots. */
+  readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -530,6 +536,8 @@ export function createPostgresDatabase(
     chainGuard: createPostgresChainGuardRepository(pool),
     launch2Campaigns: createPostgresLaunch2CampaignRepository(pool),
     squareFeed: createPostgresSquareRepository(pool),
+    walletNetWorthSnapshots:
+      createPostgresWalletNetWorthSnapshotRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

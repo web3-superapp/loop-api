@@ -682,17 +682,21 @@ describe("Decision 0143 square timeline on PostgreSQL", () => {
     ]);
   });
 
-  it("rolls back one step and up again", async () => {
-    const migrations = readdirSync(migrationsDirectory).filter((name) =>
-      name.endsWith(".ts"),
-    );
-    expect(migrations.at(-1)).toBe("000084_square_feed.ts");
+  it("rolls back through 000084 and up again", async () => {
+    const migrations = readdirSync(migrationsDirectory)
+      .filter((name) => name.endsWith(".ts"))
+      .sort();
+    // Down 000084 and every later migration, so a newer head keeps this
+    // case valid (Decision 0145 added 000085).
+    const stepsThrough000084 =
+      migrations.length - migrations.indexOf("000084_square_feed.ts");
+    expect(stepsThrough000084).toBeGreaterThanOrEqual(1);
     await pool.query("truncate public.square_post_likes, public.square_posts");
     await runner({
       databaseUrl: url,
       dir: migrationsDirectory,
       direction: "down",
-      count: 1,
+      count: stepsThrough000084,
       migrationsTable: "pgmigrations",
       log: () => undefined,
     });

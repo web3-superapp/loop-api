@@ -92,7 +92,7 @@ export function computeNetWorthChange24h(
 }
 
 /** Rounds a canonical decimal string to `digits` places, half away from zero. */
-function roundHalfAwayFromZero(value: string, digits: number): string {
+export function roundHalfAwayFromZero(value: string, digits: number): string {
   const half = `0.${"0".repeat(digits)}5`;
   const shifted = value.startsWith("-")
     ? subtractDecimalStrings(value, half)

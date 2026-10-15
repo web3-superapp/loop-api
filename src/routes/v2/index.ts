@@ -14,6 +14,7 @@ import type { PublicProfileService } from "../../features/profile/public-profile
 import type { MediaService } from "../../features/media/media-service.js";
 import type { V2SessionService } from "../../features/session/session-service.js";
 import type { WalletReadService } from "../../features/wallet/wallet-read-service.js";
+import type { WalletNetWorthHistoryService } from "../../features/wallet/wallet-networth-history.js";
 import type { WatchlistV2Service } from "../../features/watchlist/watchlist-v2-service.js";
 import type { MarketReadService } from "../../features/market/market-read-service.js";
 import type { TokenLogoProxyService } from "../../features/market/token-logo-proxy.js";
@@ -84,6 +85,8 @@ export interface V2RouteDependencies {
   readonly chainStatusService: ChainStatusService;
   readonly assetRegistryService: AssetRegistryService;
   readonly walletReadService: WalletReadService;
+  /** Decision 0145: net worth history (absent: 503). */
+  readonly walletNetWorthHistoryService?: WalletNetWorthHistoryService;
   readonly watchlistV2Service: WatchlistV2Service;
   readonly marketReadService: MarketReadService;
   /** Token logo proxy behind `GET /v2/market/logos/...` (Decision 0089). */

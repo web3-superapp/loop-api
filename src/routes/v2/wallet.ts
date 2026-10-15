@@ -20,6 +20,12 @@ import {
   walletReceiveResourceSchema,
 } from "./chain-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
+import {
+  walletNetWorthHistoryQuerySchema,
+  walletNetWorthHistoryResourceSchema,
+} from "./wallet-networth-schemas.js";
+import { V2ApiError } from "../../core/http/v2-error.js";
+import { walletNetWorthHistoryReasonCodes } from "../../features/wallet/wallet-networth-history.js";
 
 /**
  * V2 wallet module routes (D12, Decision 0033). Every route is read-only
@@ -46,7 +52,11 @@ export function registerV2WalletRoutes(
   app: FastifyInstance,
   dependencies: V2RouteDependencies,
 ): void {
-  const { authenticateLoopBearer, walletReadService } = dependencies;
+  const {
+    authenticateLoopBearer,
+    walletReadService,
+    walletNetWorthHistoryService,
+  } = dependencies;
 
   app.get(
     "/v2/wallets",
@@ -129,6 +139,47 @@ export function registerV2WalletRoutes(
       const resource = await walletReadService.getBalances({
         principal: requireAuthenticatedLoopPrincipal(request),
         walletId: params.walletId,
+        signal: requestSignal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/wallets/:walletId/networth/history",
+    {
+      schema: {
+        operationId: "getV2WalletNetWorthHistory",
+        summary: "Get the wallet's net worth history and 24 h change",
+        description:
+          "Decision 0145. Hourly USD net worth snapshots of one of the caller's wallets, downsampled per range (1d hourly, 7d every 4 h, 30d daily, 180d every 3 days, 360d weekly; at most 120 points), plus the current value (valued live like the balances netWorth, falling back to the newest snapshot), the change against the snapshot 24 h earlier, the range high / low, and an optional CNY amount at the configured fixed rate. A wallet that is not the caller's is NOT_FOUND. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode WALLET_NETWORTH_HISTORY_UNAVAILABLE when the snapshots cannot be read, WALLET_NETWORTH_CURRENT_UNAVAILABLE when neither a live value nor a snapshot exists.",
+        tags: ["wallet"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: walletIdParamsSchema,
+        querystring: walletNetWorthHistoryQuerySchema,
+        response: {
+          200: walletNetWorthHistoryResourceSchema,
+          ...chainReadErrors,
+        },
+      },
+      onRequest: validateChainHeaders,
+      preValidation: assertNoBody,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      if (walletNetWorthHistoryService === undefined) {
+        throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+          reasonCode: walletNetWorthHistoryReasonCodes.historyUnavailable,
+        });
+      }
+      const params = request.params as WalletParams;
+      const query = request.query as { readonly range?: unknown };
+      const resource = await walletNetWorthHistoryService.getHistory({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        walletId: params.walletId,
+        range: query.range,
         signal: requestSignal(request),
       });
       reply.header("cache-control", "no-store");

@@ -153,6 +153,8 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP testnet faucet sweep could not look up a hash; kept"
   | "LOOP testnet faucet sweep stays idle"
   | "LOOP square feed ingest wrote event posts"
+  | "LOOP wallet net worth snapshot lane stays idle"
+  | "LOOP wallet net worth snapshot pass finished"
   | "LOOP chain guard lane stays idle"
   | "LOOP chain guard lane enabled"
   | "LOOP chain guard lane is limited"
@@ -292,6 +294,13 @@ export interface ReconciliationWorkerLogFields {
    * host goes in `rpcUrlHost`, its HTTP status in `rpcStatus`.
    */
   readonly chainGuardAlertOutlet?: string;
+  /**
+   * Decision 0145 wallet_networth_snapshot lane: wallets that could not be
+   * valued at all and wallets whose chain read failed (counts only; the
+   * candidates go in `count`, the written rows in `inserted`).
+   */
+  readonly unvaluedCount?: number;
+  readonly failedCount?: number;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -462,6 +471,8 @@ function sanitizeFields(
         "free",
         "count",
         "confirmations",
+        "unvaluedCount",
+        "failedCount",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];

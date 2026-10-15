@@ -118,8 +118,14 @@ import {
 } from "./features/chain/chain-contract.js";
 import {
   createWalletReadService,
+  measureWalletNetWorth,
+  priceReadFailure,
   type WalletReadService,
 } from "./features/wallet/wallet-read-service.js";
+import {
+  createWalletNetWorthHistoryService,
+  type WalletNetWorthHistoryService,
+} from "./features/wallet/wallet-networth-history.js";
 import {
   createWatchlistV2Service,
   type WatchlistV2Service,
@@ -593,6 +599,10 @@ export interface BuildAppOptions {
   readonly chainStatusService?: ChainStatusService;
   readonly assetRegistryService?: AssetRegistryService;
   readonly walletReadService?: WalletReadService;
+  /** Decision 0145 test seam; composed from the database otherwise. */
+  readonly walletNetWorthHistoryService?: WalletNetWorthHistoryService;
+  /** Decision 0145 test seam for the history's clock. */
+  readonly walletNetWorthNow?: () => Date;
   readonly watchlistV2Service?: WatchlistV2Service;
   readonly marketPairsProvider?: MarketPairsProvider | null;
   readonly securityFactsProvider?: SecurityFactsProvider | null;
@@ -1770,6 +1780,37 @@ export async function buildApp(
       logger: app.log,
       tokenLogos,
     });
+  // Decision 0145: net worth history. `current` is valued live with the
+  // balances valuation (same registry, read client, and price facts).
+  const netWorthMarketFacts =
+    options.marketFactService !== undefined || marketRuntimeAvailable
+      ? marketFactService
+      : null;
+  const walletNetWorthHistoryService =
+    options.walletNetWorthHistoryService ??
+    createWalletNetWorthHistoryService({
+      wallets: accountWalletRepository,
+      snapshots: database.walletNetWorthSnapshots ?? null,
+      measure:
+        netWorthMarketFacts === null
+          ? null
+          : async (wallet, signal) => {
+              const assets = await assetRegistryService.listReadableAssets();
+              const prices = await netWorthMarketFacts
+                .readAssetPrices(assets, { signal })
+                .catch((): typeof priceReadFailure => priceReadFailure);
+              return measureWalletNetWorth({
+                readClient: bscReadClient,
+                address: wallet.address,
+                assets,
+                prices,
+              });
+            },
+      fiatCnyPerUsd: config.fiatCnyPerUsd,
+      ...(options.walletNetWorthNow === undefined
+        ? {}
+        : { now: options.walletNetWorthNow }),
+    });
   // MEME curve adapter (Decision 0101), built before the market service so
   // `category=meme` and the MEME rows share one slot0 reader (Decision 0103).
   const memeContractAdapter =
@@ -2716,6 +2757,7 @@ export async function buildApp(
       chainStatusService,
       assetRegistryService,
       walletReadService,
+      walletNetWorthHistoryService,
       watchlistV2Service,
       marketReadService,
       tokenLogoProxyService,

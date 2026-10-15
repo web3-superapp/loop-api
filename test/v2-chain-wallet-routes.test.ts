@@ -51,6 +51,10 @@ import type {
 } from "../src/features/market/market-fact-service.js";
 import type { TokenPairsSnapshot } from "../src/integrations/market/market-data-provider.js";
 import type {
+  WalletNetWorthSnapshotRecord,
+  WalletNetWorthSnapshotRepository,
+} from "../src/database/wallet-networth-snapshot-repository.js";
+import type {
   PrivyBalanceReader,
   PrivyWalletReader,
 } from "../src/integrations/privy/wallet-reader.js";
@@ -2368,5 +2372,236 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(withoutToken.headers["www-authenticate"]).toBe(
       'Bearer realm="loop-api"',
     );
+  });
+
+  describe("Decision 0145 net worth history", () => {
+    const historyUrl = (range: string, id = walletId) =>
+      `/v2/wallets/${id}/networth/history?range=${range}`;
+
+    function snapshotsFake(
+      options: {
+        readonly fail?: boolean;
+        readonly points?: readonly WalletNetWorthSnapshotRecord[];
+        readonly baseline?: WalletNetWorthSnapshotRecord | null;
+      } = {},
+    ) {
+      const reject = (): Promise<never> =>
+        Promise.reject(new Error("relation does not exist"));
+      const points = options.points ?? [];
+      const readDownsampled = vi.fn(() =>
+        options.fail === true ? reject() : Promise.resolve(points),
+      );
+      const repository: WalletNetWorthSnapshotRepository = {
+        listSnapshotCandidates: vi.fn(() => reject()),
+        recordSnapshots: vi.fn(() => reject()),
+        readDownsampled,
+        readExtremes: vi.fn(() =>
+          options.fail === true
+            ? reject()
+            : Promise.resolve({
+                high: points.at(0) ?? null,
+                low: points.at(-1) ?? null,
+              }),
+        ),
+        readLatest: vi.fn((input: { readonly notBefore: string | null }) =>
+          options.fail === true
+            ? reject()
+            : Promise.resolve(
+                input.notBefore === null
+                  ? (points.at(-1) ?? null)
+                  : (options.baseline ?? null),
+              ),
+        ),
+      };
+      return { repository, readDownsampled };
+    }
+
+    async function historyApp(
+      snapshots: WalletNetWorthSnapshotRepository | undefined,
+      overrides: Readonly<Record<string, string>> = {},
+      facts: MarketFactService | undefined = marketFactsFake("fresh"),
+    ) {
+      const dependencies = fakes();
+      return createApp(
+        {
+          ...dependencies,
+          database: {
+            ...dependencies.database,
+            ...(snapshots === undefined
+              ? {}
+              : { walletNetWorthSnapshots: snapshots }),
+          },
+        },
+        overrides,
+        facts,
+      );
+    }
+
+    it("answers the documented document with current valued live like the balances netWorth", async () => {
+      const baseline = {
+        at: "2026-10-14T11:00:00.000Z",
+        netWorthUsd: "6000",
+        quality: "fresh" as const,
+      };
+      const points = [
+        {
+          at: "2026-10-14T13:00:00.000Z",
+          netWorthUsd: "6500",
+          quality: "fresh" as const,
+        },
+        {
+          at: "2026-10-15T11:00:00.000Z",
+          netWorthUsd: "6100.5",
+          quality: "partial" as const,
+        },
+      ];
+      const fake = snapshotsFake({ points, baseline });
+      const { app } = await historyApp(fake.repository, {
+        FIAT_CNY_PER_USD: "7.1130",
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: historyUrl("7d"),
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = response.json<Record<string, unknown>>();
+      // 1.5 WBNB + 7 BNB (WBNB proxy) at 747.39.
+      expect(body).toMatchObject({
+        walletId,
+        range: "7d",
+        points,
+        current: {
+          netWorthUsd: "6352.815",
+          quality: "fresh",
+          origin: "live",
+        },
+        change24h: { usd: "352.815", pct: "5.8803", baselineAt: baseline.at },
+        high: { netWorthUsd: "6500", at: points[0]?.at },
+        low: { netWorthUsd: "6100.5", at: points[1]?.at },
+        fiat: { currency: "CNY", rate: "7.113", amount: "45187.57" },
+        source: "dexscreener",
+        contractVersion: "2.0",
+      });
+      expect(fake.readDownsampled).toHaveBeenCalledWith(
+        expect.objectContaining({ bucketSeconds: 14_400, limit: 120 }),
+      );
+    });
+
+    it("answers current alone, without a 24 h change or fiat, before the first snapshot", async () => {
+      const { app } = await historyApp(snapshotsFake().repository);
+      const response = await app.inject({
+        method: "GET",
+        url: historyUrl("1d"),
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        points: [],
+        current: { netWorthUsd: "6352.815", origin: "live" },
+        change24h: null,
+        high: { netWorthUsd: "6352.815" },
+        low: { netWorthUsd: "6352.815" },
+        fiat: null,
+      });
+    });
+
+    it("rejects an unknown range, a missing range, and an extra query field", async () => {
+      const { app } = await historyApp(snapshotsFake().repository);
+      for (const url of [
+        historyUrl("2d"),
+        `/v2/wallets/${walletId}/networth/history`,
+        `${historyUrl("1d")}&cursor=x`,
+      ]) {
+        const response = await app.inject({
+          method: "GET",
+          url,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode, url).toBe(400);
+        expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    });
+
+    it("requires a Bearer token and only reads the caller's own wallet", async () => {
+      const { app } = await historyApp(snapshotsFake().repository);
+      const anonymous = await app.inject({
+        method: "GET",
+        url: historyUrl("1d"),
+        headers: commonHeaders({ authorization: undefined }),
+      });
+      expect(anonymous.statusCode).toBe(401);
+      const foreign = await app.inject({
+        method: "GET",
+        url: historyUrl("1d", otherWalletId),
+        headers: commonHeaders(),
+      });
+      expect(foreign.statusCode).toBe(404);
+      expect(foreign.json()).toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("answers 503 WALLET_NETWORTH_HISTORY_UNAVAILABLE when the snapshots cannot be read or are not composed", async () => {
+      for (const snapshots of [
+        snapshotsFake({ fail: true }).repository,
+        undefined,
+      ]) {
+        const { app } = await historyApp(snapshots);
+        const response = await app.inject({
+          method: "GET",
+          url: historyUrl("30d"),
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          code: "CAPABILITY_UNAVAILABLE",
+          detailsSafe: { reasonCode: "WALLET_NETWORTH_HISTORY_UNAVAILABLE" },
+        });
+      }
+    });
+
+    it("falls back to the newest snapshot when nothing can be valued live, and answers 503 WALLET_NETWORTH_CURRENT_UNAVAILABLE without one", async () => {
+      const unpriced = marketFactsFake("unavailable");
+      const latest = {
+        at: "2026-10-15T11:00:00.000Z",
+        netWorthUsd: "10",
+        quality: "fresh" as const,
+      };
+      const { app } = await historyApp(
+        snapshotsFake({ points: [latest] }).repository,
+        {},
+        unpriced,
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: historyUrl("1d"),
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        current: {
+          netWorthUsd: "10",
+          at: latest.at,
+          quality: "stale",
+          origin: "snapshot",
+        },
+      });
+
+      const { app: empty } = await historyApp(
+        snapshotsFake().repository,
+        {},
+        unpriced,
+      );
+      const none = await empty.inject({
+        method: "GET",
+        url: historyUrl("1d"),
+        headers: commonHeaders(),
+      });
+      expect(none.statusCode).toBe(503);
+      expect(none.json()).toMatchObject({
+        code: "CAPABILITY_UNAVAILABLE",
+        detailsSafe: { reasonCode: "WALLET_NETWORTH_CURRENT_UNAVAILABLE" },
+      });
+    });
   });
 });

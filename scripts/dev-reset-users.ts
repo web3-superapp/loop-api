@@ -231,6 +231,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     // Decision 0143: square timeline (system posts have no author and stay)
     square_posts: "user",
     square_post_likes: "user",
+    // Decision 0145: hourly net worth snapshots of the user's wallets
+    wallet_networth_snapshots: "user",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",
@@ -619,6 +621,7 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
   del("swap_quotes", `${ownedBy()} or wallet_id in ${ownedWallets}`),
   del("approval_observations", `wallet_id in ${ownedWallets}`),
   del("wallet_balance_snapshots", `wallet_id in ${ownedWallets}`),
+  del("wallet_networth_snapshots", `wallet_id in ${ownedWallets}`),
   del("account_wallets", ownedBy()),
   // Frozen Hyperliquid / perp / spot provider rows
   del("spot_intent_events", ownedBy()),

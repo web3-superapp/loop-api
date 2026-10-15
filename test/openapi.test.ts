@@ -240,11 +240,12 @@ describe("committed OpenAPI artifact", () => {
       "/v2/wallets/active",
       "/v2/wallets/{walletId}/activity",
       "/v2/wallets/{walletId}/balances",
+      "/v2/wallets/{walletId}/networth/history",
       "/v2/wallets/{walletId}/receive",
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(197);
+    expect(operationIds).toHaveLength(198);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

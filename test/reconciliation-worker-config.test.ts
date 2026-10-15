@@ -65,6 +65,8 @@ describe("loadReconciliationWorkerConfig", () => {
       testnetFaucetSweep: null,
       // Decision 0143: the square ingest lane is on by default.
       squareFeedIngest: { intervalMs: 60_000, usd1Address: null },
+      // Decision 0145: the hourly net worth snapshot lane is on by default.
+      walletNetWorthSnapshot: { intervalMs: 3_600_000, batchSize: 200 },
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

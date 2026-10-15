@@ -44,7 +44,11 @@ import {
   type WalletKind,
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
-import { computeNetWorthChange24h } from "./net-worth-change.js";
+import {
+  computeNetWorthChange24h,
+  netWorthChangeUsdDigits,
+  roundHalfAwayFromZero,
+} from "./net-worth-change.js";
 import {
   addDecimalStrings,
   marketReasonCodes,
@@ -598,7 +602,179 @@ function hedgedRead<T>(
 }
 
 /** Marks a price read that failed outright (Decision 0082). */
-const priceReadFailure: unique symbol = Symbol("priceReadFailure");
+export const priceReadFailure: unique symbol = Symbol("priceReadFailure");
+
+/**
+ * One registry row's amounts at the block that was read. Shared by the
+ * balances read and the net worth measurement (Decision 0145) so both value
+ * exactly the same display balance.
+ */
+export function projectBalanceAmounts(
+  asset: Pick<AssetRecord, "assetId" | "address" | "decimals">,
+  read: Pick<BscBalanceReadResult, "balances">,
+  gasReserveRawWei: bigint,
+): WalletBalanceAmounts | UnavailableProjection {
+  const observed = read.balances.find(
+    (balance) => balance.assetId === asset.assetId,
+  );
+  const rawValue = observed?.rawValue ?? null;
+  if (rawValue === null) {
+    return unavailable(
+      observed?.reasonCode ?? walletReasonCodes.balanceCallFailed,
+    );
+  }
+  const gasReserve = asset.address === null ? gasReserveRawWei : 0n;
+  return Object.freeze({
+    status: "available" as const,
+    rawValue: rawValue.toString(10),
+    displayBalance: formatDecimalAmount(rawValue, asset.decimals),
+    // Nothing locks a balance in this step, so available equals
+    // display. Spendable additionally holds back the native gas
+    // reserve, which is configured in wei.
+    availableBalance: formatDecimalAmount(rawValue, asset.decimals),
+    spendableBalance: formatDecimalAmount(
+      subtractFloorZero(rawValue, gasReserve),
+      asset.decimals,
+    ),
+    gasReserve: formatDecimalAmount(gasReserve, bscNativeDecimals),
+  });
+}
+
+/**
+ * A row is valued only from a `fresh` or `stale` Provider price of the
+ * asset itself; the native asset has no token address and is never
+ * priced through WBNB or any other proxy.
+ */
+export function valueWalletRow(
+  price: AssetPriceFact | null | typeof priceReadFailure,
+  balance: WalletBalanceAmounts | UnavailableProjection,
+): WalletValuationProjection | UnavailableProjection {
+  if (price === priceReadFailure) {
+    return unavailable(marketReasonCodes.providerUnreachable);
+  }
+  if (price === null) {
+    return unavailable(walletReasonCodes.marketRuntimeMissing);
+  }
+  if (balance.status !== "available") {
+    return unavailable(walletReasonCodes.balanceUnavailable);
+  }
+  const { fact, pair, proxyAsset } = price;
+  if (
+    fact.value === null ||
+    fact.fetchedAt === null ||
+    (fact.quality !== "fresh" && fact.quality !== "stale")
+  ) {
+    return unavailable(
+      fact.reasonCode ?? marketReasonCodes.providerUnreachable,
+    );
+  }
+  if (pair === null || pair.priceUsd === null) {
+    return unavailable(marketReasonCodes.pairNotFound);
+  }
+  return Object.freeze({
+    status: "available" as const,
+    priceSource: fact.source,
+    fetchedAt: fact.fetchedAt,
+    quality: proxyAsset === null ? fact.quality : ("proxied" as const),
+    reasonCode: fact.reasonCode,
+    proxyAsset,
+    priceUsd: pair.priceUsd,
+    valueUsd: multiplyDecimalStrings(balance.displayBalance, pair.priceUsd),
+    change24hPct: pair.priceChangeH24,
+  });
+}
+
+/** The net worth total of the valued rows out of `rowCount` registry rows. */
+export function summarizeWalletNetWorth(
+  valuations: readonly WalletValuationProjection[],
+  rowCount: number,
+): {
+  readonly unavailableCount: number;
+  readonly valueUsd: string;
+  readonly asOf: string | null;
+  readonly quality: "fresh" | "stale";
+  readonly change: ReturnType<typeof computeNetWorthChange24h>;
+} {
+  const unavailableCount = rowCount - valuations.length;
+  const change = computeNetWorthChange24h(valuations);
+  let valueUsd = "0";
+  let asOf: string | null = null;
+  let quality: "fresh" | "stale" = "fresh";
+  for (const valuation of valuations) {
+    valueUsd = addDecimalStrings(valueUsd, valuation.valueUsd);
+    if (asOf === null || valuation.fetchedAt > asOf) {
+      asOf = valuation.fetchedAt;
+    }
+    if (valuation.reasonCode !== null) {
+      // A stale underlying price (direct or proxied) carries a reason.
+      quality = "stale";
+    }
+  }
+  return { unavailableCount, valueUsd, asOf, quality, change };
+}
+
+/**
+ * Decision 0145: one wallet's net worth, valued exactly as
+ * `GET /v2/wallets/:walletId/balances` values `netWorth` (same registry
+ * rows, same display balance, same price facts), without the cross-check,
+ * pending totals, launch slot, or audit snapshots. `partial` when at least
+ * one row is unvalued; `null` when no row could be valued at all (nothing
+ * is recorded as zero). A chain read failure rejects.
+ */
+export interface WalletNetWorthMeasurement {
+  /** Sum of the valued rows, rounded half away from zero to 6 places. */
+  readonly netWorthUsd: string;
+  readonly quality: "fresh" | "stale" | "partial";
+  readonly unavailableCount: number;
+  /** Latest Provider fetch time among the valued rows. */
+  readonly asOf: string;
+}
+
+export async function measureWalletNetWorth(input: {
+  readonly readClient: Pick<BscReadClient, "readBalances">;
+  readonly address: string;
+  readonly assets: readonly AssetRecord[];
+  /** Per-asset price facts in `assets` order; `priceReadFailure` when the read failed. */
+  readonly prices: readonly AssetPriceFact[] | typeof priceReadFailure;
+}): Promise<WalletNetWorthMeasurement | null> {
+  if (input.assets.length === 0) {
+    return null;
+  }
+  const read = await input.readClient.readBalances(
+    input.address,
+    input.assets.map((asset) => ({
+      assetId: asset.assetId,
+      address: asset.address,
+    })),
+  );
+  const valuations = input.assets
+    .map((asset, index) =>
+      valueWalletRow(
+        input.prices === priceReadFailure
+          ? priceReadFailure
+          : (input.prices[index] ?? null),
+        projectBalanceAmounts(asset, read, 0n),
+      ),
+    )
+    .filter(
+      (valuation): valuation is WalletValuationProjection =>
+        valuation.status === "available",
+    );
+  if (valuations.length === 0) {
+    return null;
+  }
+  const summary = summarizeWalletNetWorth(valuations, input.assets.length);
+  return Object.freeze({
+    netWorthUsd: roundHalfAwayFromZero(
+      summary.valueUsd,
+      netWorthChangeUsdDigits,
+    ),
+    quality:
+      summary.unavailableCount > 0 ? ("partial" as const) : summary.quality,
+    unavailableCount: summary.unavailableCount,
+    asOf: summary.asOf ?? new Date().toISOString(),
+  });
+}
 
 /** Existing BSC read reason code for an endpoint that did not answer. */
 const bscRpcUnreachableReasonCode = "BSC_RPC_UNREACHABLE";
@@ -1528,32 +1704,9 @@ export function createWalletReadService(
       // audit snapshot.
       const rowBalances: readonly (
         WalletBalanceAmounts | UnavailableProjection
-      )[] = assets.map((asset) => {
-        const observed = read.balances.find(
-          (balance) => balance.assetId === asset.assetId,
-        );
-        const rawValue = observed?.rawValue ?? null;
-        if (rawValue === null) {
-          return unavailable(
-            observed?.reasonCode ?? walletReasonCodes.balanceCallFailed,
-          );
-        }
-        const gasReserve = asset.address === null ? input.gasReserveRawWei : 0n;
-        return Object.freeze({
-          status: "available" as const,
-          rawValue: rawValue.toString(10),
-          displayBalance: formatDecimalAmount(rawValue, asset.decimals),
-          // Nothing locks a balance in this step, so available equals
-          // display. Spendable additionally holds back the native gas
-          // reserve, which is configured in wei.
-          availableBalance: formatDecimalAmount(rawValue, asset.decimals),
-          spendableBalance: formatDecimalAmount(
-            subtractFloorZero(rawValue, gasReserve),
-            asset.decimals,
-          ),
-          gasReserve: formatDecimalAmount(gasReserve, bscNativeDecimals),
-        });
-      });
+      )[] = assets.map((asset) =>
+        projectBalanceAmounts(asset, read, input.gasReserveRawWei),
+      );
 
       const pendingPending = checkpointPending.then((checkpoint) =>
         checkpoint === null
@@ -1598,7 +1751,7 @@ export function createWalletReadService(
 
       const prices = priceRead === priceReadFailure ? null : priceRead;
       const rowValuations = assets.map((_asset, index) =>
-        valueRow(
+        valueWalletRow(
           priceRead === priceReadFailure
             ? priceReadFailure
             : (prices?.[index] ?? null),
@@ -1697,73 +1850,13 @@ export function createWalletReadService(
         contractVersion: v2ContractVersion,
       });
 
-      /**
-       * A row is valued only from a `fresh` or `stale` Provider price of the
-       * asset itself; the native asset has no token address and is never
-       * priced through WBNB or any other proxy.
-       */
-      function valueRow(
-        price: AssetPriceFact | null | typeof priceReadFailure,
-        balance: WalletBalanceAmounts | UnavailableProjection,
-      ): WalletValuationProjection | UnavailableProjection {
-        if (price === priceReadFailure) {
-          return unavailable(marketReasonCodes.providerUnreachable);
-        }
-        if (price === null) {
-          return unavailable(walletReasonCodes.marketRuntimeMissing);
-        }
-        if (balance.status !== "available") {
-          return unavailable(walletReasonCodes.balanceUnavailable);
-        }
-        const { fact, pair, proxyAsset } = price;
-        if (
-          fact.value === null ||
-          fact.fetchedAt === null ||
-          (fact.quality !== "fresh" && fact.quality !== "stale")
-        ) {
-          return unavailable(
-            fact.reasonCode ?? marketReasonCodes.providerUnreachable,
-          );
-        }
-        if (pair === null || pair.priceUsd === null) {
-          return unavailable(marketReasonCodes.pairNotFound);
-        }
-        return Object.freeze({
-          status: "available" as const,
-          priceSource: fact.source,
-          fetchedAt: fact.fetchedAt,
-          quality: proxyAsset === null ? fact.quality : ("proxied" as const),
-          reasonCode: fact.reasonCode,
-          proxyAsset,
-          priceUsd: pair.priceUsd,
-          valueUsd: multiplyDecimalStrings(
-            balance.displayBalance,
-            pair.priceUsd,
-          ),
-          change24hPct: pair.priceChangeH24,
-        });
-      }
-
       function projectNetWorth():
         WalletNetWorthProjection | UnavailableProjection {
         if (input.marketFacts === null) {
           return unavailable(walletReasonCodes.marketRuntimeMissing);
         }
-        const unavailableCount = balances.length - valuations.length;
-        const change = computeNetWorthChange24h(valuations);
-        let valueUsd = "0";
-        let asOf: string | null = null;
-        let quality: "fresh" | "stale" = "fresh";
-        for (const valuation of valuations) {
-          valueUsd = addDecimalStrings(valueUsd, valuation.valueUsd);
-          if (asOf === null || valuation.fetchedAt > asOf) {
-            asOf = valuation.fetchedAt;
-          }
-          if (valuation.reasonCode !== null) {
-            // A stale underlying price (direct or proxied) carries a reason.
-            quality = "stale";
-          }
-        }
+        const { unavailableCount, change, valueUsd, asOf, quality } =
+          summarizeWalletNetWorth(valuations, balances.length);
         return Object.freeze({
           status:
             unavailableCount === 0
