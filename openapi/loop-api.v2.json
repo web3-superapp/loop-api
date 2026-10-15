@@ -164174,7 +164174,7 @@
         "operationId": "getV2Launch2DynamicPool",
         "summary": "Get the LoopDynamic pool and reward-round state of a MEME v2 instance",
         "tags": ["launch2"],
-        "description": "Decision 0131. Every instance answers its hookKind: an OfficialTax instance is status not_applicable (every other field null); a LoopDynamic instance before graduation is not_graduated. A graduated LoopDynamic instance reads its indexed Hook (LoopHookBound) at one block, cross-checked against the configured LoopRouter (trustedRouter, PoolManager) and the indexed pool id: armed, currentRoundId, candle (5 min) and whether a roll is pending, currentDropWad, the dynamic fee cap (maxDynamicFeeWad; the sell rate is min(drop, cap), currentDynamicTaxBps) and the round close rule (Decision 0144: an armed round closes at the first candle that no longer falls — close ≥ open, flat included — on S193 Hooks; only on a rising close on pre-S193 Hooks), the pot (carry + the armed round's dynamic fees), the round's total buy weight, the viewer's weight (walletId query or the active wallet; null without one), the fee rates, routingPolicy / priceTiming, and the indexed round summary. 503 CAPABILITY_UNAVAILABLE / LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED | LAUNCH2_CHAIN_READ_FAILED. Decision 0132: every such dependency 503 (after the instance is read) adds detailsSafe.hookKind (officialTax | loopDynamic, the registry row) so a client whose first read fails still picks the LoopDynamic panel. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0131. Every instance answers its hookKind: an OfficialTax instance is status not_applicable (every other field null); a LoopDynamic instance before graduation is not_graduated. A graduated LoopDynamic instance reads its indexed Hook (LoopHookBound) at one block, cross-checked against the configured LoopRouter (trustedRouter, PoolManager) and the indexed pool id: armed, currentRoundId, candle (5 min) and whether a roll is pending, currentDropWad, the dynamic fee cap (maxDynamicFeeWad; the sell rate is min(drop, cap), currentDynamicTaxBps) and the round close rule (Decision 0144: an armed round closes at the first candle that no longer falls — close ≥ open, flat included — on S193 Hooks; only on a rising close on pre-S193 Hooks), the pot (carry + the armed round's dynamic fees), the round's total buy weight, the viewer's weight (walletId query or the active wallet; null without one; Decision 0146: the chain's buyWeight with the projection's merged weight and weightReconciled), currentRoundBuyers (Decision 0146: the armed round's addresses by merged weight — BuyCredited + CreditMoved received − sent — with each one's attributions; any router's buy counts and is credited to the address receiving the MEME), the fee rates, routingPolicy / priceTiming, and the indexed round summary. 503 CAPABILITY_UNAVAILABLE / LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED | LAUNCH2_CHAIN_READ_FAILED. Decision 0132: every such dependency 503 (after the instance is read) adds detailsSafe.hookKind (officialTax | loopDynamic, the registry row) so a client whose first read fails still picks the LoopDynamic panel. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -164256,6 +164256,7 @@
                         "carryUsd1",
                         "roundExtraFeesUsd1",
                         "roundTotalBuyWeightUsd1",
+                        "currentRoundBuyers",
                         "reservedRewardsUsd1",
                         "priceUsd1",
                         "viewer",
@@ -164475,6 +164476,92 @@
                             { "type": "null" }
                           ]
                         },
+                        "currentRoundBuyers": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["roundId", "buyerCount", "buyers"],
+                              "properties": {
+                                "roundId": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "buyerCount": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "buyers": {
+                                  "type": "array",
+                                  "maxItems": 20,
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "address",
+                                      "weightUsd1",
+                                      "creditedUsd1",
+                                      "movedInUsd1",
+                                      "movedOutUsd1",
+                                      "creditCount",
+                                      "attributions",
+                                      "lastCreditedAt"
+                                    ],
+                                    "properties": {
+                                      "address": {
+                                        "type": "string",
+                                        "pattern": "^0x[0-9a-f]{40}$"
+                                      },
+                                      "weightUsd1": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                                        "description": "Merged weight = creditedUsd1 + movedInUsd1 − movedOutUsd1 (the chain's buyWeight(round, address))."
+                                      },
+                                      "creditedUsd1": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "movedInUsd1": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "movedOutUsd1": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                      },
+                                      "creditCount": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "attributions": {
+                                        "type": "array",
+                                        "maxItems": 5,
+                                        "items": {
+                                          "type": "string",
+                                          "enum": [
+                                            "loopRouter",
+                                            "registryRouter",
+                                            "delivery",
+                                            "moved",
+                                            "unknown"
+                                          ],
+                                          "description": "Decision 0146: how the weight entry came about. Any router's buy counts while a round is armed and is credited to the address that receives the MEME. loopRouter: LOOP's LoopRouter credited its caller (tier 1); registryRouter: a router listed in the LoopRouterRegistry credited its msgSender() (tier 2); delivery: any other router (PancakeSwap, wallet swaps, aggregators, scripts) — credited to the address the PoolManager delivered the MEME to; moved: a same-transaction forward of a credited recipient's MEME moved that share of weight (CreditMoved); unknown: not derivable from the indexed logs (e.g. indexed before Decision 0146). A contract wallet / smart account that receives the MEME holds the weight itself and must call claim from that address."
+                                        },
+                                        "description": "Distinct attributions of the address's incoming entries, sorted."
+                                      },
+                                      "lastCreditedAt": {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0146: the armed round's addresses by merged weight (indexed BuyCredited + CreditMoved received − CreditMoved sent), at most 20, heaviest first; buyerCount = all of them. Any router's buy counts and is credited to the address receiving the MEME. null when no round is armed (or not applicable)."
+                        },
                         "reservedRewardsUsd1": {
                           "anyOf": [
                             {
@@ -164500,7 +164587,9 @@
                               "additionalProperties": false,
                               "required": [
                                 "walletId",
-                                "currentRoundWeightUsd1"
+                                "currentRoundWeightUsd1",
+                                "indexedCurrentRoundWeightUsd1",
+                                "weightReconciled"
                               ],
                               "properties": {
                                 "walletId": {
@@ -164509,7 +164598,22 @@
                                 },
                                 "currentRoundWeightUsd1": {
                                   "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                                  "description": "The chain's buyWeight(currentRound, wallet) at basis — the weight credited to this address as the MEME recipient (Decision 0146), 0 when no round is armed."
+                                },
+                                "indexedCurrentRoundWeightUsd1": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "Decision 0146: the projection's merged weight for the same round and address (null when no round is armed)."
+                                },
+                                "weightReconciled": {
+                                  "type": ["boolean", "null"],
+                                  "description": "Decision 0146: indexedCurrentRoundWeightUsd1 = currentRoundWeightUsd1 (false while the index lags basis or on a divergence; null when no round is armed)."
                                 }
                               }
                             },
@@ -165114,7 +165218,7 @@
         "operationId": "listV2Launch2DynamicRewards",
         "summary": "List one wallet's LoopDynamic reward rounds",
         "tags": ["launch2"],
-        "description": "Decision 0131. The caller's wallet (walletId, required; 404 when it is not one of the caller's wallets): every round in which it has buy weight (indexed BuyCredited), newest first, limit <= 100 (default 50). status: open (round not closed yet), claimable (closed, allocation × weight / totalBuyWeight > 0, not claimed), claimed (indexed RewardClaimed), no_reward. claimableUsd1 is the projection's floor(allocation × weight / totalBuyWeight) — claim/prepare re-checks on chain. An OfficialTax instance answers hookKind officialTax with no rounds. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0131. The caller's wallet (walletId, required; 404 when it is not one of the caller's wallets): every round in which it has buy weight, newest first (Decision 0146: any router's buy counts and is credited to the address receiving the MEME — weight = indexed BuyCredited to the wallet + CreditMoved received − CreditMoved sent, the chain's buyWeight; credits lists the round's entries with their attribution loopRouter | registryRouter | delivery | moved | unknown), limit <= 100 (default 50). status: open (round not closed yet), claimable (closed, allocation × weight / totalBuyWeight > 0, not claimed), claimed (indexed RewardClaimed), no_reward. claimableUsd1 is the projection's floor(allocation × weight / totalBuyWeight) — claim/prepare re-checks on chain. An OfficialTax instance answers hookKind officialTax with no rounds. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -165207,6 +165311,10 @@
                           "roundId",
                           "status",
                           "weightUsd1",
+                          "creditedUsd1",
+                          "movedInUsd1",
+                          "movedOutUsd1",
+                          "credits",
                           "totalBuyWeightUsd1",
                           "allocationUsd1",
                           "claimableUsd1",
@@ -165234,7 +165342,79 @@
                           },
                           "weightUsd1": {
                             "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                            "description": "Decision 0146: merged weight = creditedUsd1 + movedInUsd1 − movedOutUsd1 (BuyCredited to this address + CreditMoved received − sent)."
+                          },
+                          "creditedUsd1": {
+                            "type": "string",
                             "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "movedInUsd1": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "movedOutUsd1": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "credits": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "description": "Decision 0146: the wallet's weight entries of the round, newest first (at most 20).",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "direction",
+                                "attribution",
+                                "counterparty",
+                                "amountUsd1",
+                                "transactionHash",
+                                "logIndex",
+                                "creditedAt"
+                              ],
+                              "properties": {
+                                "direction": {
+                                  "type": "string",
+                                  "enum": ["in", "out"],
+                                  "description": "in: weight gained (BuyCredited, or a CreditMoved received); out: weight forwarded (CreditMoved sent, attribution moved)."
+                                },
+                                "attribution": {
+                                  "type": "string",
+                                  "enum": [
+                                    "loopRouter",
+                                    "registryRouter",
+                                    "delivery",
+                                    "moved",
+                                    "unknown"
+                                  ],
+                                  "description": "Decision 0146: how the weight entry came about. Any router's buy counts while a round is armed and is credited to the address that receives the MEME. loopRouter: LOOP's LoopRouter credited its caller (tier 1); registryRouter: a router listed in the LoopRouterRegistry credited its msgSender() (tier 2); delivery: any other router (PancakeSwap, wallet swaps, aggregators, scripts) — credited to the address the PoolManager delivered the MEME to; moved: a same-transaction forward of a credited recipient's MEME moved that share of weight (CreditMoved); unknown: not derivable from the indexed logs (e.g. indexed before Decision 0146). A contract wallet / smart account that receives the MEME holds the weight itself and must call claim from that address."
+                                },
+                                "counterparty": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^0x[0-9a-f]{40}$"
+                                    },
+                                    { "type": "null" }
+                                  ],
+                                  "description": "CreditMoved: the sender (in) or receiver (out); null for BuyCredited."
+                                },
+                                "amountUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "transactionHash": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "logIndex": { "type": "integer", "minimum": 0 },
+                                "creditedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            }
                           },
                           "totalBuyWeightUsd1": {
                             "type": "string",

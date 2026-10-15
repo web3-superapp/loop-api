@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { down, up } from "../migrations/000076_launch2_loop_dynamic.js";
 import {
+  down as down86,
+  up as up86,
+} from "../migrations/000086_launch2_dynamic_delivery_attribution.js";
+import {
   hooksLaunchLoopDynamicTemplateHash,
   hooksLaunchTemplateHash,
   InvalidHooksLaunchDraftError,
@@ -554,6 +558,39 @@ describe("000076 LoopDynamic migration contract (Decision 0131)", () => {
     expect(statement).toContain(
       "check (kind in ('nft_mint', 'buy', 'sell', 'pool_buy', 'pool_sell'))",
     );
+  });
+});
+
+describe("000086 LoopDynamic delivery attribution migration (Decision 0146)", () => {
+  it("admits CreditMoved, adds the entry projection and the merged weight columns", () => {
+    const statement = captureSql(up86);
+    expect(statement).toContain(
+      "'BuyFeeCharged', 'RewardClaimed',\n        'CreditMoved'))",
+    );
+    expect(statement).toContain(
+      "create table public.launch2_dynamic_credit_entries (",
+    );
+    expect(statement).toContain(
+      "'loopRouter', 'registryRouter', 'delivery', 'moved', 'unknown'",
+    );
+    expect(statement).toContain(
+      "update public.launch2_dynamic_buy_weights set credited_usd1 = weight_usd1;",
+    );
+    expect(statement).toContain(
+      "weight_usd1 = credited_usd1 + moved_in_usd1 - moved_out_usd1",
+    );
+    expect(statement).not.toContain("delete from");
+  });
+
+  it("refuses to roll back over an indexed CreditMoved", () => {
+    const statement = captureSql(down86);
+    expect(statement).toContain(
+      "raise exception 'refusing to remove LoopDynamic CreditMoved evidence'",
+    );
+    expect(statement).toContain(
+      "drop table public.launch2_dynamic_credit_entries;",
+    );
+    expect(statement).not.toContain("'CreditMoved'))");
   });
 });
 

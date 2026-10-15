@@ -14,6 +14,7 @@ import {
   type Launch2Chain,
   type Launch2DynamicClaimReportRecord,
   type Launch2DynamicRewardRecord,
+  type Launch2DynamicRoundBuyerRecord,
   type Launch2DynamicRoundSummary,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
@@ -197,6 +198,8 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
   /** Decision 0131: LoopDynamic projections keyed `instanceId|wallet`. */
   readonly dynamicRewards: Map<string, Launch2DynamicRewardRecord[]>;
+  /** Decision 0146: round buyers keyed `instanceId|roundId`, heaviest first. */
+  readonly dynamicRoundBuyers: Map<string, Launch2DynamicRoundBuyerRecord[]>;
   readonly dynamicSummaries: Map<string, Launch2DynamicRoundSummary>;
   readonly dynamicReports: Map<string, Launch2DynamicClaimReportRecord>;
   /** Indexed claims keyed `instanceId|txHash|roundId|buyer`. */
@@ -230,6 +233,10 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const activity: Launch2ActivityRecord[] = [];
   const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
   const dynamicRewards = new Map<string, Launch2DynamicRewardRecord[]>();
+  const dynamicRoundBuyers = new Map<
+    string,
+    Launch2DynamicRoundBuyerRecord[]
+  >();
   const dynamicSummaries = new Map<string, Launch2DynamicRoundSummary>();
   const dynamicReports = new Map<string, Launch2DynamicClaimReportRecord>();
   const dynamicClaims = new Map<
@@ -240,6 +247,7 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   return {
     poolTrades,
     dynamicRewards,
+    dynamicRoundBuyers,
     dynamicSummaries,
     dynamicReports,
     dynamicClaims,
@@ -252,6 +260,21 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
             `${input.instanceId}|${input.walletAddress.toLowerCase()}`,
           ) ?? []
         ).slice(0, input.limit),
+      ),
+    listDynamicRoundBuyers: (input) => {
+      const all =
+        dynamicRoundBuyers.get(`${input.instanceId}|${input.roundId}`) ?? [];
+      return Promise.resolve({
+        buyerCount: all.length,
+        buyers: all.slice(0, input.limit),
+      });
+    },
+    getDynamicBuyWeight: (input) =>
+      Promise.resolve(
+        (
+          dynamicRoundBuyers.get(`${input.instanceId}|${input.roundId}`) ?? []
+        ).find((buyer) => buyer.address === input.address.toLowerCase())
+          ?.weightUsd1 ?? "0",
       ),
     getDynamicClaimIntent: (input) => {
       const intent = intents.get(input.intentId);

@@ -76,6 +76,11 @@ export const launch2EventNames = Object.freeze([
   "BuyCredited",
   "BuyNotCredited",
   "RewardClaimed",
+  /**
+   * Decision 0146 (loop-contracts S200, Decision 0014): a same-transaction
+   * forward of a delivery-credited recipient's weight (`from` → `to`).
+   */
+  "CreditMoved",
 ] as const);
 
 export type Launch2EventName = (typeof launch2EventNames)[number];
@@ -759,12 +764,52 @@ export interface Launch2DynamicRewardRecord {
   readonly extraFeesUsd1: string;
   readonly totalBuyWeightUsd1: string;
   readonly allocationUsd1: string | null;
+  /** Decision 0146: weight = credited + movedIn − movedOut (raw USD1). */
   readonly weightUsd1: string;
+  readonly creditedUsd1: string;
+  readonly movedInUsd1: string;
+  readonly movedOutUsd1: string;
+  /** Decision 0146: the wallet's weight entries of the round, newest first (≤ 20). */
+  readonly entries: readonly Launch2DynamicCreditEntryRecord[];
   readonly claimedAmountUsd1: string | null;
   readonly claimTransactionHash: string | null;
   readonly claimedAt: string | null;
   readonly activatedAt: string;
   readonly closedAt: string | null;
+}
+
+/** Decision 0146: how a LoopDynamic weight entry came about. */
+export type Launch2DynamicCreditAttribution =
+  "loopRouter" | "registryRouter" | "delivery" | "moved" | "unknown";
+
+/**
+ * Decision 0146: one weight entry of an address — `in` from a
+ * `BuyCredited` (its attribution) or a `CreditMoved` receipt (`moved`),
+ * `out` for a `CreditMoved` it forwarded (`moved`).
+ */
+export interface Launch2DynamicCreditEntryRecord {
+  readonly direction: "in" | "out";
+  readonly attribution: Launch2DynamicCreditAttribution;
+  /** `CreditMoved`: the other side (from for in, to for out); else null. */
+  readonly counterparty: string | null;
+  readonly amountUsd1: string;
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+  readonly creditedAt: string;
+}
+
+/** Decision 0146: one address's merged weight in a round (projection). */
+export interface Launch2DynamicRoundBuyerRecord {
+  readonly address: string;
+  readonly weightUsd1: string;
+  readonly creditedUsd1: string;
+  readonly movedInUsd1: string;
+  readonly movedOutUsd1: string;
+  readonly creditCount: number;
+  /** Distinct attributions of its `in` entries, sorted. */
+  readonly attributions: readonly Launch2DynamicCreditAttribution[];
+  readonly lastCreditedAt: string;
 }
 
 /** Decision 0131: the projected round totals of one instance. */
@@ -1195,6 +1240,24 @@ export interface Launch2Repository {
     readonly walletAddress: string;
     readonly limit: number;
   }): Promise<readonly Launch2DynamicRewardRecord[]>;
+  /**
+   * Decision 0146: a round's addresses by merged weight (desc, then
+   * address), at most `limit`, and how many there are.
+   */
+  listDynamicRoundBuyers(input: {
+    readonly instanceId: string;
+    readonly roundId: string;
+    readonly limit: number;
+  }): Promise<{
+    readonly buyerCount: number;
+    readonly buyers: readonly Launch2DynamicRoundBuyerRecord[];
+  }>;
+  /** Decision 0146: one address's merged weight in a round ("0" when none). */
+  getDynamicBuyWeight(input: {
+    readonly instanceId: string;
+    readonly roundId: string;
+    readonly address: string;
+  }): Promise<string>;
   /** The caller's `dynamic_claim` intent (null when not theirs / not one). */
   getDynamicClaimIntent(input: {
     readonly intentId: string;

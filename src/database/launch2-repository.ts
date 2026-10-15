@@ -26,7 +26,10 @@ import {
   type Launch2ActivityRecord,
   type Launch2BuybackRecord,
   type Launch2DynamicClaimReportRecord,
+  type Launch2DynamicCreditAttribution,
+  type Launch2DynamicCreditEntryRecord,
   type Launch2DynamicRewardRecord,
+  type Launch2DynamicRoundBuyerRecord,
   type Launch2InstanceRecord,
   type Launch2IntentRecord,
   type Launch2LaneEvent,
@@ -1133,6 +1136,43 @@ async function reproject(
   await reprojectDynamic(client, instanceId);
 }
 
+const creditAttributions: readonly Launch2DynamicCreditAttribution[] = [
+  "loopRouter",
+  "registryRouter",
+  "delivery",
+  "moved",
+  "unknown",
+];
+
+function creditAttribution(value: unknown): Launch2DynamicCreditAttribution {
+  return creditAttributions.find((known) => known === value) ?? "unknown";
+}
+
+/** Decision 0146: the jsonb entry list of `listDynamicRewards`. */
+function creditEntries(
+  value: unknown,
+): readonly Launch2DynamicCreditEntryRecord[] {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze(
+    (value as Record<string, unknown>[]).map(
+      (entry): Launch2DynamicCreditEntryRecord =>
+        Object.freeze({
+          direction: entry["direction"] === "out" ? "out" : "in",
+          attribution: creditAttribution(entry["attribution"]),
+          counterparty:
+            typeof entry["counterparty"] === "string"
+              ? entry["counterparty"]
+              : null,
+          amountUsd1: String(entry["amount"]),
+          transactionHash: String(entry["tx"]),
+          logIndex: Number(entry["logIndex"]),
+          blockNumber: String(entry["block"]),
+          creditedAt: new Date(String(entry["at"])).toISOString(),
+        }),
+    ),
+  );
+}
+
 /**
  * Decision 0131: rebuilds a LoopDynamic instance's Hook binding, reward
  * rounds and buy weights from its non-removed facts (a reorg that removed
@@ -1170,6 +1210,81 @@ async function reprojectDynamic(
   });
   await client.query({
     text: `delete from public.launch2_dynamic_buy_weights where instance_id = $1`,
+    values: [instanceId],
+  });
+  await client.query({
+    text: `delete from public.launch2_dynamic_credit_entries where instance_id = $1`,
+    values: [instanceId],
+  });
+  // Decision 0146: the weight entries — BuyCredited (in; the lane's
+  // attribution, absent on rows indexed before S201 = unknown) and
+  // CreditMoved (moved: out of from, into to).
+  await client.query({
+    text: `
+      with hook as (
+        select dynamic_hook_address as address from public.launch2_instances
+        where instance_id = $1 and dynamic_hook_address is not null
+      ),
+      logs as (
+        select e.* from public.launch2_events e, hook
+        where e.instance_id = $1 and not e.removed
+          and e.contract_address = hook.address
+          and e.event_name in ('BuyCredited', 'CreditMoved')
+      )
+      insert into public.launch2_dynamic_credit_entries (
+        instance_id, round_id, address, direction, attribution,
+        counterparty_address, amount_usd1, hook_address, chain_id,
+        transaction_hash, log_index, block_number, credited_at
+      )
+      select $1, (payload ->> 'round')::numeric, payload ->> 'buyer', 'in',
+        case when payload ->> 'attribution'
+            in ('loopRouter', 'registryRouter', 'delivery')
+          then payload ->> 'attribution' else 'unknown' end,
+        null, (payload ->> 'quoteSpent')::numeric, contract_address,
+        chain_id, transaction_hash, log_index, block_number, event_at
+      from logs where event_name = 'BuyCredited'
+      union all
+      select $1, (payload ->> 'round')::numeric, payload ->> 'to', 'in',
+        'moved', payload ->> 'from', (payload ->> 'quoteSpent')::numeric,
+        contract_address, chain_id, transaction_hash, log_index,
+        block_number, event_at
+      from logs where event_name = 'CreditMoved'
+      union all
+      select $1, (payload ->> 'round')::numeric, payload ->> 'from', 'out',
+        'moved', payload ->> 'to', (payload ->> 'quoteSpent')::numeric,
+        contract_address, chain_id, transaction_hash, log_index,
+        block_number, event_at
+      from logs where event_name = 'CreditMoved'
+    `,
+    values: [instanceId],
+  });
+  // Decision 0146: weight = Σ BuyCredited + Σ CreditMoved in − Σ out, the
+  // chain's buyWeight(round, address); an address whose weight was moved on
+  // entirely has none left (no row).
+  await client.query({
+    text: `
+      insert into public.launch2_dynamic_buy_weights (
+        instance_id, round_id, buyer_address, weight_usd1, credit_count,
+        last_credited_at, credited_usd1, moved_in_usd1, moved_out_usd1
+      )
+      select $1, round_id, address,
+        credited + moved_in - moved_out, credits, last_at,
+        credited, moved_in, moved_out
+      from (
+        select round_id, address,
+          coalesce(sum(amount_usd1) filter (
+            where direction = 'in' and attribution <> 'moved'), 0) as credited,
+          coalesce(sum(amount_usd1) filter (
+            where direction = 'in' and attribution = 'moved'), 0) as moved_in,
+          coalesce(sum(amount_usd1) filter (where direction = 'out'), 0) as moved_out,
+          (count(*) filter (where direction = 'in'))::integer as credits,
+          max(credited_at) filter (where direction = 'in') as last_at
+        from public.launch2_dynamic_credit_entries
+        where instance_id = $1
+        group by round_id, address
+      ) merged
+      where credited + moved_in - moved_out > 0
+    `,
     values: [instanceId],
   });
   await client.query({
@@ -1211,11 +1326,8 @@ async function reprojectDynamic(
         coalesce((select sum(k.amount_usd1) from public.launch2_dynamic_claims k
           where k.instance_id = $1 and not k.removed
             and k.hook_address = hook.address and k.round_id = a.round_id), 0),
-        (select count(distinct w.payload ->> 'buyer')::integer
-          from public.launch2_events w
-          where w.instance_id = $1 and not w.removed
-            and w.event_name = 'BuyCredited' and w.contract_address = hook.address
-            and (w.payload ->> 'round')::numeric = a.round_id),
+        (select count(*)::integer from public.launch2_dynamic_buy_weights w
+          where w.instance_id = $1 and w.round_id = a.round_id),
         c.payload is not null,
         a.event_at, a.block_number, a.transaction_hash,
         c.event_at, c.block_number, c.transaction_hash
@@ -1229,25 +1341,6 @@ async function reprojectDynamic(
           and (e.payload ->> 'round')::numeric = a.round_id
         order by e.block_number, e.log_index limit 1
       ) c on true
-    `,
-    values: [instanceId],
-  });
-  await client.query({
-    text: `
-      insert into public.launch2_dynamic_buy_weights (
-        instance_id, round_id, buyer_address, weight_usd1, credit_count,
-        last_credited_at
-      )
-      select $1, (e.payload ->> 'round')::numeric, e.payload ->> 'buyer',
-        sum((e.payload ->> 'quoteSpent')::numeric), count(*)::integer,
-        max(e.event_at)
-      from public.launch2_events e
-      join public.launch2_instances i on i.instance_id = e.instance_id
-      where e.instance_id = $1 and not e.removed
-        and e.event_name = 'BuyCredited'
-        and e.contract_address = i.dynamic_hook_address
-      group by (e.payload ->> 'round')::numeric, e.payload ->> 'buyer'
-      having sum((e.payload ->> 'quoteSpent')::numeric) > 0
     `,
     values: [instanceId],
   });
@@ -2421,7 +2514,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             r.start_candle::text, r.end_candle::text,
             r.carried_in_usd1::text, r.extra_fees_usd1::text,
             r.total_buy_weight_usd1::text, r.allocation_usd1::text,
-            w.weight_usd1::text, k.amount_usd1::text as claimed_amount,
+            w.weight_usd1::text, w.credited_usd1::text,
+            w.moved_in_usd1::text, w.moved_out_usd1::text, x.entries,
+            k.amount_usd1::text as claimed_amount,
             k.transaction_hash as claim_tx, k.claimed_at,
             r.activated_at, r.closed_at
           from public.launch2_dynamic_buy_weights w
@@ -2434,6 +2529,23 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               and c.round_id = w.round_id and c.buyer_address = w.buyer_address
             order by c.block_number, c.log_index limit 1
           ) k on true
+          left join lateral (
+            select coalesce(jsonb_agg(jsonb_build_object(
+                'direction', d.direction, 'attribution', d.attribution,
+                'counterparty', d.counterparty_address,
+                'amount', d.amount_usd1::text,
+                'tx', d.transaction_hash, 'logIndex', d.log_index,
+                'block', d.block_number::text, 'at', d.credited_at)
+              order by d.block_number desc, d.log_index desc, d.direction), '[]'::jsonb)
+              as entries
+            from (
+              select * from public.launch2_dynamic_credit_entries e
+              where e.instance_id = w.instance_id and e.round_id = w.round_id
+                and e.address = w.buyer_address
+              order by e.block_number desc, e.log_index desc, e.direction
+              limit 20
+            ) d
+          ) x on true
           where w.instance_id = $1 and w.buyer_address = $2
           order by r.round_id desc
           limit $3
@@ -2452,6 +2564,10 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           totalBuyWeightUsd1: text(row, "total_buy_weight_usd1"),
           allocationUsd1: nullableText(row, "allocation_usd1"),
           weightUsd1: text(row, "weight_usd1"),
+          creditedUsd1: text(row, "credited_usd1"),
+          movedInUsd1: text(row, "moved_in_usd1"),
+          movedOutUsd1: text(row, "moved_out_usd1"),
+          entries: creditEntries(row["entries"]),
           claimedAmountUsd1: nullableText(row, "claimed_amount"),
           claimTransactionHash: nullableText(row, "claim_tx"),
           claimedAt: nullableIso(row, "claimed_at"),
@@ -2459,6 +2575,60 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           closedAt: nullableIso(row, "closed_at"),
         }),
       );
+    },
+
+    async listDynamicRoundBuyers(input) {
+      const rows = await query<Row>(
+        `
+          select w.buyer_address, w.weight_usd1::text, w.credited_usd1::text,
+            w.moved_in_usd1::text, w.moved_out_usd1::text, w.credit_count,
+            w.last_credited_at,
+            (select coalesce(jsonb_agg(distinct e.attribution), '[]'::jsonb)
+              from public.launch2_dynamic_credit_entries e
+              where e.instance_id = w.instance_id and e.round_id = w.round_id
+                and e.address = w.buyer_address and e.direction = 'in')
+              as attributions,
+            count(*) over () as buyer_count
+          from public.launch2_dynamic_buy_weights w
+          where w.instance_id = $1 and w.round_id = $2::numeric
+          order by w.weight_usd1 desc, w.buyer_address
+          limit $3
+        `,
+        [input.instanceId, input.roundId, input.limit],
+      );
+      const buyerCount =
+        rows[0] === undefined ? 0 : Number(rows[0]["buyer_count"]);
+      return Object.freeze({
+        buyerCount,
+        buyers: rows.map((row): Launch2DynamicRoundBuyerRecord =>
+          Object.freeze({
+            address: text(row, "buyer_address"),
+            weightUsd1: text(row, "weight_usd1"),
+            creditedUsd1: text(row, "credited_usd1"),
+            movedInUsd1: text(row, "moved_in_usd1"),
+            movedOutUsd1: text(row, "moved_out_usd1"),
+            creditCount: Number(row["credit_count"]),
+            attributions: Object.freeze(
+              (Array.isArray(row["attributions"])
+                ? (row["attributions"] as unknown[])
+                : []
+              )
+                .map((value) => creditAttribution(value))
+                .sort(),
+            ),
+            lastCreditedAt: iso(row, "last_credited_at"),
+          }),
+        ),
+      });
+    },
+
+    async getDynamicBuyWeight(input) {
+      const rows = await query<Row>(
+        `select weight_usd1::text from public.launch2_dynamic_buy_weights
+         where instance_id = $1 and round_id = $2::numeric and buyer_address = $3`,
+        [input.instanceId, input.roundId, input.address.toLowerCase()],
+      );
+      return rows[0] === undefined ? "0" : text(rows[0], "weight_usd1");
     },
 
     async getDynamicClaimIntent(input) {

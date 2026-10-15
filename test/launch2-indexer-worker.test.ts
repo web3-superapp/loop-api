@@ -12,6 +12,7 @@ import type {
 import type { Launch2MemeCoverageFacts } from "../src/features/launch2/launch2-meme-coverage.js";
 import { Launch2ChainRefusedError } from "../src/integrations/launch2/launch2-chain.js";
 import {
+  classifyLaunch2DynamicCredits,
   createLaunch2Lane,
   pairLaunch2DynamicFees,
   pairLaunch2DynamicSenders,
@@ -1568,6 +1569,182 @@ describe("launch2_event lane — LoopDynamic wallet attribution (Decision 0132)"
       recipient: wallet,
       amountIn: "100",
       amountOut: "160000",
+    });
+  });
+});
+
+describe("launch2_event lane — LoopDynamic delivery attribution (Decision 0146)", () => {
+  const poolManager = "0x" + "8".repeat(40);
+  const loopRouter = "0x" + "7".repeat(40);
+  const listedRouter = "0x" + "5".repeat(40);
+  const universalRouter = "0x" + "4".repeat(40);
+  const feeVault = "0x" + "9".repeat(40);
+  const alice = "0x" + "a".repeat(40);
+  const bob = "0x" + "b".repeat(40);
+  const hook = `0x${"c".repeat(36)}10c4`;
+  const meme = `0x${"d".repeat(36)}6666`;
+  const poolId = hash(4242n);
+  const at = (
+    contractAddress: string,
+    eventName: Launch2DecodedLog["eventName"],
+    args: Record<string, string>,
+    tx: string,
+    logIndex: number,
+  ): Launch2DecodedLog => ({
+    contractAddress,
+    eventName,
+    args,
+    transactionHash: tx,
+    logIndex,
+    blockNumber: 300n,
+    blockHash: hash(300n),
+  });
+  const swap = (tx: string, sender: string, logIndex: number) =>
+    at(
+      poolManager,
+      "Swap",
+      {
+        id: poolId,
+        sender,
+        amount0: "-100",
+        amount1: "160000",
+        sqrtPriceX96: "1",
+      },
+      tx,
+      logIndex,
+    );
+  const credited = (tx: string, buyer: string, logIndex: number) =>
+    at(
+      hook,
+      "BuyCredited",
+      { round: "1", buyer, quoteSpent: "100" },
+      tx,
+      logIndex,
+    );
+  const transfer = (tx: string, from: string, to: string, logIndex: number) =>
+    at(meme, "Transfer", { from, to, value: "156800" }, tx, logIndex);
+  const hooks = (router: string | null) =>
+    new Map([[hook, { poolId, poolManager, router, meme }]]);
+  const txA = hash(0xa1n);
+  const txB = hash(0xb1n);
+  const txC = hash(0xc1n);
+  const txD = hash(0xd1n);
+
+  it("tells tier 1, tier 2 and delivery credits apart from the log right before them", () => {
+    const logs = [
+      // Tier 1: LoopRouter's swap, credit in afterSwap right after Swap.
+      swap(txA, loopRouter, 1),
+      credited(txA, alice, 2),
+      // Tier 2: a listed router's msgSender().
+      swap(txB, listedRouter, 1),
+      credited(txB, bob, 2),
+      // Delivery: Universal Router — fee take, BuyFeeCharged, then the
+      // PoolManager's take to the user and the credit right after it.
+      swap(txC, universalRouter, 1),
+      transfer(txC, poolManager, feeVault, 2),
+      at(
+        hook,
+        "BuyFeeCharged",
+        { buyer: zeroAddress, grossMeme: "160000", fee: "3200" },
+        txC,
+        3,
+      ),
+      transfer(txC, poolManager, alice, 4),
+      credited(txC, alice, 5),
+      // An aggregator takes to itself, then forwards (CreditMoved is not
+      // a BuyCredited: classified at projection time as moved).
+      swap(txD, universalRouter, 1),
+      transfer(txD, poolManager, universalRouter, 4),
+      credited(txD, universalRouter, 5),
+      transfer(txD, universalRouter, bob, 6),
+      at(
+        hook,
+        "CreditMoved",
+        { round: "1", from: universalRouter, to: bob, quoteSpent: "100" },
+        txD,
+        7,
+      ),
+    ];
+    const result = classifyLaunch2DynamicCredits(logs, hooks(loopRouter));
+    expect([...result.entries()]).toEqual([
+      [`${txA}:2`, "loopRouter"],
+      [`${txB}:2`, "registryRouter"],
+      [`${txC}:5`, "delivery"],
+      [`${txD}:5`, "delivery"],
+    ]);
+  });
+
+  it("falls back to unknown: router unknown, the log before not read, or a transfer to someone else", () => {
+    const tier = classifyLaunch2DynamicCredits(
+      [swap(txA, loopRouter, 1), credited(txA, alice, 2)],
+      hooks(null),
+    );
+    expect(tier.get(`${txA}:2`)).toBe("unknown");
+    // The MEME segment was not read: only the Hook's logs are there.
+    const gap = classifyLaunch2DynamicCredits(
+      [swap(txC, universalRouter, 1), credited(txC, alice, 5)],
+      hooks(loopRouter),
+    );
+    expect(gap.get(`${txC}:5`)).toBe("unknown");
+    const other = classifyLaunch2DynamicCredits(
+      [transfer(txC, poolManager, bob, 4), credited(txC, alice, 5)],
+      hooks(loopRouter),
+    );
+    expect(other.get(`${txC}:5`)).toBe("unknown");
+    // Another block (a reorged copy) never pairs.
+    const moved = classifyLaunch2DynamicCredits(
+      [
+        { ...swap(txA, loopRouter, 1), blockHash: hash(301n) },
+        credited(txA, alice, 2),
+      ],
+      hooks(loopRouter),
+    );
+    expect(moved.get(`${txA}:2`)).toBe("unknown");
+  });
+
+  it("stores the attribution on BuyCredited and passes CreditMoved through", async () => {
+    const base = laneInstance();
+    const instance = laneInstance({
+      ...base,
+      addresses: { ...base.addresses, hook: zeroAddress },
+      graduated: true,
+      officialPoolId: poolId,
+      dynamicHook: hook,
+    });
+    const { lane, commits } = harness({
+      instances: [instance],
+      head: 400n,
+      logs: [
+        swap(txA, loopRouter, 1),
+        credited(txA, alice, 2),
+        swap(txB, listedRouter, 1),
+        credited(txB, bob, 2),
+        at(
+          hook,
+          "CreditMoved",
+          { round: "1", from: bob, to: alice, quoteSpent: "40" },
+          txB,
+          9,
+        ),
+      ],
+      hookPool: {
+        poolManager,
+        currency0: "0x" + "2".repeat(40),
+        trustedRouter: loopRouter,
+      },
+    });
+    await lane.runOnce();
+    const events = commits[0]?.events ?? [];
+    const byName = (name: string) =>
+      events.filter((event) => event.eventName === name);
+    expect(
+      byName("BuyCredited").map((event) => event.args["attribution"]),
+    ).toEqual(["loopRouter", "registryRouter"]);
+    expect(byName("CreditMoved")[0]?.args).toEqual({
+      round: "1",
+      from: bob,
+      to: alice,
+      quoteSpent: "40",
     });
   });
 });

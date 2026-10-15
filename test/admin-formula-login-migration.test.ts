@@ -54,7 +54,9 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000085_wallet_networth_snapshots");
+    expect(latestMigrationName).toBe(
+      "000086_launch2_dynamic_delivery_attribution",
+    );
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

@@ -909,6 +909,9 @@ export function createUnavailableLaunch2Service(
   });
 }
 
+/** Decision 0146: addresses listed in dynamic-pool currentRoundBuyers. */
+const dynamicRoundBuyersLimit = 20;
+
 export function createLaunch2Service(
   deps: Launch2ServiceDependencies,
 ): Launch2Service {
@@ -2335,6 +2338,7 @@ export function createLaunch2Service(
         carryUsd1: null,
         roundExtraFeesUsd1: null,
         roundTotalBuyWeightUsd1: null,
+        currentRoundBuyers: null,
         reservedRewardsUsd1: null,
         priceUsd1: null,
         viewer: null,
@@ -2397,6 +2401,37 @@ export function createLaunch2Service(
       .dynamicRoundSummary(record.instanceId)
       .catch(translate)
       .catch(withHookKind);
+    // Decision 0146: the armed round's addresses by merged weight
+    // (BuyCredited + CreditMoved in − out) and the viewer's indexed weight,
+    // reconciled with the chain's buyWeight(round, wallet).
+    const armedRound =
+      state.armed && state.currentRoundId > 0n
+        ? state.currentRoundId.toString(10)
+        : null;
+    const buyers =
+      armedRound === null
+        ? null
+        : await repository()
+            .listDynamicRoundBuyers({
+              instanceId: record.instanceId,
+              roundId: armedRound,
+              limit: dynamicRoundBuyersLimit,
+            })
+            .catch(translate)
+            .catch(withHookKind);
+    const indexedViewerWeight =
+      armedRound === null || wallet === null || state.wallet === null
+        ? null
+        : BigInt(
+            await repository()
+              .getDynamicBuyWeight({
+                instanceId: record.instanceId,
+                roundId: armedRound,
+                address: wallet.address.toLowerCase(),
+              })
+              .catch(translate)
+              .catch(withHookKind),
+          );
     const roll = launch2DynamicRoll(state, state.blockTimestamp);
     const roundExtra =
       state.armed && state.currentRound !== null
@@ -2454,6 +2489,29 @@ export function createLaunch2Service(
         carryUsd1: formatLaunch2Amount(state.carry),
         roundExtraFeesUsd1: formatLaunch2Amount(roundExtra),
         roundTotalBuyWeightUsd1: formatLaunch2Amount(roundWeight),
+        currentRoundBuyers:
+          buyers === null || armedRound === null
+            ? null
+            : Object.freeze({
+                roundId: armedRound,
+                buyerCount: buyers.buyerCount,
+                buyers: buyers.buyers.map((buyer) =>
+                  Object.freeze({
+                    address: buyer.address,
+                    weightUsd1: formatLaunch2Amount(BigInt(buyer.weightUsd1)),
+                    creditedUsd1: formatLaunch2Amount(
+                      BigInt(buyer.creditedUsd1),
+                    ),
+                    movedInUsd1: formatLaunch2Amount(BigInt(buyer.movedInUsd1)),
+                    movedOutUsd1: formatLaunch2Amount(
+                      BigInt(buyer.movedOutUsd1),
+                    ),
+                    creditCount: buyer.creditCount,
+                    attributions: buyer.attributions,
+                    lastCreditedAt: buyer.lastCreditedAt,
+                  }),
+                ),
+              }),
         reservedRewardsUsd1: formatLaunch2Amount(state.reservedRewards),
         priceUsd1: formatLaunch2Amount(
           launch2PoolPriceE18(state.sqrtPriceX96, state.memeIsCurrency0),
@@ -2466,6 +2524,17 @@ export function createLaunch2Service(
                 currentRoundWeightUsd1: formatLaunch2Amount(
                   state.armed ? state.wallet.currentRoundWeight : 0n,
                 ),
+                // Decision 0146: the projection's merged weight and whether
+                // it equals the chain's buyWeight at basis (false while
+                // the index lags the basis block, or on a divergence).
+                indexedCurrentRoundWeightUsd1:
+                  indexedViewerWeight === null
+                    ? null
+                    : formatLaunch2Amount(indexedViewerWeight),
+                weightReconciled:
+                  indexedViewerWeight === null
+                    ? null
+                    : indexedViewerWeight === state.wallet.currentRoundWeight,
               }),
         summary: Object.freeze({
           roundCount: summary.roundCount,
@@ -2534,6 +2603,21 @@ export function createLaunch2Service(
               ? "claimable"
               : "no_reward",
         weightUsd1: formatLaunch2Amount(BigInt(row.weightUsd1)),
+        // Decision 0146: weight = credited + movedIn − movedOut.
+        creditedUsd1: formatLaunch2Amount(BigInt(row.creditedUsd1)),
+        movedInUsd1: formatLaunch2Amount(BigInt(row.movedInUsd1)),
+        movedOutUsd1: formatLaunch2Amount(BigInt(row.movedOutUsd1)),
+        credits: row.entries.map((entry) =>
+          Object.freeze({
+            direction: entry.direction,
+            attribution: entry.attribution,
+            counterparty: entry.counterparty,
+            amountUsd1: formatLaunch2Amount(BigInt(entry.amountUsd1)),
+            transactionHash: entry.transactionHash,
+            logIndex: entry.logIndex,
+            creditedAt: entry.creditedAt,
+          }),
+        ),
         totalBuyWeightUsd1: formatLaunch2Amount(BigInt(row.totalBuyWeightUsd1)),
         allocationUsd1:
           row.allocationUsd1 === null

@@ -998,3 +998,432 @@ describe("Decision 0132: LoopDynamic wallet attribution and MEME coverage degrad
     ).toBe(3);
   });
 });
+
+describe("Decision 0146: delivery attribution read model (000086)", () => {
+  const carol = `0x${"c3".repeat(20)}`;
+  const alice = `0x${"a7".repeat(20)}`;
+  const router = `0x${"e4".repeat(20)}`;
+  const usd = (n: bigint) => (n * wad).toString();
+
+  async function bound(offset: number) {
+    const target = await instance();
+    const poolId = `0x${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    const e = (
+      name: Launch2LaneEvent["eventName"],
+      args: Record<string, string>,
+      block: number,
+      index = 0,
+    ) =>
+      event(
+        target,
+        name === "LoopHookBound" ? target.graduationAdapter : hook,
+        name,
+        args,
+        block + offset,
+        index,
+      );
+    await commit(
+      [
+        e("LoopHookBound", { hook, poolId }, 2000),
+        e(
+          "RoundActivated",
+          { round: "1", startCandle: "10", carriedQuote: "0" },
+          2001,
+        ),
+      ],
+      2001 + offset,
+    );
+    return { target, e };
+  }
+
+  async function weights(instanceId: string) {
+    const rows = await pool.query<{
+      round_id: string;
+      buyer_address: string;
+      weight_usd1: string;
+      credited_usd1: string;
+      moved_in_usd1: string;
+      moved_out_usd1: string;
+    }>(
+      `select round_id::text, buyer_address, weight_usd1::text,
+         credited_usd1::text, moved_in_usd1::text, moved_out_usd1::text
+       from public.launch2_dynamic_buy_weights where instance_id = $1
+       order by round_id, buyer_address`,
+      [instanceId],
+    );
+    return rows.rows;
+  }
+
+  async function conserved(instanceId: string) {
+    const rows = await pool.query<{ round_id: string; ok: boolean }>(
+      `select r.round_id::text,
+         r.total_buy_weight_usd1 = coalesce((select sum(w.weight_usd1)
+           from public.launch2_dynamic_buy_weights w
+           where w.instance_id = r.instance_id and w.round_id = r.round_id), 0)
+         and r.buyer_count = (select count(*) from public.launch2_dynamic_buy_weights w
+           where w.instance_id = r.instance_id and w.round_id = r.round_id) as ok
+       from public.launch2_dynamic_rounds r where r.instance_id = $1`,
+      [instanceId],
+    );
+    expect(rows.rows.length).toBeGreaterThan(0);
+    expect(rows.rows.every((row) => row.ok)).toBe(true);
+  }
+
+  it("moves weight in full, in part and several times within a round, never across rounds, and conserves the total", async () => {
+    const offset = 100;
+    const { target, e } = await bound(offset);
+    await commit(
+      [
+        // Aggregator takes 100 and forwards all of it to carol.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: router,
+            quoteSpent: usd(100n),
+            attribution: "delivery",
+          },
+          2002,
+          5,
+        ),
+        e(
+          "CreditMoved",
+          { round: "1", from: router, to: carol, quoteSpent: usd(100n) },
+          2002,
+          7,
+        ),
+        // Aggregator takes 50, keeps 10 %: 45 to alice.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: router,
+            quoteSpent: usd(50n),
+            attribution: "delivery",
+          },
+          2003,
+          5,
+        ),
+        e(
+          "CreditMoved",
+          { round: "1", from: router, to: alice, quoteSpent: usd(45n) },
+          2003,
+          7,
+        ),
+        // A chain: alice gets 30 by LoopRouter, forwards 20 to carol, carol 5 back.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: alice,
+            quoteSpent: usd(30n),
+            attribution: "loopRouter",
+          },
+          2004,
+          2,
+        ),
+        e(
+          "CreditMoved",
+          { round: "1", from: alice, to: carol, quoteSpent: usd(20n) },
+          2005,
+          3,
+        ),
+        e(
+          "CreditMoved",
+          { round: "1", from: carol, to: alice, quoteSpent: usd(5n) },
+          2005,
+          6,
+        ),
+      ],
+      2005 + offset,
+    );
+    expect(await weights(target.instanceId)).toEqual([
+      {
+        round_id: "1",
+        buyer_address: alice,
+        weight_usd1: usd(60n),
+        credited_usd1: usd(30n),
+        moved_in_usd1: usd(50n),
+        moved_out_usd1: usd(20n),
+      },
+      {
+        round_id: "1",
+        buyer_address: carol,
+        weight_usd1: usd(115n),
+        credited_usd1: "0",
+        moved_in_usd1: usd(120n),
+        moved_out_usd1: usd(5n),
+      },
+      {
+        round_id: "1",
+        buyer_address: router,
+        weight_usd1: usd(5n),
+        credited_usd1: usd(150n),
+        moved_in_usd1: "0",
+        moved_out_usd1: usd(145n),
+      },
+    ]);
+    await conserved(target.instanceId);
+
+    // Round 2: carol's round-2 move touches round 2 only.
+    await commit(
+      [
+        e(
+          "RoundClosed",
+          {
+            round: "1",
+            endCandle: "12",
+            rewardAllocation: usd(18n),
+            nextCarry: "0",
+          },
+          2010,
+        ),
+        e(
+          "RoundActivated",
+          { round: "2", startCandle: "20", carriedQuote: "0" },
+          2011,
+        ),
+        e(
+          "BuyCredited",
+          {
+            round: "2",
+            buyer: carol,
+            quoteSpent: usd(40n),
+            attribution: "registryRouter",
+          },
+          2012,
+          2,
+        ),
+        e(
+          "CreditMoved",
+          { round: "2", from: carol, to: router, quoteSpent: usd(40n) },
+          2012,
+          4,
+        ),
+      ],
+      2012 + offset,
+    );
+    const all = await weights(target.instanceId);
+    expect(
+      all.filter((row) => row.round_id === "1").map((row) => row.weight_usd1),
+    ).toEqual([usd(60n), usd(115n), usd(5n)]);
+    // Carol forwarded her whole round-2 weight: no row left for her.
+    expect(all.filter((row) => row.round_id === "2")).toEqual([
+      {
+        round_id: "2",
+        buyer_address: router,
+        weight_usd1: usd(40n),
+        credited_usd1: "0",
+        moved_in_usd1: usd(40n),
+        moved_out_usd1: "0",
+      },
+    ]);
+    await conserved(target.instanceId);
+
+    const rewards = await launch2.listDynamicRewards({
+      instanceId: target.instanceId,
+      walletAddress: carol,
+      limit: 10,
+    });
+    expect(rewards.map((row) => [row.roundId, row.weightUsd1])).toEqual([
+      ["1", usd(115n)],
+    ]);
+    expect(
+      rewards[0]!.entries.map((entry) => [
+        entry.direction,
+        entry.attribution,
+        entry.counterparty,
+        entry.amountUsd1,
+      ]),
+    ).toEqual([
+      ["out", "moved", alice, usd(5n)],
+      ["in", "moved", alice, usd(20n)],
+      ["in", "moved", router, usd(100n)],
+    ]);
+    const buyers = await launch2.listDynamicRoundBuyers({
+      instanceId: target.instanceId,
+      roundId: "1",
+      limit: 2,
+    });
+    expect(buyers.buyerCount).toBe(3);
+    expect(
+      buyers.buyers.map((buyer) => [
+        buyer.address,
+        buyer.weightUsd1,
+        buyer.attributions,
+      ]),
+    ).toEqual([
+      [carol, usd(115n), ["moved"]],
+      [alice, usd(60n), ["loopRouter", "moved"]],
+    ]);
+    expect(
+      await launch2.getDynamicBuyWeight({
+        instanceId: target.instanceId,
+        roundId: "2",
+        address: carol,
+      }),
+    ).toBe("0");
+
+    // A reorg from block 2005 undoes alice's forwards: weight back to her.
+    await commit([], 2013 + offset, 2005 + offset);
+    expect(
+      (await weights(target.instanceId))
+        .filter((row) => row.round_id === "1")
+        .map((row) => [row.buyer_address, row.weight_usd1]),
+    ).toEqual([
+      [alice, usd(75n)],
+      [carol, usd(100n)],
+      [router, usd(5n)],
+    ]);
+    await conserved(target.instanceId);
+  });
+
+  it("reproduces the chain's buyWeight of the S200 Universal Router fork case (loop-contracts 0014 §7.1)", async () => {
+    const offset = 200;
+    const { target, e } = await bound(offset);
+    const bob = `0x${"b5".repeat(20)}`;
+    await commit(
+      [
+        // Not listed: TAKE_ALL to bob → delivery.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: bob,
+            quoteSpent: usd(200n),
+            attribution: "delivery",
+          },
+          2002,
+          4,
+        ),
+        // TAKE to the router itself + SWEEP to carol.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: router,
+            quoteSpent: usd(100n),
+            attribution: "delivery",
+          },
+          2003,
+          4,
+        ),
+        e(
+          "CreditMoved",
+          { round: "1", from: router, to: carol, quoteSpent: usd(100n) },
+          2003,
+          6,
+        ),
+        // Listed: msgSender() → bob; the older listed router credits alice.
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: bob,
+            quoteSpent: usd(300n),
+            attribution: "registryRouter",
+          },
+          2004,
+          2,
+        ),
+        e(
+          "BuyCredited",
+          {
+            round: "1",
+            buyer: alice,
+            quoteSpent: usd(50n),
+            attribution: "registryRouter",
+          },
+          2005,
+          2,
+        ),
+      ],
+      2005 + offset,
+    );
+    // buyWeight(1, ·) on chain after the fork test: bob 500, carol 100,
+    // router 0, alice 50; totalBuyWeight 650.
+    const chain = new Map([
+      [bob, usd(500n)],
+      [carol, usd(100n)],
+      [router, "0"],
+      [alice, usd(50n)],
+    ]);
+    for (const [address, weight] of chain) {
+      expect(
+        await launch2.getDynamicBuyWeight({
+          instanceId: target.instanceId,
+          roundId: "1",
+          address,
+        }),
+      ).toBe(weight);
+    }
+    const round = await pool.query<{ total: string; buyers: number }>(
+      "select total_buy_weight_usd1::text as total, buyer_count as buyers from public.launch2_dynamic_rounds where instance_id = $1 and round_id = 1",
+      [target.instanceId],
+    );
+    expect(round.rows[0]).toEqual({ total: usd(650n), buyers: 3 });
+    await conserved(target.instanceId);
+  });
+
+  it("keeps a pre-S200 Hook's read model: BuyCredited only, attribution unknown when the lane did not derive one", async () => {
+    const offset = 300;
+    const { target, e } = await bound(offset);
+    await commit(
+      [
+        e(
+          "BuyCredited",
+          { round: "1", buyer: alice, quoteSpent: usd(30n) },
+          2002,
+        ),
+        e(
+          "BuyCredited",
+          { round: "1", buyer: alice, quoteSpent: usd(10n) },
+          2003,
+        ),
+        e(
+          "BuyCredited",
+          { round: "1", buyer: carol, quoteSpent: usd(70n) },
+          2004,
+        ),
+        e(
+          "BuyNotCredited",
+          { round: "1", buyer: zeroAddress, quoteSpent: usd(9n) },
+          2005,
+        ),
+      ],
+      2005 + offset,
+    );
+    expect(await weights(target.instanceId)).toEqual([
+      {
+        round_id: "1",
+        buyer_address: alice,
+        weight_usd1: usd(40n),
+        credited_usd1: usd(40n),
+        moved_in_usd1: "0",
+        moved_out_usd1: "0",
+      },
+      {
+        round_id: "1",
+        buyer_address: carol,
+        weight_usd1: usd(70n),
+        credited_usd1: usd(70n),
+        moved_in_usd1: "0",
+        moved_out_usd1: "0",
+      },
+    ]);
+    const rewards = await launch2.listDynamicRewards({
+      instanceId: target.instanceId,
+      walletAddress: alice,
+      limit: 10,
+    });
+    expect(rewards[0]).toMatchObject({
+      weightUsd1: usd(40n),
+      totalBuyWeightUsd1: usd(110n),
+    });
+    expect(rewards[0]!.entries.map((entry) => entry.attribution)).toEqual([
+      "unknown",
+      "unknown",
+    ]);
+    await conserved(target.instanceId);
+  });
+});

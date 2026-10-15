@@ -1276,6 +1276,7 @@ describe("PostgreSQL Spot reconciliation repository", () => {
     public.launch2_buyback_attempts,
     public.launch2_dynamic_claim_reports,
     public.launch2_dynamic_buy_weights,
+    public.launch2_dynamic_credit_entries,
     public.launch2_dynamic_rounds,
     public.launch2_dynamic_claims,
     public.launch2_dynamic_candles,

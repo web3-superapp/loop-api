@@ -59,6 +59,12 @@ export const hooksLaunchAbiSelection = {
     "graduationAuthority",
     "curve",
     "graduated",
+    // S200 (loop-contracts Decision 0014, Decision 0146): delivery-based
+    // reward attribution — the one-time bound LoopDynamic Hook.
+    "rewardHook",
+    "bindRewardHook",
+    "armAttribution",
+    "RewardHookBound",
   ],
   CurveEngine: [
     "BUY_TAX_BPS",
@@ -227,6 +233,11 @@ export const hooksLaunchAbiSelection = {
     "BuyNotCredited",
     "BuyFeeCharged",
     "RewardClaimed",
+    // S200 (loop-contracts Decision 0014, Decision 0146): delivery-based
+    // attribution — the MEME transfer hook and the same-transaction
+    // forwarding of a recipient's weight.
+    "attributeDelivery",
+    "CreditMoved",
   ],
   LoopRouter: ["manager", "activeActor", "swapExactInput"],
   LoopDynamicGraduationAdapter: [

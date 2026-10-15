@@ -206,6 +206,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     launch2_dynamic_claims: "user",
     launch2_dynamic_rounds: "user",
     launch2_dynamic_buy_weights: "user",
+    // Decision 0146: weight entries (BuyCredited / CreditMoved projection)
+    launch2_dynamic_credit_entries: "user",
     launch2_dynamic_claim_reports: "user",
     // Decision 0120: no-holder closures and retry grants of those instances
     launch2_snapshot_closures: "user",
@@ -410,6 +412,10 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
   del("launch2_dynamic_rounds", `instance_id in ${doomedLaunch2Instances}`),
   del(
     "launch2_dynamic_buy_weights",
+    `instance_id in ${doomedLaunch2Instances}`,
+  ),
+  del(
+    "launch2_dynamic_credit_entries",
     `instance_id in ${doomedLaunch2Instances}`,
   ),
   del("launch2_positions", `instance_id in ${doomedLaunch2Instances}`),

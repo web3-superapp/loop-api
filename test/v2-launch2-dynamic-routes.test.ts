@@ -243,7 +243,14 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       roundTotalBuyWeightUsd1: "100",
       reservedRewardsUsd1: "10",
       priceUsd1: "0.000625",
-      viewer: { walletId, currentRoundWeightUsd1: "25" },
+      viewer: {
+        walletId,
+        currentRoundWeightUsd1: "25",
+        // Decision 0146: nothing indexed for the wallet yet.
+        indexedCurrentRoundWeightUsd1: "0",
+        weightReconciled: false,
+      },
+      currentRoundBuyers: { roundId: "3", buyerCount: 0, buyers: [] },
       summary: {
         roundCount: 3,
         closedRoundCount: 2,
@@ -254,6 +261,95 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
         buyFeesMeme: "1000",
       },
       basis: { blockNumber: "6000" },
+    });
+  });
+
+  it("lists the armed round's buyers by merged weight and reconciles the viewer with buyWeight (Decision 0146)", async () => {
+    const { repository, record } = seeded();
+    const aggregator = `0x${"a9".repeat(20)}`;
+    const at = new Date(1_799_000_100_000).toISOString();
+    // Chain: buyWeight(3, wallet) = 25 (fake Hook). Projection: the wallet
+    // got 20 by delivery and 5 forwarded by an aggregator that kept 1.
+    repository.dynamicRoundBuyers.set(`${record.instanceId}|3`, [
+      {
+        address: walletAddress,
+        weightUsd1: (25n * wad).toString(),
+        creditedUsd1: (20n * wad).toString(),
+        movedInUsd1: (5n * wad).toString(),
+        movedOutUsd1: "0",
+        creditCount: 2,
+        attributions: ["delivery", "moved"],
+        lastCreditedAt: at,
+      },
+      {
+        address: aggregator,
+        weightUsd1: (1n * wad).toString(),
+        creditedUsd1: (6n * wad).toString(),
+        movedInUsd1: "0",
+        movedOutUsd1: (5n * wad).toString(),
+        creditCount: 1,
+        attributions: ["delivery"],
+        lastCreditedAt: at,
+      },
+    ]);
+    const { app } = await createApp({ repository });
+    const url = `/v2/launch2/instances/${record.instanceId}/dynamic-pool?walletId=${walletId}`;
+    let pool = (await get(app, url)).json<{
+      dynamicPool: Record<string, unknown>;
+    }>().dynamicPool;
+    expect(pool["currentRoundBuyers"]).toEqual({
+      roundId: "3",
+      buyerCount: 2,
+      buyers: [
+        {
+          address: walletAddress,
+          weightUsd1: "25",
+          creditedUsd1: "20",
+          movedInUsd1: "5",
+          movedOutUsd1: "0",
+          creditCount: 2,
+          attributions: ["delivery", "moved"],
+          lastCreditedAt: at,
+        },
+        {
+          address: aggregator,
+          weightUsd1: "1",
+          creditedUsd1: "6",
+          movedInUsd1: "0",
+          movedOutUsd1: "5",
+          creditCount: 1,
+          attributions: ["delivery"],
+          lastCreditedAt: at,
+        },
+      ],
+    });
+    expect(pool["viewer"]).toEqual({
+      walletId,
+      currentRoundWeightUsd1: "25",
+      indexedCurrentRoundWeightUsd1: "25",
+      weightReconciled: true,
+    });
+    // The index lags (or diverges): the projection still has 20.
+    repository.dynamicRoundBuyers.set(`${record.instanceId}|3`, [
+      {
+        address: walletAddress,
+        weightUsd1: (20n * wad).toString(),
+        creditedUsd1: (20n * wad).toString(),
+        movedInUsd1: "0",
+        movedOutUsd1: "0",
+        creditCount: 1,
+        attributions: ["delivery"],
+        lastCreditedAt: at,
+      },
+    ]);
+    pool = (await get(app, url)).json<{
+      dynamicPool: Record<string, unknown>;
+    }>().dynamicPool;
+    expect(pool["viewer"]).toEqual({
+      walletId,
+      currentRoundWeightUsd1: "25",
+      indexedCurrentRoundWeightUsd1: "20",
+      weightReconciled: false,
     });
   });
 
@@ -622,6 +718,10 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       totalBuyWeightUsd1: (300n * wad).toString(),
       allocationUsd1: (30n * wad).toString(),
       weightUsd1: (100n * wad).toString(),
+      creditedUsd1: (100n * wad).toString(),
+      movedInUsd1: "0",
+      movedOutUsd1: "0",
+      entries: [],
       claimedAmountUsd1: null,
       claimTransactionHash: null,
       claimedAt: null,
@@ -636,7 +736,43 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
         allocationUsd1: null,
         closedAt: null,
       }),
-      row("2", {}),
+      row("2", {
+        creditedUsd1: (90n * wad).toString(),
+        movedInUsd1: (15n * wad).toString(),
+        movedOutUsd1: (5n * wad).toString(),
+        entries: [
+          {
+            direction: "out",
+            attribution: "moved",
+            counterparty: `0x${"c3".repeat(20)}`,
+            amountUsd1: (5n * wad).toString(),
+            transactionHash: `0x${"02".repeat(32)}`,
+            logIndex: 9,
+            blockNumber: "5002",
+            creditedAt: new Date(1_799_000_300_000).toISOString(),
+          },
+          {
+            direction: "in",
+            attribution: "moved",
+            counterparty: `0x${"a9".repeat(20)}`,
+            amountUsd1: (15n * wad).toString(),
+            transactionHash: `0x${"01".repeat(32)}`,
+            logIndex: 7,
+            blockNumber: "5001",
+            creditedAt: new Date(1_799_000_200_000).toISOString(),
+          },
+          {
+            direction: "in",
+            attribution: "loopRouter",
+            counterparty: null,
+            amountUsd1: (90n * wad).toString(),
+            transactionHash: `0x${"00".repeat(31)}01`,
+            logIndex: 3,
+            blockNumber: "5000",
+            creditedAt: new Date(1_799_000_100_000).toISOString(),
+          },
+        ],
+      }),
       row("1", {
         claimedAmountUsd1: (5n * wad).toString(),
         claimTransactionHash: `0x${"ab".repeat(32)}`,
@@ -664,7 +800,26 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     expect(body.rounds[1]).toMatchObject({
       claimableUsd1: "10",
       allocationUsd1: "30",
+      // Decision 0146: 90 + 15 − 5 = 100.
+      weightUsd1: "100",
+      creditedUsd1: "90",
+      movedInUsd1: "15",
+      movedOutUsd1: "5",
     });
+    expect(
+      (body.rounds[1]!["credits"] as Record<string, unknown>[]).map(
+        (credit) => [
+          credit["direction"],
+          credit["attribution"],
+          credit["amountUsd1"],
+        ],
+      ),
+    ).toEqual([
+      ["out", "moved", "5"],
+      ["in", "moved", "15"],
+      ["in", "loopRouter", "90"],
+    ]);
+    expect(body.rounds[0]!["credits"]).toEqual([]);
     const missing = await get(
       app,
       `/v2/launch2/instances/${record.instanceId}/dynamic-pool/rewards`,

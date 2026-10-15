@@ -110,6 +110,8 @@ const roleAbis: Readonly<
       "BuyCredited",
       "BuyNotCredited",
       "RewardClaimed",
+      // Decision 0146: S200 Hooks forward weight within a transaction.
+      "CreditMoved",
     ],
   },
 };

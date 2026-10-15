@@ -1,4 +1,5 @@
-export const latestMigrationName = "000085_wallet_networth_snapshots";
+export const latestMigrationName =
+  "000086_launch2_dynamic_delivery_attribution";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -174,6 +175,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.launch2_dynamic_claims",
   "public.launch2_dynamic_rounds",
   "public.launch2_dynamic_buy_weights",
+  "public.launch2_dynamic_credit_entries",
   "public.launch2_dynamic_claim_reports",
   "public.chain_guard_incidents",
   "public.chain_guard_cursors",

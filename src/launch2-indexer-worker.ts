@@ -8,6 +8,7 @@ import {
   launch2ReasonCodes,
 } from "./features/launch2/launch2-contract.js";
 import type {
+  Launch2DynamicCreditAttribution,
   Launch2Chain,
   Launch2ContractRole,
   Launch2DecodedLog,
@@ -404,6 +405,82 @@ export function pairLaunch2DynamicFees(
     paired.set(keyOf(match), fee.toString(10));
   }
   return paired;
+}
+
+/** Decision 0146: how a LoopDynamic Hook credited a buy's weight. */
+export type Launch2DynamicBuyCreditAttribution = Exclude<
+  Launch2DynamicCreditAttribution,
+  "moved"
+>;
+
+/**
+ * Decision 0146 (loop-contracts S200, Decision 0014 §2): tells each
+ * `BuyCredited` of a LoopDynamic Hook apart from the log right before it in
+ * the same transaction and block (`logIndex − 1`):
+ *
+ * - the PoolManager `Swap` of the Hook's pool — tiers 1 / 2 credit in
+ *   `afterSwap`, the first log after the swap: `sender` = the Hook's
+ *   trusted LoopRouter → `loopRouter`, another router → `registryRouter`
+ *   (a listed router's `msgSender()`); the trusted router unknown →
+ *   `unknown`;
+ * - the instance MEME's `Transfer` from the PoolManager to the credited
+ *   address — the S200 transfer hook credits a `take` right after the
+ *   transfer → `delivery`;
+ * - anything else (a log not read, e.g. an untrusted MEME segment) →
+ *   `unknown`.
+ *
+ * Returns Hook log key → attribution (every BuyCredited of a known Hook).
+ */
+export function classifyLaunch2DynamicCredits(
+  logs: readonly Launch2DecodedLog[],
+  hooks: ReadonlyMap<
+    string,
+    {
+      readonly poolId: string;
+      readonly poolManager: string;
+      readonly router: string | null;
+      readonly meme: string | null;
+    }
+  >,
+): Map<string, Launch2DynamicBuyCreditAttribution> {
+  const keyOf = (log: Launch2DecodedLog): string =>
+    `${log.transactionHash}:${log.logIndex}`;
+  const byKey = new Map(logs.map((log) => [keyOf(log), log]));
+  const result = new Map<string, Launch2DynamicBuyCreditAttribution>();
+  for (const credit of logs) {
+    if (credit.eventName !== "BuyCredited") continue;
+    const hook = hooks.get(credit.contractAddress);
+    if (hook === undefined) continue;
+    const prev =
+      credit.logIndex === 0
+        ? undefined
+        : byKey.get(`${credit.transactionHash}:${credit.logIndex - 1}`);
+    let attribution: Launch2DynamicBuyCreditAttribution = "unknown";
+    if (prev !== undefined && prev.blockHash === credit.blockHash) {
+      if (
+        prev.eventName === "Swap" &&
+        prev.contractAddress === hook.poolManager &&
+        prev.args["id"] === hook.poolId
+      ) {
+        if (hook.router !== null) {
+          attribution =
+            prev.args["sender"] === hook.router
+              ? "loopRouter"
+              : "registryRouter";
+        }
+      } else if (
+        prev.eventName === "Transfer" &&
+        hook.meme !== null &&
+        prev.contractAddress === hook.meme &&
+        prev.args["from"] === hook.poolManager &&
+        prev.args["to"] === credit.args["buyer"]
+      ) {
+        attribution = "delivery";
+      }
+    }
+    result.set(keyOf(credit), attribution);
+  }
+  return result;
 }
 
 /**
@@ -1277,6 +1354,29 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               parties:
                 await options.chain.readTransactionParties(senderCandidates),
             });
+      // Decision 0146: how each BuyCredited was credited (the log before it).
+      const creditHooks = new Map<
+        string,
+        {
+          poolId: string;
+          poolManager: string;
+          router: string | null;
+          meme: string | null;
+        }
+      >();
+      for (const [poolId, owner] of pools) {
+        if (owner.dynamicHook === null) continue;
+        creditHooks.set(owner.dynamicHook, {
+          poolId,
+          poolManager: owner.poolManager,
+          router: owner.dynamicRouter,
+          meme: byInstance.get(owner.instanceId)?.addresses.meme ?? null,
+        });
+      }
+      const creditAttributions =
+        creditHooks.size === 0
+          ? new Map<string, Launch2DynamicBuyCreditAttribution>()
+          : classifyLaunch2DynamicCredits(decoded.logs, creditHooks);
       const timestamps = new Map<bigint, bigint>();
       const events: Launch2LaneEvent[] = [];
       let memeTransfers: Launch2MemeTransferRecord[] = [];
@@ -1338,39 +1438,48 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           eventName: log.eventName,
           // Decision 0124: which side of a Swap is MEME (hook currency0).
           args:
-            swapPool === undefined || log.eventName !== "Swap"
-              ? log.args
-              : swapPool.dynamicHook !== null
-                ? Object.freeze({
-                    ...log.args,
-                    memeIsCurrency0: swapPool.memeIsCurrency0
-                      ? "true"
-                      : "false",
-                    // Decision 0131: the Hook's fee of this swap, if paired.
-                    poolHookKind: "loopDynamic",
-                    dynamicFee:
-                      dynamicFees.get(
-                        `${log.transactionHash}:${log.logIndex}`,
-                      ) ?? "0",
-                    // Decision 0132: the transaction sender, if attributable.
-                    ...senderAttributionArgs(
-                      senderAttributions.get(
-                        `${log.transactionHash}:${log.logIndex}`,
+            log.eventName === "BuyCredited"
+              ? Object.freeze({
+                  ...log.args,
+                  // Decision 0146: the lane's attribution of this credit.
+                  attribution:
+                    creditAttributions.get(
+                      `${log.transactionHash}:${log.logIndex}`,
+                    ) ?? "unknown",
+                })
+              : swapPool === undefined || log.eventName !== "Swap"
+                ? log.args
+                : swapPool.dynamicHook !== null
+                  ? Object.freeze({
+                      ...log.args,
+                      memeIsCurrency0: swapPool.memeIsCurrency0
+                        ? "true"
+                        : "false",
+                      // Decision 0131: the Hook's fee of this swap, if paired.
+                      poolHookKind: "loopDynamic",
+                      dynamicFee:
+                        dynamicFees.get(
+                          `${log.transactionHash}:${log.logIndex}`,
+                        ) ?? "0",
+                      // Decision 0132: the transaction sender, if attributable.
+                      ...senderAttributionArgs(
+                        senderAttributions.get(
+                          `${log.transactionHash}:${log.logIndex}`,
+                        ),
                       ),
-                    ),
-                  })
-                : Object.freeze({
-                    ...log.args,
-                    memeIsCurrency0: swapPool.memeIsCurrency0
-                      ? "true"
-                      : "false",
-                    // Decision 0126: the router's payer / recipient, if paired.
-                    ...attributionArgs(
-                      attributions.get(
-                        `${log.transactionHash}:${log.logIndex}`,
+                    })
+                  : Object.freeze({
+                      ...log.args,
+                      memeIsCurrency0: swapPool.memeIsCurrency0
+                        ? "true"
+                        : "false",
+                      // Decision 0126: the router's payer / recipient, if paired.
+                      ...attributionArgs(
+                        attributions.get(
+                          `${log.transactionHash}:${log.logIndex}`,
+                        ),
                       ),
-                    ),
-                  }),
+                    }),
           transactionHash: log.transactionHash,
           logIndex: log.logIndex,
           blockNumber: log.blockNumber.toString(10),

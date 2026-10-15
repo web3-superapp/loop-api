@@ -1680,6 +1680,55 @@ export const launch2DynamicPoolQuerySchema = {
   properties: { walletId: opaqueIdSchema },
 } as const;
 
+// Decision 0146 (loop-contracts S200, Decision 0014): any router's buy
+// is weighted and credited to the address receiving the MEME.
+const dynamicCreditAttributionSchema = {
+  type: "string",
+  enum: ["loopRouter", "registryRouter", "delivery", "moved", "unknown"],
+  description:
+    "Decision 0146: how the weight entry came about. Any router's buy counts while a round is armed and is credited to the address that receives the MEME. loopRouter: LOOP's LoopRouter credited its caller (tier 1); registryRouter: a router listed in the LoopRouterRegistry credited its msgSender() (tier 2); delivery: any other router (PancakeSwap, wallet swaps, aggregators, scripts) — credited to the address the PoolManager delivered the MEME to; moved: a same-transaction forward of a credited recipient's MEME moved that share of weight (CreditMoved); unknown: not derivable from the indexed logs (e.g. indexed before Decision 0146). A contract wallet / smart account that receives the MEME holds the weight itself and must call claim from that address.",
+} as const;
+
+const dynamicRoundBuyerProperties = {
+  address: addressSchema,
+  weightUsd1: {
+    ...decimalSchema,
+    description:
+      "Merged weight = creditedUsd1 + movedInUsd1 − movedOutUsd1 (the chain's buyWeight(round, address)).",
+  },
+  creditedUsd1: decimalSchema,
+  movedInUsd1: decimalSchema,
+  movedOutUsd1: decimalSchema,
+  creditCount: { type: "integer", minimum: 0 },
+  attributions: {
+    type: "array",
+    maxItems: 5,
+    items: dynamicCreditAttributionSchema,
+    description:
+      "Distinct attributions of the address's incoming entries, sorted.",
+  },
+  lastCreditedAt: dateTimeSchema,
+} as const;
+
+const dynamicCreditEntryProperties = {
+  direction: {
+    type: "string",
+    enum: ["in", "out"],
+    description:
+      "in: weight gained (BuyCredited, or a CreditMoved received); out: weight forwarded (CreditMoved sent, attribution moved).",
+  },
+  attribution: dynamicCreditAttributionSchema,
+  counterparty: {
+    ...nullableAddressSchema,
+    description:
+      "CreditMoved: the sender (in) or receiver (out); null for BuyCredited.",
+  },
+  amountUsd1: decimalSchema,
+  transactionHash: txHashSchema,
+  logIndex: { type: "integer", minimum: 0 },
+  creditedAt: dateTimeSchema,
+} as const;
+
 const dynamicPoolProperties = {
   instanceId: opaqueIdSchema,
   hookKind: { type: "string", enum: ["officialTax", "loopDynamic"] },
@@ -1761,6 +1810,32 @@ const dynamicPoolProperties = {
   carryUsd1: nullableDecimalSchema,
   roundExtraFeesUsd1: nullableDecimalSchema,
   roundTotalBuyWeightUsd1: nullableDecimalSchema,
+  currentRoundBuyers: {
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["roundId", "buyerCount", "buyers"],
+        properties: {
+          roundId: uintStringSchema,
+          buyerCount: { type: "integer", minimum: 0 },
+          buyers: {
+            type: "array",
+            maxItems: 20,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: Object.keys(dynamicRoundBuyerProperties),
+              properties: dynamicRoundBuyerProperties,
+            },
+          },
+        },
+      },
+      { type: "null" },
+    ],
+    description:
+      "Decision 0146: the armed round's addresses by merged weight (indexed BuyCredited + CreditMoved received − CreditMoved sent), at most 20, heaviest first; buyerCount = all of them. Any router's buy counts and is credited to the address receiving the MEME. null when no round is armed (or not applicable).",
+  },
   reservedRewardsUsd1: nullableDecimalSchema,
   priceUsd1: nullableDecimalSchema,
   viewer: {
@@ -1768,10 +1843,29 @@ const dynamicPoolProperties = {
       {
         type: "object",
         additionalProperties: false,
-        required: ["walletId", "currentRoundWeightUsd1"],
+        required: [
+          "walletId",
+          "currentRoundWeightUsd1",
+          "indexedCurrentRoundWeightUsd1",
+          "weightReconciled",
+        ],
         properties: {
           walletId: opaqueIdSchema,
-          currentRoundWeightUsd1: decimalSchema,
+          currentRoundWeightUsd1: {
+            ...decimalSchema,
+            description:
+              "The chain's buyWeight(currentRound, wallet) at basis — the weight credited to this address as the MEME recipient (Decision 0146), 0 when no round is armed.",
+          },
+          indexedCurrentRoundWeightUsd1: {
+            ...nullableDecimalSchema,
+            description:
+              "Decision 0146: the projection's merged weight for the same round and address (null when no round is armed).",
+          },
+          weightReconciled: {
+            type: ["boolean", "null"],
+            description:
+              "Decision 0146: indexedCurrentRoundWeightUsd1 = currentRoundWeightUsd1 (false while the index lags basis or on a divergence; null when no round is armed).",
+          },
         },
       },
       { type: "null" },
@@ -1851,7 +1945,26 @@ const dynamicRewardRoundProperties = {
     type: "string",
     enum: ["open", "claimable", "claimed", "no_reward"],
   },
-  weightUsd1: decimalSchema,
+  weightUsd1: {
+    ...decimalSchema,
+    description:
+      "Decision 0146: merged weight = creditedUsd1 + movedInUsd1 − movedOutUsd1 (BuyCredited to this address + CreditMoved received − sent).",
+  },
+  creditedUsd1: decimalSchema,
+  movedInUsd1: decimalSchema,
+  movedOutUsd1: decimalSchema,
+  credits: {
+    type: "array",
+    maxItems: 20,
+    description:
+      "Decision 0146: the wallet's weight entries of the round, newest first (at most 20).",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: Object.keys(dynamicCreditEntryProperties),
+      properties: dynamicCreditEntryProperties,
+    },
+  },
   totalBuyWeightUsd1: decimalSchema,
   allocationUsd1: nullableDecimalSchema,
   claimableUsd1: decimalSchema,
