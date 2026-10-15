@@ -468,6 +468,9 @@ import {
   type TestnetFaucetService,
 } from "./features/testnet-faucet/testnet-faucet-service.js";
 import { registerV2TestnetFaucetRoutes } from "./routes/v2/testnet-faucet.js";
+import { registerV2SquareRoutes } from "./routes/v2/square.js";
+import { createSquareService } from "./features/square/square-service.js";
+import { createAdminSquarePostService } from "./features/admin/admin-square-posts.js";
 import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
 import {
   createMemeContractAdapter,
@@ -2638,6 +2641,16 @@ export async function buildApp(
     );
   }
 
+  // Decision 0143: the square timeline (database + cursor codec only).
+  const squareService = createSquareService({
+    repository: database.squareFeed ?? null,
+    cursorCodec: v2CursorCodec,
+    publicBaseUrl: config.publicBaseUrl,
+    ...(options.walletIntentNow === undefined
+      ? {}
+      : { now: options.walletIntentNow }),
+  });
+
   if (includeV2) {
     registerV2Routes(app, {
       config,
@@ -2674,6 +2687,7 @@ export async function buildApp(
         communityAiRuntimeAvailable,
         pushRuntimeAvailable,
         memeRuntimeAvailable,
+        squareFeedAvailable: squareService.available,
         testnetFaucetState: () => ({
           reasonCode: testnetFaucetService.unavailableReason(),
         }),
@@ -2748,6 +2762,11 @@ export async function buildApp(
       authenticationHooks.authenticateLoopBearer,
       testnetFaucetService,
     );
+    registerV2SquareRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      squareService,
+    );
   }
 
   const adminConfig = adminMounted ? config.admin : null;
@@ -2755,6 +2774,11 @@ export async function buildApp(
     const adminRepository =
       database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0143: square timeline posts (console-written system posts).
+      squarePosts: createAdminSquarePostService({
+        repository: database.squareFeed ?? null,
+        ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
+      }),
       // Decision 0140: launch desk campaigns (console-written).
       launch2Campaigns: createAdminLaunch2CampaignService({
         repository: database.launch2Campaigns ?? null,

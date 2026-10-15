@@ -88,6 +88,8 @@ import {
   createTestnetFaucetTransactionLookup,
 } from "./integrations/bsc/testnet-faucet-chain.js";
 import { createTestnetFaucetSweepLane } from "./testnet-faucet-sweep-worker.js";
+import { createSquareFeedIngestLane } from "./square-feed-ingest-worker.js";
+import type { SquareFeedIngestRepository } from "./features/square/square-ingest.js";
 import {
   launch2BuybackKeeperDefaults,
   launch2KeeperReasonCodes,
@@ -302,6 +304,8 @@ export interface ReconciliationWorkerDatabase {
   readonly chainGuard?: ChainGuardRepository;
   /** `community_member_buy_feed` lane (Decision 0097); absent keeps it off. */
   readonly memberBuyFeed?: MemberBuyFeedRepository;
+  /** Decision 0143 `square_feed_ingest` lane; absent keeps it off. */
+  readonly squareFeed?: SquareFeedIngestRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -401,6 +405,7 @@ export interface RunReconciliationWorkerOptions {
   /** S169 test seam: the faucet sweep's hash lookup. */
   readonly createTestnetFaucetTransactionLookup?: typeof createTestnetFaucetTransactionLookup;
   readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
+  readonly createSquareFeedIngestLane?: typeof createSquareFeedIngestLane;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -808,6 +813,36 @@ export async function runReconciliationWorker(
           "LOOP testnet faucet sweep stays idle",
         );
       }
+    }
+    // Decision 0143: system events (member buys >= 10 USD1, LoopDynamic
+    // claims, graduations) into the square timeline. Database only.
+    const squareIngestConfig = options.config.squareFeedIngest ?? null;
+    if (squareIngestConfig !== null && database.squareFeed !== undefined) {
+      memeLanes.push(
+        (options.createSquareFeedIngestLane ?? createSquareFeedIngestLane)({
+          repository: database.squareFeed,
+          usd1Address: squareIngestConfig.usd1Address,
+          intervalMs: squareIngestConfig.intervalMs,
+          onPass: (result) => {
+            if (result.insertedCount > 0) {
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane: "square_feed_ingest",
+                  inserted: result.insertedCount,
+                },
+                "LOOP square feed ingest wrote event posts",
+              );
+            }
+          },
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        }),
+      );
     }
     // Decision 0134: with the chain guard on, the three signing lanes ask
     // its incidents (read-only) before every tick and skip the tick while

@@ -115,8 +115,9 @@ describe("testnet faucet OpenAPI contract (Decision 0128)", () => {
     ]);
   });
 
-  it("lists testnetFaucet last among the capability IDs and freezes the reason codes", () => {
-    expect(v2CapabilityIds.at(-1)).toBe("testnetFaucet");
+  it("lists testnetFaucet after launch2 (Decision 0143 appends squareFeed) and freezes the reason codes", () => {
+    expect(v2CapabilityIds.at(-2)).toBe("testnetFaucet");
+    expect(v2CapabilityIds.at(-1)).toBe("squareFeed");
     expect(Object.values(testnetFaucetReasonCodes)).toEqual(
       expect.arrayContaining([
         "TESTNET_FAUCET_DISABLED",

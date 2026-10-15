@@ -228,9 +228,7 @@ describe("Decision 0110 formula approval and login lockout on PostgreSQL", () =>
   });
 
   it("migrates to the head (000057 and later) with the author columns and the attempts table", async () => {
-    expect(latestMigrationName).toBe(
-      "000083_meme_list_volume_best_trades_indexes",
-    );
+    expect(latestMigrationName).toBe("000084_square_feed");
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by run_on desc, id desc limit 1",
     );

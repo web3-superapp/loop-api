@@ -58,6 +58,8 @@ import {
 import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresLaunch2CampaignRepository } from "./launch2-campaign-repository.js";
+import { createPostgresSquareRepository } from "./square-repository.js";
+import type { SquareRepository } from "../features/square/square-contract.js";
 import type { Launch2CampaignRepository } from "../features/launch2/launch2-campaigns.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
@@ -273,6 +275,8 @@ export interface Database {
   readonly chainGuard?: ChainGuardRepository;
   /** Decision 0140: launch desk operator campaigns (console-written). */
   readonly launch2Campaigns?: Launch2CampaignRepository;
+  /** Decision 0143: square timeline posts, likes, and the ingest lane. */
+  readonly squareFeed?: SquareRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
   readonly admin?: AdminRepository;
   /** Decision 0109: console accounts (roles, idempotent account writes). */
@@ -525,6 +529,7 @@ export function createPostgresDatabase(
     testnetFaucet: createPostgresTestnetFaucetRepository(pool),
     chainGuard: createPostgresChainGuardRepository(pool),
     launch2Campaigns: createPostgresLaunch2CampaignRepository(pool),
+    squareFeed: createPostgresSquareRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),
     adminLaunchReview: createPostgresAdminLaunchReviewRepository(pool),

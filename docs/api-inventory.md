@@ -713,6 +713,21 @@ day → 429), estimated tBNB gas, and the worker lane `testnet_faucet_pending_sw
 | `GET /v2/testnet/faucet`  | Bearer + headers; `walletId` (own embedded wallet)  | `bnbAmount`, `usd1Amount`, `cooldownSeconds`, `available`, `nextAvailableAt`, `lastGrant`                                                                                                                         | `implemented` | `implemented`; default `unavailable` (`TESTNET_FAUCET_DISABLED`)                                            |
 | `POST /v2/testnet/faucet` | Write headers incl. `Idempotency-Key`; `{walletId}` | `201` `bnb` / `usd1` `{amount, transactionHash}`, `grantedAt`, `nextAvailableAt`; 429 cooldown (incl. S169 failed-retry), 503 `TESTNET_FAUCET_PARTIAL`, 503 operator low, 503 `TESTNET_FAUCET_DAILY_LIMIT` (S169) | `implemented` | `blocked-provider` until the staging operator account holds tBNB; no on-chain (anvil / testnet) run in S156 |
 
+### V2 square timeline (Decision 0143, always registered)
+
+Capability `squareFeed` (available with the database and `V2_CURSOR_HMAC_SECRET`; else
+`unavailable` / `SQUARE_REPOSITORY_UNAVAILABLE`). Migration 000084 `square_posts` /
+`square_post_likes`; the worker lane `square_feed_ingest` (`SQUARE_FEED_INGEST_ENABLED`,
+default on, every 60 s) writes buy / claim / graduation posts. Console:
+`/admin/v1/square/posts` (list, get, create, patch, publish, archive).
+
+| Method and path                               | Request                                                              | Success projection                                                                                                                           | Interface     | Capability    |
+| --------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------- |
+| `GET /v2/square/feed`                         | Bearer + headers; `scope` global / following, `cursor`, `limit` ≤ 30 | `scope`, `items[]` (`postId`, `kind`, `author`, `text`, `token`, `event`, `likeCount`, `likedByViewer`, `pinned`, `createdAt`), `nextCursor` | `implemented` | `implemented` |
+| `POST /v2/square/posts`                       | Write headers incl. `Idempotency-Key`; `{text, tokenRef?}`           | `201` `{post}` (replay `200`); 422 text / tokenRef, 429 five a minute                                                                        | `implemented` | `implemented` |
+| `DELETE /v2/square/posts/{postId}`            | Write headers incl. `Idempotency-Key`                                | `204` (own opinion only)                                                                                                                     | `implemented` | `implemented` |
+| `PUT / DELETE /v2/square/posts/{postId}/like` | Write headers incl. `Idempotency-Key`                                | `{postId, likeCount, likedByViewer}`                                                                                                         | `implemented` | `implemented` |
+
 ### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
 
 | Method and path           | Request                       | Success projection                                                             | Interface     | Capability                                                           |

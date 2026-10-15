@@ -1,5 +1,4 @@
-export const latestMigrationName =
-  "000083_meme_list_volume_best_trades_indexes";
+export const latestMigrationName = "000084_square_feed";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -179,4 +178,6 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.chain_guard_incidents",
   "public.chain_guard_cursors",
   "public.launch2_campaigns",
+  "public.square_posts",
+  "public.square_post_likes",
 ] as const);

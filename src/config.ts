@@ -1191,6 +1191,8 @@ const reconciliationWorkerEnvironmentSchema = z
       5_000,
       600_000,
     ),
+    SQUARE_FEED_INGEST_ENABLED: booleanString,
+    SQUARE_FEED_INGEST_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
@@ -1949,6 +1951,17 @@ export interface ReconciliationWorkerConfig {
   readonly testnetFaucetSweep?: {
     readonly pendingTimeoutSeconds: number;
     readonly intervalMs: number;
+  } | null;
+  /**
+   * Decision 0143 `square_feed_ingest` lane (`SQUARE_FEED_INGEST_ENABLED`,
+   * default true; `SQUARE_FEED_INGEST_INTERVAL_MS`, default 60 000). Database
+   * only: member buys ≥ 10 USD1, LoopDynamic claims and graduations become
+   * square posts. `usd1Address` is the verified USD1 (a stable quote beside
+   * USDT / USDC). Absent or null keeps it off.
+   */
+  readonly squareFeedIngest?: {
+    readonly intervalMs: number;
+    readonly usd1Address: string | null;
   } | null;
   /**
    * `market_sparkline_warm` lane (Decision 0074); default on. It only ever
@@ -4149,6 +4162,10 @@ export function loadReconciliationWorkerConfig(
     VOICE_ROOM_IDLE_END_MINUTES:
       environment["VOICE_ROOM_IDLE_END_MINUTES"] ?? "10",
     VOICE_ROOM_MAX_LIVE_HOURS: environment["VOICE_ROOM_MAX_LIVE_HOURS"] ?? "12",
+    SQUARE_FEED_INGEST_ENABLED:
+      environment["SQUARE_FEED_INGEST_ENABLED"] ?? "true",
+    SQUARE_FEED_INGEST_INTERVAL_MS:
+      environment["SQUARE_FEED_INGEST_INTERVAL_MS"] ?? "60000",
     COMMUNITY_MEMBER_BUY_FEED_ENABLED:
       environment["COMMUNITY_MEMBER_BUY_FEED_ENABLED"] ?? "true",
     COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS:
@@ -4379,6 +4396,15 @@ export function loadReconciliationWorkerConfig(
                   apiSecret: parsed.data.STREAM_API_SECRET,
                 })
               : null,
+        })
+      : null,
+    squareFeedIngest: parsed.data.SQUARE_FEED_INGEST_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.SQUARE_FEED_INGEST_INTERVAL_MS,
+          usd1Address: parseVerifiedUsd1Address(
+            parsed.data.BSC_USD1_TOKEN_ADDRESS,
+            parsed.data.BSC_USD1_VERIFIED,
+          ),
         })
       : null,
     testnetFaucetSweep: parsed.data.TESTNET_FAUCET_ENABLED

@@ -228,6 +228,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     chain_guard_cursors: "platform",
     // Decision 0140: launch desk campaigns (console-written, no user column)
     launch2_campaigns: "platform",
+    // Decision 0143: square timeline (system posts have no author and stay)
+    square_posts: "user",
+    square_post_likes: "user",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",
@@ -463,6 +466,13 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     `${ownedBy()} or idempotency_record_id in ${ownedIdempotency}`,
   ),
   del("mining_epoch_rewards", ownedBy()),
+  // Decision 0143: likes by or on posts of doomed users, then their posts
+  del(
+    "square_post_likes",
+    `${ownedBy("user_id")} or post_id in
+      (select post_id from public.square_posts where ${ownedBy("author_user_id")})`,
+  ),
+  del("square_posts", ownedBy("author_user_id")),
   // Decision 0128: faucet grants reference the wallet and the idempotency row
   del(
     "testnet_faucet_grants",

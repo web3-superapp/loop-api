@@ -206,6 +206,10 @@ describe("committed OpenAPI artifact", () => {
       "/v2/session/bootstrap",
       "/v2/session/logout",
       "/v2/settings",
+      "/v2/square/feed",
+      "/v2/square/posts",
+      "/v2/square/posts/{postId}",
+      "/v2/square/posts/{postId}/like",
       "/v2/support/tickets",
       "/v2/swap/quote",
       "/v2/testnet/faucet",
@@ -240,7 +244,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(192);
+    expect(operationIds).toHaveLength(197);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",
@@ -1337,7 +1341,10 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/session",
       "GET /admin/v1/settings/intel-promotions",
       "GET /admin/v1/settings/recommended-communities",
+      "GET /admin/v1/square/posts",
+      "GET /admin/v1/square/posts/{postId}",
       "PATCH /admin/v1/launch2/campaigns/{campaignId}",
+      "PATCH /admin/v1/square/posts/{postId}",
       "POST /admin/v1/accounts",
       "POST /admin/v1/accounts/{accountId}/disable",
       "POST /admin/v1/accounts/{accountId}/reset-password",
@@ -1366,6 +1373,9 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/mining/parameter-versions/{versionId}/withdraw",
       "POST /admin/v1/session",
       "POST /admin/v1/session/password",
+      "POST /admin/v1/square/posts",
+      "POST /admin/v1/square/posts/{postId}/archive",
+      "POST /admin/v1/square/posts/{postId}/publish",
       "PUT /admin/v1/settings/intel-promotions",
       "PUT /admin/v1/settings/recommended-communities",
     ]);

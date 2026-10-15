@@ -294,6 +294,12 @@ export interface V2ProductPolicyRuntime {
    * Optional; absent is unavailable (TESTNET_FAUCET_RUNTIME_UNAVAILABLE).
    */
   readonly testnetFaucetState?: () => { readonly reasonCode: string | null };
+  /**
+   * Decision 0143: the square timeline (`/v2/square/*`). True when the
+   * database repository and the cursor codec are composed. Absent or false
+   * closes `squareFeed` with SQUARE_REPOSITORY_UNAVAILABLE.
+   */
+  readonly squareFeedAvailable?: boolean;
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -533,6 +539,7 @@ export const v2CapabilityIds = Object.freeze([
   "meme",
   "launch2",
   "testnetFaucet",
+  "squareFeed",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -1081,6 +1088,25 @@ function testnetFaucetCapability(
   });
 }
 
+/**
+ * Decision 0143: not a `V2_MODULES_ENABLED` module (never `deferred`);
+ * available while the square repository and the cursor codec exist.
+ */
+function squareFeedCapability(
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const available = runtime.squareFeedAvailable === true;
+  return Object.freeze({
+    capabilityId: "squareFeed",
+    availability: available ? "available" : "unavailable",
+    reasonCode: available ? null : "SQUARE_REPOSITORY_UNAVAILABLE",
+    evidence: Object.freeze({
+      status: "notApplicable" as const,
+      reasonCode: null,
+    }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1309,6 +1335,7 @@ export async function createV2CapabilitiesProjection(
     memeCapability(config, runtime),
     launch2Capability(config, runtime),
     testnetFaucetCapability(runtime),
+    squareFeedCapability(runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

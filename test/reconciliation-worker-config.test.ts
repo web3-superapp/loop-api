@@ -63,6 +63,8 @@ describe("loadReconciliationWorkerConfig", () => {
       chainGuardAlerts: null,
       // S169: the faucet pending sweep is off while the faucet is.
       testnetFaucetSweep: null,
+      // Decision 0143: the square ingest lane is on by default.
+      squareFeedIngest: { intervalMs: 60_000, usd1Address: null },
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

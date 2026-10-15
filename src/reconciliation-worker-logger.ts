@@ -152,6 +152,7 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP testnet faucet sweep closed a pending grant"
   | "LOOP testnet faucet sweep could not look up a hash; kept"
   | "LOOP testnet faucet sweep stays idle"
+  | "LOOP square feed ingest wrote event posts"
   | "LOOP chain guard lane stays idle"
   | "LOOP chain guard lane enabled"
   | "LOOP chain guard lane is limited"

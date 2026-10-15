@@ -92,8 +92,6 @@ describe("000075 MEME coverage integrity (Decision 0129 §2)", () => {
   });
 
   it("is the latest migration", () => {
-    expect(latestMigrationName).toBe(
-      "000083_meme_list_volume_best_trades_indexes",
-    );
+    expect(latestMigrationName).toBe("000084_square_feed");
   });
 });

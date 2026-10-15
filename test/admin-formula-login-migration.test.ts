@@ -54,9 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe(
-      "000083_meme_list_volume_best_trades_indexes",
-    );
+    expect(latestMigrationName).toBe("000084_square_feed");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });
