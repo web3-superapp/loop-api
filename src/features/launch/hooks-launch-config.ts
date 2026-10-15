@@ -91,35 +91,64 @@ export interface HooksLaunchLoopDynamicParams {
   readonly excludeBuybackFromRewards: boolean;
   /** S165: buy fee in ppm of the MEME output (ruled: 20,000). */
   readonly buyFeePpm: number;
+  /**
+   * Decision 0144 (loop-contracts Decision 0012, S193): the dynamic sell
+   * rate cap, a raw 18-decimal integer string (`"200000000000000000"` =
+   * 20 %; `"0"` = uncapped). Absent = a pre-S193 (S165) Factory, which has
+   * no such parameter: its `TEMPLATE_HASH` has no trailing word and its
+   * Hooks are uncapped.
+   */
+  readonly maxDynamicFeeWad?: string;
+}
+
+/** `maxDynamicFeeWad` is a uint256 below 1e18 (the Hook rejects ≥ 1e18). */
+export function isHooksLaunchMaxDynamicFeeWad(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /^(0|[1-9][0-9]{0,17})$/u.test(value) &&
+    BigInt(value) < 10n ** 18n
+  );
 }
 
 /**
  * `keccak256(abi.encode(keccak256("hooks_launch_v1"), uint8(1), router,
  * uint24 baseSellFeePpm, baseFeeRecipient, uint8 priceTiming, uint8
  * routingPolicy, routerRegistryAdmin, excludeBuybackFromRewards, uint24
- * buyFeePpm))` — the LoopDynamic Factory's `TEMPLATE_HASH`.
+ * buyFeePpm, uint256 maxDynamicFeeWad))` — the LoopDynamic Factory's
+ * `TEMPLATE_HASH`. Decision 0144: the trailing `uint256 maxDynamicFeeWad`
+ * (loop-contracts Decision 0012 §3) is encoded whenever the parameter is
+ * present — a cap of 0 still adds a zero word, so an S193 Factory's hash
+ * differs from the S165 one even uncapped. Without it (an S165 Factory)
+ * the hash is the ten-field S165 formula, unchanged.
  */
 export function hooksLaunchLoopDynamicTemplateHash(
   params: HooksLaunchLoopDynamicParams,
 ): `0x${string}` {
+  const head = [
+    hooksLaunchTemplateHash,
+    1,
+    params.router as `0x${string}`,
+    params.baseSellFeePpm,
+    params.baseFeeRecipient as `0x${string}`,
+    params.priceTiming,
+    params.routingPolicy,
+    params.routerRegistryAdmin as `0x${string}`,
+    params.excludeBuybackFromRewards,
+    params.buyFeePpm,
+  ] as const;
+  const s165 =
+    "bytes32, uint8, address, uint24, address, uint8, uint8, address, bool, uint24";
+  if (params.maxDynamicFeeWad === undefined) {
+    return keccak256(encodeAbiParameters(parseAbiParameters(s165), head));
+  }
+  if (!isHooksLaunchMaxDynamicFeeWad(params.maxDynamicFeeWad)) {
+    throw new InvalidHooksLaunchDraftError();
+  }
   return keccak256(
-    encodeAbiParameters(
-      parseAbiParameters(
-        "bytes32, uint8, address, uint24, address, uint8, uint8, address, bool, uint24",
-      ),
-      [
-        hooksLaunchTemplateHash,
-        1,
-        params.router as `0x${string}`,
-        params.baseSellFeePpm,
-        params.baseFeeRecipient as `0x${string}`,
-        params.priceTiming,
-        params.routingPolicy,
-        params.routerRegistryAdmin as `0x${string}`,
-        params.excludeBuybackFromRewards,
-        params.buyFeePpm,
-      ],
-    ),
+    encodeAbiParameters(parseAbiParameters(`${s165}, uint256`), [
+      ...head,
+      BigInt(params.maxDynamicFeeWad),
+    ]),
   );
 }
 
@@ -127,7 +156,7 @@ export function hooksLaunchLoopDynamicTemplateHash(
  * Decision 0131: the `fixedEconomics` of a LoopDynamic template — the
  * OfficialTax object with the pool tax rates taken from the Hook
  * parameters and the Hook parameters appended (so the configHash binds
- * them, `buyFeePpm` included). The OfficialTax object is never changed.
+ * them, `buyFeePpm` and — Decision 0144 — `maxDynamicFeeWad` included). The OfficialTax object is never changed.
  */
 export function hooksLaunchLoopDynamicFixedEconomics(
   base: HooksLaunchFixedEconomics,
@@ -147,6 +176,11 @@ export function hooksLaunchLoopDynamicFixedEconomics(
       routingPolicy: params.routingPolicy === 1 ? "Open" : "LoopRouterOnly",
       routerRegistryAdmin: params.routerRegistryAdmin.toLowerCase(),
       excludeBuybackFromRewards: params.excludeBuybackFromRewards,
+      // Decision 0144: an S193 Factory's cap (raw WAD string, "0" =
+      // uncapped); an S165 template's JSON (and configHash) is unchanged.
+      ...(params.maxDynamicFeeWad === undefined
+        ? {}
+        : { maxDynamicFeeWad: params.maxDynamicFeeWad }),
     }),
   });
 }

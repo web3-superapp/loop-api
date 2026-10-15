@@ -36,7 +36,10 @@ import {
   type HooksLaunchOnChainFacts,
 } from "../../features/launch/hooks-launch-verification.js";
 import type { HooksLaunchLoopDynamicOnChainFacts } from "../../features/launch/hooks-launch-loop-dynamic-verification.js";
-import { readHooksLaunchLoopDynamicTemplate } from "./hooks-launch-factory-reader.js";
+import {
+  isHooksLaunchContractRevert,
+  readHooksLaunchLoopDynamicTemplate,
+} from "./hooks-launch-factory-reader.js";
 import {
   buybackExecutorAbi,
   curveEngineAbi,
@@ -683,6 +686,14 @@ export function createHooksLaunchExecutorChain(input: {
             "excludeBuybackFromRewards",
           ),
           buyFeePpm: await num(hf, HF, "buyFeePpm"),
+          // Decision 0144: null = an S165 Hook factory (no cap getter).
+          maxDynamicFeeWad: await read(hf, HF, "maxDynamicFeeWad").then(
+            (value) => String(value),
+            (error: unknown) => {
+              if (isHooksLaunchContractRevert(error)) return null;
+              throw error;
+            },
+          ),
           lpFee: await num(hf, HF, "LP_FEE"),
           tickSpacing: await num(hf, HF, "TICK_SPACING"),
           launch: {

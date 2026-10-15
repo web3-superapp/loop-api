@@ -1883,6 +1883,11 @@ const hooksLaunchFixedEconomicsSchema = {
         routingPolicy: { type: "string", enum: ["LoopRouterOnly", "Open"] },
         routerRegistryAdmin: addressSchema,
         excludeBuybackFromRewards: { type: "boolean" },
+        maxDynamicFeeWad: {
+          ...uintStringSchema,
+          description:
+            "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories.",
+        },
       },
     },
   },

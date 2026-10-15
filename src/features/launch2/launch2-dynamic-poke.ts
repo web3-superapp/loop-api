@@ -9,7 +9,9 @@ import type { Launch2Repository } from "./launch2-ports.js";
  * indexed LoopDynamic Hook and, when a round is armed and the 5-minute
  * candle has ended without a swap since (`block.timestamp / 300 >
  * candleId`), calls the permissionless `poke()` once so the candle closes
- * on time (a green close ends the round and makes it claimable). It never
+ * on time (Decision 0144: on an S193 Hook a candle that no longer fell —
+ * close ≥ open, flat included — ends the round and makes it claimable; a
+ * pre-S193 Hook needs a rising close). It never
  * pokes an unarmed Hook (nothing to finalise) and sends at most one
  * transaction per Hook per tick, after a passing simulation. The lane
  * writes no database row; the Hook's logs reach the read model through the

@@ -446,6 +446,142 @@ describe("Decision 0131: LoopDynamic read model (000076)", () => {
     ).toEqual([]);
   });
 
+  it("projects S193 closes: a round ended at a skipped empty candle and an activate-then-close in one roll (Decision 0144)", async () => {
+    const target = await instance();
+    const poolId = `0x${"43".repeat(32)}`;
+    const e = (
+      address: string,
+      name: Launch2LaneEvent["eventName"],
+      args: Record<string, string>,
+      block: number,
+      index = 0,
+    ) => event(target, address, name, args, block, index);
+    await commit(
+      [
+        e(target.graduationAdapter, "LoopHookBound", { hook, poolId }, 2000),
+        // Candle 600 crashes: round 1 from 601.
+        e(
+          hook,
+          "CandleClosed",
+          { candle: "600", openSqrtPriceX96: "1000", closeSqrtPriceX96: "800" },
+          2001,
+        ),
+        e(
+          hook,
+          "RoundActivated",
+          { round: "1", startCandle: "601", carriedQuote: "0" },
+          2001,
+          1,
+        ),
+        e(
+          hook,
+          "BuyCredited",
+          { round: "1", buyer: buyerA, quoteSpent: (10n * wad).toString() },
+          2002,
+        ),
+        // One roll: 601 closes red (continues), 602–603 are empty; the
+        // round ends at 602 — a candle with no CandleClosed of its own.
+        e(
+          hook,
+          "CandleClosed",
+          { candle: "601", openSqrtPriceX96: "800", closeSqrtPriceX96: "790" },
+          2003,
+        ),
+        e(
+          hook,
+          "EmptyCandlesSkipped",
+          { first: "602", count: "2", flatSqrtPriceX96: "790" },
+          2003,
+          1,
+        ),
+        e(
+          hook,
+          "RoundClosed",
+          {
+            round: "1",
+            endCandle: "602",
+            rewardAllocation: "0",
+            nextCarry: "0",
+          },
+          2003,
+          2,
+        ),
+        // Candle 604 crashes and 605 is empty: activated and closed in the
+        // same roll (start = end, nothing to allocate, carry unchanged).
+        e(
+          hook,
+          "CandleClosed",
+          { candle: "604", openSqrtPriceX96: "790", closeSqrtPriceX96: "600" },
+          2004,
+        ),
+        e(
+          hook,
+          "RoundActivated",
+          { round: "2", startCandle: "605", carriedQuote: "0" },
+          2004,
+          1,
+        ),
+        e(
+          hook,
+          "EmptyCandlesSkipped",
+          { first: "605", count: "1", flatSqrtPriceX96: "600" },
+          2004,
+          2,
+        ),
+        e(
+          hook,
+          "RoundClosed",
+          {
+            round: "2",
+            endCandle: "605",
+            rewardAllocation: "0",
+            nextCarry: "0",
+          },
+          2004,
+          3,
+        ),
+      ],
+      2004,
+    );
+    const rounds = await pool.query<{
+      round_id: string;
+      start_candle: string;
+      end_candle: string | null;
+      closed: boolean;
+      allocation_usd1: string | null;
+      total_buy_weight_usd1: string;
+    }>(
+      `select round_id::text, start_candle::text, end_candle::text, closed,
+         allocation_usd1::text, total_buy_weight_usd1::text
+       from public.launch2_dynamic_rounds where instance_id = $1
+       order by round_id`,
+      [target.instanceId],
+    );
+    expect(rounds.rows).toEqual([
+      {
+        round_id: "1",
+        start_candle: "601",
+        end_candle: "602",
+        closed: true,
+        allocation_usd1: "0",
+        total_buy_weight_usd1: (10n * wad).toString(),
+      },
+      {
+        round_id: "2",
+        start_candle: "605",
+        end_candle: "605",
+        closed: true,
+        allocation_usd1: "0",
+        total_buy_weight_usd1: "0",
+      },
+    ]);
+    expect(await launch2.dynamicRoundSummary(target.instanceId)).toMatchObject({
+      roundCount: 2,
+      closedRoundCount: 2,
+      lastRound: { roundId: "2" },
+    });
+  });
+
   it("keeps an OfficialTax instance's hook kind and refuses a Hook binding shape on it", async () => {
     const target = await instance();
     await pool.query(

@@ -6,6 +6,7 @@ import { down, up } from "../migrations/000076_launch2_loop_dynamic.js";
 import {
   hooksLaunchLoopDynamicTemplateHash,
   hooksLaunchTemplateHash,
+  InvalidHooksLaunchDraftError,
   parseHooksLaunchDraft,
 } from "../src/features/launch/hooks-launch-config.js";
 import {
@@ -17,11 +18,17 @@ import {
   launch2DynamicCrashOverTenPercent,
   launch2DynamicDropWad,
   launch2DynamicGrossOfNet,
+  launch2DynamicClosesRound,
+  launch2DynamicEffectiveRateWad,
   launch2DynamicIsGreen,
+  launch2DynamicIsRed,
+  launch2DynamicRealizedRateWad,
   launch2DynamicReasonCodes,
   launch2DynamicReasonMessagesZh,
   launch2DynamicRoll,
+  launch2DynamicSellExtraFee,
   launch2DynamicSellSplit,
+  launch2DynamicWadBps,
   launch2HookKindOf,
 } from "../src/features/launch2/launch2-dynamic.js";
 import {
@@ -82,6 +89,7 @@ describe("LoopDynamic arithmetic (Decision 0131)", () => {
       lastSqrtPriceX96: 900n * q96,
       currentRoundId: 4n,
       memeIsCurrency0: true,
+      roundCloseRule: "closeAtOrAboveOpen" as const,
     };
     expect(launch2DynamicRoll(base, 100n * 300n + 299n)).toMatchObject({
       rollPending: false,
@@ -109,6 +117,180 @@ describe("LoopDynamic arithmetic (Decision 0131)", () => {
       true,
     );
     expect(launch2DynamicPokeDue(base, 101n * 300n)).toBe(false);
+  });
+
+  it("closes an armed round on a candle that no longer falls (Decision 0144)", () => {
+    const open = 1_000n * q96;
+    // S193: close ≥ open closes (a flat candle included); a red one keeps it.
+    for (const memeIsCurrency0 of [true, false]) {
+      const up = memeIsCurrency0 ? open + 1n : open - 1n;
+      const down = memeIsCurrency0 ? open - 1n : open + 1n;
+      expect(launch2DynamicIsRed(open, down, memeIsCurrency0)).toBe(true);
+      expect(launch2DynamicIsRed(open, open, memeIsCurrency0)).toBe(false);
+      expect(launch2DynamicIsRed(open, up, memeIsCurrency0)).toBe(false);
+      for (const [close, s193, legacy] of [
+        [up, true, true],
+        [open, true, false],
+        [down, false, false],
+      ] as const) {
+        expect(
+          launch2DynamicClosesRound(
+            open,
+            close,
+            memeIsCurrency0,
+            "closeAtOrAboveOpen",
+          ),
+        ).toBe(s193);
+        expect(
+          launch2DynamicClosesRound(
+            open,
+            close,
+            memeIsCurrency0,
+            "closeAboveOpen",
+          ),
+        ).toBe(legacy);
+      }
+    }
+    // The roll: an armed round over a flat (e.g. empty) candle.
+    const armedFlat = {
+      initialized: true,
+      armed: true,
+      candleId: 100n,
+      candleOpenSqrtPriceX96: open,
+      lastSqrtPriceX96: open,
+      currentRoundId: 4n,
+      memeIsCurrency0: true,
+      roundCloseRule: "closeAtOrAboveOpen" as const,
+    };
+    expect(launch2DynamicRoll(armedFlat, 101n * 300n)).toMatchObject({
+      rollPending: true,
+      armed: false,
+      closes: true,
+      roundId: 4n,
+    });
+    // A pre-S193 Hook keeps the round armed on the same flat candle.
+    expect(
+      launch2DynamicRoll(
+        { ...armedFlat, roundCloseRule: "closeAboveOpen" },
+        101n * 300n,
+      ),
+    ).toMatchObject({ rollPending: true, armed: true, closes: false });
+    // Decision 0144 / loop-contracts 0013 §2: a red candle followed by
+    // skipped empty ones ends at the first empty candle (S193 only).
+    const armedRed = { ...armedFlat, lastSqrtPriceX96: open - 1n };
+    expect(launch2DynamicRoll(armedRed, 103n * 300n)).toMatchObject({
+      armed: false,
+      closes: true,
+      roundId: 4n,
+    });
+    expect(
+      launch2DynamicRoll(
+        { ...armedRed, roundCloseRule: "closeAboveOpen" },
+        103n * 300n,
+      ),
+    ).toMatchObject({ armed: true, closes: false });
+    // A crash followed by an empty candle: activated and closed in one roll.
+    const crash = {
+      ...armedFlat,
+      armed: false,
+      lastSqrtPriceX96: (open * 9n) / 10n,
+    };
+    expect(launch2DynamicRoll(crash, 102n * 300n)).toMatchObject({
+      activates: true,
+      closes: true,
+      armed: false,
+      roundId: 5n,
+    });
+    expect(launch2DynamicRoll(crash, 101n * 300n)).toMatchObject({
+      activates: true,
+      closes: false,
+      armed: true,
+      roundId: 5n,
+    });
+    // A red candle keeps it armed under both rules (no new activation).
+    expect(
+      launch2DynamicRoll(
+        { ...armedFlat, lastSqrtPriceX96: open - 1n },
+        101n * 300n,
+      ),
+    ).toMatchObject({ armed: true, closes: false, activates: false });
+  });
+
+  it("caps the dynamic sell rate at min(drop, cap) (Decision 0144)", () => {
+    const cap = (2n * wad) / 10n;
+    const gross = 100n * wad;
+    const baseFee = 2n * wad;
+    const cases = [
+      // [drop, cap, charged rate]
+      [(13n * wad) / 100n, cap, (13n * wad) / 100n],
+      [(6n * wad) / 10n, cap, cap],
+      [(6n * wad) / 10n, 0n, (6n * wad) / 10n],
+      [cap, cap, cap],
+      [0n, cap, 0n],
+    ] as const;
+    for (const [drop, maxDynamicFeeWad, rate] of cases) {
+      expect(launch2DynamicEffectiveRateWad(drop, maxDynamicFeeWad)).toBe(rate);
+      const extraFee = launch2DynamicSellExtraFee({
+        gross,
+        baseFee,
+        dropWad: drop,
+        maxDynamicFeeWad,
+      });
+      expect(extraFee).toBe(((gross - baseFee) * rate) / wad);
+      // The realized rate from the SellFeeCharged amounts is the charged
+      // rate, not the event's dropWad.
+      expect(
+        launch2DynamicRealizedRateWad({
+          grossQuote: gross,
+          baseFee,
+          extraFee,
+        }),
+      ).toBe(rate);
+    }
+    expect(launch2DynamicWadBps((13n * wad) / 100n)).toBe(1300);
+    expect(
+      launch2DynamicWadBps(
+        launch2DynamicEffectiveRateWad((6n * wad) / 10n, cap),
+      ),
+    ).toBe(2000);
+    expect(
+      launch2DynamicWadBps(
+        launch2DynamicEffectiveRateWad((6n * wad) / 10n, 0n),
+      ),
+    ).toBe(6000);
+    // Rounding: the Hook floors extra, so the realized rate is at most one
+    // wei of rate below min(drop, cap).
+    const oddGross = 123_456_789_123n;
+    const oddBase = 2_469_135_782n;
+    const drop = 333_333_333_333_333_333n;
+    const extraFee = launch2DynamicSellExtraFee({
+      gross: oddGross,
+      baseFee: oddBase,
+      dropWad: drop,
+      maxDynamicFeeWad: 0n,
+    });
+    const realized = launch2DynamicRealizedRateWad({
+      grossQuote: oddGross,
+      baseFee: oddBase,
+      extraFee,
+    });
+    expect(realized <= drop).toBe(true);
+    expect(drop - realized <= wad / (oddGross - oddBase) + 1n).toBe(true);
+    expect(
+      launch2DynamicSellExtraFee({
+        gross: 1n,
+        baseFee: 1n,
+        dropWad: drop,
+        maxDynamicFeeWad: 0n,
+      }),
+    ).toBe(0n);
+    expect(
+      launch2DynamicRealizedRateWad({
+        grossQuote: 1n,
+        baseFee: 1n,
+        extraFee: 0n,
+      }),
+    ).toBe(0n);
   });
 
   it("inverts the output fee and splits a sell from two simulations", () => {
@@ -223,6 +405,36 @@ describe("LoopDynamic template hash (loop-contracts S165, Decision 0009 §13)", 
     ).not.toBe(hooksLaunchLoopDynamicTemplateHash(params));
   });
 
+  it("appends uint256 maxDynamicFeeWad for an S193 Factory (Decision 0144, loop-contracts 0012 §3)", () => {
+    // Vectors: cast keccak $(cast abi-encode "f(bytes32,uint8,address,
+    // uint24,address,uint8,uint8,address,bool,uint24,uint256)" …).
+    expect(
+      hooksLaunchLoopDynamicTemplateHash({ ...params, maxDynamicFeeWad: "0" }),
+    ).toBe(
+      "0xa0dce14c6763911f2bda8e2cd2e22ab8dd97ea6f9ca73c1d15b68abaea23a2d1",
+    );
+    expect(
+      hooksLaunchLoopDynamicTemplateHash({
+        ...params,
+        maxDynamicFeeWad: "200000000000000000",
+      }),
+    ).toBe(
+      "0x79099800919dff67131a5082465c35cd4e589a581825e65084a8fa2eb26b102e",
+    );
+    // A cap of 0 still adds the zero word: not the S165 hash.
+    expect(
+      hooksLaunchLoopDynamicTemplateHash({ ...params, maxDynamicFeeWad: "0" }),
+    ).not.toBe(hooksLaunchLoopDynamicTemplateHash(params));
+    for (const bad of ["1000000000000000000", "-1", "01", "0.2", ""]) {
+      expect(() =>
+        hooksLaunchLoopDynamicTemplateHash({
+          ...params,
+          maxDynamicFeeWad: bad,
+        }),
+      ).toThrow(InvalidHooksLaunchDraftError);
+    }
+  });
+
   it("binds the Hook parameters into the configHash only for loopDynamic", () => {
     const draft = {
       name: "Project",
@@ -261,6 +473,31 @@ describe("LoopDynamic template hash (loop-contracts S165, Decision 0009 §13)", 
       loopDynamic: { ...params, buyFeePpm: 10_000 },
     });
     expect(cheaper.configHash).not.toBe(dynamic.configHash);
+    // Decision 0144: an S165 template's JSON has no cap key (its configHash
+    // is unchanged); an S193 one carries it, and the cap is signed.
+    expect(
+      "maxDynamicFeeWad" in
+        ((dynamic.fixedEconomics as Record<string, unknown>)[
+          "loopDynamic"
+        ] as object),
+    ).toBe(false);
+    const capped = parseHooksLaunchDraft(draft, {
+      ...policy,
+      loopDynamic: { ...params, maxDynamicFeeWad: "200000000000000000" },
+    });
+    expect(capped.templateHash).toBe(
+      "0x79099800919dff67131a5082465c35cd4e589a581825e65084a8fa2eb26b102e",
+    );
+    expect(capped.fixedEconomics).toMatchObject({
+      loopDynamic: { maxDynamicFeeWad: "200000000000000000" },
+    });
+    expect(capped.configHash).not.toBe(dynamic.configHash);
+    const uncapped = parseHooksLaunchDraft(draft, {
+      ...policy,
+      loopDynamic: { ...params, maxDynamicFeeWad: "0" },
+    });
+    expect(uncapped.configHash).not.toBe(capped.configHash);
+    expect(uncapped.configHash).not.toBe(dynamic.configHash);
   });
 });
 

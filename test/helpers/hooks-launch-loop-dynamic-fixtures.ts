@@ -41,9 +41,37 @@ export const testnetLoopDynamicParams: HooksLaunchLoopDynamicParams =
     excludeBuybackFromRewards: true,
     buyFeePpm: 20_000,
   });
-/** Manifest `loopDynamic.templateHash`. */
+/**
+ * Manifest `loopDynamic.templateHash` of the S165 Factory — a chain fact
+ * (pre-S193, no `maxDynamicFeeWad`), kept as the regression vector of the
+ * ten-field formula.
+ */
 export const testnetLoopDynamicTemplateHash =
   "0x0e61af8199739dd4a9c5902178b87159d00c208639b8f4d504b24d263a3f8819";
+
+/**
+ * Decision 0144: the S193 Factory's parameters — loop-contracts
+ * `deployments/bsc-testnet/factory-20261015T112941Z.json` `loopDynamic.params`
+ * (main 47d7620, Decision 0013; new LoopRouter `0x21eE…943a`, cap 0.2e18).
+ * Its template hash is computed from these (`hooksLaunchLoopDynamicTemplateHash`);
+ * `s193TestnetManifestTemplateHash` is the manifest's recorded value, a chain
+ * fact the computation must reproduce.
+ */
+export const s193LoopDynamicParams: HooksLaunchLoopDynamicParams =
+  Object.freeze({
+    router: "0x21eec27f759b6efb1e6c9a26a555ed40f08f943a",
+    baseSellFeePpm: 20_000,
+    baseFeeRecipient: "0x0e2e2b52d5465f3e4576e71ee4dd1dff22557040",
+    priceTiming: 1,
+    routingPolicy: 1,
+    routerRegistryAdmin: "0x3e64c464e739e108d88c9b805157eeb2a8a11767",
+    excludeBuybackFromRewards: true,
+    buyFeePpm: 20_000,
+    maxDynamicFeeWad: "200000000000000000",
+  });
+/** Manifest `loopDynamic.templateHash` (factory-20261015T112941Z.json). */
+export const s193TestnetManifestTemplateHash =
+  "0xe96acde581d40a074b1730374cd3aef400d27db8bad9d98ba82cf98fab876d67";
 
 export const loopDynamicTemplate = Object.freeze({
   params: testnetLoopDynamicParams,
@@ -188,6 +216,7 @@ export function passingLoopDynamicFacts(): HooksLaunchLoopDynamicOnChainFacts {
       routerRegistry,
       excludeBuybackFromRewards: true,
       buyFeePpm: 20_000,
+      maxDynamicFeeWad: testnetLoopDynamicParams.maxDynamicFeeWad ?? null,
       lpFee: 2_500,
       tickSpacing: 60,
       launch: {

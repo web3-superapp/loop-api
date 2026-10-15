@@ -94343,6 +94343,11 @@
                                         },
                                         "excludeBuybackFromRewards": {
                                           "type": "boolean"
+                                        },
+                                        "maxDynamicFeeWad": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                          "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories."
                                         }
                                       }
                                     }
@@ -95555,6 +95560,11 @@
                                 },
                                 "excludeBuybackFromRewards": {
                                   "type": "boolean"
+                                },
+                                "maxDynamicFeeWad": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                  "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories."
                                 }
                               }
                             }
@@ -116878,7 +116888,12 @@
                         "claim": {
                           "type": "object",
                           "additionalProperties": false,
-                          "required": ["executable", "reasonCode", "latest"],
+                          "required": [
+                            "executable",
+                            "reasonCode",
+                            "configurationReasonCode",
+                            "latest"
+                          ],
                           "properties": {
                             "executable": { "type": "boolean" },
                             "reasonCode": {
@@ -116889,6 +116904,16 @@
                                 },
                                 { "type": "null" }
                               ]
+                            },
+                            "configurationReasonCode": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+                                },
+                                { "type": "null" }
+                              ],
+                              "description": "Decision 0144 (S193): the claim path's configuration reason alone — the first of MINING_SETTLEMENT_UNAVAILABLE (no settlement store configured), MINING_CLAIM_MAINNET_CLOSED, MINING_CLAIM_CONTRACT_NOT_CONFIGURED, MINING_CLAIM_CHAIN_NOT_CONFIGURED, MINING_CLAIM_SIGNER_NOT_CONFIGURED, MINING_CLAIM_WRITES_DISABLED; null when the claim path is configured. Never masked by the ledger reasons in reasonCode (MINING_PARAMETERS_PENDING, MINING_NOTHING_SETTLED, MINING_CLAIM_NOTHING_TO_CLAIM, MINING_CLAIM_BELOW_MINIMUM, MINING_CLAIM_IN_FLIGHT, a runtime MINING_SETTLEMENT_UNAVAILABLE), so the App can tell whether the LOOP claim contract is configured (MINING_CLAIM_CONTRACT_NOT_CONFIGURED) whatever the ledger says. Does not cover the contract's paused / unreadable state (reasonCode only)."
                             },
                             "latest": {
                               "anyOf": [
@@ -160908,7 +160933,7 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 10000,
-                              "description": "sell: the dynamic fee over the post-base output in bps (the candle's drop at the Hook's priceTiming, after this trade for POST_SWAP); buy: 0."
+                              "description": "sell: the dynamic fee over the post-base output in bps — min(the candle's drop at the Hook's priceTiming (after this trade for POST_SWAP), maxDynamicFeeWad) (Decision 0144; cap 0 = uncapped); buy: 0."
                             },
                             "dynamicTaxAmount": {
                               "type": "string",
@@ -161995,7 +162020,7 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 10000,
-                              "description": "sell: the dynamic fee over the post-base output in bps (the candle's drop at the Hook's priceTiming, after this trade for POST_SWAP); buy: 0."
+                              "description": "sell: the dynamic fee over the post-base output in bps — min(the candle's drop at the Hook's priceTiming (after this trade for POST_SWAP), maxDynamicFeeWad) (Decision 0144; cap 0 = uncapped); buy: 0."
                             },
                             "dynamicTaxAmount": {
                               "type": "string",
@@ -163398,7 +163423,7 @@
         "operationId": "getV2Launch2DynamicPool",
         "summary": "Get the LoopDynamic pool and reward-round state of a MEME v2 instance",
         "tags": ["launch2"],
-        "description": "Decision 0131. Every instance answers its hookKind: an OfficialTax instance is status not_applicable (every other field null); a LoopDynamic instance before graduation is not_graduated. A graduated LoopDynamic instance reads its indexed Hook (LoopHookBound) at one block, cross-checked against the configured LoopRouter (trustedRouter, PoolManager) and the indexed pool id: armed, currentRoundId, candle (5 min) and whether a roll is pending, currentDropWad, the pot (carry + the armed round's dynamic fees), the round's total buy weight, the viewer's weight (walletId query or the active wallet; null without one), the fee rates, routingPolicy / priceTiming, and the indexed round summary. 503 CAPABILITY_UNAVAILABLE / LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED | LAUNCH2_CHAIN_READ_FAILED. Decision 0132: every such dependency 503 (after the instance is read) adds detailsSafe.hookKind (officialTax | loopDynamic, the registry row) so a client whose first read fails still picks the LoopDynamic panel. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "description": "Decision 0131. Every instance answers its hookKind: an OfficialTax instance is status not_applicable (every other field null); a LoopDynamic instance before graduation is not_graduated. A graduated LoopDynamic instance reads its indexed Hook (LoopHookBound) at one block, cross-checked against the configured LoopRouter (trustedRouter, PoolManager) and the indexed pool id: armed, currentRoundId, candle (5 min) and whether a roll is pending, currentDropWad, the dynamic fee cap (maxDynamicFeeWad; the sell rate is min(drop, cap), currentDynamicTaxBps) and the round close rule (Decision 0144: an armed round closes at the first candle that no longer falls — close ≥ open, flat included — on S193 Hooks; only on a rising close on pre-S193 Hooks), the pot (carry + the armed round's dynamic fees), the round's total buy weight, the viewer's weight (walletId query or the active wallet; null without one), the fee rates, routingPolicy / priceTiming, and the indexed round summary. 503 CAPABILITY_UNAVAILABLE / LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED | LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED | LAUNCH2_DYNAMIC_HOOK_MISMATCH | LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED | LAUNCH2_CHAIN_READ_FAILED. Decision 0132: every such dependency 503 (after the instance is read) adds detailsSafe.hookKind (officialTax | loopDynamic, the registry row) so a client whose first read fails still picks the LoopDynamic panel. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
         "parameters": [
           {
             "schema": {
@@ -163471,6 +163496,11 @@
                         "rollPending",
                         "currentDropWad",
                         "currentDropBps",
+                        "maxDynamicFeeWad",
+                        "maxDynamicFeeBps",
+                        "currentDynamicTaxBps",
+                        "roundCloseRule",
+                        "armedAfterRoll",
                         "potUsd1",
                         "carryUsd1",
                         "roundExtraFeesUsd1",
@@ -163590,7 +163620,7 @@
                         },
                         "rollPending": {
                           "type": ["null", "boolean"],
-                          "description": "The Hook's candle ended without a swap / poke since; the next swap, poke or claim closes it first."
+                          "description": "The Hook's candle ended without a swap / poke since; the next swap, poke or claim closes it first (Decision 0144: on an S193 Hook an armed round whose pending candle did not fall — flat included — closes then)."
                         },
                         "currentDropWad": {
                           "anyOf": [
@@ -163611,6 +163641,51 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "maxDynamicFeeWad": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.2 (20 %)."
+                        },
+                        "maxDynamicFeeBps": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "currentDynamicTaxBps": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0144: the dynamic sell rate at the current price, min(currentDropWad, maxDynamicFeeWad) in bps (0 = no dynamic fee). PRE_SWAP: what the next sell pays; POST_SWAP: before that sell's own price impact (the quote is exact)."
+                        },
+                        "roundCloseRule": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": ["closeAtOrAboveOpen", "closeAboveOpen"]
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0144: how an armed round ends. closeAtOrAboveOpen (S193 Hooks, ruled 2026-10-15): the first candle that no longer falls closes the round — close ≥ open, a flat candle included. closeAboveOpen (pre-S193 Hooks, legacy Factories): only a candle closing above its open closes it; a flat one keeps it armed. A round arms when a candle closes more than 10 % below its open."
+                        },
+                        "armedAfterRoll": {
+                          "type": ["null", "boolean"],
+                          "description": "Decision 0144 (loop-contracts 0013 §7.3): whether a round is armed once the pending candle roll runs (the next swap, poke or claim). Equals armed when rollPending is false; while a roll is pending the chain's armed() is stale — on an S193 Hook an armed round ends if the pending candle did not fall or an empty candle followed it, and a crash can activate one. Use this for the App's \"round in progress\" and dynamic-tax hints."
                         },
                         "potUsd1": {
                           "anyOf": [

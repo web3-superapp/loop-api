@@ -1,5 +1,6 @@
 import { decodeFunctionData } from "viem";
 
+import { launch2DynamicSellExtraFee } from "../../src/features/launch2/launch2-dynamic.js";
 import {
   launch2PoolId,
   launch2PoolKey,
@@ -26,7 +27,8 @@ import { memeUsd1 } from "./meme-service-fakes.js";
  * hook = 0, the Hook bound at graduation) and a LoopRouter / Hook reader
  * at a constant price of 1,600 MEME per USD1 (no impact). The buy fee is
  * `buyFeePpm` of the MEME output; a sell pays `baseSellFeePpm` plus
- * `dropWad` of the rest unless the call is "neutral".
+ * `min(dropWad, maxDynamicFeeWad)` of the rest (Decision 0144) unless the
+ * call is "neutral".
  */
 
 export const launch2LoopRouter = "0x7777777777777777777777777777777777777777";
@@ -69,8 +71,10 @@ export interface FakeLaunch2DynamicState {
   routerCheck: Launch2PoolRouterCheck;
   failRead: boolean;
   hook: Partial<Launch2DynamicHookState>;
-  /** The sell's dynamic rate (18 decimals) while armed. */
+  /** The candle's drop (18 decimals) while armed. */
   dropWad: bigint;
+  /** Decision 0144: the Hook's cap (0 = uncapped); the rate is min(drop, cap). */
+  maxDynamicFeeWad: bigint;
   usd1Balance: bigint;
   memeBalance: bigint;
   walletWeight: bigint;
@@ -90,6 +94,7 @@ export function defaultDynamicState(
     failRead: false,
     hook: {},
     dropWad: 3n * 10n ** 17n,
+    maxDynamicFeeWad: 0n,
     usd1Balance: 1_000n * wad,
     memeBalance: 2_000_000n * wad,
     walletWeight: 25n * wad,
@@ -131,6 +136,8 @@ export function createFakeLaunch2DynamicChain(
       currentDropWad: armed ? state.dropWad : 0n,
       baseSellFeePpm: 20_000n,
       buyFeePpm: 20_000n,
+      maxDynamicFeeWad: state.maxDynamicFeeWad,
+      roundCloseRule: "closeAtOrAboveOpen",
       priceTiming: 1,
       routingPolicy: 1,
       routerRegistry: launch2RouterRegistry,
@@ -207,7 +214,12 @@ export function createFakeLaunch2DynamicChain(
       const extra =
         call.neutralHook !== null || !armed
           ? 0n
-          : ((gross - base) * state.dropWad) / 10n ** 18n;
+          : launch2DynamicSellExtraFee({
+              gross,
+              baseFee: base,
+              dropWad: state.dropWad,
+              maxDynamicFeeWad: state.maxDynamicFeeWad,
+            });
       return Promise.resolve({
         status: "ok",
         amountSpent: amountIn,

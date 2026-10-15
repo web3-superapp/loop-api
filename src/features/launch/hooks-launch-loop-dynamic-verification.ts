@@ -114,6 +114,11 @@ export interface HooksLaunchLoopDynamicOnChainFacts {
     readonly routerRegistry: string;
     readonly excludeBuybackFromRewards: boolean;
     readonly buyFeePpm: number;
+    /**
+     * Decision 0144: `maxDynamicFeeWad()` (raw WAD string); null for an
+     * S165 Hook factory without the getter.
+     */
+    readonly maxDynamicFeeWad: string | null;
     readonly lpFee: number;
     readonly tickSpacing: number;
     readonly launch: {
@@ -409,6 +414,7 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
       hookFactory.excludeBuybackFromRewards ===
         params.excludeBuybackFromRewards &&
       hookFactory.buyFeePpm === params.buyFeePpm &&
+      hookFactory.maxDynamicFeeWad === (params.maxDynamicFeeWad ?? null) &&
       hookFactory.lpFee === c.lpFee &&
       hookFactory.tickSpacing === c.tickSpacing &&
       same(factory.loopHookDeploymentFactory, adapter?.hookFactory ?? ""),

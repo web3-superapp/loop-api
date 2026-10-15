@@ -515,6 +515,9 @@ export function createMiningRewardsService(
           claim: {
             executable: false,
             reasonCode: claimReason,
+            // Decision 0144 (S193 coordinator addendum): the configuration
+            // reason alone, never masked by a ledger reason.
+            configurationReasonCode: claimReason,
             latest: null,
           },
         });
@@ -704,6 +707,7 @@ export function createMiningRewardsService(
           claim: Object.freeze({
             executable: gate === null,
             reasonCode: gate,
+            configurationReasonCode: claimReason,
             latest:
               claims[0] === undefined
                 ? null
@@ -728,6 +732,7 @@ export function createMiningRewardsService(
             claim: {
               executable: false,
               reasonCode: reasons.settlementUnavailable,
+              configurationReasonCode: claimReason,
               latest: null,
             },
           });

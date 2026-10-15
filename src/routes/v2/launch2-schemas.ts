@@ -1505,7 +1505,7 @@ export const launch2PoolQuoteSchema = {
           minimum: 0,
           maximum: 10_000,
           description:
-            "sell: the dynamic fee over the post-base output in bps (the candle's drop at the Hook's priceTiming, after this trade for POST_SWAP); buy: 0.",
+            "sell: the dynamic fee over the post-base output in bps — min(the candle's drop at the Hook's priceTiming (after this trade for POST_SWAP), maxDynamicFeeWad) (Decision 0144; cap 0 = uncapped); buy: 0.",
         },
         dynamicTaxAmount: {
           ...decimalSchema,
@@ -1722,7 +1722,7 @@ const dynamicPoolProperties = {
   rollPending: {
     type: ["boolean", "null"],
     description:
-      "The Hook's candle ended without a swap / poke since; the next swap, poke or claim closes it first.",
+      "The Hook's candle ended without a swap / poke since; the next swap, poke or claim closes it first (Decision 0144: on an S193 Hook an armed round whose pending candle did not fall — flat included — closes then).",
   },
   currentDropWad: {
     ...nullableDecimalSchema,
@@ -1730,6 +1730,30 @@ const dynamicPoolProperties = {
       "currentDropWad() as a decimal fraction (0.3 = 30 % below the candle open); 0 when not armed or a roll is pending.",
   },
   currentDropBps: nullableIntegerBpsSchema,
+  maxDynamicFeeWad: {
+    ...nullableDecimalSchema,
+    description:
+      "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.2 (20 %).",
+  },
+  maxDynamicFeeBps: nullableIntegerBpsSchema,
+  currentDynamicTaxBps: {
+    ...nullableIntegerBpsSchema,
+    description:
+      "Decision 0144: the dynamic sell rate at the current price, min(currentDropWad, maxDynamicFeeWad) in bps (0 = no dynamic fee). PRE_SWAP: what the next sell pays; POST_SWAP: before that sell's own price impact (the quote is exact).",
+  },
+  roundCloseRule: {
+    anyOf: [
+      { type: "string", enum: ["closeAtOrAboveOpen", "closeAboveOpen"] },
+      { type: "null" },
+    ],
+    description:
+      "Decision 0144: how an armed round ends. closeAtOrAboveOpen (S193 Hooks, ruled 2026-10-15): the first candle that no longer falls closes the round — close ≥ open, a flat candle included. closeAboveOpen (pre-S193 Hooks, legacy Factories): only a candle closing above its open closes it; a flat one keeps it armed. A round arms when a candle closes more than 10 % below its open.",
+  },
+  armedAfterRoll: {
+    type: ["boolean", "null"],
+    description:
+      "Decision 0144 (loop-contracts 0013 §7.3): whether a round is armed once the pending candle roll runs (the next swap, poke or claim). Equals armed when rollPending is false; while a roll is pending the chain's armed() is stale — on an S193 Hook an armed round ends if the pending candle did not fall or an empty candle followed it, and a crash can activate one. Use this for the App's \"round in progress\" and dynamic-tax hints.",
+  },
   potUsd1: {
     ...nullableDecimalSchema,
     description: "carry + the armed round's dynamic fees.",

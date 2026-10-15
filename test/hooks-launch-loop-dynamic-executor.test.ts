@@ -33,6 +33,8 @@ import {
   loopDynamicSignedPayload,
   loopDynamicTemplate,
   passingLoopDynamicFacts,
+  s193LoopDynamicParams,
+  s193TestnetManifestTemplateHash,
   testnetLoopDynamicParams,
   testnetLoopDynamicTemplateHash,
 } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
@@ -105,6 +107,19 @@ describe("LoopDynamic template (Decision 0132)", () => {
         testnetLoopDynamicParams,
       ).toLowerCase(),
     ).toBe(testnetLoopDynamicTemplateHash);
+  });
+
+  it("reproduces the S193 testnet Factory's TEMPLATE_HASH (11 fields, cap 0.2e18) from its manifest parameters (Decision 0144)", () => {
+    expect(
+      hooksLaunchLoopDynamicTemplateHash(s193LoopDynamicParams).toLowerCase(),
+    ).toBe(s193TestnetManifestTemplateHash);
+    // The cap is bound: the same parameters uncapped / without it differ.
+    expect(
+      hooksLaunchLoopDynamicTemplateHash({
+        ...s193LoopDynamicParams,
+        maxDynamicFeeWad: "0",
+      }).toLowerCase(),
+    ).not.toBe(s193TestnetManifestTemplateHash);
   });
 
   it("shares deployLaunch / activateLaunch / launchModules / LaunchDeployed bytes with the OfficialTax Factory", () => {
@@ -237,6 +252,57 @@ describe("LoopDynamic read-back verification (Decision 0132)", () => {
   const expected = () => ({
     ...expectedDeployment(),
     predictedHookAddress: loopDynamicHookAddress,
+  });
+
+  it("binds an S193 Factory's cap: the Hook factory's maxDynamicFeeWad must be the signed one (Decision 0144)", () => {
+    // The fixture's facts (S165 router) with the S193 cap added.
+    const params = {
+      ...testnetLoopDynamicParams,
+      maxDynamicFeeWad: "200000000000000000",
+    };
+    const template = {
+      params,
+      templateHash: hooksLaunchLoopDynamicTemplateHash(params).toLowerCase(),
+    };
+    const s193Facts = (maxDynamicFeeWad: string | null) => {
+      const facts = passingLoopDynamicFacts();
+      return {
+        ...facts,
+        factory: { ...facts.factory, templateHash: template.templateHash },
+        hookFactory:
+          facts.hookFactory === null
+            ? null
+            : { ...facts.hookFactory, maxDynamicFeeWad },
+      };
+    };
+    const run = (maxDynamicFeeWad: string | null) =>
+      verifyHooksLaunchLoopDynamicDeployment({
+        expected: expected(),
+        template,
+        event: loopDynamicLaunchDeployedEvent(),
+        facts: s193Facts(maxDynamicFeeWad),
+      }).failedChecks;
+    expect(run("200000000000000000")).toEqual([]);
+    expect(run("100000000000000000")).toEqual(["hook_factory_params"]);
+    expect(run("0")).toEqual(["hook_factory_params"]);
+    // A Hook factory without the getter (S165) under an S193 template.
+    expect(run(null)).toEqual(["hook_factory_params"]);
+    // And an S165 template whose Hook factory answers a cap.
+    const facts = passingLoopDynamicFacts();
+    expect(
+      verifyHooksLaunchLoopDynamicDeployment({
+        expected: expected(),
+        template: loopDynamicTemplate,
+        event: loopDynamicLaunchDeployedEvent(),
+        facts: {
+          ...facts,
+          hookFactory:
+            facts.hookFactory === null
+              ? null
+              : { ...facts.hookFactory, maxDynamicFeeWad: "0" },
+        },
+      }).failedChecks,
+    ).toEqual(["hook_factory_params"]);
   });
 
   it("passes every check for the fixture", () => {

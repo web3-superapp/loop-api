@@ -335,6 +335,18 @@ export interface Launch2DynamicHookState {
   readonly baseSellFeePpm: bigint;
   /** S165: buy fee in ppm of the MEME output. */
   readonly buyFeePpm: bigint;
+  /**
+   * Decision 0144 (loop-contracts Decision 0012): `maxDynamicFeeWad()`, the
+   * dynamic sell rate cap (18 decimals; 0 = uncapped). A pre-S193 Hook has
+   * no such getter and reads as 0.
+   */
+  readonly maxDynamicFeeWad: bigint;
+  /**
+   * Decision 0144: `closeAtOrAboveOpen` for a Hook that answers
+   * `maxDynamicFeeWad()` (S193: a flat candle closes the round),
+   * `closeAboveOpen` for a pre-S193 Hook (only a green candle closes it).
+   */
+  readonly roundCloseRule: "closeAtOrAboveOpen" | "closeAboveOpen";
   /** 0 PRE_SWAP, 1 POST_SWAP. */
   readonly priceTiming: number;
   /** 0 LoopRouterOnly, 1 Open. */

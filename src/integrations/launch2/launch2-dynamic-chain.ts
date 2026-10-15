@@ -1,11 +1,14 @@
 import {
   BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
   createPublicClient,
   decodeErrorResult,
   decodeFunctionResult,
   encodeFunctionData,
   encodePacked,
   erc20Abi,
+  ExecutionRevertedError,
   fallback,
   http,
   keccak256,
@@ -91,6 +94,22 @@ export function launch2DynamicErrorName(data: Hex | null): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A contract-level revert (or empty return data) of a view — a function the
+ * contract does not have. Network and RPC failures are not reverts.
+ */
+export function isLaunch2ContractRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  return (
+    error.walk(
+      (cause) =>
+        cause instanceof ContractFunctionRevertedError ||
+        cause instanceof ContractFunctionZeroDataError ||
+        cause instanceof ExecutionRevertedError,
+    ) !== null
+  );
 }
 
 function roundOf(value: unknown): Launch2DynamicRoundState {
@@ -179,6 +198,23 @@ export function createLaunch2DynamicChain(input: {
       args,
       blockNumber,
     })) as T;
+  }
+
+  /**
+   * Decision 0144: `maxDynamicFeeWad()` of the Hook, or null when the Hook
+   * has no such function (a pre-S193 Hook: the call reverts / returns no
+   * data). RPC and network failures propagate (fail closed).
+   */
+  async function hookCapRead(
+    hook: string,
+    blockNumber: bigint,
+  ): Promise<bigint | null> {
+    try {
+      return await hookRead<bigint>(hook, "maxDynamicFeeWad", blockNumber);
+    } catch (error) {
+      if (isLaunch2ContractRevert(error)) return null;
+      throw error;
+    }
   }
 
   async function overrideFor(
@@ -280,6 +316,7 @@ export function createLaunch2DynamicChain(input: {
         routerRegistry,
         excludeBuybackFromRewards,
         rewardExcludedBuyer,
+        maxDynamicFeeWad,
       ] = await Promise.all([
         hookRead<string>(hook, "manager", at),
         hookRead<string>(hook, "trustedRouter", at),
@@ -303,6 +340,7 @@ export function createLaunch2DynamicChain(input: {
         hookRead<string>(hook, "routerRegistry", at),
         hookRead<boolean>(hook, "excludeBuybackFromRewards", at),
         hookRead<string>(hook, "rewardExcludedBuyer", at),
+        hookCapRead(hook, at),
       ]);
       const slotKey = keccak256(
         encodePacked(["bytes32", "bytes32"], [poolId as Hex, slotHex(6n)]),
@@ -372,6 +410,9 @@ export function createLaunch2DynamicChain(input: {
         currentDropWad,
         baseSellFeePpm: BigInt(baseSellFeePpm),
         buyFeePpm: BigInt(buyFeePpm),
+        maxDynamicFeeWad: maxDynamicFeeWad ?? 0n,
+        roundCloseRule:
+          maxDynamicFeeWad === null ? "closeAboveOpen" : "closeAtOrAboveOpen",
         priceTiming: Number(priceTiming),
         routingPolicy: Number(routingPolicy),
         routerRegistry: lower(routerRegistry),

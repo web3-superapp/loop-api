@@ -17,6 +17,7 @@ import { bscTestnet } from "viem/chains";
 import {
   hooksLaunchLegacyNftSaleDurationSeconds,
   hooksLaunchLoopDynamicTemplateHash,
+  isHooksLaunchMaxDynamicFeeWad,
   isHooksLaunchNftSaleDuration,
   type HooksLaunchLoopDynamicParams,
 } from "../../features/launch/hooks-launch-config.js";
@@ -71,6 +72,7 @@ export async function readHooksLaunchLoopDynamicTemplate(
     excludeBuybackFromRewards,
     buyFeePpm,
     launchFactory,
+    maxDynamicFeeWad,
   ] = await Promise.all([
     read(hdf, H, "router"),
     read(hdf, H, "baseSellFeePpm"),
@@ -81,6 +83,12 @@ export async function readHooksLaunchLoopDynamicTemplate(
     read(hdf, H, "excludeBuybackFromRewards"),
     read(hdf, H, "buyFeePpm"),
     read(hdf, H, "launchFactory"),
+    // Decision 0144: S193 Hook factories answer the cap; an S165 one has no
+    // such function (a revert = absent). RPC failures propagate.
+    read(hdf, H, "maxDynamicFeeWad").catch((error: unknown) => {
+      if (isHooksLaunchContractRevert(error)) return null;
+      throw error;
+    }),
   ]);
   const registryAddress = String(registry).toLowerCase();
   const admin =
@@ -102,7 +110,10 @@ export async function readHooksLaunchLoopDynamicTemplate(
     String(launchFactory).toLowerCase() !== factoryAddress.toLowerCase() ||
     (timing !== 0 && timing !== 1) ||
     (policy !== 0 && policy !== 1) ||
-    typeof excludeBuybackFromRewards !== "boolean"
+    typeof excludeBuybackFromRewards !== "boolean" ||
+    (maxDynamicFeeWad !== null &&
+      (typeof maxDynamicFeeWad !== "bigint" ||
+        !isHooksLaunchMaxDynamicFeeWad(maxDynamicFeeWad.toString(10))))
   ) {
     throw new HooksLaunchFactoryTemplateMismatchError();
   }
@@ -115,7 +126,12 @@ export async function readHooksLaunchLoopDynamicTemplate(
     routerRegistryAdmin: admin,
     excludeBuybackFromRewards,
     buyFeePpm: Number(buyFeePpm),
+    ...(maxDynamicFeeWad === null
+      ? {}
+      : { maxDynamicFeeWad: maxDynamicFeeWad.toString(10) }),
   });
+  // An S193 Factory's TEMPLATE_HASH has the trailing cap word, an S165 one
+  // does not; the recomputed hash must equal the chain's either way.
   const expected = hooksLaunchLoopDynamicTemplateHash(params);
   if (expected.toLowerCase() !== String(templateHash).toLowerCase()) {
     throw new HooksLaunchFactoryTemplateMismatchError();
@@ -208,7 +224,7 @@ const tokenDeployerAbi = [
  * Factory `nftSaleDuration()` has no selector and the call reverts. Network
  * and RPC failures are not reverts and stay unavailable.
  */
-function isContractRevert(error: unknown): boolean {
+export function isHooksLaunchContractRevert(error: unknown): boolean {
   if (!(error instanceof BaseError)) return false;
   return (
     error.walk(
@@ -318,7 +334,7 @@ export function createHooksLaunchFactoryReader(input: {
         });
         read = { seconds: Number(value), legacy: false };
       } catch (error) {
-        if (!isContractRevert(error)) {
+        if (!isHooksLaunchContractRevert(error)) {
           throw new Error("Hooks launch factory read unavailable", {
             cause: error,
           });

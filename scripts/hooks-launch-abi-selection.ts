@@ -213,6 +213,9 @@ export const hooksLaunchAbiSelection = {
     // S165 (loop-contracts Decision 0009 §13): 2 % buy fee in MEME.
     "buyFeePpm",
     "buybackBuyer",
+    // S179/S193 (loop-contracts Decision 0012, Decision 0144): dynamic sell
+    // rate cap (0 = uncapped; absent on pre-S193 Hooks).
+    "maxDynamicFeeWad",
     "poke",
     "claim",
     "SellFeeCharged",
@@ -268,6 +271,8 @@ export const hooksLaunchAbiSelection = {
     "routerRegistry",
     "excludeBuybackFromRewards",
     "buyFeePpm",
+    // Decision 0144: the cap every Hook of this factory gets (S193).
+    "maxDynamicFeeWad",
     "LoopHookDeployed",
     // Decision 0132 (S170): Hook salt preview / registration read-back.
     "launchFactory",

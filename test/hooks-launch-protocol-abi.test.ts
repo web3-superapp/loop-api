@@ -28,10 +28,18 @@ const protocolOut = [
   .map((entry) => path.join(entry, "out"))
   // Decision 0131: a checkout whose build predates the selection (an
   // artifact missing) is not the current build; the parity check skips.
+  // Decision 0144: so is one whose artifacts lack a selected item (a
+  // pre-S193 build without `maxDynamicFeeWad`).
   .find((entry) =>
-    Object.keys(hooksLaunchAbiSelection).every((contract) =>
-      existsSync(path.join(entry, `${contract}.sol`, `${contract}.json`)),
-    ),
+    Object.entries(hooksLaunchAbiSelection).every(([contract, names]) => {
+      const file = path.join(entry, `${contract}.sol`, `${contract}.json`);
+      if (!existsSync(file)) return false;
+      const artifact = JSON.parse(readFileSync(file, "utf8")) as {
+        readonly abi?: readonly { readonly name?: string }[];
+      };
+      const present = new Set((artifact.abi ?? []).map((item) => item.name));
+      return names.every((name) => present.has(name));
+    }),
   );
 
 const exportName = (contract: string) =>

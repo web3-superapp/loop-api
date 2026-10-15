@@ -365,7 +365,13 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
   it("composes fail-closed from configuration: no store → 503, no claim address → 503", async () => {
     const { app } = await createApp({ composeFromConfig: {} });
     expect((await get(app, "/v2/mining/rewards")).json()).toMatchObject({
-      hourly: { displayState: "unavailable", claim: { executable: false } },
+      hourly: {
+        displayState: "unavailable",
+        claim: {
+          executable: false,
+          configurationReasonCode: "MINING_SETTLEMENT_UNAVAILABLE",
+        },
+      },
     });
     expectError(
       await prepare(app),
@@ -415,6 +421,7 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
       expect(await claimOf(app)).toEqual({
         executable: false,
         reasonCode: "MINING_PARAMETERS_PENDING",
+        configurationReasonCode: null,
         latest: null,
       });
     });
@@ -469,6 +476,7 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
       expect(await claimOf((await createApp({ chain: paused })).app)).toEqual({
         executable: false,
         reasonCode: "MINING_CLAIM_CONTRACT_PAUSED",
+        configurationReasonCode: null,
         latest: null,
       });
       const down = defaultClaimChainState();
@@ -501,6 +509,78 @@ describe("V2 mining hourly rewards and claims (Decision 0116)", () => {
       });
       expect(await claimOf(empty.app)).toMatchObject({
         reasonCode: "MINING_CLAIM_NOTHING_TO_CLAIM",
+      });
+    });
+
+    it("Decision 0144: configurationReasonCode answers the configuration even when a ledger reason masks reasonCode", async () => {
+      // Every ledger state × the contract configured or not.
+      const ledgers = [
+        ["pending", "MINING_PARAMETERS_PENDING"],
+        ["unsettled", "MINING_NOTHING_SETTLED"],
+        ["empty", "MINING_CLAIM_NOTHING_TO_CLAIM"],
+        ["small", "MINING_CLAIM_BELOW_MINIMUM"],
+      ] as const;
+      const repositoryFor = (ledger: (typeof ledgers)[number][0]) => {
+        if (ledger === "empty") return seededRepository(0n);
+        if (ledger === "small") return seededRepository(loop / 2n);
+        const repository = createInMemoryMiningSettlement();
+        repository.versions.push(
+          ledger === "pending"
+            ? parameterVersion({ effectiveFrom: "2026-10-11T00:00:00.000Z" })
+            : parameterVersion(),
+        );
+        return repository;
+      };
+      for (const [ledger, reasonCode] of ledgers) {
+        const unconfigured = await createApp({
+          repository: repositoryFor(ledger),
+          deps: { contractAddress: null },
+        });
+        expect(await claimOf(unconfigured.app), ledger).toMatchObject({
+          executable: false,
+          reasonCode,
+          configurationReasonCode: "MINING_CLAIM_CONTRACT_NOT_CONFIGURED",
+        });
+        const configured = await createApp({
+          repository: repositoryFor(ledger),
+        });
+        expect(await claimOf(configured.app), ledger).toMatchObject({
+          reasonCode,
+          configurationReasonCode: null,
+        });
+      }
+      // Each configuration reason, under a ledger that allows a claim.
+      for (const [deps, code] of [
+        [{ signer: null }, "MINING_CLAIM_SIGNER_NOT_CONFIGURED"],
+        [{ chain: null }, "MINING_CLAIM_CHAIN_NOT_CONFIGURED"],
+        [{ chainId: "eip155:56" }, "MINING_CLAIM_MAINNET_CLOSED"],
+        [{ writesEnabled: false }, "MINING_CLAIM_WRITES_DISABLED"],
+      ] as const) {
+        const { app } = await createApp({ deps });
+        expect(await claimOf(app)).toMatchObject({
+          reasonCode: code,
+          configurationReasonCode: code,
+        });
+      }
+      // Fully configured, nothing masked.
+      const { app } = await createApp();
+      expect(await claimOf(app)).toMatchObject({
+        executable: true,
+        reasonCode: null,
+        configurationReasonCode: null,
+      });
+      // The store down at runtime: reasonCode is the store, the configuration still answers.
+      const down = seededRepository();
+      down.unavailable = true;
+      const store = await createApp({
+        repository: down,
+        deps: { contractAddress: null },
+      });
+      expect(await claimOf(store.app)).toEqual({
+        executable: false,
+        reasonCode: "MINING_SETTLEMENT_UNAVAILABLE",
+        configurationReasonCode: "MINING_CLAIM_CONTRACT_NOT_CONFIGURED",
+        latest: null,
       });
     });
   });

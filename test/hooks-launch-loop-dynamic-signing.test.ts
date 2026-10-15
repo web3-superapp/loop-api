@@ -1,7 +1,14 @@
-import { concatHex, getCreate2Address, keccak256, type Abi } from "viem";
+import {
+  ContractFunctionZeroDataError,
+  concatHex,
+  getCreate2Address,
+  keccak256,
+  type Abi,
+} from "viem";
 import { describe, expect, it } from "vitest";
 
 import {
+  hooksLaunchLoopDynamicTemplateHash,
   hooksLaunchTemplateHash,
   parseHooksLaunchDraft,
 } from "../src/features/launch/hooks-launch-config.js";
@@ -14,6 +21,7 @@ import { HooksLaunchFactoryTemplateMismatchError } from "../src/features/launch/
 import { hooksLaunchFactoryHashPolicy } from "../src/features/launch/hooks-launch-project-config.js";
 import { readHooksLaunchLoopDynamicTemplate } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import {
+  s193LoopDynamicParams,
   testnetLoopDynamicParams,
   testnetLoopDynamicTemplateHash,
 } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
@@ -50,9 +58,32 @@ function chainReads(overrides: Record<string, unknown> = {}) {
   };
   return (address: string, _abi: Abi, name: string) => {
     const key = `${address.toLowerCase()}.${name}`;
-    if (!(key in values)) return Promise.reject(new Error(`no ${key}`));
+    if (!(key in values)) {
+      // An S165 Hook factory has no maxDynamicFeeWad(): the call returns
+      // no data (a contract-level failure, not a transport one).
+      if (name === "maxDynamicFeeWad") {
+        return Promise.reject(
+          new ContractFunctionZeroDataError({ functionName: name }),
+        );
+      }
+      return Promise.reject(new Error(`no ${key}`));
+    }
     return Promise.resolve(values[key]);
   };
+}
+
+/** Decision 0144: an S193 Factory (cap getter, 11-field TEMPLATE_HASH). */
+const s193TemplateHash = hooksLaunchLoopDynamicTemplateHash(
+  s193LoopDynamicParams,
+).toLowerCase();
+function s193Reads(overrides: Record<string, unknown> = {}) {
+  return chainReads({
+    [`${factory}.TEMPLATE_HASH`]: s193TemplateHash,
+    [`${factory}.loopRouter`]: s193LoopDynamicParams.router,
+    [`${hookFactory}.router`]: s193LoopDynamicParams.router,
+    [`${hookFactory}.maxDynamicFeeWad`]: 200_000_000_000_000_000n,
+    ...overrides,
+  });
 }
 
 describe("LoopDynamic Factory template read (Decision 0132)", () => {
@@ -85,6 +116,55 @@ describe("LoopDynamic Factory template read (Decision 0132)", () => {
     await expect(
       readHooksLaunchLoopDynamicTemplate(chainReads(overrides), factory),
     ).rejects.toBeInstanceOf(HooksLaunchFactoryTemplateMismatchError);
+  });
+
+  it("reads an S193 Factory's cap and verifies the 11-field TEMPLATE_HASH (Decision 0144)", async () => {
+    const read = await readHooksLaunchLoopDynamicTemplate(s193Reads(), factory);
+    expect(read.params).toEqual(s193LoopDynamicParams);
+    expect(read.params.maxDynamicFeeWad).toBe("200000000000000000");
+    expect(read.templateHash).toBe(s193TemplateHash);
+    expect(read.templateHash).not.toBe(testnetLoopDynamicTemplateHash);
+    // Uncapped S193 Factory: the zero word is still hashed.
+    const uncapped = { ...s193LoopDynamicParams, maxDynamicFeeWad: "0" };
+    const zero = await readHooksLaunchLoopDynamicTemplate(
+      s193Reads({
+        [`${hookFactory}.maxDynamicFeeWad`]: 0n,
+        [`${factory}.TEMPLATE_HASH`]:
+          hooksLaunchLoopDynamicTemplateHash(uncapped).toLowerCase(),
+      }),
+      factory,
+    );
+    expect(zero.params.maxDynamicFeeWad).toBe("0");
+  });
+
+  it.each([
+    [
+      "an S193 cap with the S165 TEMPLATE_HASH",
+      { [`${factory}.TEMPLATE_HASH`]: testnetLoopDynamicTemplateHash },
+    ],
+    [
+      "another cap than the TEMPLATE_HASH commits",
+      { [`${hookFactory}.maxDynamicFeeWad`]: 100_000_000_000_000_000n },
+    ],
+    [
+      "a cap of 1e18 or more",
+      { [`${hookFactory}.maxDynamicFeeWad`]: 10n ** 18n },
+    ],
+  ])("refuses %s as a template mismatch (Decision 0144)", async (_n, o) => {
+    await expect(
+      readHooksLaunchLoopDynamicTemplate(s193Reads(o), factory),
+    ).rejects.toBeInstanceOf(HooksLaunchFactoryTemplateMismatchError);
+  });
+
+  it("lets a transport failure of the cap read through (not legacy, not a mismatch)", async () => {
+    const reads = s193Reads();
+    const failing = (address: string, abi: Abi, name: string) =>
+      name === "maxDynamicFeeWad"
+        ? Promise.reject(new Error("rpc down"))
+        : reads(address, abi, name);
+    await expect(
+      readHooksLaunchLoopDynamicTemplate(failing, factory),
+    ).rejects.toThrow("rpc down");
   });
 
   it("lets a transport failure through (not a mismatch)", async () => {
@@ -221,6 +301,37 @@ describe("config template binding (Decision 0132)", () => {
     ).rejects.toThrow("mismatch");
     await expect(
       assertHooksLaunchFactoryTemplate(officialReader, dynamic, mismatch),
+    ).rejects.toThrow("mismatch");
+  });
+
+  it("refuses a config hashed for the S165 template once the Factory is S193 (Decision 0144)", async () => {
+    const s193Reader = {
+      ...dynamicReader,
+      loopDynamicTemplate: () =>
+        Promise.resolve({
+          params: s193LoopDynamicParams,
+          templateHash: s193TemplateHash,
+        }),
+    };
+    const s193 = parseHooksLaunchDraft(body, {
+      ...policy,
+      loopDynamic: s193LoopDynamicParams,
+    });
+    expect(s193.templateHash).toBe(s193TemplateHash);
+    expect(s193.configHash).not.toBe(dynamic.configHash);
+    expect(await hooksLaunchFactoryHashPolicy(s193Reader)).toEqual({
+      nftSaleDurationSeconds: 3_600,
+      loopDynamic: s193LoopDynamicParams,
+    });
+    // A draft saved before the redeploy is re-saved, never signed as is.
+    await expect(
+      assertHooksLaunchFactoryTemplate(s193Reader, dynamic, mismatch),
+    ).rejects.toThrow("mismatch");
+    await expect(
+      assertHooksLaunchFactoryTemplate(s193Reader, s193, mismatch),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertHooksLaunchFactoryTemplate(dynamicReader, s193, mismatch),
     ).rejects.toThrow("mismatch");
   });
 });

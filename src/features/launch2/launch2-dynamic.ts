@@ -178,6 +178,48 @@ export function launch2DynamicIsGreen(
   return memeIsCurrency0 ? close > open : close < open;
 }
 
+/** MEME went down over the candle (strictly; a flat candle is not red). */
+export function launch2DynamicIsRed(
+  open: bigint,
+  close: bigint,
+  memeIsCurrency0: boolean,
+): boolean {
+  return memeIsCurrency0 ? close < open : close > open;
+}
+
+/**
+ * Decision 0144 (S193, docs/36 Q10 ruling 2026-10-15): when an armed
+ * round closes at a candle roll.
+ *
+ * - `closeAtOrAboveOpen` (S193 Hooks, the ruled rule): the first candle
+ *   that no longer falls closes the round — `close ≥ open`, a flat
+ *   (doji) candle included;
+ * - `closeAboveOpen` (pre-S193 Hooks, the loop_hook_v1 prototype): only a
+ *   green candle (`close > open`) closes it; a flat candle keeps it armed.
+ *
+ * A Hook's rule is a chain fact: a Hook that answers `maxDynamicFeeWad()`
+ * (S193 generation, loop-contracts Decision 0012) closes on flat; one
+ * without the getter (S165, legacy Factory instances) does not.
+ */
+export const launch2DynamicRoundCloseRules = Object.freeze([
+  "closeAtOrAboveOpen",
+  "closeAboveOpen",
+] as const);
+export type Launch2DynamicRoundCloseRule =
+  (typeof launch2DynamicRoundCloseRules)[number];
+
+/** Whether the candle `open → close` closes an armed round under `rule`. */
+export function launch2DynamicClosesRound(
+  open: bigint,
+  close: bigint,
+  memeIsCurrency0: boolean,
+  rule: Launch2DynamicRoundCloseRule,
+): boolean {
+  return rule === "closeAtOrAboveOpen"
+    ? !launch2DynamicIsRed(open, close, memeIsCurrency0)
+    : launch2DynamicIsGreen(open, close, memeIsCurrency0);
+}
+
 /** `PriceMath.crashOverTenPercent` (exact, on encoded sqrt prices). */
 export function launch2DynamicCrashOverTenPercent(
   open: bigint,
@@ -214,12 +256,17 @@ export interface Launch2DynamicCandleState {
   readonly lastSqrtPriceX96: bigint;
   readonly currentRoundId: bigint;
   readonly memeIsCurrency0: boolean;
+  /** Decision 0144: the Hook generation's close rule. */
+  readonly roundCloseRule: Launch2DynamicRoundCloseRule;
 }
 
 /**
  * `LoopAccounting._rollCandle` at `nowSeconds` (the next swap, poke, or
  * claim runs it first): whether the pending candle close activates a round
- * (red candle below −10 %) or closes the armed one (green candle).
+ * (red candle below −10 %) or closes the armed one (Decision 0144: a
+ * candle that no longer falls, flat included, on an S193 Hook — also the
+ * first skipped empty candle of a multi-candle gap; a green candle on a
+ * pre-S193 Hook).
  */
 export function launch2DynamicRoll(
   state: Launch2DynamicCandleState,
@@ -249,10 +296,11 @@ export function launch2DynamicRoll(
   let closes = false;
   if (armed) {
     if (
-      launch2DynamicIsGreen(
+      launch2DynamicClosesRound(
         state.candleOpenSqrtPriceX96,
         state.lastSqrtPriceX96,
         state.memeIsCurrency0,
+        state.roundCloseRule,
       )
     ) {
       armed = false;
@@ -268,6 +316,18 @@ export function launch2DynamicRoll(
     armed = true;
     roundId += 1n;
     activates = true;
+  }
+  // Decision 0144 (loop-contracts 0013 §2): the candles between the last
+  // recorded one and now had no trade — flat (open = close). On an S193
+  // Hook the first of them ends a round still armed (including one this
+  // roll just activated: activate-then-close, start = end).
+  if (
+    armed &&
+    state.roundCloseRule === "closeAtOrAboveOpen" &&
+    nowId > state.candleId + 1n
+  ) {
+    armed = false;
+    closes = true;
   }
   return {
     rollPending: true,
@@ -297,6 +357,64 @@ export function launch2DynamicGrossOfNet(net: bigint, ppm: bigint): bigint {
   while (gross > 0n && netOf(gross) > net) gross -= 1n;
   while (netOf(gross + 1n) <= net) gross += 1n;
   return gross;
+}
+
+/**
+ * Decision 0144 (loop-contracts Decision 0012): the dynamic sell rate the
+ * Hook charges for a candle drop — `min(drop, cap)`, `cap = 0` = uncapped
+ * (pre-S193 Hooks and an uncapped S193 Factory). `SellFeeCharged.dropWad`
+ * stays the real drop; this is the rate actually applied.
+ */
+export function launch2DynamicEffectiveRateWad(
+  dropWad: bigint,
+  maxDynamicFeeWad: bigint,
+): bigint {
+  return maxDynamicFeeWad !== 0n && dropWad > maxDynamicFeeWad
+    ? maxDynamicFeeWad
+    : dropWad;
+}
+
+/**
+ * `LoopDynamicHook.afterSwap` sell branch: `extra = floor((gross − base) ×
+ * min(drop, cap) / 1e18)`.
+ */
+export function launch2DynamicSellExtraFee(input: {
+  readonly gross: bigint;
+  readonly baseFee: bigint;
+  readonly dropWad: bigint;
+  readonly maxDynamicFeeWad: bigint;
+}): bigint {
+  if (input.gross <= input.baseFee) return 0n;
+  return mulDiv(
+    input.gross - input.baseFee,
+    launch2DynamicEffectiveRateWad(input.dropWad, input.maxDynamicFeeWad),
+    launch2DynamicWad,
+  );
+}
+
+/**
+ * The rate a `SellFeeCharged` log actually charged, from its amounts:
+ * `extraFee × 1e18 / (grossQuote − baseFee)` (floor; ≤ 1 wei of rate below
+ * `min(dropWad, cap)` because the Hook floors `extra`). Never use the
+ * event's `dropWad` as the charged rate: it is the real drop (Decision
+ * 0012 §1), above the rate whenever the cap applied.
+ */
+export function launch2DynamicRealizedRateWad(input: {
+  readonly grossQuote: bigint;
+  readonly baseFee: bigint;
+  readonly extraFee: bigint;
+}): bigint {
+  if (input.grossQuote <= input.baseFee) return 0n;
+  return mulDiv(
+    input.extraFee,
+    launch2DynamicWad,
+    input.grossQuote - input.baseFee,
+  );
+}
+
+/** An 18-decimal rate → bps (floor). */
+export function launch2DynamicWadBps(wad: bigint): number {
+  return Number((wad * 10_000n) / launch2DynamicWad);
 }
 
 /** ppm → bps (the Hook's ppm are whole bps: 20,000 ppm = 200 bps). */

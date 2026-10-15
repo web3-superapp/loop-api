@@ -121,6 +121,8 @@ import {
   launch2DynamicPriceTiming,
   launch2DynamicReasonCodes,
   launch2DynamicRoll,
+  launch2DynamicEffectiveRateWad,
+  launch2DynamicWadBps,
   launch2DynamicRoutingPolicy,
   launch2DynamicSellSplit,
   launch2HookKindOf,
@@ -2324,6 +2326,11 @@ export function createLaunch2Service(
         rollPending: null,
         currentDropWad: null,
         currentDropBps: null,
+        maxDynamicFeeWad: null,
+        maxDynamicFeeBps: null,
+        currentDynamicTaxBps: null,
+        roundCloseRule: null,
+        armedAfterRoll: null,
         potUsd1: null,
         carryUsd1: null,
         roundExtraFeesUsd1: null,
@@ -2428,7 +2435,21 @@ export function createLaunch2Service(
         ),
         rollPending: roll.rollPending,
         currentDropWad: formatLaunch2Amount(state.currentDropWad),
-        currentDropBps: Number((state.currentDropWad * 10_000n) / 10n ** 18n),
+        currentDropBps: launch2DynamicWadBps(state.currentDropWad),
+        // Decision 0144: the cap and the rate a sell at the current price
+        // pays (min(drop, cap); PRE_SWAP exact, POST_SWAP before the trade).
+        maxDynamicFeeWad: formatLaunch2Amount(state.maxDynamicFeeWad),
+        maxDynamicFeeBps: launch2DynamicWadBps(state.maxDynamicFeeWad),
+        currentDynamicTaxBps: launch2DynamicWadBps(
+          launch2DynamicEffectiveRateWad(
+            state.currentDropWad,
+            state.maxDynamicFeeWad,
+          ),
+        ),
+        roundCloseRule: state.roundCloseRule,
+        // Decision 0144 (loop-contracts 0013 §7.3): armed() is stale until
+        // the next swap / poke settles; this is the state after that roll.
+        armedAfterRoll: roll.armed,
         potUsd1: formatLaunch2Amount(state.carry + roundExtra),
         carryUsd1: formatLaunch2Amount(state.carry),
         roundExtraFeesUsd1: formatLaunch2Amount(roundExtra),

@@ -231,6 +231,11 @@ export const miningHourlyBlockSchema = object(
       {
         executable: { type: "boolean" },
         reasonCode: nullableReasonCodeSchema,
+        configurationReasonCode: {
+          ...nullableReasonCodeSchema,
+          description:
+            "Decision 0144 (S193): the claim path's configuration reason alone — the first of MINING_SETTLEMENT_UNAVAILABLE (no settlement store configured), MINING_CLAIM_MAINNET_CLOSED, MINING_CLAIM_CONTRACT_NOT_CONFIGURED, MINING_CLAIM_CHAIN_NOT_CONFIGURED, MINING_CLAIM_SIGNER_NOT_CONFIGURED, MINING_CLAIM_WRITES_DISABLED; null when the claim path is configured. Never masked by the ledger reasons in reasonCode (MINING_PARAMETERS_PENDING, MINING_NOTHING_SETTLED, MINING_CLAIM_NOTHING_TO_CLAIM, MINING_CLAIM_BELOW_MINIMUM, MINING_CLAIM_IN_FLIGHT, a runtime MINING_SETTLEMENT_UNAVAILABLE), so the App can tell whether the LOOP claim contract is configured (MINING_CLAIM_CONTRACT_NOT_CONFIGURED) whatever the ledger says. Does not cover the contract's paused / unreadable state (reasonCode only).",
+        },
         latest: nullable(miningClaimSchema),
       },
       "Decision 0123: executable is true only when an approved parameter version is in force, at least one hour is settled, claimable > 0 and ≥ the minimum, no claim is submitting / confirming, and the claim path is configured. Otherwise reasonCode, first match: MINING_SETTLEMENT_UNAVAILABLE, MINING_PARAMETERS_PENDING, MINING_NOTHING_SETTLED, MINING_CLAIM_NOTHING_TO_CLAIM, MINING_CLAIM_BELOW_MINIMUM, MINING_CLAIM_IN_FLIGHT, then the configuration reasons (MINING_CLAIM_MAINNET_CLOSED, MINING_CLAIM_CONTRACT_NOT_CONFIGURED, MINING_CLAIM_CHAIN_NOT_CONFIGURED, MINING_CLAIM_SIGNER_NOT_CONFIGURED, MINING_CLAIM_WRITES_DISABLED).",

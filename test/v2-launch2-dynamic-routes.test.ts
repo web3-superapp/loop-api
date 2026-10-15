@@ -231,6 +231,12 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       rollPending: false,
       currentDropWad: "0.3",
       currentDropBps: 3000,
+      // Decision 0144: an uncapped S193 Hook.
+      maxDynamicFeeWad: "0",
+      maxDynamicFeeBps: 0,
+      currentDynamicTaxBps: 3000,
+      roundCloseRule: "closeAtOrAboveOpen",
+      armedAfterRoll: true,
       potUsd1: "45",
       carryUsd1: "40",
       roundExtraFeesUsd1: "5",
@@ -451,6 +457,91 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       null,
       launch2DynamicHook,
     ]);
+  });
+
+  it("caps the dynamic sell fee at min(drop, maxDynamicFeeWad) in the read model and the quote (Decision 0144)", async () => {
+    const { repository, record } = seeded();
+    const cap = (2n * wad) / 10n;
+    for (const [drop, maxDynamicFeeWad, bps, capText, dynamicTaxAmount] of [
+      [(13n * wad) / 100n, cap, 1300, "0.2", "12.74"],
+      [(6n * wad) / 10n, cap, 2000, "0.2", "19.6"],
+      [(6n * wad) / 10n, 0n, 6000, "0", "58.8"],
+    ] as const) {
+      const { app } = await createApp({
+        repository,
+        dynamic: defaultDynamicState({ dropWad: drop, maxDynamicFeeWad }),
+      });
+      const pool = (
+        await get(
+          app,
+          `/v2/launch2/instances/${record.instanceId}/dynamic-pool`,
+        )
+      ).json<{ dynamicPool: Record<string, unknown> }>().dynamicPool;
+      expect(pool).toMatchObject({
+        currentDropBps: Number((drop * 10_000n) / wad),
+        maxDynamicFeeWad: capText,
+        maxDynamicFeeBps: Number((maxDynamicFeeWad * 10_000n) / wad),
+        currentDynamicTaxBps: bps,
+      });
+      // 160,000 MEME = 100 USD1 gross; base 2; dynamic = 98 × min(drop, cap).
+      const quote = await get(
+        app,
+        quoteUrl(record.instanceId, "side=sell&mode=exactIn&amount=160000"),
+      );
+      expect(quote.statusCode).toBe(200);
+      expect(quote.json()).toMatchObject({
+        quote: { dynamic: { dynamicTaxBps: bps, dynamicTaxAmount } },
+      });
+    }
+  });
+
+  it("answers a pre-S193 Hook's close rule (Decision 0144)", async () => {
+    const { repository, record } = seeded();
+    const { app } = await createApp({
+      repository,
+      dynamic: defaultDynamicState({
+        hook: { roundCloseRule: "closeAboveOpen", maxDynamicFeeWad: 0n },
+      }),
+    });
+    const response = await get(
+      app,
+      `/v2/launch2/instances/${record.instanceId}/dynamic-pool`,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      dynamicPool: { roundCloseRule: "closeAboveOpen", maxDynamicFeeBps: 0 },
+    });
+  });
+
+  it("answers the round state after a pending roll: an armed round over an empty candle ends (Decision 0144)", async () => {
+    const { repository, record } = seeded();
+    for (const [rule, after] of [
+      ["closeAtOrAboveOpen", false],
+      ["closeAboveOpen", true],
+    ] as const) {
+      const { app } = await createApp({
+        repository,
+        // The last recorded candle ended two candles ago, flat: a roll is pending.
+        dynamic: defaultDynamicState({
+          hook: {
+            candleId: launch2NowSeconds / 300n - 2n,
+            roundCloseRule: rule,
+          },
+        }),
+      });
+      const pool = (
+        await get(
+          app,
+          `/v2/launch2/instances/${record.instanceId}/dynamic-pool`,
+        )
+      ).json<{ dynamicPool: Record<string, unknown> }>().dynamicPool;
+      expect(pool).toMatchObject({
+        armed: true,
+        rollPending: true,
+        armedAfterRoll: after,
+        roundCloseRule: rule,
+      });
+    }
   });
 
   it("maps Hook errors to reason codes (UnauthorizedRouter, Busy)", async () => {
