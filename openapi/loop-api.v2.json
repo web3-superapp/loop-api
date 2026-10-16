@@ -121284,7 +121284,7 @@
                                       { "type": "integer", "minimum": 1 },
                                       { "type": "null" }
                                     ],
-                                    "description": "rank() among positive powers; null while the power is zero (in the snapshot, not ranked). Always public."
+                                    "description": "rank() among positive powers; null while the power is zero (in the settled hour, not ranked). Always public."
                                   },
                                   "power": {
                                     "anyOf": [
@@ -121370,7 +121370,7 @@
                             "participants": {
                               "type": "integer",
                               "minimum": 0,
-                              "description": "Accounts with positive power in the snapshot; items may hold more rows (zero-power accounts with position null)."
+                              "description": "Accounts with positive power in the settled hour; items may hold more rows (zero-power accounts with position null)."
                             }
                           }
                         },
@@ -121411,11 +121411,12 @@
                                       { "type": "integer", "minimum": 1 },
                                       { "type": "null" }
                                     ],
-                                    "description": "rank() among communities with positive power; null while zero (bound and weighted, not ranked)."
+                                    "description": "rank() among communities with positive power; null while zero (bound, not ranked)."
                                   },
                                   "power": {
                                     "type": "string",
-                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                    "description": "Decision 0148: the non-banned members' power of the settled hour that belongs to the community — NFT self power of its instances, referral NFT units from its instances × the coefficient, and self power on the bound asset."
                                   },
                                   "community": {
                                     "type": "object",
@@ -121443,11 +121444,13 @@
                                   },
                                   "weight": {
                                     "type": "string",
-                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                                    "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                    "description": "Decision 0148: the community's NFT coefficient under the settled hour's parameter version (listed, else the version default, else 0)."
                                   },
                                   "participants": {
                                     "type": "integer",
-                                    "minimum": 0
+                                    "minimum": 0,
+                                    "description": "Members with positive community power in the hour."
                                   }
                                 }
                               }
@@ -121577,7 +121580,7 @@
                           }
                         }
                       ],
-                      "description": "Every account in the snapshot (users), every bound community with an approved weight (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). One page of at most 50 rows; follow nextCursor."
+                      "description": "Decision 0148: every account of the newest settled hour by nft_total_power + asset_total_power (users), every community with a bound asset (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). MINING_SNAPSHOT_NOT_AVAILABLE while no hour is settled. One page of at most 50 rows; follow nextCursor."
                     },
                     "myPosition": {
                       "anyOf": [
@@ -121826,7 +121829,8 @@
                             }
                           }
                         }
-                      ]
+                      ],
+                      "description": "Decision 0148, users / communities: the settled hour ranked, in the snapshot shape — snapshotId = epochId, computedAt = hourEnd, blockNumber \"0\", blockHash = 0x + the hour's input digest, formulaVersion = the parameter version, priceVersion = mining_hourly:<hourStart>, holdingsSource chain, never stale. Referrals: the snapshot lane's block as before."
                     },
                     "display": {
                       "type": "object",
@@ -134894,7 +134898,7 @@
         "operationId": "getV2PrivacyPreferences",
         "summary": "Get the authenticated LOOP privacy preferences",
         "tags": ["profile"],
-        "description": "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, miningPower and communities self) except totalAssets and tradeHistory, which default to everyone (Decision 0095, docs/09 B11), while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
+        "description": "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, communities self) except totalAssets and tradeHistory (Decision 0095, docs/09 B11) and miningPower (Decision 0148), which default to everyone, while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
         "parameters": [
           {
             "schema": {
