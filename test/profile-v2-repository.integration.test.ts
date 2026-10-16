@@ -757,7 +757,7 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
           anonymousMode: false,
           visibility: {
             totalAssets: "everyone",
-            miningPower: "self",
+            miningPower: "everyone",
             communities: "self",
             tradeHistory: "everyone",
           },
@@ -906,7 +906,7 @@ describe("PostgreSQL V2 LOOP ID profile migration and repository", () => {
       anonymousMode: false,
       visibility: {
         totalAssets: "everyone",
-        miningPower: "self",
+        miningPower: "everyone",
         communities: "self",
         tradeHistory: "everyone",
       },

@@ -93,7 +93,7 @@ describe("000075 MEME coverage integrity (Decision 0129 §2)", () => {
 
   it("is the latest migration", () => {
     expect(latestMigrationName).toBe(
-      "000086_launch2_dynamic_delivery_attribution",
+      "000087_mining_power_visibility_default_everyone",
     );
   });
 });

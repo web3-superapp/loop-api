@@ -34,7 +34,7 @@ describe("000058 admin follow-ups", () => {
       "S130 facts exist; refusing to roll back 000058",
     );
     expect(latestMigrationName).toBe(
-      "000086_launch2_dynamic_delivery_attribution",
+      "000087_mining_power_visibility_default_everyone",
     );
   });
 });

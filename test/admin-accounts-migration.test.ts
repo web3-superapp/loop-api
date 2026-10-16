@@ -65,7 +65,7 @@ describe("000055 admin accounts", () => {
 
   it("lists the new relations (head moved on in 000058)", () => {
     expect(latestMigrationName).toBe(
-      "000086_launch2_dynamic_delivery_attribution",
+      "000087_mining_power_visibility_default_everyone",
     );
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(

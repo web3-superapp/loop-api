@@ -1,5 +1,5 @@
 export const latestMigrationName =
-  "000086_launch2_dynamic_delivery_attribution";
+  "000087_mining_power_visibility_default_everyone";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

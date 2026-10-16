@@ -64,7 +64,7 @@ describe("000059 Hooks deployment executor", () => {
 
   it("is the head migration and registers the new relations", () => {
     expect(latestMigrationName).toBe(
-      "000086_launch2_dynamic_delivery_attribution",
+      "000087_mining_power_visibility_default_everyone",
     );
     expect(requiredDatabaseRelations).toEqual(
       expect.arrayContaining([

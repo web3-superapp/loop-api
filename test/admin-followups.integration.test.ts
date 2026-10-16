@@ -299,7 +299,7 @@ describe("Decision 0111 console follow-ups on PostgreSQL", () => {
 
   it("migrates to the head migration", async () => {
     expect(latestMigrationName).toBe(
-      "000086_launch2_dynamic_delivery_attribution",
+      "000087_mining_power_visibility_default_everyone",
     );
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by run_on desc, id desc limit 1",

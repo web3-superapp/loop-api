@@ -240,7 +240,7 @@ export const defaultPrivacyV2Values: PrivacyV2Values = Object.freeze({
   anonymousMode: false,
   visibility: Object.freeze({
     totalAssets: "everyone",
-    miningPower: "self",
+    miningPower: "everyone",
     communities: "self",
     tradeHistory: "everyone",
   }),

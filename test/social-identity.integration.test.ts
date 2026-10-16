@@ -194,7 +194,7 @@ describe("Decision 0095 social identity on PostgreSQL", () => {
     expect(stored.rows[0]).toEqual({
       total_assets_visibility: "everyone",
       trade_history_visibility: "everyone",
-      mining_power_visibility: "self",
+      mining_power_visibility: "everyone",
       communities_visibility: "self",
     });
   });

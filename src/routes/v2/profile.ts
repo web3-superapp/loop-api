@@ -565,7 +565,7 @@ export const registerV2ProfileRoutes: V2ModuleRegistrar = (
         operationId: "getV2PrivacyPreferences",
         summary: "Get the authenticated LOOP privacy preferences",
         description:
-          "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, miningPower and communities self) except totalAssets and tradeHistory, which default to everyone (Decision 0095, docs/09 B11), while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
+          "Returns the version-0 defaults without creating a row: presentation flags fail closed (discoverable false, communities self) except totalAssets and tradeHistory (Decision 0095, docs/09 B11) and miningPower (Decision 0148), which default to everyone, while the three social gates default open (friendRequests enabled, groupInvites and directMessages friends; Decision 0070). Presentation flags are never authorization; the social gates are read by every message-request, direct-channel, and group admission check.",
         tags: ["profile"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
