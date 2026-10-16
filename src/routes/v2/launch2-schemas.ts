@@ -1417,12 +1417,13 @@ export const launch2PoolQuoteSchema = {
     taxAmount: {
       ...decimalSchema,
       description:
-        "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding.",
+        "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding. LoopDynamic: base + dynamic fee in taxToken (Decision 0152: an S209 Hook's buy fee is USD1 from the input).",
     },
     taxToken: { type: "string", enum: ["meme", "usd1"] },
     taxUsd1: {
       ...decimalSchema,
-      description: "= taxAmount for a sell; 0 for a buy (taxed in MEME).",
+      description:
+        "= taxAmount for a sell and for a LoopDynamic S209 buy (USD1 buy fee, Decision 0152); 0 for a buy taxed in MEME.",
     },
     priceBeforeUsd1: {
       ...decimalSchema,
@@ -1484,6 +1485,7 @@ export const launch2PoolQuoteSchema = {
         "priceTiming",
         "baseTaxBps",
         "baseTaxAmount",
+        "baseTaxToken",
         "dynamicTaxBps",
         "dynamicTaxAmount",
         "armed",
@@ -1498,7 +1500,13 @@ export const launch2PoolQuoteSchema = {
         baseTaxAmount: {
           ...decimalSchema,
           description:
-            "buy: the 2 % buy fee in MEME (from the net output, ≤ 1 wei off); sell: the base sell fee in USD1.",
+            "buy: the 2 % buy fee — Decision 0152: an S209 Hook (0x10CC) keeps floor(amountIn × buyFeePpm / 1e6) USD1 of the input before the pool swaps amountIn − fee (the MEME output is untaxed); a pre-S209 Hook (0x10C4) takes it in MEME from the net output (≤ 1 wei off). sell: the base sell fee in USD1.",
+        },
+        baseTaxToken: {
+          type: "string",
+          enum: ["meme", "usd1"],
+          description:
+            "Decision 0152: the token of baseTaxAmount (sell: usd1; buy: usd1 on an S209 Hook, meme before).",
         },
         dynamicTaxBps: {
           type: "integer",
@@ -1758,6 +1766,11 @@ const dynamicPoolProperties = {
     ],
   },
   buyTaxBps: nullableIntegerBpsSchema,
+  buyFeeToken: {
+    anyOf: [{ type: "string", enum: ["meme", "usd1"] }, { type: "null" }],
+    description:
+      "Decision 0152 (loop-contracts Decision 0015): the token of the base buy fee. usd1 — an S209 Hook (address bits 0x10CC) keeps floor(amountIn × buyTaxBps / 10,000) of the USD1 input (Hook baseFeesAccrued, withdrawn by the fee vault) and the pool swaps the rest; meme — a pre-S209 Hook (0x10C4) takes buyTaxBps of the MEME output to the fee vault. null when not active.",
+  },
   baseSellTaxBps: nullableIntegerBpsSchema,
   excludeBuybackFromRewards: { type: ["boolean", "null"] },
   armed: { type: ["boolean", "null"] },
@@ -1884,6 +1897,7 @@ const dynamicPoolProperties = {
           "dynamicFeesUsd1",
           "baseSellFeesUsd1",
           "buyFeesMeme",
+          "buyFeesUsd1",
         ],
         properties: {
           roundCount: { type: "integer", minimum: 0 },
@@ -1892,7 +1906,15 @@ const dynamicPoolProperties = {
           claimedUsd1: decimalSchema,
           dynamicFeesUsd1: decimalSchema,
           baseSellFeesUsd1: decimalSchema,
-          buyFeesMeme: decimalSchema,
+          buyFeesMeme: {
+            ...decimalSchema,
+            description: "Σ buy fees of pre-S209 Hooks (MEME).",
+          },
+          buyFeesUsd1: {
+            ...decimalSchema,
+            description:
+              "Decision 0152: Σ buy fees of S209 Hooks (USD1, taken from the input).",
+          },
         },
       },
       { type: "null" },

@@ -229,6 +229,7 @@ export const emptyDynamicSummary: Launch2DynamicRoundSummary = Object.freeze({
   extraFeesUsd1: "0",
   baseSellFeesUsd1: "0",
   buyFeesMeme: "0",
+  buyFeesUsd1: "0",
   lastRound: null,
 });
 
@@ -521,6 +522,13 @@ export interface FakeLaunch2ChainState {
   /** Decision 0126: wallet balance reads (and a switch to fail them). */
   balanceReads: number;
   failBalances: boolean;
+  /**
+   * Decision 0152: what `readCurvePurchaseCap` answers (default the
+   * pre-S209 5,000,000 MEME constant) and a switch to fail it.
+   */
+  curvePurchaseCap?: bigint;
+  failCurvePurchaseCap?: boolean;
+  curvePurchaseCapReads?: number;
 }
 
 export function defaultChainState(
@@ -560,6 +568,13 @@ export function createFakeLaunch2Chain(
     recoverSnapshotSigners: unused,
     readHookPool: unused,
     readDynamicHookPool: unused,
+    readCurvePurchaseCap: () => {
+      state.curvePurchaseCapReads = (state.curvePurchaseCapReads ?? 0) + 1;
+      if (state.failCurvePurchaseCap === true) {
+        return Promise.reject(new Error("rpc down"));
+      }
+      return Promise.resolve(state.curvePurchaseCap ?? 5_000_000n * wad);
+    },
     readWalletBalances: () => {
       state.balanceReads += 1;
       if (state.failBalances) return Promise.reject(new Error("rpc down"));

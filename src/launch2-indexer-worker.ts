@@ -25,7 +25,11 @@ import {
 } from "./features/launch2/launch2-meme-assets.js";
 import type { Launch2FactoryEntry } from "./features/launch2/launch2-generation.js";
 import { deriveLaunch2Stage } from "./features/launch2/launch2-stage.js";
-import { launch2HookKindOf } from "./features/launch2/launch2-dynamic.js";
+import {
+  launch2DynamicBuyFeeTokenOfLog,
+  launch2HookKindOf,
+  type Launch2DynamicBuyFeeToken,
+} from "./features/launch2/launch2-dynamic.js";
 import { launch2PoolSwapFacts } from "./features/launch2/launch2-pool.js";
 import {
   assessLaunch2MemeCoverage,
@@ -363,14 +367,25 @@ export function pairLaunch2RouterSwaps(
  * `Swap` it charged — same transaction and block, the Hook's pool, the
  * newest such swap before the fee log, not paired yet (the PoolManager
  * emits `Swap` before it calls `afterSwap`, where the Hook takes the fee).
- * `BuyFeeCharged.fee` is MEME; `SellFeeCharged` is `baseFee + extraFee`
- * USD1. Returns PoolManager log key → the fee (raw integer string).
+ * `SellFeeCharged` is `baseFee + extraFee` USD1. `BuyFeeCharged.fee`:
+ * Decision 0152 (loop-contracts Decision 0015) — an S209 Hook's
+ * `BuyFeeCharged(round, buyer, grossQuote, fee)` is USD1 taken from the
+ * input in `beforeSwap` (charged in `afterSwap`, so still after the
+ * `Swap`), a pre-S209 Hook's `BuyFeeCharged(buyer, grossMeme, fee)` is
+ * MEME taken from the output. Returns PoolManager log key → the fee (raw
+ * integer string) and its token.
  */
-export function pairLaunch2DynamicFees(
+export function pairLaunch2DynamicFeeFacts(
   logs: readonly Launch2DecodedLog[],
   hookPools: ReadonlyMap<string, string>,
-): Map<string, string> {
-  const paired = new Map<string, string>();
+): Map<
+  string,
+  { readonly fee: string; readonly token: Launch2DynamicBuyFeeToken }
+> {
+  const paired = new Map<
+    string,
+    { readonly fee: string; readonly token: Launch2DynamicBuyFeeToken }
+  >();
   const keyOf = (log: Launch2DecodedLog): string =>
     `${log.transactionHash}:${log.logIndex}`;
   for (const charged of logs) {
@@ -402,9 +417,31 @@ export function pairLaunch2DynamicFees(
         ? BigInt(charged.args["fee"] ?? "0")
         : BigInt(charged.args["baseFee"] ?? "0") +
           BigInt(charged.args["extraFee"] ?? "0");
-    paired.set(keyOf(match), fee.toString(10));
+    paired.set(
+      keyOf(match),
+      Object.freeze({
+        fee: fee.toString(10),
+        token:
+          charged.eventName === "BuyFeeCharged"
+            ? launch2DynamicBuyFeeTokenOfLog(charged.args)
+            : "usd1",
+      }),
+    );
   }
   return paired;
+}
+
+/** Decision 0131: `pairLaunch2DynamicFeeFacts` without the token. */
+export function pairLaunch2DynamicFees(
+  logs: readonly Launch2DecodedLog[],
+  hookPools: ReadonlyMap<string, string>,
+): Map<string, string> {
+  return new Map(
+    [...pairLaunch2DynamicFeeFacts(logs, hookPools)].map(([key, value]) => [
+      key,
+      value.fee,
+    ]),
+  );
 }
 
 /** Decision 0146: how a LoopDynamic Hook credited a buy's weight. */
@@ -498,7 +535,10 @@ export function classifyLaunch2DynamicCredits(
  *
  * with `amountIn` = the swap's input and `amountOut` = its output minus the
  * Hook fee of the same swap (`pairLaunch2DynamicFees`; LoopRouter pays the
- * caller exactly that). Everything else stays anonymous: pool statistics
+ * caller exactly that). Decision 0152: a USD1 buy fee (S209 Hook,
+ * `feeTokens`) was taken from the input instead — `amountIn` = the swap's
+ * pool input + the fee (what the caller paid), `amountOut` = the whole
+ * MEME output. Everything else stays anonymous: pool statistics
  * only. Returns PoolManager log key → attribution.
  */
 export function pairLaunch2DynamicSenders(input: {
@@ -511,6 +551,8 @@ export function pairLaunch2DynamicSenders(input: {
     >
   >;
   readonly fees: ReadonlyMap<string, string>;
+  /** Decision 0152: the paired fee's token (absent = MEME / sell USD1). */
+  readonly feeTokens?: ReadonlyMap<string, Launch2DynamicBuyFeeToken>;
   readonly parties: ReadonlyMap<
     string,
     { readonly from: string; readonly to: string | null }
@@ -578,9 +620,14 @@ export function pairLaunch2DynamicSenders(input: {
     }
     if (facts === null) continue;
     const fee = BigInt(input.fees.get(keyOf(log)) ?? "0");
-    const amountIn = facts.side === "buy" ? facts.usd1Amount : facts.memeAmount;
+    const usd1BuyFee =
+      facts.side === "buy" && input.feeTokens?.get(keyOf(log)) === "usd1";
+    const amountIn =
+      facts.side === "buy"
+        ? facts.usd1Amount + (usd1BuyFee ? fee : 0n)
+        : facts.memeAmount;
     const gross = facts.side === "buy" ? facts.memeAmount : facts.usd1Amount;
-    const amountOut = gross - fee;
+    const amountOut = usd1BuyFee ? gross : gross - fee;
     if (amountIn <= 0n || amountOut <= 0n) continue;
     attributed.set(keyOf(log), {
       payer: party.from,
@@ -1322,10 +1369,22 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
           dynamicHookPools.set(owner.dynamicHook, poolId);
         }
       }
-      const dynamicFees =
+      const dynamicFeeFacts =
         dynamicHookPools.size === 0
-          ? new Map<string, string>()
-          : pairLaunch2DynamicFees(decoded.logs, dynamicHookPools);
+          ? new Map<
+              string,
+              {
+                readonly fee: string;
+                readonly token: Launch2DynamicBuyFeeToken;
+              }
+            >()
+          : pairLaunch2DynamicFeeFacts(decoded.logs, dynamicHookPools);
+      const dynamicFees = new Map(
+        [...dynamicFeeFacts].map(([key, value]) => [key, value.fee]),
+      );
+      const dynamicFeeTokens = new Map(
+        [...dynamicFeeFacts].map(([key, value]) => [key, value.token]),
+      );
       // Decision 0132: LoopDynamic swaps of a direct LoopRouter call are the
       // transaction sender's (the only transactions whose parties are read).
       const senderCandidates = [
@@ -1351,6 +1410,7 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
               logs: decoded.logs,
               pools,
               fees: dynamicFees,
+              feeTokens: dynamicFeeTokens,
               parties:
                 await options.chain.readTransactionParties(senderCandidates),
             });
@@ -1461,6 +1521,12 @@ export function createLaunch2Lane(options: Launch2LaneOptions): Launch2Lane {
                         dynamicFees.get(
                           `${log.transactionHash}:${log.logIndex}`,
                         ) ?? "0",
+                      // Decision 0152: USD1 for an S209 Hook's buy fee.
+                      ...(dynamicFeeTokens.get(
+                        `${log.transactionHash}:${log.logIndex}`,
+                      ) === "usd1"
+                        ? { dynamicFeeToken: "usd1" }
+                        : {}),
                       // Decision 0132: the transaction sender, if attributable.
                       ...senderAttributionArgs(
                         senderAttributions.get(

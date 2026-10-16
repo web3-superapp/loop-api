@@ -20,8 +20,10 @@ import {
 import {
   createFakeLaunch2DynamicChain,
   defaultDynamicState,
+  dynamicPoolIdFor,
   graduatedDynamicInstance,
   launch2DynamicHook,
+  launch2DynamicHookS209,
   launch2LoopRouter,
   type FakeLaunch2DynamicState,
 } from "./helpers/launch2-dynamic-fakes.js";
@@ -202,6 +204,7 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       extraFeesUsd1: (70n * wad).toString(),
       baseSellFeesUsd1: (4n * wad).toString(),
       buyFeesMeme: (1_000n * wad).toString(),
+      buyFeesUsd1: "0",
       lastRound: null,
     });
     const { app } = await createApp({ repository });
@@ -522,6 +525,84 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
       (decoded.args[0] as { readonly hooks: string }).hooks.toLowerCase(),
     ).toBe(launch2DynamicHook);
     expect(decoded.args.slice(1, 4)).toEqual([true, 10n * wad, 0n]);
+  });
+
+  it("quotes an S209 Hook's buy fee from the USD1 input (Decision 0152)", async () => {
+    const base = graduatedDynamicInstance();
+    const poolId = dynamicPoolIdFor(
+      base.addresses.meme,
+      launch2DynamicHookS209,
+    );
+    const record = graduatedDynamicInstance({
+      dynamicPool: { hook: launch2DynamicHookS209, poolId, boundBlock: "4000" },
+      graduation: {
+        ...(base.graduation as NonNullable<typeof base.graduation>),
+        poolId,
+      },
+    });
+    const { repository } = seeded(record);
+    const { app } = await createApp({
+      repository,
+      dynamic: defaultDynamicState({ hook: { poolId } }),
+    });
+    const response = await get(
+      app,
+      quoteUrl(
+        record.instanceId,
+        "side=buy&mode=exactIn&amount=10&slippageBps=100",
+      ),
+    );
+    expect(response.statusCode).toBe(200);
+    const quote = response.json<{ quote: Record<string, unknown> }>().quote;
+    // 10 USD1: 0.2 USD1 fee, 9.8 swapped → 15,680 MEME, untaxed.
+    expect(quote).toMatchObject({
+      amountIn: "10",
+      expectedOut: "15680",
+      taxBps: 200,
+      taxAmount: "0.2",
+      taxToken: "usd1",
+      taxUsd1: "0.2",
+      dynamic: {
+        hook: launch2DynamicHookS209,
+        baseTaxBps: 200,
+        baseTaxAmount: "0.2",
+        baseTaxToken: "usd1",
+        // The weight is what the buyer paid.
+        rewardWeight: "10",
+      },
+    });
+    const pool = await get(
+      app,
+      `/v2/launch2/instances/${record.instanceId}/dynamic-pool?walletId=${walletId}`,
+    );
+    expect(pool.statusCode).toBe(200);
+    expect(
+      pool.json<{ dynamicPool: Record<string, unknown> }>().dynamicPool,
+    ).toMatchObject({ buyFeeToken: "usd1", buyTaxBps: 200 });
+  });
+
+  it("refuses a Hook whose address bits are neither generation (Decision 0152)", async () => {
+    const odd = `0x${"c".repeat(36)}20cc`;
+    const base = graduatedDynamicInstance();
+    const poolId = dynamicPoolIdFor(base.addresses.meme, odd);
+    const record = graduatedDynamicInstance({
+      dynamicPool: { hook: odd, poolId, boundBlock: "4000" },
+      graduation: {
+        ...(base.graduation as NonNullable<typeof base.graduation>),
+        poolId,
+      },
+    });
+    const { repository } = seeded(record);
+    const { app } = await createApp({
+      repository,
+      dynamic: defaultDynamicState({ hook: { poolId } }),
+    });
+    const response = await get(
+      app,
+      quoteUrl(record.instanceId, "side=buy&mode=exactIn&amount=10"),
+    );
+    expect(response.statusCode).toBe(503);
+    expect(JSON.stringify(response.json())).toContain("HOOK_MISMATCH");
   });
 
   it("splits a sell's fee into the 2 % base and the dynamic fee from a neutral simulation", async () => {

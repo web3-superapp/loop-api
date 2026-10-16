@@ -15,7 +15,9 @@ import {
 
 import {
   hooksLaunchLegacyNftSaleDurationSeconds,
+  hooksLaunchLoopDynamicHookPermissionBits,
   hooksLaunchLoopDynamicTemplateHash,
+  isHooksLaunchMaxCumulativeBuy,
   isHooksLaunchMaxDynamicFeeWad,
   isHooksLaunchNftSaleDuration,
   type HooksLaunchLoopDynamicParams,
@@ -52,15 +54,20 @@ export async function readHooksLaunchLoopDynamicTemplate(
 }> {
   const F = loopDynamicLaunchFactoryAbi as Abi;
   const H = loopHookDeploymentFactoryAbi as Abi;
-  const [kind, templateHash, router, hookFactory, registry] = await Promise.all(
-    [
+  const [kind, templateHash, router, hookFactory, registry, maxCumulativeBuy] =
+    await Promise.all([
       read(factoryAddress, F, "hookKind"),
       read(factoryAddress, F, "TEMPLATE_HASH"),
       read(factoryAddress, F, "loopRouter"),
       read(factoryAddress, F, "loopHookDeploymentFactory"),
       read(factoryAddress, F, "routerRegistry"),
-    ],
-  );
+      // Decision 0152: S209 Factories answer the curve cap; an older one
+      // has no such function (a revert = absent). RPC failures propagate.
+      read(factoryAddress, F, "maxCumulativeBuy").catch((error: unknown) => {
+        if (isHooksLaunchContractRevert(error)) return null;
+        throw error;
+      }),
+    ]);
   const hdf = String(hookFactory) as Address;
   const [
     hookRouter,
@@ -73,6 +80,7 @@ export async function readHooksLaunchLoopDynamicTemplate(
     buyFeePpm,
     launchFactory,
     maxDynamicFeeWad,
+    requiredPermissionMask,
   ] = await Promise.all([
     read(hdf, H, "router"),
     read(hdf, H, "baseSellFeePpm"),
@@ -89,6 +97,9 @@ export async function readHooksLaunchLoopDynamicTemplate(
       if (isHooksLaunchContractRevert(error)) return null;
       throw error;
     }),
+    // Decision 0152: 0x10C4 (pre-S209) or 0x10CC (S209) — must agree with
+    // the generation the Factory's getters show.
+    read(hdf, H, "REQUIRED_PERMISSION_MASK"),
   ]);
   const registryAddress = String(registry).toLowerCase();
   const admin =
@@ -113,7 +124,16 @@ export async function readHooksLaunchLoopDynamicTemplate(
     typeof excludeBuybackFromRewards !== "boolean" ||
     (maxDynamicFeeWad !== null &&
       (typeof maxDynamicFeeWad !== "bigint" ||
-        !isHooksLaunchMaxDynamicFeeWad(maxDynamicFeeWad.toString(10))))
+        !isHooksLaunchMaxDynamicFeeWad(maxDynamicFeeWad.toString(10)))) ||
+    (maxCumulativeBuy !== null &&
+      (typeof maxCumulativeBuy !== "bigint" ||
+        maxDynamicFeeWad === null ||
+        !isHooksLaunchMaxCumulativeBuy(maxCumulativeBuy.toString(10)))) ||
+    typeof requiredPermissionMask !== "bigint" ||
+    requiredPermissionMask !==
+      hooksLaunchLoopDynamicHookPermissionBits(
+        maxCumulativeBuy === null ? {} : { maxCumulativeBuy: "1" },
+      )
   ) {
     throw new HooksLaunchFactoryTemplateMismatchError();
   }
@@ -129,9 +149,13 @@ export async function readHooksLaunchLoopDynamicTemplate(
     ...(maxDynamicFeeWad === null
       ? {}
       : { maxDynamicFeeWad: maxDynamicFeeWad.toString(10) }),
+    ...(maxCumulativeBuy === null
+      ? {}
+      : { maxCumulativeBuy: maxCumulativeBuy.toString(10) }),
   });
   // An S193 Factory's TEMPLATE_HASH has the trailing cap word, an S165 one
-  // does not; the recomputed hash must equal the chain's either way.
+  // does not, an S209 one also the purchase cap word (Decision 0152); the
+  // recomputed hash must equal the chain's either way.
   const expected = hooksLaunchLoopDynamicTemplateHash(params);
   if (expected.toLowerCase() !== String(templateHash).toLowerCase()) {
     throw new HooksLaunchFactoryTemplateMismatchError();
@@ -244,7 +268,8 @@ export function createHooksLaunchFactoryReader(input: {
    * Decision 0132: `loopDynamic` = a `LoopDynamicLaunchFactory`: the
    * template (Hook parameters, `TEMPLATE_HASH`) is read and verified, and
    * the Hook salt is mined for `loopHookDeploymentFactory()` /
-   * `previewLoopHookInitCodeHash(request)` (bits 0x10C4). Absent =
+   * `previewLoopHookInitCodeHash(request)` (bits 0x10C4; Decision 0152:
+   * 0x10CC for an S209 Factory, by its template). Absent =
    * OfficialTax, unchanged.
    */
   readonly hookKind?: "officialTax" | "loopDynamic";

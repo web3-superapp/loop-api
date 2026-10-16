@@ -1008,6 +1008,12 @@ export function createHooksLaunchExecutor(options: {
           // the launch2 read model derives `nft_sale` / its end from.
           nftSaleDurationSeconds: facts.factory.nftSaleDuration.toString(10),
           nftSaleEnd: (facts.nft?.saleEnd ?? 0n).toString(10),
+          // Decision 0152: the verified per-address curve purchase cap
+          // (S209: the Factory's maxCumulativeBuy) the launch2 read model
+          // shows (`launch2_instances` → curve_purchase_cap).
+          curveMaxCumulativeBuy: (facts.curve?.maxCumulativeBuy ?? 0n).toString(
+            10,
+          ),
           ...(facts.factory.nftSaleDurationLegacy
             ? { legacyFactory: true }
             : {}),

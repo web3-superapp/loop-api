@@ -1,4 +1,4 @@
-export const latestMigrationName = "000089_launch_slot_mainnet_chain_ids";
+export const latestMigrationName = "000090_launch2_dynamic_usd1_buy_fee";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

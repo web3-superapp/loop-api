@@ -106,6 +106,7 @@ describe("public MEME routes (Decision 0147)", () => {
       readonly ratePerWindow?: number;
       readonly clock?: { ms: number };
       readonly env?: Readonly<Record<string, string>>;
+      readonly chainState?: ReturnType<typeof defaultChainState>;
     } = {},
   ) {
     const repository = options.repository ?? createInMemoryLaunch2Repository();
@@ -125,7 +126,9 @@ describe("public MEME routes (Decision 0147)", () => {
         accountWallets: walletsFake(),
       },
       privyAccessTokenVerifier: s7PrivyVerifier(),
-      launch2Chain: createFakeLaunch2Chain(defaultChainState()),
+      launch2Chain: createFakeLaunch2Chain(
+        options.chainState ?? defaultChainState(),
+      ),
       launch2PoolChain: createFakeLaunch2PoolChain(defaultPoolState()),
       launch2DynamicChain:
         dynamic === null ? null : createFakeLaunch2DynamicChain(dynamic),
@@ -206,6 +209,7 @@ describe("public MEME routes (Decision 0147)", () => {
       extraFeesUsd1: (70n * wad).toString(),
       baseSellFeesUsd1: (4n * wad).toString(),
       buyFeesMeme: (1_000n * wad).toString(),
+      buyFeesUsd1: "0",
       lastRound: null,
     });
     repository.dynamicRoundBuyers.set(`${record.instanceId}|3`, [
@@ -248,6 +252,8 @@ describe("public MEME routes (Decision 0147)", () => {
       stage: "graduated",
       hookAddress: launch2DynamicHook,
       poolId: record.graduation?.poolId,
+      // Decision 0152: the curve's cap read from the chain (pre-S209 5M).
+      perAddressCurveCapMeme: "5000000",
       chainId: "eip155:97",
       explorerBaseUrl: "https://testnet.bscscan.com",
       socials: {
@@ -284,6 +290,7 @@ describe("public MEME routes (Decision 0147)", () => {
       currentDynamicTaxBps: 2000,
       maxDynamicFeeBps: 2000,
       baseBuyFeeBps: 200,
+      buyFeeToken: "meme",
       baseSellFeeBps: 200,
       pendingPotUsd1: "45",
       carryUsd1: "40",
@@ -300,6 +307,7 @@ describe("public MEME routes (Decision 0147)", () => {
     expect(body["totals"]).toEqual({
       curveTaxUsd1: "99",
       poolBaseBuyFeeMeme: "1000",
+      poolBaseBuyFeeUsd1: "0",
       poolBaseSellFeeUsd1: "4",
       dynamicFeesUsd1: "70",
       // 99 + 4 + 70 + 1,000 MEME × 0.000625.
@@ -318,6 +326,63 @@ describe("public MEME routes (Decision 0147)", () => {
     expect(repository.publicFactsCalls[0]?.since).toBe(
       new Date(Number(launch2NowSeconds - 86_400n) * 1000).toISOString(),
     );
+  });
+
+  it("adds S209 USD1 buy fees to the totals and reads the curve cap from the chain (Decision 0152)", async () => {
+    const record = graduatedDynamicInstance({
+      pool: {
+        ...graduatedDynamicInstance().pool,
+        lastPriceE18: (625n * 10n ** 12n).toString(),
+      },
+      curvePurchaseCap: (2_000_000n * wad).toString(),
+    });
+    const repository = seeded(record);
+    repository.publicFacts.set(record.instanceId, {
+      curveTaxUsd1: (10n * wad).toString(),
+    });
+    repository.dynamicSummaries.set(record.instanceId, {
+      roundCount: 0,
+      closedRoundCount: 0,
+      allocatedUsd1: "0",
+      claimedUsd1: "0",
+      extraFeesUsd1: (3n * wad).toString(),
+      baseSellFeesUsd1: (4n * wad).toString(),
+      // A pre-S209 Hook's MEME fees and an S209 Hook's USD1 fees.
+      buyFeesMeme: (1_000n * wad).toString(),
+      buyFeesUsd1: (6n * wad).toString(),
+      lastRound: null,
+    });
+    const chainState = {
+      ...defaultChainState(),
+      curvePurchaseCap: 1_000_000n * wad,
+    };
+    const { app } = await createApp({ repository, chainState });
+    const body = (await get(app, `/public/v1/meme/${record.instanceId}`)).json<
+      Record<string, Record<string, unknown>>
+    >();
+    expect(body["totals"]).toMatchObject({
+      poolBaseBuyFeeMeme: "1000",
+      poolBaseBuyFeeUsd1: "6",
+      poolBaseSellFeeUsd1: "4",
+      dynamicFeesUsd1: "3",
+      // 10 + 4 + 6 + 3 + 1,000 MEME × 0.000625.
+      totalTaxUsd1Equivalent: "23.625",
+    });
+    expect(body["instance"]?.["perAddressCurveCapMeme"]).toBe("1000000");
+    // Immutable: read once per curve.
+    await get(app, `/public/v1/meme/${record.instanceId}`);
+    expect(chainState.curvePurchaseCapReads).toBe(1);
+
+    // The chain unreachable: the executor-verified value.
+    const failing = {
+      ...defaultChainState(),
+      failCurvePurchaseCap: true,
+    };
+    const second = await createApp({ repository, chainState: failing });
+    const fallback = (
+      await get(second.app, `/public/v1/meme/${record.instanceId}`)
+    ).json<Record<string, Record<string, unknown>>>();
+    expect(fallback["instance"]?.["perAddressCurveCapMeme"]).toBe("2000000");
   });
 
   it("answers dynamic null for OfficialTax and pre-graduation instances (never 503)", async () => {

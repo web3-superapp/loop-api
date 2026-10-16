@@ -23,6 +23,7 @@
 ## 2. 字段口径（详情）
 
 - `instance.stage`：按时钟推导（与 App 同一 `deriveLaunch2StageOf`）；`createdAt` = 链上激活时间（无则登记时间）；`hookAddress`：LoopDynamic = 毕业时绑定的 Hook（未绑定 null），OfficialTax = 注册表 Hook；`poolId` = `Graduated.officialPoolId`；`explorerBaseUrl` 按 CAIP-2（97 → testnet.bscscan.com，56 → bscscan.com）。
+- `instance.perAddressCurveCapMeme`（**0152 新增**）：曲线单地址累计买入上限，链上读 `maxCumulativeBuy()`（旧曲线回退 `MAX_CUMULATIVE_BUY()`），进程内按曲线缓存；链不可达时用执行器核验过的值。`dynamic.buyFeeToken`（**0152 新增**）：`usd1` = S209 Hook（地址位 0x10CC，买入税从 USD1 输入扣），`meme` = 之前。
 - `instance.socials`：创建者保存的链接（0138：http(s)、≤ 5、原顺序）里第一个 x.com / twitter.com → `x`，第一个 t.me / telegram.me / telegram.org → `telegram`，第一个其它 → `website`。
 - `community.slogan`：社区表**没有单独的口号字段**，口号取公开描述的第一行（折叠空白，≤ 60 个码点，超出加「…」，与 0138 摘要同规则）；描述本身也是单行（库约束），所以通常口号 = 描述。`avatarUrl` 恒为 `null`：社区头像是 App 内置预设（`avatar:preset/…`）或需要登录的媒体（`logo:media/…`），没有公开 URL。
 - `price.lastPriceUsd1`：已毕业 = 最后一笔已索引外盘 swap 后的价格（还没有 swap 时用曲线终价）；未毕业 = 曲线当前价（投影）。`asOf` = 最后外盘成交时间，否则投影时间。
@@ -34,9 +35,9 @@
   - `lastClosedRound` = `launch2_dynamic_rounds` 里最新一条 `closed` 行（`allocation_usd1`、`buyer_count`、`closed_at`）。
 - `totals`（§3 的 SQL + 现有轮次汇总）：
   - `curveTaxUsd1` = Σ `launch2_trades.tax_usd1`（内盘买卖各 10 %，USD1）。
-  - LoopDynamic：`poolBaseBuyFeeMeme` = Σ `launch2_dynamic_fees.base_fee`（`side = buy`，MEME）；`poolBaseSellFeeUsd1` = Σ `base_fee`（`side = sell`，USD1）；`dynamicFeesUsd1` = Σ `extra_fee`（`side = sell`，进奖池）——即现有 `dynamicRoundSummary`，与 dynamic-pool `summary` 同值。
+  - LoopDynamic：`poolBaseBuyFeeMeme` = Σ `launch2_dynamic_fees.base_fee`（`side = buy`，MEME；**0152 修订**：只计 `fee_token = meme` 的旧 Hook 行，S209 Hook 的 USD1 买入税计入新字段 `poolBaseBuyFeeUsd1`）；`poolBaseSellFeeUsd1` = Σ `base_fee`（`side = sell`，USD1）；`dynamicFeesUsd1` = Σ `extra_fee`（`side = sell`，进奖池）——即现有 `dynamicRoundSummary`，与 dynamic-pool `summary` 同值。
   - OfficialTax：`poolBaseBuyFeeMeme` = Σ `launch2_pool_swaps.tax_amount`（`tax_token = meme`）；`poolBaseSellFeeUsd1` = 同（`tax_token = usd1`）；`dynamicFeesUsd1 = 0`。未毕业两者都是 0。
-  - `totalTaxUsd1Equivalent` = 以上 USD1 部分 + MEME 买入税 × `lastPriceUsd1`（向下取整）；有 MEME 税而没有价格时 null。
+  - `totalTaxUsd1Equivalent` = 以上 USD1 部分（**0152 修订**：含 `poolBaseBuyFeeUsd1`）+ MEME 买入税 × `lastPriceUsd1`（向下取整）；有 MEME 税而没有价格时 null。
   - `rewardsAllocatedUsd1` / `rewardsClaimedUsd1` = Σ `launch2_dynamic_rounds.allocation_usd1` / `claimed_usd1`（`claimed_usd1` 由 `launch2_dynamic_claims` 投影而来）；OfficialTax 为 0。
   - `buyback` = 回购账本（0121）：`executedCount` / `spentUsd1` / `boughtMeme` / `lastAt` 来自 `launch2_buybacks`（executed、未回滚）的实例投影，`escrowRemainingUsd1` = NFT 收入 − 已花（与 `/v2` 详情 `escrowAvailableUsd1` 同口径），`recipientAddress` = 注册表回购接收地址。本实现**总是给对象**（合同允许 null，未用到）。
 - 所有求和都跳过 reorg 回滚（`removed`）的事实。

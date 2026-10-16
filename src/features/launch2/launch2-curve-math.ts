@@ -17,7 +17,8 @@ const virtualMeme = (sale * 4n) / 3n;
 const taxBps = launch2Template.curveBuyTaxBps;
 const sellTaxBps = launch2Template.curveSellTaxBps;
 const denominator = launch2Template.taxDenominator;
-const cap = launch2Template.perAddressCap;
+/** The pre-S209 constant; Decision 0152: each curve now carries its own. */
+const defaultCap = launch2Template.perAddressCap;
 
 export class Launch2CurveRangeError extends RangeError {
   constructor(message: string) {
@@ -102,6 +103,13 @@ export interface Launch2CurveState {
   readonly accountedReserve: bigint;
   /** Unix seconds of the block the state was read at. */
   readonly blockTimestamp: bigint;
+  /**
+   * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
+   * lifetime purchase cap — `maxCumulativeBuy()` of an S209 curve (a
+   * Factory parameter), `MAX_CUMULATIVE_BUY()` (5,000,000 MEME) before.
+   * Absent = the pre-S209 constant.
+   */
+  readonly maxCumulativeBuy?: bigint;
 }
 
 export type Launch2MaxLimit =
@@ -120,6 +128,7 @@ export function launch2QuoteMaxBuy(
   state: Launch2CurveState,
   cumulativeBought: bigint,
 ): Launch2MaxBuy {
+  const cap = state.maxCumulativeBuy ?? defaultCap;
   const quotaRemaining = cumulativeBought >= cap ? 0n : cap - cumulativeBought;
   const inventoryRemaining = sale - state.soldSupply;
   const closed = {

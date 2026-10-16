@@ -34,6 +34,11 @@ import { memeUsd1 } from "./meme-service-fakes.js";
 export const launch2LoopRouter = "0x7777777777777777777777777777777777777777";
 export const launch2LoopRouterCodeHash = `0x${"ef".repeat(32)}`;
 export const launch2DynamicHook = `0x${"c".repeat(36)}10c4`;
+/**
+ * Decision 0152: an S209 Hook (bits 0x10CC) — the fake takes its buy fee
+ * from the USD1 input instead of the MEME output.
+ */
+export const launch2DynamicHookS209 = `0x${"c".repeat(36)}10cc`;
 export const launch2RouterRegistry =
   "0x4444444444444444444444444444444444444444";
 const zero = "0x0000000000000000000000000000000000000000";
@@ -43,10 +48,11 @@ export const launch2DynamicEnv = Object.freeze({
   LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: launch2LoopRouterCodeHash,
 });
 
-export function dynamicPoolIdFor(meme: string): string {
-  return launch2PoolId(
-    launch2PoolKey({ meme, usd1: memeUsd1, hook: launch2DynamicHook }),
-  );
+export function dynamicPoolIdFor(
+  meme: string,
+  hook: string = launch2DynamicHook,
+): string {
+  return launch2PoolId(launch2PoolKey({ meme, usd1: memeUsd1, hook }));
 }
 
 export function graduatedDynamicInstance(
@@ -188,7 +194,7 @@ export function createFakeLaunch2DynamicChain(
         data: call.data as `0x${string}`,
       });
       const args = decoded.args as readonly [
-        { currency0: string; currency1: string },
+        { currency0: string; currency1: string; hooks: string },
         boolean,
         bigint,
         bigint,
@@ -199,6 +205,15 @@ export function createFakeLaunch2DynamicChain(
       const amountIn = args[2];
       const usd1First = args[0].currency0.toLowerCase() === memeUsd1;
       const buy = usd1First ? zeroForOne : !zeroForOne;
+      if (buy && (BigInt(args[0].hooks) & 0x3fffn) === 0x10ccn) {
+        // S209: floor(amountIn × 2 %) stays in the Hook, the rest swaps.
+        const fee = (amountIn * 20_000n) / ppm;
+        return Promise.resolve({
+          status: "ok",
+          amountSpent: amountIn,
+          amountReceived: (amountIn - fee) * 1_600n,
+        });
+      }
       if (buy) {
         const gross = amountIn * 1_600n;
         const fee = (gross * 20_000n) / ppm;

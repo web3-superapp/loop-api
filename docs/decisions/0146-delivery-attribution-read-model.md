@@ -55,7 +55,7 @@
 
 ## 6. 测试
 
-- `test/launch2-indexer-worker.test.ts`：第 1 / 2 档、交割（含买入税 take 与 `BuyFeeCharged` 在前）、聚合器 take 给自己的判定；`trustedRouter` 未知、MEME 段缺失、转给别人、跨区块 → `unknown`；lane 提交时 `BuyCredited` 带 `attribution`，`CreditMoved` 原样通过。
+- `test/launch2-indexer-worker.test.ts`：第 1 / 2 档、交割（含买入税 take 与 `BuyFeeCharged` 在前；**0152 修订**：S209 Hook 不再 take MEME，买入税是 USD1，`_creditBuy` 记的权重 = 池子输入 + 税 = 实付全额，判定规则不变）、聚合器 take 给自己的判定；`trustedRouter` 未知、MEME 段缺失、转给别人、跨区块 → `unknown`；lane 提交时 `BuyCredited` 带 `attribution`，`CreditMoved` 原样通过。
 - `test/launch2-dynamic.integration.test.ts`（真实 PostgreSQL，`loop_api_test_s201`）：全额 / 部分（聚合器留 10%）/ 多次与链式挪动、反向挪回；跨轮不挪（第 2 轮挪动不动第 1 轮）；每轮 Σ 权重 = `total_buy_weight_usd1` 且 `buyer_count` = 正权重地址数；重组撤销挪动后权重回到转出方；0014 §7.1 Universal Router 分叉用例的事件序列复现链上 `buyWeight`（BOB 500、CAROL 100、路由 0、ALICE 50、总 650）；旧实例（无 `CreditMoved`、无 `attribution` 键）结果与 0131 相同、记录为 `unknown`；奖励记录 / 轮次买家列表 / 单地址权重读取。
 - `test/v2-launch2-dynamic-routes.test.ts`：`currentRoundBuyers` 形状与金额格式；`weightReconciled` true / false；奖励轮次的合并分量与 `credits`。
 - `test/launch2-dynamic.test.ts`：000086 的 up / down SQL。

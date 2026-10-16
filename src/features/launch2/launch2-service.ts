@@ -118,7 +118,9 @@ import {
   launch2DynamicBps,
   launch2DynamicCandleSeconds,
   launch2DynamicClaimable,
+  launch2DynamicBuyFeeTokenOfHook,
   launch2DynamicGrossOfNet,
+  launch2DynamicUsd1BuySplit,
   launch2DynamicPriceTiming,
   launch2DynamicReasonCodes,
   launch2DynamicRoll,
@@ -583,11 +585,24 @@ function buybackSummaryOf(
   });
 }
 
-function positionCurveOf(position: Launch2PositionRecord | null): Resource {
+/**
+ * Decision 0152: the instance curve's verified per-address purchase cap
+ * (S209: a Factory parameter; before: the 5,000,000 MEME constant).
+ */
+function curvePurchaseCapOf(record: Launch2InstanceRecord): bigint {
+  const raw = record.curvePurchaseCap;
+  return raw !== undefined && /^[1-9][0-9]{0,77}$/u.test(raw)
+    ? BigInt(raw)
+    : launch2Template.perAddressCap;
+}
+
+function positionCurveOf(
+  position: Launch2PositionRecord | null,
+  cap: bigint,
+): Resource {
   const bought = BigInt(position?.curveBought ?? "0");
   const sold = BigInt(position?.curveSold ?? "0");
   const cumulative = BigInt(position?.cumulativeBought ?? "0");
-  const cap = launch2Template.perAddressCap;
   return Object.freeze({
     bought: formatLaunch2Amount(bought),
     sold: formatLaunch2Amount(sold),
@@ -969,6 +984,31 @@ export function createLaunch2Service(
       maximumDeadlineSeconds,
     ),
   );
+  /**
+   * Decision 0152: per-curve `maxCumulativeBuy()` (or the pre-S209
+   * `MAX_CUMULATIVE_BUY()`) read from the chain — immutable, so cached for
+   * the process. No chain / a failed read answers the instance's verified
+   * value (the executor read the same immutable before activation).
+   */
+  const curveCapCache = new Map<string, bigint>();
+  async function chainCurvePurchaseCap(
+    record: Launch2InstanceRecord,
+  ): Promise<bigint> {
+    const curve = record.addresses.curve.toLowerCase();
+    const cached = curveCapCache.get(curve);
+    if (cached !== undefined) return cached;
+    if (deps.chain === null) return curvePurchaseCapOf(record);
+    try {
+      const value = await deps.chain.readCurvePurchaseCap(curve);
+      if (value <= 0n) return curvePurchaseCapOf(record);
+      if (curveCapCache.size > 1_000) curveCapCache.clear();
+      curveCapCache.set(curve, value);
+      return value;
+    } catch {
+      return curvePurchaseCapOf(record);
+    }
+  }
+
   const balanceCacheMs = Math.min(
     Math.max(deps.balanceCacheMs ?? maximumBalanceCacheMs, 0),
     maximumBalanceCacheMs,
@@ -2040,7 +2080,11 @@ export function createLaunch2Service(
     } = await dynamicHookAt(record, address, true);
     const meme = record.addresses.meme.toLowerCase();
     const key = launch2PoolKey({ meme, usd1: state.quote, hook });
-    if (launch2PoolId(key) !== state.poolId) {
+    // Decision 0152: the Hook address's permission bits are its generation
+    // (0x10C4 = MEME buy fee, 0x10CC = USD1 buy fee); anything else is not
+    // a LoopDynamic Hook this backend knows.
+    const buyFeeToken = launch2DynamicBuyFeeTokenOfHook(hook);
+    if (launch2PoolId(key) !== state.poolId || buyFeeToken === null) {
       return unavailableWith(launch2DynamicReasonCodes.hookMismatch);
     }
     const zeroForOne = launch2PoolZeroForOne(key, request.side, meme);
@@ -2090,9 +2134,16 @@ export function createLaunch2Service(
     let dynamicTaxBps = 0;
     let rewardWeight = 0n;
     if (request.side === "buy") {
-      // S165: the buy fee is taken from the MEME output (gross − fee = net).
-      const gross = launch2DynamicGrossOfNet(expectedOut, state.buyFeePpm);
-      baseFee = gross - expectedOut;
+      if (buyFeeToken === "usd1") {
+        // Decision 0152 (loop-contracts Decision 0015): an S209 Hook keeps
+        // floor(amountIn × buyFeePpm / 1e6) USD1 before the pool swaps
+        // amountIn − fee; the MEME output (the simulation's) is untaxed.
+        baseFee = launch2DynamicUsd1BuySplit(amountIn, state.buyFeePpm).fee;
+      } else {
+        // S165: the buy fee is taken from the MEME output (gross − fee = net).
+        const gross = launch2DynamicGrossOfNet(expectedOut, state.buyFeePpm);
+        baseFee = gross - expectedOut;
+      }
       if (roll.armed && address !== state.rewardExcludedBuyer) {
         rewardWeight = amountIn;
       }
@@ -2148,8 +2199,10 @@ export function createLaunch2Service(
         request.side === "buy" ? state.buyFeePpm : state.baseSellFeePpm,
       ),
       taxAmount: formatLaunch2Amount(tax),
-      taxToken: request.side === "buy" ? "meme" : "usd1",
-      taxUsd1: formatLaunch2Amount(request.side === "sell" ? tax : 0n),
+      taxToken: request.side === "buy" ? buyFeeToken : "usd1",
+      taxUsd1: formatLaunch2Amount(
+        request.side === "sell" || buyFeeToken === "usd1" ? tax : 0n,
+      ),
       priceBeforeUsd1: formatLaunch2Amount(
         launch2PoolPriceE18(state.sqrtPriceX96, state.memeIsCurrency0),
       ),
@@ -2181,6 +2234,8 @@ export function createLaunch2Service(
           request.side === "buy" ? state.buyFeePpm : state.baseSellFeePpm,
         ),
         baseTaxAmount: formatLaunch2Amount(baseFee),
+        // Decision 0152: the token baseTaxAmount is in (sell: USD1).
+        baseTaxToken: request.side === "buy" ? buyFeeToken : "usd1",
         dynamicTaxBps,
         dynamicTaxAmount: formatLaunch2Amount(dynamicFee),
         armed: roll.armed,
@@ -2363,6 +2418,7 @@ export function createLaunch2Service(
         routingPolicy: null,
         priceTiming: null,
         buyTaxBps: null,
+        buyFeeToken: null,
         baseSellTaxBps: null,
         excludeBuybackFromRewards: null,
         armed: null,
@@ -2615,17 +2671,21 @@ export function createLaunch2Service(
       summary !== null
         ? BigInt(summary.buyFeesMeme)
         : BigInt(facts.poolTaxMeme);
+    // Decision 0152: S209 Hooks charge the buy fee in USD1 (the summary
+    // splits Hook buy fees by token; OfficialTax buys are MEME-taxed).
+    const buyFeeUsd1 = summary !== null ? BigInt(summary.buyFeesUsd1) : 0n;
     const baseSellFee =
       summary !== null
         ? BigInt(summary.baseSellFeesUsd1)
         : BigInt(facts.poolTaxUsd1);
     const dynamicFees = summary !== null ? BigInt(summary.extraFeesUsd1) : 0n;
     const totalTax = launch2PublicTotalTaxUsd1({
-      usd1Parts: [curveTax, baseSellFee, dynamicFees],
+      usd1Parts: [curveTax, baseSellFee, buyFeeUsd1, dynamicFees],
       memeFee: buyFeeMeme,
       priceE18: lastPrice > 0n ? lastPrice : null,
     });
     const buyback = buybackSummaryOf(record, null);
+    const curveCap = await chainCurvePurchaseCap(record);
     let dynamic: Resource | null = null;
     if (dynamicRead !== null) {
       const { state, armedRound, buyers } = dynamicRead;
@@ -2656,6 +2716,10 @@ export function createLaunch2Service(
         currentDynamicTaxBps: publicTaxBps(state),
         maxDynamicFeeBps: launch2DynamicWadBps(state.maxDynamicFeeWad),
         baseBuyFeeBps: launch2DynamicBps(state.buyFeePpm),
+        // Decision 0152: usd1 = an S209 Hook (fee from the USD1 input).
+        buyFeeToken:
+          launch2DynamicBuyFeeTokenOfHook(publicHookAddress(record) ?? "") ??
+          "meme",
         baseSellFeeBps: launch2DynamicBps(state.baseSellFeePpm),
         pendingPotUsd1: formatLaunch2Amount(state.carry + roundExtra),
         carryUsd1: formatLaunch2Amount(state.carry),
@@ -2690,6 +2754,7 @@ export function createLaunch2Service(
         hookAddress: publicHookAddress(record),
         poolId: record.graduation?.poolId.toLowerCase() ?? null,
         escrowAddress: record.addresses.escrow.toLowerCase(),
+        perAddressCurveCapMeme: formatLaunch2Amount(curveCap),
         chainId: record.chainId,
         explorerBaseUrl: launch2PublicExplorerBaseUrl(record.chainId),
         socials: launch2PublicSocials(
@@ -2718,6 +2783,7 @@ export function createLaunch2Service(
       totals: Object.freeze({
         curveTaxUsd1: formatLaunch2Amount(curveTax),
         poolBaseBuyFeeMeme: formatLaunch2Amount(buyFeeMeme),
+        poolBaseBuyFeeUsd1: formatLaunch2Amount(buyFeeUsd1),
         poolBaseSellFeeUsd1: formatLaunch2Amount(baseSellFee),
         dynamicFeesUsd1: formatLaunch2Amount(dynamicFees),
         totalTaxUsd1Equivalent:
@@ -2940,6 +3006,8 @@ export function createLaunch2Service(
         routingPolicy: launch2DynamicRoutingPolicy(state.routingPolicy),
         priceTiming: launch2DynamicPriceTiming(state.priceTiming),
         buyTaxBps: launch2DynamicBps(state.buyFeePpm),
+        // Decision 0152: the Hook generation (address permission bits).
+        buyFeeToken: launch2DynamicBuyFeeTokenOfHook(hook),
         baseSellTaxBps: launch2DynamicBps(state.baseSellFeePpm),
         excludeBuybackFromRewards: state.excludeBuybackFromRewards,
         armed: state.armed,
@@ -3030,6 +3098,7 @@ export function createLaunch2Service(
             BigInt(summary.baseSellFeesUsd1),
           ),
           buyFeesMeme: formatLaunch2Amount(BigInt(summary.buyFeesMeme)),
+          buyFeesUsd1: formatLaunch2Amount(BigInt(summary.buyFeesUsd1)),
         }),
         basis: Object.freeze({
           blockNumber: state.blockNumber.toString(10),
@@ -3716,6 +3785,7 @@ export function createLaunch2Service(
           buybackRecipient: record.buybackRecipient,
           template: launch2TemplateProjection(
             Number(seconds(record.nftSaleEnd) - seconds(record.nftSaleStart)),
+            curvePurchaseCapOf(record),
           ),
           contracts: Object.freeze({
             factory: record.factoryAddress,
@@ -3831,7 +3901,7 @@ export function createLaunch2Service(
                         ? member?.proof !== null && member !== null
                         : stage.stage === "public",
                   }),
-                  curve: positionCurveOf(position),
+                  curve: positionCurveOf(position, curvePurchaseCapOf(record)),
                   ...balances,
                   ...poolTradeStatsOf(poolStats[0]),
                 }),
@@ -3893,7 +3963,8 @@ export function createLaunch2Service(
           ? state.curve.blockTimestamp
           : nowSeconds();
       const deadline = chainNow + BigInt(deps.quoteTtlSeconds);
-      const cap = launch2Template.perAddressCap;
+      // Decision 0152: the curve's own cap at the quote block.
+      const cap = state.curve.maxCumulativeBuy ?? launch2Template.perAddressCap;
       const used = state.cumulativeBought;
       return Object.freeze({
         quote: Object.freeze({
@@ -4122,7 +4193,7 @@ export function createLaunch2Service(
                 held: position.nftHeld,
               }),
               snapshotMember: position.snapshotMember,
-              curve: positionCurveOf(position),
+              curve: positionCurveOf(position, curvePurchaseCapOf(record)),
               lastActivityAt: position.lastActivityAt,
               ...(balancesOf.get(key) ?? notGraduatedBalances),
               ...poolTradeStatsOf(statsOf.get(key)),

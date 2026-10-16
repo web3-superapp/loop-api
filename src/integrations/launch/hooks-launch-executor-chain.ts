@@ -56,6 +56,7 @@ import {
   projectNFTAbi,
   snapshotRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
+import { legacyS200CurveEngineAbi } from "./hooks-launch-protocol-abi-legacy-s200.js";
 
 /**
  * Decision 0112: the executor's BSC Testnet client. It signs exactly two
@@ -386,7 +387,20 @@ export function createHooksLaunchExecutorChain(input: {
         (async () => ({
           buyTaxBps: await big(modules.curve, C, "BUY_TAX_BPS"),
           sellTaxBps: await big(modules.curve, C, "SELL_TAX_BPS"),
-          maxCumulativeBuy: await big(modules.curve, C, "MAX_CUMULATIVE_BUY"),
+          // Decision 0152: S209 curves answer maxCumulativeBuy() (a
+          // Factory parameter); an older curve has only the constant.
+          maxCumulativeBuy: await big(
+            modules.curve,
+            C,
+            "maxCumulativeBuy",
+          ).catch((error: unknown) => {
+            if (!isHooksLaunchContractRevert(error)) throw error;
+            return big(
+              modules.curve,
+              legacyS200CurveEngineAbi,
+              "MAX_CUMULATIVE_BUY",
+            );
+          }),
           earlyRoundDuration: await big(
             modules.curve,
             C,
@@ -515,6 +529,7 @@ export function createHooksLaunchExecutorChain(input: {
       loopRouter,
       loopHookDeploymentFactory,
       routerRegistry,
+      factoryMaxCumulativeBuy,
       deployerRows,
       modules,
     ] = await Promise.all([
@@ -533,6 +548,14 @@ export function createHooksLaunchExecutorChain(input: {
       address(factory, F, "loopRouter"),
       address(factory, F, "loopHookDeploymentFactory"),
       address(factory, F, "routerRegistry"),
+      // Decision 0152: null = a pre-S209 Factory (no such getter).
+      read(factory, F, "maxCumulativeBuy").then(
+        (value) => BigInt(value as bigint),
+        (error: unknown) => {
+          if (isHooksLaunchContractRevert(error)) return null;
+          throw error;
+        },
+      ),
       Promise.all(
         (
           [
@@ -577,6 +600,7 @@ export function createHooksLaunchExecutorChain(input: {
       loopRouter,
       loopHookDeploymentFactory,
       routerRegistry,
+      maxCumulativeBuy: factoryMaxCumulativeBuy,
       deployers: deployerRows,
     };
     if (modules === null) {
@@ -705,6 +729,8 @@ export function createHooksLaunchExecutorChain(input: {
           ),
           lpFee: await num(hf, HF, "LP_FEE"),
           tickSpacing: await num(hf, HF, "TICK_SPACING"),
+          // Decision 0152: 0x10C4 before S209, 0x10CC since.
+          requiredPermissionMask: await big(hf, HF, "REQUIRED_PERMISSION_MASK"),
           launch: {
             meme: lower(launch.meme),
             initializer: lower(launch.initializer),

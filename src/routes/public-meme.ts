@@ -260,6 +260,7 @@ const dynamicSchema = {
         "currentDynamicTaxBps",
         "maxDynamicFeeBps",
         "baseBuyFeeBps",
+        "buyFeeToken",
         "baseSellFeeBps",
         "pendingPotUsd1",
         "carryUsd1",
@@ -308,7 +309,17 @@ const dynamicSchema = {
             "Dynamic sell tax at the current price: min(drop, cap) in bps; 0 = base 2 % only.",
         },
         maxDynamicFeeBps: bpsSchema,
-        baseBuyFeeBps: bpsSchema,
+        baseBuyFeeBps: {
+          ...bpsSchema,
+          description:
+            "Base buy fee in bps. Decision 0152: with buyFeeToken usd1 (S209 Hook) it is taken from the USD1 input — fee = floor(amountIn × bps / 10,000), the pool swaps the rest, the MEME output is untaxed; with meme (pre-S209 Hook) from the MEME output.",
+        },
+        buyFeeToken: {
+          type: "string",
+          enum: ["meme", "usd1"],
+          description:
+            "Decision 0152 (loop-contracts Decision 0015): the token the base buy fee is charged in — usd1 for an S209 Hook (address bits 0x10CC), meme before (0x10C4).",
+        },
         baseSellFeeBps: bpsSchema,
         pendingPotUsd1: {
           ...unsignedDecimalSchema,
@@ -373,6 +384,7 @@ export const publicMemeDetailSchema = {
         "hookAddress",
         "poolId",
         "escrowAddress",
+        "perAddressCurveCapMeme",
         "chainId",
         "explorerBaseUrl",
         "socials",
@@ -390,6 +402,11 @@ export const publicMemeDetailSchema = {
         hookAddress: nullableAddressSchema,
         poolId: { anyOf: [bytes32Schema, { type: "null" }] },
         escrowAddress: nullableAddressSchema,
+        perAddressCurveCapMeme: {
+          ...unsignedDecimalSchema,
+          description:
+            "Decision 0152 (loop-contracts Decision 0015): the curve's per-address lifetime purchase cap in MEME, read from the chain — maxCumulativeBuy() (S209, a Factory parameter) or MAX_CUMULATIVE_BUY() (5,000,000 before); the verified value when the chain is unreachable.",
+        },
         chainId: { type: "string", pattern: "^eip155:[1-9][0-9]{0,9}$" },
         explorerBaseUrl: nullableUrlSchema,
         socials: {
@@ -461,6 +478,7 @@ export const publicMemeDetailSchema = {
       required: [
         "curveTaxUsd1",
         "poolBaseBuyFeeMeme",
+        "poolBaseBuyFeeUsd1",
         "poolBaseSellFeeUsd1",
         "dynamicFeesUsd1",
         "totalTaxUsd1Equivalent",
@@ -470,10 +488,23 @@ export const publicMemeDetailSchema = {
       ],
       properties: {
         curveTaxUsd1: unsignedDecimalSchema,
-        poolBaseBuyFeeMeme: unsignedDecimalSchema,
+        poolBaseBuyFeeMeme: {
+          ...unsignedDecimalSchema,
+          description:
+            "Σ official-pool buy fees charged in MEME: OfficialTax and pre-S209 LoopDynamic Hooks.",
+        },
+        poolBaseBuyFeeUsd1: {
+          ...unsignedDecimalSchema,
+          description:
+            "Decision 0152: Σ LoopDynamic buy fees charged in USD1 (S209 Hooks, from the input); 0 otherwise.",
+        },
         poolBaseSellFeeUsd1: unsignedDecimalSchema,
         dynamicFeesUsd1: unsignedDecimalSchema,
-        totalTaxUsd1Equivalent: nullableUnsignedDecimalSchema,
+        totalTaxUsd1Equivalent: {
+          ...nullableUnsignedDecimalSchema,
+          description:
+            "curveTaxUsd1 + poolBaseSellFeeUsd1 + poolBaseBuyFeeUsd1 + dynamicFeesUsd1 + poolBaseBuyFeeMeme × lastPriceUsd1 (floored); null when there is MEME tax but no price.",
+        },
         rewardsAllocatedUsd1: unsignedDecimalSchema,
         rewardsClaimedUsd1: unsignedDecimalSchema,
         buyback: {

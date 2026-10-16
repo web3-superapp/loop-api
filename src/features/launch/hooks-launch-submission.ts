@@ -24,6 +24,7 @@ import {
   readHooksLaunchFactoryTemplate,
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
+import { hooksLaunchLoopDynamicHookPermissionBits } from "./hooks-launch-config.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
@@ -415,11 +416,15 @@ export function createHooksLaunchSubmissionService(input: {
           salt: body.hookSalt as Hex,
           bytecodeHash: hook.initCodeHash as Hex,
         });
+        // Decision 0152: a LoopDynamic Factory's bits follow its template
+        // (0x10CC for S209, 0x10C4 before).
+        const requiredBits = loopDynamic
+          ? hooksLaunchLoopDynamicHookPermissionBits(
+              (await readHooksLaunchFactoryTemplate(reader)).loopDynamic ?? {},
+            )
+          : hooksLaunchHookPermissionBits.officialTax;
         if (
-          (BigInt(hookAddress) & 0x3fffn) !==
-            hooksLaunchHookPermissionBits[
-              loopDynamic ? "loopDynamic" : "officialTax"
-            ] ||
+          (BigInt(hookAddress) & 0x3fffn) !== requiredBits ||
           (loopDynamic && /^0x0{64}$/iu.test(body.hookSalt))
         )
           throw new HooksLaunchSubmissionError("invalid");

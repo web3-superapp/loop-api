@@ -99,6 +99,45 @@ export interface HooksLaunchLoopDynamicParams {
    * Hooks are uncapped.
    */
   readonly maxDynamicFeeWad?: string;
+  /**
+   * Decision 0152 (loop-contracts Decision 0015, S209): the Factory's
+   * per-address curve purchase cap `maxCumulativeBuy()`, a raw MEME integer
+   * string in (0, 1e27] (default `"5000000000000000000000000"`). Present =
+   * an S209 Factory: `TEMPLATE_HASH` gets a trailing `uint256
+   * maxCumulativeBuy`, its Hooks carry permission bits 0x10CC and take the
+   * buy fee from the USD1 input. Absent = a pre-S209 Factory (5,000,000
+   * constant, 0x10C4, MEME buy fee). Requires `maxDynamicFeeWad`.
+   */
+  readonly maxCumulativeBuy?: string;
+}
+
+/** Decision 0152: `MAX_CUMULATIVE_BUY_LIMIT` = the MEME total supply. */
+export const hooksLaunchMaxCumulativeBuyLimit = 10n ** 27n;
+
+/** A uint256 in (0, 1e27] as a canonical decimal string. */
+export function isHooksLaunchMaxCumulativeBuy(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{0,27}$/u.test(value) &&
+    BigInt(value) <= hooksLaunchMaxCumulativeBuyLimit
+  );
+}
+
+/**
+ * Decision 0152 (loop-contracts Decision 0015 §7): the v4 permission bits
+ * a LoopDynamic Factory's Hooks carry — 0x10CC for an S209 Factory
+ * (`maxCumulativeBuy` present; + beforeSwapReturnDelta, the USD1 buy fee),
+ * 0x10C4 before.
+ */
+export const hooksLaunchLoopDynamicHookPermissionBitsByGeneration =
+  Object.freeze({ legacy: 0x10c4n, s209: 0x10ccn } as const);
+
+export function hooksLaunchLoopDynamicHookPermissionBits(
+  params: Pick<HooksLaunchLoopDynamicParams, "maxCumulativeBuy">,
+): bigint {
+  return params.maxCumulativeBuy === undefined
+    ? hooksLaunchLoopDynamicHookPermissionBitsByGeneration.legacy
+    : hooksLaunchLoopDynamicHookPermissionBitsByGeneration.s209;
 }
 
 /** `maxDynamicFeeWad` is a uint256 below 1e18 (the Hook rejects ≥ 1e18). */
@@ -119,7 +158,9 @@ export function isHooksLaunchMaxDynamicFeeWad(value: unknown): boolean {
  * (loop-contracts Decision 0012 §3) is encoded whenever the parameter is
  * present — a cap of 0 still adds a zero word, so an S193 Factory's hash
  * differs from the S165 one even uncapped. Without it (an S165 Factory)
- * the hash is the ten-field S165 formula, unchanged.
+ * the hash is the ten-field S165 formula, unchanged. Decision 0152: an
+ * S209 Factory appends `uint256 maxCumulativeBuy` (twelve fields); without
+ * it the eleven-field S193 formula is unchanged.
  */
 export function hooksLaunchLoopDynamicTemplateHash(
   params: HooksLaunchLoopDynamicParams,
@@ -139,10 +180,27 @@ export function hooksLaunchLoopDynamicTemplateHash(
   const s165 =
     "bytes32, uint8, address, uint24, address, uint8, uint8, address, bool, uint24";
   if (params.maxDynamicFeeWad === undefined) {
+    if (params.maxCumulativeBuy !== undefined) {
+      throw new InvalidHooksLaunchDraftError();
+    }
     return keccak256(encodeAbiParameters(parseAbiParameters(s165), head));
   }
   if (!isHooksLaunchMaxDynamicFeeWad(params.maxDynamicFeeWad)) {
     throw new InvalidHooksLaunchDraftError();
+  }
+  if (params.maxCumulativeBuy !== undefined) {
+    // Decision 0152: S209 — loop-contracts Decision 0015 §5 appends
+    // `uint256 maxCumulativeBuy` after the cap word.
+    if (!isHooksLaunchMaxCumulativeBuy(params.maxCumulativeBuy)) {
+      throw new InvalidHooksLaunchDraftError();
+    }
+    return keccak256(
+      encodeAbiParameters(parseAbiParameters(`${s165}, uint256, uint256`), [
+        ...head,
+        BigInt(params.maxDynamicFeeWad),
+        BigInt(params.maxCumulativeBuy),
+      ]),
+    );
   }
   return keccak256(
     encodeAbiParameters(parseAbiParameters(`${s165}, uint256`), [
@@ -162,8 +220,19 @@ export function hooksLaunchLoopDynamicFixedEconomics(
   base: HooksLaunchFixedEconomics,
   params: HooksLaunchLoopDynamicParams,
 ): Readonly<Record<string, unknown>> {
+  if (
+    params.maxCumulativeBuy !== undefined &&
+    !isHooksLaunchMaxCumulativeBuy(params.maxCumulativeBuy)
+  ) {
+    throw new InvalidHooksLaunchDraftError();
+  }
   return Object.freeze({
     ...base,
+    // Decision 0152: an S209 Factory's cap replaces the constant in place
+    // (same key position); a pre-S209 template's JSON is unchanged.
+    ...(params.maxCumulativeBuy === undefined
+      ? {}
+      : { perAddressLifetimeBuyCapRaw: params.maxCumulativeBuy }),
     officialPoolBuyTaxBps: params.buyFeePpm / 100,
     officialPoolSellTaxBps: params.baseSellFeePpm / 100,
     officialPoolHookKind: "loopDynamic",
@@ -181,6 +250,15 @@ export function hooksLaunchLoopDynamicFixedEconomics(
       ...(params.maxDynamicFeeWad === undefined
         ? {}
         : { maxDynamicFeeWad: params.maxDynamicFeeWad }),
+      // Decision 0152: an S209 Factory's cap, and the buy fee token its
+      // Hooks charge (code, not a TEMPLATE_HASH parameter — bound here so
+      // the project signs what its buyers will pay).
+      ...(params.maxCumulativeBuy === undefined
+        ? {}
+        : {
+            maxCumulativeBuy: params.maxCumulativeBuy,
+            buyFeeToken: "usd1",
+          }),
     }),
   });
 }

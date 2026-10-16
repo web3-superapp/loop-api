@@ -249,6 +249,12 @@ export interface Launch2Chain {
     readonly wallet: string | null;
   }): Promise<Launch2ViewerChainState>;
   /**
+   * Decision 0152 (route-facing): the curve's per-address purchase cap —
+   * `maxCumulativeBuy()` of an S209 curve, `MAX_CUMULATIVE_BUY()` of an
+   * older one (immutable either way).
+   */
+  readCurvePurchaseCap(curve: string): Promise<bigint>;
+  /**
    * Decision 0126 (route-facing): the wallet's MEME and instance-USD1
    * (`CurveEngine.usd1()`) balances at one block.
    */
@@ -577,6 +583,13 @@ export interface Launch2InstanceRecord {
    * mainnet. Never derived from a constant.
    */
   readonly nftSaleEnd: string;
+  /**
+   * Decision 0152: the curve's verified per-address purchase cap (raw MEME
+   * integer string; the executor's `verification.curveMaxCumulativeBuy`,
+   * 5,000,000 MEME for launches verified before S209). Absent = that
+   * constant.
+   */
+  readonly curvePurchaseCap?: string;
   readonly deployBlockNumber: string;
   readonly activationBlockNumber: string | null;
   readonly deployedEventSeen: boolean;
@@ -873,7 +886,10 @@ export interface Launch2DynamicRoundSummary {
   readonly claimedUsd1: string;
   readonly extraFeesUsd1: string;
   readonly baseSellFeesUsd1: string;
+  /** Σ pre-S209 Hook buy fees (MEME, `fee_token = 'meme'`). */
   readonly buyFeesMeme: string;
+  /** Decision 0152: Σ S209 Hook buy fees (USD1, `fee_token = 'usd1'`). */
+  readonly buyFeesUsd1: string;
   readonly lastRound: {
     readonly roundId: string;
     readonly closed: boolean;

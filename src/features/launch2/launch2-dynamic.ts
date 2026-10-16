@@ -339,14 +339,65 @@ export function launch2DynamicRoll(
   };
 }
 
+/**
+ * Decision 0152 (loop-contracts Decision 0015 §7): the v4 permission bits a
+ * LoopDynamic Hook address carries — its generation, readable from the
+ * address alone. Pre-S209 Hooks (`0x10C4`) take the 2 % buy fee from the
+ * MEME output in `afterSwap`; S209 Hooks (`0x10CC`, + beforeSwapReturnDelta)
+ * take it from the USD1 input in `beforeSwap`.
+ */
+export const launch2DynamicHookPermissionFlags = Object.freeze({
+  meme: 0x10c4n,
+  usd1: 0x10ccn,
+} as const);
+
+export type Launch2DynamicBuyFeeToken =
+  keyof typeof launch2DynamicHookPermissionFlags;
+
+/** The low 14 bits of a Hook address → its buy fee token; null = neither generation. */
+export function launch2DynamicBuyFeeTokenOfHook(
+  hook: string,
+): Launch2DynamicBuyFeeToken | null {
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(hook)) return null;
+  const flags = BigInt(hook) & 0x3fffn;
+  if (flags === launch2DynamicHookPermissionFlags.usd1) return "usd1";
+  if (flags === launch2DynamicHookPermissionFlags.meme) return "meme";
+  return null;
+}
+
+/**
+ * Decision 0152: a decoded `BuyFeeCharged` → its fee token. The S209 event
+ * `(round, buyer, grossQuote, fee)` and the older `(buyer, grossMeme, fee)`
+ * have different topic0s; the decoder keeps the argument names.
+ */
+export function launch2DynamicBuyFeeTokenOfLog(
+  args: Readonly<Record<string, string>>,
+): Launch2DynamicBuyFeeToken {
+  return args["grossQuote"] !== undefined ? "usd1" : "meme";
+}
+
 /** `floor(gross × ppm / 1e6)`. */
 export function launch2DynamicFeeOfGross(gross: bigint, ppm: bigint): bigint {
   return mulDiv(gross, ppm, ppmDenominator);
 }
 
 /**
+ * Decision 0152: an S209 Hook's buy split of the USD1 input `amountIn` —
+ * `fee = floor(amountIn × buyFeePpm / 1e6)` stays in the Hook
+ * (`baseFeesAccrued`), the pool swaps `amountIn − fee`; the MEME output is
+ * not taxed.
+ */
+export function launch2DynamicUsd1BuySplit(
+  amountIn: bigint,
+  buyFeePpm: bigint,
+): { readonly fee: bigint; readonly poolInput: bigint } {
+  const fee = launch2DynamicFeeOfGross(amountIn, buyFeePpm);
+  return { fee, poolInput: amountIn - fee };
+}
+
+/**
  * The gross behind a net output `gross − floor(gross × ppm / 1e6)` (the
- * fee is taken from the output). Two grosses can give the same net; the
+ * fee is taken from the output; pre-S209 buys). Two grosses can give the same net; the
  * larger is taken (the larger fee, at most 1 wei off the contract's).
  */
 export function launch2DynamicGrossOfNet(net: bigint, ppm: bigint): bigint {

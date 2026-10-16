@@ -73,6 +73,36 @@ export const s193LoopDynamicParams: HooksLaunchLoopDynamicParams =
 export const s193TestnetManifestTemplateHash =
   "0xe96acde581d40a074b1730374cd3aef400d27db8bad9d98ba82cf98fab876d67";
 
+/**
+ * Decision 0152 (loop-contracts Decision 0015 §5): the S200 testnet
+ * manifest's parameters (`factory-20261015T185535Z.json`: router
+ * `0x135C…A110`, cap 0.2e18) with the S209 default purchase cap — the
+ * contracts' published vector. `s200TestnetManifestTemplateHash` is that
+ * manifest's recorded (pre-S209, eleven-field) hash.
+ */
+export const s200LoopDynamicParams: HooksLaunchLoopDynamicParams =
+  Object.freeze({
+    router: "0x135c772b52ec87c669f3aa1fdf18a728ec7ea110",
+    baseSellFeePpm: 20_000,
+    baseFeeRecipient: "0x0e2e2b52d5465f3e4576e71ee4dd1dff22557040",
+    priceTiming: 1,
+    routingPolicy: 1,
+    routerRegistryAdmin: "0x3e64c464e739e108d88c9b805157eeb2a8a11767",
+    excludeBuybackFromRewards: true,
+    buyFeePpm: 20_000,
+    maxDynamicFeeWad: "200000000000000000",
+  });
+export const s200TestnetManifestTemplateHash =
+  "0x7a0e33b7bb610d4c0007cb2c2a91e1802558bbe779898a60123e78a5ffd15aed";
+export const s209LoopDynamicParams: HooksLaunchLoopDynamicParams =
+  Object.freeze({
+    ...s200LoopDynamicParams,
+    maxCumulativeBuy: "5000000000000000000000000",
+  });
+/** loop-contracts Decision 0015 §5: the S209 default-cap vector. */
+export const s209ContractsVectorTemplateHash =
+  "0x327aac844dd76e91622e1ac509d419fe3e4abbfa844f2f1e65772a1a15a40791";
+
 export const loopDynamicTemplate = Object.freeze({
   params: testnetLoopDynamicParams,
   templateHash: hooksLaunchLoopDynamicTemplateHash(
@@ -164,6 +194,8 @@ export function passingLoopDynamicFacts(): HooksLaunchLoopDynamicOnChainFacts {
       loopRouter: testnetLoopDynamicParams.router,
       loopHookDeploymentFactory: hookDeploymentFactory,
       routerRegistry,
+      // Decision 0152: a pre-S209 Factory (no maxCumulativeBuy getter).
+      maxCumulativeBuy: null,
       deployers: (["token", "sale", "buyback", "loopDynamic"] as const).map(
         (name, index) => ({
           name,
@@ -219,6 +251,7 @@ export function passingLoopDynamicFacts(): HooksLaunchLoopDynamicOnChainFacts {
       maxDynamicFeeWad: testnetLoopDynamicParams.maxDynamicFeeWad ?? null,
       lpFee: 2_500,
       tickSpacing: 60,
+      requiredPermissionMask: 0x10c4n,
       launch: {
         meme: memeAddress,
         initializer: modules.graduationAdapter,

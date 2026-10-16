@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  hooksLaunchLoopDynamicHookPermissionBits,
   hooksLaunchLoopDynamicTemplateHash,
   hooksLaunchTemplateHash,
   parseHooksLaunchDraft,
@@ -22,6 +23,7 @@ import { hooksLaunchFactoryHashPolicy } from "../src/features/launch/hooks-launc
 import { readHooksLaunchLoopDynamicTemplate } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import {
   s193LoopDynamicParams,
+  s209LoopDynamicParams,
   testnetLoopDynamicParams,
   testnetLoopDynamicTemplateHash,
 } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
@@ -53,6 +55,8 @@ function chainReads(overrides: Record<string, unknown> = {}) {
     [`${hookFactory}.excludeBuybackFromRewards`]: true,
     [`${hookFactory}.buyFeePpm`]: 20_000,
     [`${hookFactory}.launchFactory`]: factory,
+    // Decision 0152: a pre-S209 Hook factory requires 0x10C4.
+    [`${hookFactory}.REQUIRED_PERMISSION_MASK`]: 0x10c4n,
     [`${registry}.admin`]: testnetLoopDynamicParams.routerRegistryAdmin,
     ...overrides,
   };
@@ -61,7 +65,8 @@ function chainReads(overrides: Record<string, unknown> = {}) {
     if (!(key in values)) {
       // An S165 Hook factory has no maxDynamicFeeWad(): the call returns
       // no data (a contract-level failure, not a transport one).
-      if (name === "maxDynamicFeeWad") {
+      // Decision 0152: likewise a pre-S209 Factory's maxCumulativeBuy().
+      if (name === "maxDynamicFeeWad" || name === "maxCumulativeBuy") {
         return Promise.reject(
           new ContractFunctionZeroDataError({ functionName: name }),
         );
@@ -70,6 +75,22 @@ function chainReads(overrides: Record<string, unknown> = {}) {
     }
     return Promise.resolve(values[key]);
   };
+}
+
+/** Decision 0152: an S209 Factory (purchase cap, 0x10CC, 12 fields). */
+const s209TemplateHash = hooksLaunchLoopDynamicTemplateHash(
+  s209LoopDynamicParams,
+).toLowerCase();
+function s209Reads(overrides: Record<string, unknown> = {}) {
+  return chainReads({
+    [`${factory}.TEMPLATE_HASH`]: s209TemplateHash,
+    [`${factory}.loopRouter`]: s209LoopDynamicParams.router,
+    [`${factory}.maxCumulativeBuy`]: 5_000_000n * 10n ** 18n,
+    [`${hookFactory}.router`]: s209LoopDynamicParams.router,
+    [`${hookFactory}.maxDynamicFeeWad`]: 200_000_000_000_000_000n,
+    [`${hookFactory}.REQUIRED_PERMISSION_MASK`]: 0x10ccn,
+    ...overrides,
+  });
 }
 
 /** Decision 0144: an S193 Factory (cap getter, 11-field TEMPLATE_HASH). */
@@ -167,6 +188,68 @@ describe("LoopDynamic Factory template read (Decision 0132)", () => {
     ).rejects.toThrow("rpc down");
   });
 
+  it("reads an S209 Factory's purchase cap, 0x10CC and the 12-field TEMPLATE_HASH (Decision 0152)", async () => {
+    const read = await readHooksLaunchLoopDynamicTemplate(s209Reads(), factory);
+    expect(read.params).toEqual(s209LoopDynamicParams);
+    expect(read.templateHash).toBe(s209TemplateHash);
+    expect(read.templateHash).not.toBe(s193TemplateHash);
+    expect(hooksLaunchLoopDynamicHookPermissionBits(read.params)).toBe(0x10ccn);
+    // A lower cap is another template (another hash).
+    const lower = {
+      ...s209LoopDynamicParams,
+      maxCumulativeBuy: "1" + "0".repeat(24),
+    };
+    const read2 = await readHooksLaunchLoopDynamicTemplate(
+      s209Reads({
+        [`${factory}.maxCumulativeBuy`]: 10n ** 24n,
+        [`${factory}.TEMPLATE_HASH`]:
+          hooksLaunchLoopDynamicTemplateHash(lower).toLowerCase(),
+      }),
+      factory,
+    );
+    expect(read2.params.maxCumulativeBuy).toBe("1" + "0".repeat(24));
+  });
+
+  it.each([
+    [
+      "an S209 cap with the S193 TEMPLATE_HASH",
+      { [`${factory}.TEMPLATE_HASH`]: s193TemplateHash },
+    ],
+    [
+      "an S209 Factory whose Hook factory still requires 0x10C4",
+      { [`${hookFactory}.REQUIRED_PERMISSION_MASK`]: 0x10c4n },
+    ],
+    ["a zero purchase cap", { [`${factory}.maxCumulativeBuy`]: 0n }],
+    [
+      "a purchase cap above the MEME supply",
+      { [`${factory}.maxCumulativeBuy`]: 10n ** 27n + 1n },
+    ],
+  ])("refuses %s as a template mismatch (Decision 0152)", async (_n, o) => {
+    await expect(
+      readHooksLaunchLoopDynamicTemplate(s209Reads(o), factory),
+    ).rejects.toBeInstanceOf(HooksLaunchFactoryTemplateMismatchError);
+  });
+
+  it("refuses a pre-S209 Factory whose Hook factory requires 0x10CC (Decision 0152)", async () => {
+    await expect(
+      readHooksLaunchLoopDynamicTemplate(
+        s193Reads({ [`${hookFactory}.REQUIRED_PERMISSION_MASK`]: 0x10ccn }),
+        factory,
+      ),
+    ).rejects.toBeInstanceOf(HooksLaunchFactoryTemplateMismatchError);
+  });
+
+  it("lets a transport failure of the purchase cap read through (Decision 0152)", async () => {
+    const reads = s209Reads();
+    const failing = (address: string, abi: Abi, name: string) =>
+      name === "maxCumulativeBuy"
+        ? Promise.reject(new Error("rpc down"))
+        : reads(address, abi, name);
+    await expect(
+      readHooksLaunchLoopDynamicTemplate(failing, factory),
+    ).rejects.toThrow("rpc down");
+  });
+
   it("lets a transport failure through (not a mismatch)", async () => {
     const failing = () => Promise.reject(new Error("rpc down"));
     await expect(
@@ -178,7 +261,7 @@ describe("LoopDynamic Factory template read (Decision 0132)", () => {
 describe("LoopDynamic signing material (Decision 0132)", () => {
   const initCodeHash = `0x${"9a".repeat(32)}` as const;
 
-  it("mines a non-zero salt whose CREATE2 address carries 0x10C4", () => {
+  it("mines a non-zero salt whose CREATE2 address carries 0x10CC (S209) or, asked for, 0x10C4", () => {
     const salt = mineHooksLaunchSalt({
       deployer: hookFactory,
       initCodeHash,
@@ -191,7 +274,25 @@ describe("LoopDynamic signing material (Decision 0132)", () => {
       salt,
       bytecodeHash: initCodeHash,
     });
-    expect(BigInt(hook) & 0x3fffn).toBe(0x10c4n);
+    // Decision 0152: the current build's LoopDynamic bits.
+    expect(BigInt(hook) & 0x3fffn).toBe(0x10ccn);
+    // A pre-S209 Factory's template asks for 0x10C4.
+    const legacySalt = mineHooksLaunchSalt({
+      deployer: hookFactory,
+      initCodeHash,
+      maxAttempts: 1_000_000,
+      hookKind: "loopDynamic",
+      permissionBits: hooksLaunchLoopDynamicHookPermissionBits(
+        testnetLoopDynamicParams,
+      ),
+    });
+    expect(legacySalt).not.toBe(`0x${"0".repeat(64)}`);
+    const legacyHook = getCreate2Address({
+      from: hookFactory,
+      salt: legacySalt,
+      bytecodeHash: initCodeHash,
+    });
+    expect(BigInt(legacyHook) & 0x3fffn).toBe(0x10c4n);
     // OfficialTax mining is unchanged (0x20CC).
     const official = mineHooksLaunchSalt({
       deployer: hookFactory,

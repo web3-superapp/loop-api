@@ -173,6 +173,7 @@ function harness(options: {
   } as unknown as Launch2Repository;
   const chain: Launch2Chain = {
     verifyChain: () => Promise.resolve("ok"),
+    readCurvePurchaseCap: () => Promise.reject(new Error("not used")),
     getHead: () =>
       Promise.resolve({
         blockNumber: options.head,

@@ -15,6 +15,14 @@ export const hooksLaunchTemplateConstants = Object.freeze({
   graduationReserve: 133_333_332_000_000_000_000_000n,
   curveBuyTaxBps: 1_000n,
   curveSellTaxBps: 1_000n,
+  /**
+   * The pre-S209 `MAX_CUMULATIVE_BUY` constant. Decision 0152: an
+   * OfficialTax launch must still have exactly this cap (its configHash
+   * binds `perAddressLifetimeBuyCapRaw` = 5,000,000 MEME — an S209
+   * OfficialTax Factory deployed with another `maxCumulativeBuy` fails
+   * `curve_caps`); a LoopDynamic launch is checked against its template's
+   * `maxCumulativeBuy`.
+   */
   perAddressCap: 5_000_000n * wad,
   earlyRoundSeconds: 3_600n,
   officialPoolTaxBps: 200n,

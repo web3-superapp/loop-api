@@ -1,4 +1,6 @@
 import {
+  hooksLaunchLoopDynamicHookPermissionBits as permissionBitsOf,
+  hooksLaunchLoopDynamicHookPermissionBitsByGeneration,
   hooksLaunchLoopDynamicTemplateHash,
   type HooksLaunchLoopDynamicParams,
 } from "./hooks-launch-config.js";
@@ -25,7 +27,9 @@ import {
  *   `LoopHookDeploymentFactory`; the project-signed `hookSalt` is
  *   registered there (`launchHook(launchId).saltRegistered`), and
  *   `computeAddress(salt, hookInitCodeHash(launchId))` is the predicted
- *   Hook address the task was bound to, with permission bits 0x10C4;
+ *   Hook address the task was bound to, with the Factory generation's
+ *   permission bits (0x10C4; Decision 0152: 0x10CC for an S209 Factory,
+ *   whose template carries `maxCumulativeBuy`);
  * - the Hook parameters the Factory deploys with (fees, timing, routing,
  *   buyback exclusion, router) are the template the project signed
  *   (`TEMPLATE_HASH` = `hooksLaunchLoopDynamicTemplateHash(params)`);
@@ -37,7 +41,13 @@ import {
  * exactly as for OfficialTax.
  */
 
-export const hooksLaunchLoopDynamicHookPermissionBits = 0x10c4n;
+/**
+ * The pre-S209 bits (kept for callers of Decision 0132); Decision 0152:
+ * the bits a launch is checked against follow its template
+ * (`hooksLaunchLoopDynamicHookPermissionBits(params)` in the config).
+ */
+export const hooksLaunchLoopDynamicHookPermissionBits =
+  hooksLaunchLoopDynamicHookPermissionBitsByGeneration.legacy;
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
 export interface HooksLaunchLoopDynamicExpectation {
@@ -68,6 +78,11 @@ export interface HooksLaunchLoopDynamicOnChainFacts {
     readonly loopRouter: string;
     readonly loopHookDeploymentFactory: string;
     readonly routerRegistry: string;
+    /**
+     * Decision 0152: `maxCumulativeBuy()` of an S209 Factory; null for an
+     * older Factory without the getter.
+     */
+    readonly maxCumulativeBuy: bigint | null;
     readonly deployers: readonly {
       readonly name: "token" | "sale" | "buyback" | "loopDynamic";
       readonly address: string;
@@ -121,6 +136,8 @@ export interface HooksLaunchLoopDynamicOnChainFacts {
     readonly maxDynamicFeeWad: string | null;
     readonly lpFee: number;
     readonly tickSpacing: number;
+    /** Decision 0152: `REQUIRED_PERMISSION_MASK()` (0x10C4 / 0x10CC). */
+    readonly requiredPermissionMask: bigint;
     readonly launch: {
       readonly meme: string;
       readonly initializer: string;
@@ -204,6 +221,12 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
     results.set(name, ok);
   };
   const params = template.params;
+  // Decision 0152: the generation's Hook bits and curve purchase cap.
+  const permissionBits = permissionBitsOf(params);
+  const curveCap =
+    params.maxCumulativeBuy === undefined
+      ? c.perAddressCap
+      : BigInt(params.maxCumulativeBuy);
 
   check(
     "factory_code_hash",
@@ -278,7 +301,9 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
     "hook_permission_bits",
     () =>
       (BigInt(expected.predictedHookAddress) & c.hookPermissionMask) ===
-      hooksLaunchLoopDynamicHookPermissionBits,
+        permissionBits &&
+      hookFactory !== null &&
+      hookFactory.requiredPermissionMask === permissionBits,
   );
   check(
     "hook_salt_registered",
@@ -364,7 +389,9 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
     "curve_caps",
     () =>
       curve !== null &&
-      curve.maxCumulativeBuy === c.perAddressCap &&
+      curve.maxCumulativeBuy === curveCap &&
+      factory.maxCumulativeBuy ===
+        (params.maxCumulativeBuy === undefined ? null : curveCap) &&
       curve.earlyRoundDuration === c.earlyRoundSeconds,
   );
   check(
@@ -504,7 +531,7 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
       adapter.lpMemeAllocation === c.initialLiquiditySupply &&
       adapter.lpFee === c.lpFee &&
       adapter.tickSpacing === c.tickSpacing &&
-      adapter.hookPermissions === hooksLaunchLoopDynamicHookPermissionBits &&
+      adapter.hookPermissions === permissionBits &&
       same(adapter.launchFactory, expected.factoryAddress) &&
       same(adapter.poolManager, factory.poolManager) &&
       same(adapter.usd1, factory.usd1) &&

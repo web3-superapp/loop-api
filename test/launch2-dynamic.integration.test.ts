@@ -809,6 +809,178 @@ describe("Decision 0132: LoopDynamic wallet attribution and MEME coverage degrad
     ]);
   });
 
+  it("stores an S209 Hook's USD1 buy fee next to a pre-S209 MEME one (Decision 0152, 000090)", async () => {
+    const target = await instance();
+    const s209Hook = `0x${"d".repeat(36)}10cc`;
+    const poolId = `0x${"44".repeat(32)}`;
+    const swapTx = hex(32);
+    const swap = {
+      ...event(
+        target,
+        `0x${"8".repeat(40)}`,
+        "Swap",
+        {
+          id: poolId,
+          sender: `0x${"7".repeat(40)}`,
+          // The pool swapped 98 USD1 (100 paid − 2 USD1 fee).
+          amount0: (-98n * wad).toString(),
+          amount1: (97n * wad).toString(),
+          sqrtPriceX96: (2n ** 96n).toString(10),
+          liquidity: "1",
+          tick: "0",
+          fee: "2500",
+          memeIsCurrency0: "false",
+          poolHookKind: "loopDynamic",
+          dynamicFee: (2n * wad).toString(),
+          dynamicFeeToken: "usd1",
+          attributionSource: "transactionSender",
+          routerPayer: buyerA,
+          routerRecipient: buyerA,
+          routerAmountIn: (100n * wad).toString(),
+          routerAmountOut: (97n * wad).toString(),
+        },
+        6_000,
+        1,
+      ),
+      transactionHash: swapTx,
+    };
+    const fees = [
+      // S209: (round, buyer, grossQuote, fee), USD1; round 0 = unarmed,
+      // buyer 0 = an unattributed tier-3 buy.
+      event(
+        target,
+        s209Hook,
+        "BuyFeeCharged",
+        {
+          round: "0",
+          buyer: buyerA,
+          grossQuote: (100n * wad).toString(),
+          fee: (2n * wad).toString(),
+        },
+        6_000,
+        3,
+      ),
+      event(
+        target,
+        s209Hook,
+        "BuyFeeCharged",
+        {
+          round: "4",
+          buyer: zeroAddress,
+          grossQuote: (50n * wad).toString(),
+          fee: wad.toString(),
+        },
+        6_000,
+        5,
+      ),
+      // Pre-S209: (buyer, grossMeme, fee), MEME.
+      event(
+        target,
+        hook,
+        "BuyFeeCharged",
+        {
+          buyer: buyerB,
+          grossMeme: (1_000n * wad).toString(),
+          fee: (20n * wad).toString(),
+        },
+        6_000,
+        7,
+      ),
+    ];
+    await commit([swap, ...fees], 6_000);
+    const rows = await pool.query<{
+      fee_token: string;
+      round_id: string | null;
+      buyer_address: string;
+      gross_amount: string;
+      base_fee: string;
+    }>(
+      `select fee_token, round_id::text, buyer_address, gross_amount::text,
+         base_fee::text
+       from public.launch2_dynamic_fees
+       where instance_id = $1 and side = 'buy' order by log_index`,
+      [target.instanceId],
+    );
+    expect(rows.rows).toEqual([
+      {
+        fee_token: "usd1",
+        round_id: "0",
+        buyer_address: buyerA,
+        gross_amount: (100n * wad).toString(),
+        base_fee: (2n * wad).toString(),
+      },
+      {
+        fee_token: "usd1",
+        round_id: "4",
+        buyer_address: zeroAddress,
+        gross_amount: (50n * wad).toString(),
+        base_fee: wad.toString(),
+      },
+      {
+        fee_token: "meme",
+        round_id: null,
+        buyer_address: buyerB,
+        gross_amount: (1_000n * wad).toString(),
+        base_fee: (20n * wad).toString(),
+      },
+    ]);
+    expect(await launch2.dynamicRoundSummary(target.instanceId)).toMatchObject({
+      buyFeesMeme: (20n * wad).toString(),
+      buyFeesUsd1: (3n * wad).toString(),
+    });
+    const swapRow = await pool.query<{
+      usd1_amount: string;
+      tax_amount: string;
+      tax_token: string;
+    }>(
+      `select usd1_amount::text, tax_amount::text, tax_token
+       from public.launch2_pool_swaps where instance_id = $1`,
+      [target.instanceId],
+    );
+    // The buyer paid pool input + fee; the fee is USD1.
+    expect(swapRow.rows).toEqual([
+      {
+        usd1_amount: (100n * wad).toString(),
+        tax_amount: (2n * wad).toString(),
+        tax_token: "usd1",
+      },
+    ]);
+    const facts = await launch2.getPublicMemeFacts?.({
+      instanceIds: [target.instanceId],
+      since: new Date(0).toISOString(),
+    });
+    expect(facts?.[0]).toMatchObject({
+      poolTaxUsd1: (2n * wad).toString(),
+      poolTaxMeme: "0",
+    });
+    // 000090: a USD1 buy row without a round, and a sell taxed in MEME,
+    // are still refused.
+    await expect(
+      pool.query(
+        `insert into public.launch2_dynamic_fees (
+           chain_id, transaction_hash, log_index, block_number, block_hash,
+           instance_id, hook_address, side, fee_token, round_id,
+           buyer_address, gross_amount, base_fee, extra_fee, drop_wad,
+           charged_at)
+         values ($1, $2, 0, 1, $3, $4, $5, 'buy', 'usd1', null, $6, 1, 0, 0,
+           0, now())`,
+        [chainId, hex(32), hex(32), target.instanceId, s209Hook, buyerA],
+      ),
+    ).rejects.toThrow(/launch2_dynamic_fees_side_shape/u);
+    await expect(
+      pool.query(
+        `insert into public.launch2_pool_swaps (
+           chain_id, transaction_hash, log_index, block_number, block_hash,
+           instance_id, pool_id, caller_address, side, usd1_amount,
+           meme_amount, tax_amount, tax_token, sqrt_price_x96, price_e18,
+           swapped_at)
+         values ($1, $2, 0, 1, $3, $4, $5, $6, 'sell', 1, 1, 0, 'meme', 1, 1,
+           now())`,
+        [chainId, hex(32), hex(32), target.instanceId, poolId, buyerA],
+      ),
+    ).rejects.toThrow(/launch2_pool_swaps_tax_side/u);
+  });
+
   it("stores a LoopDynamic config version (000078) and refuses any other poolHookKind", async () => {
     const owner = await user();
     const projectId = randomUUID();

@@ -17,6 +17,11 @@ export const launch2Template = Object.freeze({
   curveBuyTaxBps: 1_000n,
   curveSellTaxBps: 1_000n,
   taxDenominator: 10_000n,
+  /**
+   * The pre-S209 constant `MAX_CUMULATIVE_BUY` (5,000,000 MEME). Decision
+   * 0152: S209 curves take `maxCumulativeBuy` from their Factory — read
+   * models use the instance's verified value, quotes the chain's.
+   */
   perAddressCap: 5_000_000n * launch2Wad,
   earlyRoundSeconds: 3_600,
   nftPrice: 100n * launch2Wad,
@@ -168,6 +173,11 @@ export function parseLaunch2Amount(value: unknown): bigint | null {
  */
 export function launch2TemplateProjection(
   nftSaleSeconds: number,
+  /**
+   * Decision 0152: the instance curve's per-address cap (S209: a Factory
+   * parameter); absent = the pre-S209 constant.
+   */
+  perAddressCap: bigint = launch2Template.perAddressCap,
 ): Record<string, unknown> {
   const t = launch2Template;
   return Object.freeze({
@@ -181,8 +191,9 @@ export function launch2TemplateProjection(
     officialPoolTaxBps: t.officialPoolTaxBps,
     lpFee: t.lpFee,
     tickSpacing: t.tickSpacing,
-    perAddressCap: formatLaunch2Amount(t.perAddressCap),
-    perAddressCapBps: 50,
+    perAddressCap: formatLaunch2Amount(perAddressCap),
+    // bps of the MEME total supply, floored (5,000,000 MEME = 50).
+    perAddressCapBps: Number((perAddressCap * 10_000n) / t.memeTotalSupply),
     nftPriceUsd1: formatLaunch2Amount(t.nftPrice),
     nftSaleSeconds,
     earlyRoundSeconds: t.earlyRoundSeconds,

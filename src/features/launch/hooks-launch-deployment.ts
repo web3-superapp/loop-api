@@ -18,6 +18,7 @@ import {
   mineHooksLaunchSaltAsync,
 } from "./hooks-launch-deployment-crypto.js";
 import {
+  hooksLaunchLoopDynamicHookPermissionBits,
   hooksLaunchTemplateHash,
   type HooksLaunchLoopDynamicParams,
 } from "./hooks-launch-config.js";
@@ -377,17 +378,29 @@ export function createHooksLaunchDeploymentService(input: {
         memeSalt: meme.salt,
       };
       const hook = await reader.hookDeployment(requestWithMemeSalt);
-      // Decision 0132: LoopDynamic Hooks carry bits 0x10C4 (salt ≠ 0).
+      // Decision 0132: LoopDynamic Hooks carry their Factory's bits (salt
+      // ≠ 0) — Decision 0152: 0x10CC for an S209 Factory, 0x10C4 before.
       const loopDynamic = reader.hookKind === "loopDynamic";
+      const template = loopDynamic
+        ? await readHooksLaunchFactoryTemplate(reader)
+        : null;
       const hookSalt = await mineHooksLaunchSaltAsync({
         deployer: hook.deployer,
         initCodeHash: hook.initCodeHash,
         maxAttempts: input.maxSaltAttempts,
-        ...(loopDynamic ? { hookKind: "loopDynamic" as const } : {}),
+        ...(loopDynamic
+          ? {
+              hookKind: "loopDynamic" as const,
+              ...(template?.loopDynamic === undefined
+                ? {}
+                : {
+                    permissionBits: hooksLaunchLoopDynamicHookPermissionBits(
+                      template.loopDynamic,
+                    ),
+                  }),
+            }
+          : {}),
       });
-      const template = loopDynamic
-        ? await readHooksLaunchFactoryTemplate(reader)
-        : null;
       const typedData = createHooksLaunchDeploymentTypedData({
         chainId: reader.chainId,
         verifyingContract: reader.factoryAddress,

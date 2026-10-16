@@ -5,16 +5,16 @@
 
 ## 1. 结论
 
-| 项             | 做法                                                                                                                                                                                                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 费上限来源     | 链上只读：Hook 工厂 `LoopHookDeploymentFactory.maxDynamicFeeWad()`（模板 / 签名 / 执行器核验）与 Hook `LoopDynamicHook.maxDynamicFeeWad()`（读模型 / 报价）。缺省 0 = 不封顶                                                                |
-| 模板哈希       | `LoopDynamicConfig` 末尾追加 `uint256 maxDynamicFeeWad`；**参数存在即编码**（封顶 0 也多一个零字）；S165 工厂（无此 getter）仍按十字段公式                                                                                                  |
-| fixedEconomics | LoopDynamic 模板的 `loopDynamic` 块加 `maxDynamicFeeWad`（原始 18 位整数字符串，`"200000000000000000"` = 20%）；S165 模板 JSON 不变（已有 configHash 不变）；OfficialTax 不变                                                               |
-| 卖出动态税     | `extra = floor((gross − base) × min(drop, cap) / 1e18)`，`cap = 0` 时 = `drop`                                                                                                                                                              |
-| 实收税率反推   | `extraFee × 1e18 / (grossQuote − baseFee)`；`SellFeeCharged.dropWad` 是真实跌幅，**不是**实收税率                                                                                                                                           |
-| 关轮规则       | S193 Hook：轮次中第一根**不再下跌**（`close ≥ open`，十字星也关）的 K 线关轮，**含一次结算中被跳过的第一根空 K 线**（0013 §2：激活后下一根就空 = 同一次结算先激活再关轮）；S193 之前的 Hook（legacy 工厂实例）：仍是只有收涨才关            |
-| Hook 代际判定  | Hook 能回答 `maxDynamicFeeWad()` = S193 代（收平关）；该调用 revert / 无返回 = S165 代（收涨关、封顶 0）。RPC / 网络错误不当作旧代，照常失败（fail closed）                                                                                 |
-| 缓存失效       | 盐与预测地址一直按链上实时 `previewLoopHookInitCodeHash` 现挖、提交时按实时 `hookDeployment` 重算，没有持久化缓存；模板按工厂地址缓存在进程内，换工厂 = 换 env + 重启。按旧模板保存的草稿在新工厂上 `template_mismatch`（必须重新保存再签） |
+| 项             | 做法                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 费上限来源     | 链上只读：Hook 工厂 `LoopHookDeploymentFactory.maxDynamicFeeWad()`（模板 / 签名 / 执行器核验）与 Hook `LoopDynamicHook.maxDynamicFeeWad()`（读模型 / 报价）。缺省 0 = 不封顶                                                                      |
+| 模板哈希       | `LoopDynamicConfig` 末尾追加 `uint256 maxDynamicFeeWad`；**参数存在即编码**（封顶 0 也多一个零字）；S165 工厂（无此 getter）仍按十字段公式；**0152 修订**：S209 工厂再追加 `uint256 maxCumulativeBuy`（十二字段），无该 getter 的工厂仍按十一字段 |
+| fixedEconomics | LoopDynamic 模板的 `loopDynamic` 块加 `maxDynamicFeeWad`（原始 18 位整数字符串，`"200000000000000000"` = 20%）；S165 模板 JSON 不变（已有 configHash 不变）；OfficialTax 不变                                                                     |
+| 卖出动态税     | `extra = floor((gross − base) × min(drop, cap) / 1e18)`，`cap = 0` 时 = `drop`                                                                                                                                                                    |
+| 实收税率反推   | `extraFee × 1e18 / (grossQuote − baseFee)`；`SellFeeCharged.dropWad` 是真实跌幅，**不是**实收税率                                                                                                                                                 |
+| 关轮规则       | S193 Hook：轮次中第一根**不再下跌**（`close ≥ open`，十字星也关）的 K 线关轮，**含一次结算中被跳过的第一根空 K 线**（0013 §2：激活后下一根就空 = 同一次结算先激活再关轮）；S193 之前的 Hook（legacy 工厂实例）：仍是只有收涨才关                  |
+| Hook 代际判定  | Hook 能回答 `maxDynamicFeeWad()` = S193 代（收平关）；该调用 revert / 无返回 = S165 代（收涨关、封顶 0）。RPC / 网络错误不当作旧代，照常失败（fail closed）                                                                                       |
+| 缓存失效       | 盐与预测地址一直按链上实时 `previewLoopHookInitCodeHash` 现挖、提交时按实时 `hookDeployment` 重算，没有持久化缓存；模板按工厂地址缓存在进程内，换工厂 = 换 env + 重启。按旧模板保存的草稿在新工厂上 `template_mismatch`（必须重新保存再签）       |
 
 ## 2. 模板哈希
 
@@ -25,7 +25,7 @@ TEMPLATE_HASH(S193) = keccak256(abi.encode(
   uint24 buyFeePpm, uint256 maxDynamicFeeWad))
 ```
 
-- `hooksLaunchLoopDynamicTemplateHash(params)`：`params.maxDynamicFeeWad === undefined` → S165 十字段（测试网 S165 manifest 值 `0x0e61af81…8819` 继续复现，作为回归向量）；有值 → 十一字段。值必须是 `< 1e18` 的十进制整数字符串，否则抛 `InvalidHooksLaunchDraftError`。
+- `hooksLaunchLoopDynamicTemplateHash(params)`：`params.maxDynamicFeeWad === undefined` → S165 十字段（测试网 S165 manifest 值 `0x0e61af81…8819` 继续复现，作为回归向量）；有值 → 十一字段（**0152 修订**：再有 `maxCumulativeBuy` → 十二字段）。值必须是 `< 1e18` 的十进制整数字符串，否则抛 `InvalidHooksLaunchDraftError`。
 - 单测向量用 `cast abi-encode` + `cast keccak` 独立算出（同一组参数）：cap 0 → `0xa0dce14c…a2d1`，cap 0.2e18 → `0x79099800…102e`，与 S165 公式（`0x32ceb3c3…3fd9`）三者两两不同。
 - `readHooksLaunchLoopDynamicTemplate`（签名 / 保存用的工厂读取器，执行器共用）：读 Hook 工厂 `maxDynamicFeeWad()`；revert = 不存在（S165）。读到的值 ≥ 1e18 → `HooksLaunchFactoryTemplateMismatchError`。按读到的参数重算的哈希必须等于链上 `TEMPLATE_HASH()`，否则 mismatch——所以「S193 工厂但封顶读失败被当成 S165」不可能静默通过：十字段哈希对不上新工厂的 `TEMPLATE_HASH`。
 - 执行器读回（`hooks-launch-executor-chain`）的 `hookFactory` 新增 `maxDynamicFeeWad: string | null`；核验 `hook_factory_params` 增加「Hook 工厂的封顶 = 签名模板的封顶（都没有也算相等）」。

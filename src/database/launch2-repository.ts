@@ -141,6 +141,23 @@ function stageOf(value: unknown): Launch2Stage {
 }
 
 /**
+ * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
+ * purchase cap the executor read back and verified (S209: the Factory's
+ * `maxCumulativeBuy()`), kept in the task's
+ * `verification.curveMaxCumulativeBuy`. Tasks verified before S209 lack
+ * the key; that code only passed curves whose cap was exactly the
+ * 5,000,000 MEME constant, so that is their fact.
+ */
+const curvePurchaseCapColumn = `
+  coalesce(
+    (select (t.verification ->> 'curveMaxCumulativeBuy')::numeric
+       from public.hooks_launch_deployment_tasks t
+       where t.job_id = launch2_instances.job_id
+         and t.verification ->> 'curveMaxCumulativeBuy' ~ '^[1-9][0-9]{0,27}$'),
+    5000000000000000000000000
+  )::text as curve_purchase_cap`;
+
+/**
  * Decision 0119: the NFT sale end is the deployed `ProjectNFT.saleEnd()`
  * the S132 executor read back and verified (= start + the Factory's
  * `nftSaleDuration()`), kept in the task's `verification.nftSaleEnd`.
@@ -229,7 +246,8 @@ const instanceColumns = `
     where v.project_id = launch2_instances.project_id
       and v.config_version = launch2_instances.config_version)
     as project_profile,
-  ${nftSaleEndColumn}
+  ${nftSaleEndColumn},
+  ${curvePurchaseCapColumn}
 `;
 
 /**
@@ -386,6 +404,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     buybackRecipient: text(row, "buyback_recipient"),
     nftSaleStart: iso(row, "nft_sale_start"),
     nftSaleEnd: saleEndOf(row),
+    curvePurchaseCap: text(row, "curve_purchase_cap"),
     deployBlockNumber: text(row, "deploy_block_number"),
     activationBlockNumber: nullableText(row, "activation_block_number"),
     deployedEventSeen: row["deployed_event_seen"] === true,
@@ -674,6 +693,20 @@ async function insertFact(
       (a["memeIsCurrency0"] === "true" || a["memeIsCurrency0"] === "false")
     ) {
       const sqrtPrice = BigInt(a["sqrtPriceX96"] ?? "0");
+      const dynamic = a["poolHookKind"] === "loopDynamic";
+      // Decision 0131: a LoopDynamic pool's fee is the Hook's own log
+      // (BuyFeeCharged / SellFeeCharged of the same swap, paired by the
+      // lane); unpaired = no fee (an exempt buyback).
+      const dynamicFee =
+        dynamic && /^(0|[1-9][0-9]{0,77})$/u.test(a["dynamicFee"] ?? "")
+          ? BigInt(a["dynamicFee"] as string)
+          : 0n;
+      // Decision 0152 (loop-contracts Decision 0015): an S209 Hook took the
+      // buy fee from the USD1 input before the pool swapped — the Swap log
+      // shows the pool input, the buyer paid input + fee, and the fee is
+      // USD1; the MEME output is untaxed.
+      const usd1BuyFee =
+        dynamic && facts.side === "buy" && a["dynamicFeeToken"] === "usd1";
       await client.query({
         text: `
           insert into public.launch2_pool_swaps (
@@ -710,18 +743,13 @@ async function insertFact(
           a["id"],
           a["sender"],
           facts.side,
-          facts.usd1Amount.toString(10),
-          facts.memeAmount.toString(10),
-          // Decision 0131: a LoopDynamic pool's fee is the Hook's own log
-          // (BuyFeeCharged / SellFeeCharged of the same swap, paired by the
-          // lane); unpaired = no fee (an exempt buyback).
-          (a["poolHookKind"] === "loopDynamic"
-            ? /^(0|[1-9][0-9]{0,77})$/u.test(a["dynamicFee"] ?? "")
-              ? BigInt(a["dynamicFee"] as string)
-              : 0n
-            : facts.taxAmount
+          (usd1BuyFee
+            ? facts.usd1Amount + dynamicFee
+            : facts.usd1Amount
           ).toString(10),
-          facts.taxToken,
+          facts.memeAmount.toString(10),
+          (dynamic ? dynamicFee : facts.taxAmount).toString(10),
+          usd1BuyFee ? "usd1" : facts.taxToken,
           sqrtPrice.toString(10),
           launch2PoolPriceE18(
             sqrtPrice,
@@ -771,7 +799,13 @@ async function insertFact(
       ],
     });
   } else if (event.eventName === "BuyFeeCharged") {
-    // loop-contracts S165: 2 % of the MEME output to the fee vault.
+    // Decision 0152 (loop-contracts Decision 0015): an S209 Hook's
+    // `BuyFeeCharged(round, buyer, grossQuote, fee)` — 2 % of the USD1 the
+    // buyer paid, kept in the Hook's `baseFeesAccrued` (round 0 = no round
+    // armed, buyer 0 = an unattributed tier-3 buy). A pre-S209 Hook's
+    // `BuyFeeCharged(buyer, grossMeme, fee)` — loop-contracts S165: 2 % of
+    // the MEME output to the fee vault — keeps its MEME row.
+    const usd1 = a["grossQuote"] !== undefined;
     await client.query({
       text: `
         insert into public.launch2_dynamic_fees (
@@ -780,15 +814,17 @@ async function insertFact(
           buyer_address, gross_amount, base_fee, extra_fee, drop_wad,
           charged_at
         )
-        values ($1, $2, $3, $4::numeric, $5, $6, $7, 'buy', 'meme', null,
-          $8, $9::numeric, $10::numeric, 0, 0, $11::timestamptz)
+        values ($1, $2, $3, $4::numeric, $5, $6, $7, 'buy', $8, $9::numeric,
+          $10, $11::numeric, $12::numeric, 0, 0, $13::timestamptz)
         ${upsertTail}
       `,
       values: [
         ...base,
         event.contractAddress,
+        usd1 ? "usd1" : "meme",
+        usd1 ? a["round"] : null,
         a["buyer"],
-        a["grossMeme"],
+        usd1 ? a["grossQuote"] : a["grossMeme"],
         a["fee"],
         at,
       ],
@@ -2697,7 +2733,13 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
               where instance_id = $1 and not removed and side = 'sell') as base_sell,
             (select coalesce(sum(base_fee), 0)::text
               from public.launch2_dynamic_fees
-              where instance_id = $1 and not removed and side = 'buy') as buy_fees,
+              where instance_id = $1 and not removed and side = 'buy'
+                and fee_token = 'meme') as buy_fees,
+            -- Decision 0152: S209 Hooks charge the buy fee in USD1.
+            (select coalesce(sum(base_fee), 0)::text
+              from public.launch2_dynamic_fees
+              where instance_id = $1 and not removed and side = 'buy'
+                and fee_token = 'usd1') as buy_fees_usd1,
             (select jsonb_build_object('roundId', round_id::text,
                 'closed', closed, 'activatedAt', activated_at,
                 'closedAt', closed_at)
@@ -2717,6 +2759,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
         extraFeesUsd1: text(row, "extra_fees"),
         baseSellFeesUsd1: text(row, "base_sell"),
         buyFeesMeme: text(row, "buy_fees"),
+        buyFeesUsd1: text(row, "buy_fees_usd1"),
         lastRound:
           last === null
             ? null

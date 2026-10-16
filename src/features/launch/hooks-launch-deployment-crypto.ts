@@ -19,11 +19,16 @@ const requiredHookPermissionBits = 0x20ccn;
  * Decision 0132: the v4 permission bits a Hook address must carry, by the
  * Factory's Hook kind. `OfficialTaxHook`: 0x20CC (unchanged since S125);
  * `LoopDynamicHook` (`LoopHookDeploymentFactory.REQUIRED_PERMISSION_MASK`):
- * afterInitialize | beforeSwap | afterSwap | afterSwapReturnDelta = 0x10C4.
+ * afterInitialize | beforeSwap | afterSwap | afterSwapReturnDelta = 0x10C4
+ * before S209. Decision 0152 (loop-contracts Decision 0015 §7): an S209
+ * LoopDynamic Factory's Hooks add beforeSwapReturnDelta = 0x10CC — this
+ * table names the current build; a pre-S209 Factory's bits come from its
+ * template (`hooksLaunchLoopDynamicHookPermissionBits(params)`), passed as
+ * `permissionBits`.
  */
 export const hooksLaunchHookPermissionBits = Object.freeze({
   officialTax: requiredHookPermissionBits,
-  loopDynamic: 0x10c4n,
+  loopDynamic: 0x10ccn,
 } as const);
 export type HooksLaunchHookKind = keyof typeof hooksLaunchHookPermissionBits;
 
@@ -246,6 +251,11 @@ function* searchHooksLaunchSalt(input: {
   readonly maxAttempts: number;
   /** Decision 0132: absent = OfficialTax (0x20CC). */
   readonly hookKind?: HooksLaunchHookKind;
+  /**
+   * Decision 0152: the bits to mine for instead of the kind's current ones
+   * (a pre-S209 LoopDynamic Factory: 0x10C4).
+   */
+  readonly permissionBits?: bigint;
 }): Generator<void, Hex, void> {
   if (
     !addressPattern.test(input.deployer) ||
@@ -260,6 +270,7 @@ function* searchHooksLaunchSalt(input: {
   const initCodeHash = input.initCodeHash as Hex;
   const create2Prefix = `0xff${deployer}` as Hex;
   const required =
+    input.permissionBits ??
     hooksLaunchHookPermissionBits[input.hookKind ?? "officialTax"];
   // Decision 0132: a zero salt means "none registered" to the LoopDynamic
   // Factory (`deployLaunch` skips `registerSalt`, the Hook would be mined

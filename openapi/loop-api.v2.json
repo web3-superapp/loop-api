@@ -96960,7 +96960,7 @@
         "operationId": "getV2HooksLaunchSigningRequest",
         "summary": "Prepare the owner's BSC Testnet Hooks deployment signature",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC; Decision 0132: 0x10C4 and typedData.message.templateHash = the LoopDynamic Factory TEMPLATE_HASH with HOOKS_LAUNCH_HOOK_KIND=loopDynamic). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); Decision 0132: or the config was hashed for another Hook kind / template; re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient). Decision 0127: 422 VALIDATION_FAILED HOOKS_CONFIG_VERSION_USED: the Factory already recorded a launch for (this wallet, this configVersion) — a draft saved before versions were allocated per owner; save the config again (a new owner-unique version) and get it approved. request.configVersion is unique across all projects of the owner, so it may skip numbers within one project.",
+        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC; Decision 0132: 0x10C4 — Decision 0152: 0x10CC for an S209 LoopDynamic Factory, by its template — and typedData.message.templateHash = the LoopDynamic Factory TEMPLATE_HASH with HOOKS_LAUNCH_HOOK_KIND=loopDynamic). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); Decision 0132: or the config was hashed for another Hook kind / template; re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient). Decision 0127: 422 VALIDATION_FAILED HOOKS_CONFIG_VERSION_USED: the Factory already recorded a launch for (this wallet, this configVersion) — a draft saved before versions were allocated per owner; save the config again (a new owner-unique version) and get it approved. request.configVersion is unique across all projects of the owner, so it may skip numbers within one project.",
         "parameters": [
           {
             "schema": {
@@ -161725,7 +161725,7 @@
                         "taxAmount": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding."
+                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding. LoopDynamic: base + dynamic fee in taxToken (Decision 0152: an S209 Hook's buy fee is USD1 from the input)."
                         },
                         "taxToken": {
                           "type": "string",
@@ -161734,7 +161734,7 @@
                         "taxUsd1": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                          "description": "= taxAmount for a sell; 0 for a buy (taxed in MEME)."
+                          "description": "= taxAmount for a sell and for a LoopDynamic S209 buy (USD1 buy fee, Decision 0152); 0 for a buy taxed in MEME."
                         },
                         "priceBeforeUsd1": {
                           "type": "string",
@@ -161844,6 +161844,7 @@
                             "priceTiming",
                             "baseTaxBps",
                             "baseTaxAmount",
+                            "baseTaxToken",
                             "dynamicTaxBps",
                             "dynamicTaxAmount",
                             "armed",
@@ -161871,7 +161872,12 @@
                             "baseTaxAmount": {
                               "type": "string",
                               "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                              "description": "buy: the 2 % buy fee in MEME (from the net output, ≤ 1 wei off); sell: the base sell fee in USD1."
+                              "description": "buy: the 2 % buy fee — Decision 0152: an S209 Hook (0x10CC) keeps floor(amountIn × buyFeePpm / 1e6) USD1 of the input before the pool swaps amountIn − fee (the MEME output is untaxed); a pre-S209 Hook (0x10C4) takes it in MEME from the net output (≤ 1 wei off). sell: the base sell fee in USD1."
+                            },
+                            "baseTaxToken": {
+                              "type": "string",
+                              "enum": ["meme", "usd1"],
+                              "description": "Decision 0152: the token of baseTaxAmount (sell: usd1; buy: usd1 on an S209 Hook, meme before)."
                             },
                             "dynamicTaxBps": {
                               "type": "integer",
@@ -162812,7 +162818,7 @@
                         "taxAmount": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding."
+                          "description": "The OfficialTaxHook tax in the output token (buy: MEME, sell: USD1). exactOut: exact; exactIn: 2 % of the gross output, at most 1 wei off the hook's rounding. LoopDynamic: base + dynamic fee in taxToken (Decision 0152: an S209 Hook's buy fee is USD1 from the input)."
                         },
                         "taxToken": {
                           "type": "string",
@@ -162821,7 +162827,7 @@
                         "taxUsd1": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                          "description": "= taxAmount for a sell; 0 for a buy (taxed in MEME)."
+                          "description": "= taxAmount for a sell and for a LoopDynamic S209 buy (USD1 buy fee, Decision 0152); 0 for a buy taxed in MEME."
                         },
                         "priceBeforeUsd1": {
                           "type": "string",
@@ -162931,6 +162937,7 @@
                             "priceTiming",
                             "baseTaxBps",
                             "baseTaxAmount",
+                            "baseTaxToken",
                             "dynamicTaxBps",
                             "dynamicTaxAmount",
                             "armed",
@@ -162958,7 +162965,12 @@
                             "baseTaxAmount": {
                               "type": "string",
                               "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
-                              "description": "buy: the 2 % buy fee in MEME (from the net output, ≤ 1 wei off); sell: the base sell fee in USD1."
+                              "description": "buy: the 2 % buy fee — Decision 0152: an S209 Hook (0x10CC) keeps floor(amountIn × buyFeePpm / 1e6) USD1 of the input before the pool swaps amountIn − fee (the MEME output is untaxed); a pre-S209 Hook (0x10C4) takes it in MEME from the net output (≤ 1 wei off). sell: the base sell fee in USD1."
+                            },
+                            "baseTaxToken": {
+                              "type": "string",
+                              "enum": ["meme", "usd1"],
+                              "description": "Decision 0152: the token of baseTaxAmount (sell: usd1; buy: usd1 on an S209 Hook, meme before)."
                             },
                             "dynamicTaxBps": {
                               "type": "integer",
@@ -164430,6 +164442,7 @@
                         "routingPolicy",
                         "priceTiming",
                         "buyTaxBps",
+                        "buyFeeToken",
                         "baseSellTaxBps",
                         "excludeBuybackFromRewards",
                         "armed",
@@ -164522,6 +164535,13 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "buyFeeToken": {
+                          "anyOf": [
+                            { "type": "string", "enum": ["meme", "usd1"] },
+                            { "type": "null" }
+                          ],
+                          "description": "Decision 0152 (loop-contracts Decision 0015): the token of the base buy fee. usd1 — an S209 Hook (address bits 0x10CC) keeps floor(amountIn × buyTaxBps / 10,000) of the USD1 input (Hook baseFeesAccrued, withdrawn by the fee vault) and the pool swaps the rest; meme — a pre-S209 Hook (0x10C4) takes buyTaxBps of the MEME output to the fee vault. null when not active."
                         },
                         "baseSellTaxBps": {
                           "anyOf": [
@@ -164825,7 +164845,8 @@
                                 "claimedUsd1",
                                 "dynamicFeesUsd1",
                                 "baseSellFeesUsd1",
-                                "buyFeesMeme"
+                                "buyFeesMeme",
+                                "buyFeesUsd1"
                               ],
                               "properties": {
                                 "roundCount": {
@@ -164854,7 +164875,13 @@
                                 },
                                 "buyFeesMeme": {
                                   "type": "string",
-                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                                  "description": "Σ buy fees of pre-S209 Hooks (MEME)."
+                                },
+                                "buyFeesUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                                  "description": "Decision 0152: Σ buy fees of S209 Hooks (USD1, taken from the input)."
                                 }
                               }
                             },

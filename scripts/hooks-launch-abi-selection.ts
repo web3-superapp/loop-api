@@ -69,7 +69,11 @@ export const hooksLaunchAbiSelection = {
   CurveEngine: [
     "BUY_TAX_BPS",
     "SELL_TAX_BPS",
-    "MAX_CUMULATIVE_BUY",
+    // Decision 0152 (loop-contracts Decision 0015): the per-Factory cap;
+    // pre-S209 curves answer the frozen MAX_CUMULATIVE_BUY() instead
+    // (`hooks-launch-protocol-abi-legacy-s200.ts`).
+    "maxCumulativeBuy",
+    "MAX_CUMULATIVE_BUY_LIMIT",
     "EARLY_ROUND_DURATION",
     "meme",
     "usd1",
@@ -216,7 +220,8 @@ export const hooksLaunchAbiSelection = {
     "routerRegistry",
     "excludeBuybackFromRewards",
     "rewardExcludedBuyer",
-    // S165 (loop-contracts Decision 0009 §13): 2 % buy fee in MEME.
+    // S165 (loop-contracts Decision 0009 §13): 2 % buy fee; Decision 0152
+    // (loop-contracts Decision 0015): taken from the USD1 input since S209.
     "buyFeePpm",
     "buybackBuyer",
     // S179/S193 (loop-contracts Decision 0012, Decision 0144): dynamic sell
@@ -284,6 +289,8 @@ export const hooksLaunchAbiSelection = {
     "buyFeePpm",
     // Decision 0144: the cap every Hook of this factory gets (S193).
     "maxDynamicFeeWad",
+    // Decision 0152: 0x10C4 before S209, 0x10CC since (beforeSwapReturnDelta).
+    "REQUIRED_PERMISSION_MASK",
     "LoopHookDeployed",
     // Decision 0132 (S170): Hook salt preview / registration read-back.
     "launchFactory",
@@ -332,6 +339,8 @@ export const hooksLaunchAbiSelection = {
     "loopDynamicDeployer",
     "loopDynamicDeployerCodeHash",
     "previewLoopHookInitCodeHash",
+    // Decision 0152 (loop-contracts Decision 0015): absent before S209.
+    "maxCumulativeBuy",
     "LaunchDeployed",
     "LaunchActivated",
   ],

@@ -38,7 +38,12 @@ import {
   projectNFTAbi,
   snapshotRegistryAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
+import {
+  legacyS200CurveEngineAbi,
+  legacyS200LoopDynamicHookAbi,
+} from "../launch/hooks-launch-protocol-abi-legacy-s200.js";
 import { legacyV2BuybackExecutorAbi } from "../launch/hooks-launch-protocol-abi-legacy-v2.js";
+import { isLaunch2ContractRevert } from "./launch2-dynamic-chain.js";
 
 /**
  * Decision 0114: the launch slot (BSC Testnet, chain 97) reader of the
@@ -59,6 +64,15 @@ export class Launch2ChainRefusedError extends Error {
     this.reasonCode = reasonCode;
   }
 }
+
+/**
+ * Decision 0152: the LoopDynamic Hook role decodes with the current ABI and
+ * the frozen pre-S209 `BuyFeeCharged` (another topic0).
+ */
+export const launch2DynamicHookDecodeAbi: Abi = [
+  ...loopDynamicHookAbi,
+  ...legacyS200LoopDynamicHookAbi,
+];
 
 const roleAbis: Readonly<
   Record<
@@ -99,7 +113,11 @@ const roleAbis: Readonly<
     events: ["LoopHookBound"],
   },
   dynamicHook: {
-    abi: loopDynamicHookAbi,
+    // Decision 0152: a pre-S209 Hook's `BuyFeeCharged(buyer, grossMeme,
+    // fee)` (MEME) has another topic0 than the S209 `BuyFeeCharged(round,
+    // buyer, grossQuote, fee)` (USD1); both decode, the argument names
+    // (`grossMeme` / `grossQuote`) carry the generation.
+    abi: launch2DynamicHookDecodeAbi,
     events: [
       "SellFeeCharged",
       "BuyFeeCharged",
@@ -235,6 +253,36 @@ export function createLaunch2Chain(input: {
       args,
       blockNumber,
     })) as T;
+  }
+
+  /**
+   * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
+   * purchase cap — `maxCumulativeBuy()` (S209, a Factory parameter), or
+   * the frozen `MAX_CUMULATIVE_BUY()` constant when the curve has no such
+   * function (a revert / empty answer = a pre-S209 curve). RPC failures
+   * propagate. Immutable either way.
+   */
+  async function curvePurchaseCap(
+    curve: string,
+    blockNumber: bigint | undefined,
+  ): Promise<bigint> {
+    const at = blockNumber === undefined ? {} : { blockNumber };
+    try {
+      return await client.readContract({
+        address: curve as Address,
+        abi: curveEngineAbi,
+        functionName: "maxCumulativeBuy",
+        ...at,
+      });
+    } catch (error) {
+      if (!isLaunch2ContractRevert(error)) throw error;
+    }
+    return await client.readContract({
+      address: curve as Address,
+      abi: legacyS200CurveEngineAbi,
+      functionName: "MAX_CUMULATIVE_BUY",
+      ...at,
+    });
   }
 
   return Object.freeze<Launch2Chain>({
@@ -608,6 +656,7 @@ export function createLaunch2Chain(input: {
         ),
         read<string>(request.curve, curveAbi, "usd1", [], at),
       ]);
+      const maxCumulativeBuy = await curvePurchaseCap(request.curve, at);
       const tokenAbi = memeTokenAbi as Abi;
       const [cumulativeBought, nftMinted, usd1Balance, memeBalance] =
         request.wallet === null
@@ -646,6 +695,7 @@ export function createLaunch2Chain(input: {
           soldSupply,
           accountedReserve,
           blockTimestamp: block.timestamp,
+          maxCumulativeBuy,
         },
         cumulativeBought,
         nftMinted,
@@ -655,6 +705,10 @@ export function createLaunch2Chain(input: {
         usd1Balance,
         memeBalance,
       };
+    },
+
+    async readCurvePurchaseCap(curve) {
+      return curvePurchaseCap(curve, undefined);
     },
 
     async readWalletBalances(request) {
