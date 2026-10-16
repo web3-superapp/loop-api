@@ -35,8 +35,10 @@ import {
   type InvalidateMiningSnapshotsInput,
   type MiningAccountStandingRecord,
   type MiningCommunityStandingRecord,
+  type MiningEpochAccountStandingRecord,
   type MiningFormulaRecord,
   type MiningMemberPowerRecord,
+  type MiningRankEpochRecord,
   type MiningRankedAccountRecord,
   type MiningRepository,
   type MiningSnapshotAttemptRecord,
@@ -380,6 +382,151 @@ const accountTotalsSql = `
     from totals
   )
 `;
+
+/**
+ * Decision 0148: the same totals and positions over one settled hour. An
+ * account's power is its hourly total of both tracks
+ * (`nft_total_power + asset_total_power`, self plus referral), exact
+ * PostgreSQL numeric arithmetic over the stored decimal strings.
+ */
+const epochAccountTotalsSql = `
+  totals as (
+    select
+      owner_user_id,
+      nft_total_power::numeric + asset_total_power::numeric as total
+    from public.mining_epoch_rewards
+    where epoch_id = $1
+  ),
+  ranked as (
+    select
+      owner_user_id,
+      total,
+      case
+        when total > 0 then rank() over (order by total desc)
+      end as position
+    from totals
+  )
+`;
+
+/**
+ * Decision 0148: community standings over one settled hour. Every community
+ * with a bound asset is listed; `weight` is its NFT coefficient under the
+ * hour's parameter version (listed coefficient, else the version's
+ * `defaultCommunityCoefficient`, else 0 — the calculator's own rule). A
+ * non-banned member contributes the part of the hour's power that belongs to
+ * the community:
+ *
+ * - NFT self: the `nft_holdings[].power` of the community's instances;
+ * - NFT referral: the equivalent NFT units the member received from the
+ *   community's NFTs (`referral_levels[].nftUnitsByCommunity`) × the
+ *   coefficient, truncated to 18 decimals like every stored power (exact
+ *   while the coefficient does not change inside the hour);
+ * - asset self: the `asset_holdings[].power` of the bound asset. Asset
+ *   referral power is stored per level only, not per asset, so it ranks
+ *   accounts, not communities.
+ */
+const epochCommunityStandingsSql = `
+  epoch_version as (
+    select v.document
+    from public.mining_epochs as e
+    join public.mining_parameter_versions as v on v.version_id = e.version_id
+    where e.epoch_id = $1
+  ),
+  bound as (
+    select
+      c.community_id,
+      c.name as community_name,
+      c.bound_asset_key as bound_asset_id,
+      coalesce(
+        (
+          select (entry->>'coefficient')::numeric
+          from epoch_version as ev,
+            jsonb_array_elements(
+              coalesce(ev.document->'communityCoefficients', '[]'::jsonb)
+            ) as entry
+          where entry->>'communityId' = c.community_id::text
+          limit 1
+        ),
+        (
+          select (ev.document->>'defaultCommunityCoefficient')::numeric
+          from epoch_version as ev
+        ),
+        0
+      ) as coefficient
+    from public.communities as c
+    where c.bound_asset_key is not null
+  ),
+  member_powers as (
+    select
+      b.community_id,
+      r.owner_user_id,
+      coalesce((
+        select sum((holding->>'power')::numeric)
+        from jsonb_array_elements(r.nft_holdings) as holding
+        where holding->>'communityId' = b.community_id::text
+      ), 0) + trunc(coalesce((
+        select sum((unit->>'units')::numeric)
+        from jsonb_array_elements(r.referral_levels) as level,
+          jsonb_array_elements(
+            coalesce(level->'nftUnitsByCommunity', '[]'::jsonb)
+          ) as unit
+        where unit->>'communityId' = b.community_id::text
+      ), 0) * b.coefficient, 18) + coalesce((
+        select sum((holding->>'power')::numeric)
+        from jsonb_array_elements(r.asset_holdings) as holding
+        where holding->>'assetId' = b.bound_asset_id
+      ), 0) as power
+    from bound as b
+    join public.community_memberships as m
+      on m.community_id = b.community_id and m.status <> 'banned'
+    join public.mining_epoch_rewards as r
+      on r.epoch_id = $1 and r.owner_user_id = m.owner_user_id
+  ),
+  powers as (
+    select
+      b.community_id,
+      coalesce(sum(p.power), 0) as total,
+      count(p.owner_user_id) filter (where p.power > 0)::int
+        as participant_count
+    from bound as b
+    left join member_powers as p on p.community_id = b.community_id
+    group by b.community_id
+  ),
+  standings as (
+    select
+      b.community_id,
+      b.community_name,
+      b.bound_asset_id,
+      trim_scale(b.coefficient)::text as weight,
+      p.total::text as power,
+      p.participant_count,
+      case
+        when p.total > 0
+          then (rank() over (order by p.total desc))::int
+      end as position
+    from bound as b
+    join powers as p on p.community_id = b.community_id
+  )
+`;
+
+const epochAccountStandingRowSchema = z
+  .object({
+    total_power: numericTextSchema.nullable(),
+    position: z.number().int().min(1).nullable(),
+    participant_count: z.number().int().min(0),
+  })
+  .strict();
+
+const rankEpochRowSchema = z
+  .object({
+    epoch_id: opaqueIdSchema,
+    hour_start: z.date(),
+    hour_end: z.date(),
+    settled_at: z.date(),
+    input_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    config_version: configVersionSchema,
+  })
+  .strict();
 
 /**
  * Community standings under one snapshot and formula version: every
@@ -1238,11 +1385,76 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       }
     },
 
+    async getLatestRankEpoch() {
+      try {
+        const result = await pool.query({
+          text: `
+            select
+              e.epoch_id, e.hour_start, e.hour_end, e.settled_at,
+              e.input_digest, v.config_version
+            from public.mining_epochs as e
+            join public.mining_parameter_versions as v
+              on v.version_id = e.version_id
+            where e.status = 'settled'
+            order by e.hour_start desc
+            limit 1
+          `,
+        });
+        const raw: unknown = result.rows[0];
+        if (raw === undefined) {
+          return null;
+        }
+        const row = rankEpochRowSchema.parse(raw);
+        const record: MiningRankEpochRecord = Object.freeze({
+          epochId: row.epoch_id,
+          hourStart: row.hour_start.toISOString(),
+          hourEnd: row.hour_end.toISOString(),
+          settledAt: row.settled_at.toISOString(),
+          inputDigest: row.input_digest,
+          configVersion: row.config_version,
+        });
+        return record;
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async getEpochAccountStanding(
+      input: Parameters<MiningRepository["getEpochAccountStanding"]>[0],
+    ) {
+      try {
+        const epochId = opaqueIdSchema.parse(input.epochId);
+        const ownerUserId = opaqueIdSchema.parse(input.ownerUserId);
+        const result = await pool.query({
+          text: `
+            with ${epochAccountTotalsSql}
+            select
+              r.total::text as total_power,
+              r.position::int as position,
+              (select count(*) from ranked where position is not null)::int
+                as participant_count
+            from (select 1) as one
+            left join ranked as r on r.owner_user_id = $2
+          `,
+          values: [epochId, ownerUserId],
+        });
+        const row = epochAccountStandingRowSchema.parse(result.rows[0]);
+        const record: MiningEpochAccountStandingRecord = Object.freeze({
+          totalPower: row.total_power,
+          position: row.position,
+          participantCount: row.participant_count,
+        });
+        return record;
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async listAccountRanking(
       input: Parameters<MiningRepository["listAccountRanking"]>[0],
     ) {
       try {
-        const snapshotId = opaqueIdSchema.parse(input.snapshotId);
+        const epochId = opaqueIdSchema.parse(input.epochId);
         const limit = z.number().int().min(1).max(500).parse(input.limit);
         const afterTotal =
           input.after === undefined
@@ -1256,7 +1468,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         // rank() over positive totals and zero totals (position null) follow.
         const result = await pool.query({
           text: `
-            with ${accountTotalsSql}
+            with ${epochAccountTotalsSql}
             select
               r.owner_user_id,
               r.total::text as total_power,
@@ -1264,7 +1476,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               profile.public_profile_id,
               profile.alias,
               coalesce(privacy.anonymous_mode, false) as anonymous_mode,
-              coalesce(privacy.mining_power_visibility, 'self') = 'everyone'
+              coalesce(privacy.mining_power_visibility, 'everyone') = 'everyone'
                 as power_visible_to_others,
               profile.avatar_ref
             from ranked as r
@@ -1279,7 +1491,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             order by r.total desc, r.owner_user_id asc
             limit $2
           `,
-          values: [snapshotId, limit, afterTotal, afterOwner],
+          values: [epochId, limit, afterTotal, afterOwner],
         });
         return Object.freeze(
           result.rows.map((raw): MiningRankedAccountRecord => {
@@ -1305,8 +1517,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       input: Parameters<MiningRepository["listCommunityRanking"]>[0],
     ) {
       try {
-        const snapshotId = opaqueIdSchema.parse(input.snapshotId);
-        const configVersion = configVersionSchema.parse(input.configVersion);
+        const epochId = opaqueIdSchema.parse(input.epochId);
         const limit = z.number().int().min(1).max(500).parse(input.limit);
         const after = input.after;
         const afterPower =
@@ -1321,29 +1532,22 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         // positive power; zero-power communities follow with position null).
         const result = await pool.query({
           text: `
-            with ${communityStandingsSql}
+            with ${epochCommunityStandingsSql}
             select *
             from standings
-            where $4::numeric is null
-              or power::numeric < $4::numeric
+            where $3::numeric is null
+              or power::numeric < $3::numeric
               or (
-                power::numeric = $4::numeric
+                power::numeric = $3::numeric
                 and (
-                  community_name > $5::text
-                  or (community_name = $5::text and community_id > $6::uuid)
+                  community_name > $4::text
+                  or (community_name = $4::text and community_id > $5::uuid)
                 )
               )
             order by power::numeric desc, community_name asc, community_id asc
-            limit $3
+            limit $2
           `,
-          values: [
-            snapshotId,
-            configVersion,
-            limit,
-            afterPower,
-            afterName,
-            afterId,
-          ],
+          values: [epochId, limit, afterPower, afterName, afterId],
         });
         return Object.freeze(result.rows.map(mapCommunityStanding));
       } catch (error) {
@@ -1355,23 +1559,22 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
       input: Parameters<MiningRepository["getMemberBestCommunityStanding"]>[0],
     ) {
       try {
-        const snapshotId = opaqueIdSchema.parse(input.snapshotId);
-        const configVersion = configVersionSchema.parse(input.configVersion);
+        const epochId = opaqueIdSchema.parse(input.epochId);
         const ownerUserId = opaqueIdSchema.parse(input.ownerUserId);
         const result = await pool.query({
           text: `
-            with ${communityStandingsSql}
+            with ${epochCommunityStandingsSql}
             select s.*
             from standings as s
             join public.community_memberships as m
               on m.community_id = s.community_id
-              and m.owner_user_id = $3
+              and m.owner_user_id = $2
               and m.status <> 'banned'
             where s.position is not null
             order by s.position asc, s.community_name asc, s.community_id asc
             limit 1
           `,
-          values: [snapshotId, configVersion, ownerUserId],
+          values: [epochId, ownerUserId],
         });
         const raw: unknown = result.rows[0];
         return raw === undefined ? null : mapCommunityStanding(raw);
@@ -1512,7 +1715,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               profile.public_profile_id,
               profile.owner_user_id,
               t.total as total_power,
-              coalesce(privacy.mining_power_visibility, 'self') = 'everyone'
+              coalesce(privacy.mining_power_visibility, 'everyone') = 'everyone'
                 as visible_to_others
             from public.user_profiles as profile
             left join totals as t on t.owner_user_id = profile.owner_user_id

@@ -57,6 +57,7 @@ import { estimateDailyOutputShare } from "./mining-daily-output.js";
 import {
   MiningRepositoryUnavailableError,
   type MiningFormulaRecord,
+  type MiningRankEpochRecord,
   type MiningRankedAccountRecord,
   type MiningReferralRankRecord,
   type MiningRepository,
@@ -494,6 +495,40 @@ function snapshotProjection(
     stale: resolution.stale,
     latestAttempt: attemptProjection(resolution.latestAttempt),
     holdingsSource: record.holdingsSource,
+  });
+}
+
+/**
+ * The `snapshot` slot of the users and communities ranks (Decision 0148):
+ * the settled hour they rank, in the unchanged snapshot shape so clients
+ * keep decoding it. `computedAt` is the hour's end (the power is the
+ * average over `[hourStart, hourEnd)`; the same anchor the minute display
+ * of `GET /v2/mining/rewards` uses). An hour has no single block:
+ * `blockNumber` is "0" and `blockHash` carries the hour's input digest;
+ * `formulaVersion` is the parameter version and `priceVersion` the epoch's
+ * idempotency key. Settlement reads indexed chain facts only, so the
+ * holdings are `chain`, and a settled hour is never stale.
+ */
+function rankEpochSnapshot(
+  epoch: MiningRankEpochRecord,
+): MiningSnapshotProjection {
+  const latestAttempt: MiningSnapshotAttemptProjection = Object.freeze({
+    snapshotId: epoch.epochId,
+    status: "complete" as const,
+    computedAt: epoch.hourEnd,
+    reasonCode: null,
+    unreadInputs: Object.freeze([]),
+  });
+  return Object.freeze({
+    snapshotId: epoch.epochId,
+    blockNumber: "0",
+    blockHash: `0x${epoch.inputDigest}`,
+    formulaVersion: epoch.configVersion,
+    priceVersion: `mining_hourly:${epoch.hourStart}`,
+    computedAt: epoch.hourEnd,
+    stale: false,
+    latestAttempt,
+    holdingsSource: "chain" as const,
   });
 }
 
@@ -1084,27 +1119,30 @@ export function createMiningService(dependencies: {
           });
         }
 
-        if (hasNoMiningSnapshot(resolution)) {
-          const reason = missingReason(resolution);
+        // Decision 0148: the users and communities ranks read the newest
+        // settled hour, not the snapshot lane; `formula` stays the snapshot
+        // baseline state every mining page publishes.
+        const epoch = await repository.getLatestRankEpoch();
+        if (epoch === null) {
+          const reason = unavailable(miningReasonCodes.snapshotNotAvailable);
           return Object.freeze({
             scope,
             ranking: reason,
             myPosition: reason,
             me: null,
             nextCursor: null,
-            snapshot: missingSnapshot(resolution),
+            snapshot: reason,
             display,
             formula,
             contractVersion: v2ContractVersion,
           });
         }
-        const snapshot = resolution.snapshot;
+        const snapshot = rankEpochSnapshot(epoch);
         if (scope === "communities") {
           const after = page.continuation;
           const [rows, mine] = await Promise.all([
             repository.listCommunityRanking({
-              snapshotId: snapshot.snapshotId,
-              configVersion: resolution.formula.configVersion,
+              epochId: epoch.epochId,
               limit: page.fetchSize,
               ...(after === null
                 ? {}
@@ -1117,8 +1155,7 @@ export function createMiningService(dependencies: {
                   }),
             }),
             repository.getMemberBestCommunityStanding({
-              snapshotId: snapshot.snapshotId,
-              configVersion: resolution.formula.configVersion,
+              epochId: epoch.epochId,
               ownerUserId: viewer,
             }),
           ]);
@@ -1163,7 +1200,7 @@ export function createMiningService(dependencies: {
                     name: last.communityName,
                     community: last.communityId,
                   }),
-            snapshot: snapshotProjection(resolution),
+            snapshot,
             display,
             formula,
             contractVersion: v2ContractVersion,
@@ -1172,7 +1209,7 @@ export function createMiningService(dependencies: {
         const after = page.continuation;
         const [rows, standing] = await Promise.all([
           repository.listAccountRanking({
-            snapshotId: snapshot.snapshotId,
+            epochId: epoch.epochId,
             limit: page.fetchSize,
             ...(after === null
               ? {}
@@ -1183,8 +1220,8 @@ export function createMiningService(dependencies: {
                   },
                 }),
           }),
-          repository.getAccountStanding({
-            snapshotId: snapshot.snapshotId,
+          repository.getEpochAccountStanding({
+            epochId: epoch.epochId,
             ownerUserId: viewer,
           }),
         ]);
@@ -1198,20 +1235,20 @@ export function createMiningService(dependencies: {
             items: Object.freeze(
               items.map((row) => projectRankedUser(row, viewer)),
             ),
-            participants: standing?.participantCount ?? 0,
+            participants: standing.participantCount,
           }),
+          // An account without a row in the settled hour had no power in it
+          // (no holding, no powered invitee): not ranked, never "pending".
           myPosition:
-            standing === null
-              ? await absentReason(viewer)
-              : standing.position === null
-                ? unavailable(miningReasonCodes.rankNotRanked)
-                : Object.freeze({
-                    status: "available" as const,
-                    position: standing.position,
-                    power: standing.totalPower,
-                  }),
+            standing.totalPower === null || standing.position === null
+              ? unavailable(miningReasonCodes.rankNotRanked)
+              : Object.freeze({
+                  status: "available" as const,
+                  position: standing.position,
+                  power: standing.totalPower,
+                }),
           me:
-            standing === null || standing.position === null
+            standing.totalPower === null || standing.position === null
               ? null
               : Object.freeze({
                   rank: standing.position,
@@ -1224,7 +1261,7 @@ export function createMiningService(dependencies: {
                   power: last.totalPower,
                   owner: last.ownerUserId,
                 }),
-          snapshot: snapshotProjection(resolution),
+          snapshot,
           display,
           formula,
           contractVersion: v2ContractVersion,

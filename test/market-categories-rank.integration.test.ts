@@ -19,9 +19,10 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
 
 /**
  * Decision 0100 against PostgreSQL: the meme / community candidate sets of
- * the categorised market list, the referral rank, the rank keysets, and the
- * caller's best community standing. No migration: every query reads tables
- * other modules already write.
+ * the categorised market list and the referral rank. The users /
+ * communities rank keysets and the best community standing moved to the
+ * settled hour in Decision 0148 (test/mining-rank-hourly.integration.test.ts).
+ * No migration: every query reads tables other modules already write.
  */
 
 const { Client, Pool } = pg;
@@ -40,7 +41,6 @@ const alphaAssetId = `${mainnet}:${alphaAddress}`;
 const betaAssetId = `${mainnet}:${betaAddress}`;
 const blockedAssetId = `${mainnet}:${blockedAddress}`;
 const memeAssetId = `${testnet}:${memeAddress}`;
-const configVersion = "miningFormulaS112TestOnly";
 
 function connectionUrl(source: string, name: string): string {
   const url = new URL(source);
@@ -334,182 +334,5 @@ describe("Decision 0100 market categories and rank pages on PostgreSQL", () => {
       position: null,
       participantCount: 3,
     });
-  });
-
-  it("pages the account and community ranks by keyset and finds the caller's best community", async () => {
-    const mining = createPostgresMiningRepository(pool);
-    const users = [
-      await account("power300"),
-      await account("power200a"),
-      await account("power200b"),
-      await account("power0"),
-    ];
-    await pool.query({
-      text: `
-        insert into public.mining_formula_versions (
-          config_version, formula, weight_range, price_guard_rules, status,
-          effective_at, approved_at
-        )
-        values ($1, $2::jsonb, $3::jsonb, '[]'::jsonb, 'pending_approval', null, null)
-      `,
-      values: [
-        configVersion,
-        JSON.stringify({
-          kind: "holding_times_reference_price_times_weight",
-          expressionKey: "k",
-          dailyOutputKey: "k",
-          assetWeights: { [alphaAssetId]: "1", [betaAssetId]: "1" },
-          referralBoost: { status: "pending_approval" },
-        }),
-        JSON.stringify({
-          loop: { status: "approved", descriptionKey: "k" },
-          community: { status: "pending_approval", descriptionKey: "k" },
-          reviewFactorKeys: [],
-        }),
-      ],
-    });
-    const snapshotId = randomUUID();
-    await pool.query({
-      text: `
-        insert into public.mining_snapshots (
-          snapshot_id, block_number, block_hash, formula_version,
-          price_version, total_power, account_count, status, holdings_source
-        )
-        values ($1, 100, $2, $3, 'dexscreener:2026-10-08T00:00:00.000Z',
-          '700', 4, 'complete', 'chain')
-      `,
-      values: [snapshotId, `0x${"e".repeat(64)}`, configVersion],
-    });
-    const powers: [string, string, string][] = [
-      [users[0]!, alphaAssetId, "300"],
-      [users[1]!, betaAssetId, "200"],
-      [users[2]!, alphaAssetId, "200"],
-      [users[3]!, alphaAssetId, "0"],
-    ];
-    for (const [owner, assetId, power] of powers) {
-      await pool.query({
-        text: `
-          insert into public.mining_snapshot_powers (
-            snapshot_id, owner_user_id, asset_id, holding,
-            reference_price_usd, reference_price_quality, weight, power,
-            block_number
-          )
-          values ($1, $2, $3, '1', '1', 'fresh', '1', $4, 100)
-        `,
-        values: [snapshotId, owner, assetId, power],
-      });
-    }
-    const full = await mining.listAccountRanking({ snapshotId, limit: 10 });
-    const tiedOrder = [users[1]!, users[2]!].sort();
-    expect(
-      full.map((row) => [row.ownerUserId, row.totalPower, row.position]),
-    ).toEqual([
-      [users[0], "300", 1],
-      [tiedOrder[0], "200", 2],
-      [tiedOrder[1], "200", 2],
-      [users[3], "0", null],
-    ]);
-    const page1 = await mining.listAccountRanking({ snapshotId, limit: 2 });
-    const page2 = await mining.listAccountRanking({
-      snapshotId,
-      limit: 2,
-      after: {
-        totalPower: page1.at(-1)!.totalPower,
-        ownerUserId: page1.at(-1)!.ownerUserId,
-      },
-    });
-    expect([...page1, ...page2].map((row) => row.ownerUserId)).toEqual(
-      full.map((row) => row.ownerUserId),
-    );
-
-    // Two weighted communities: Alpha (users 0 and 2 on ALPHA -> 500) and
-    // Beta (user 1 on BETA -> 200). User 2 is in both; its best standing is
-    // Alpha. User 3 is only a banned member of Beta: no standing.
-    const owner = await account(null);
-    const alphaCommunity = await community({
-      owner,
-      name: "Alpha Rank",
-      assetId: alphaAssetId,
-      verified: true,
-    });
-    const betaCommunity = await community({
-      owner,
-      name: "Beta Rank",
-      assetId: betaAssetId,
-      verified: true,
-    });
-    const join = async (
-      communityId: string,
-      member: string,
-      status = "active",
-    ) =>
-      pool.query({
-        text: `insert into public.community_memberships (community_id, owner_user_id, role, status) values ($1, $2, 'member', $3)`,
-        values: [communityId, member, status],
-      });
-    await join(alphaCommunity, users[0]!);
-    await join(alphaCommunity, users[2]!);
-    await join(betaCommunity, users[1]!);
-    await join(betaCommunity, users[2]!);
-    // A banned membership never counts as the caller's community.
-    await join(betaCommunity, users[3]!, "banned");
-    await pool.query({
-      text: `
-        insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at)
-        values ($1, 'approved', '1', $3, now()), ($2, 'approved', '1', $3, now())
-      `,
-      values: [alphaCommunity, betaCommunity, configVersion],
-    });
-    const communities = await mining.listCommunityRanking({
-      snapshotId,
-      configVersion,
-      limit: 10,
-    });
-    expect(
-      communities.map((row) => [row.communityId, row.power, row.position]),
-    ).toEqual([
-      [alphaCommunity, "500", 1],
-      [betaCommunity, "200", 2],
-    ]);
-    const afterFirst = await mining.listCommunityRanking({
-      snapshotId,
-      configVersion,
-      limit: 10,
-      after: {
-        power: "500",
-        communityName: "Alpha Rank",
-        communityId: alphaCommunity,
-      },
-    });
-    expect(afterFirst.map((row) => row.communityId)).toEqual([betaCommunity]);
-    expect(
-      await mining.getMemberBestCommunityStanding({
-        snapshotId,
-        configVersion,
-        ownerUserId: users[2]!,
-      }),
-    ).toMatchObject({ communityId: alphaCommunity, position: 1, power: "500" });
-    expect(
-      await mining.getMemberBestCommunityStanding({
-        snapshotId,
-        configVersion,
-        ownerUserId: users[1]!,
-      }),
-    ).toMatchObject({ communityId: betaCommunity, position: 2 });
-    expect(
-      await mining.getMemberBestCommunityStanding({
-        snapshotId,
-        configVersion,
-        ownerUserId: users[3]!,
-      }),
-    ).toBeNull();
-    const outsider = await account(null);
-    expect(
-      await mining.getMemberBestCommunityStanding({
-        snapshotId,
-        configVersion,
-        ownerUserId: outsider,
-      }),
-    ).toBeNull();
   });
 });

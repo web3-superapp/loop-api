@@ -1233,44 +1233,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           blockNumber: "122037728",
         },
       ]);
-      const ranking = await mining.listAccountRanking({
-        snapshotId,
-        limit: 10,
-      });
-      expect(ranking).toEqual([
-        {
-          ownerUserId: alice,
-          totalPower: "1138.67",
-          position: 1,
-          publicProfileId: await profileOf(alice),
-          alias: `alias_${alice.slice(0, 8)}`,
-          anonymousMode: false,
-          avatarRef: null,
-          powerVisibleToOthers: true,
-        },
-        {
-          ownerUserId: bob,
-          totalPower: "34.5000000000000001",
-          position: 2,
-          publicProfileId: await profileOf(bob),
-          alias: `alias_${bob.slice(0, 8)}`,
-          anonymousMode: true,
-          avatarRef: null,
-          powerVisibleToOthers: false,
-        },
-        // Zero power: listed after the ranked rows, with no position.
-        {
-          ownerUserId: carol,
-          totalPower: "0",
-          position: null,
-          publicProfileId: await profileOf(carol),
-          alias: `alias_${carol.slice(0, 8)}`,
-          anonymousMode: false,
-          avatarRef: null,
-          // No privacy row: mining_power_visibility defaults to `self`.
-          powerVisibleToOthers: false,
-        },
-      ]);
+      // The users / communities ranks read the settled hour since Decision
+      // 0148 (test/mining-rank-hourly.integration.test.ts).
       // Community standing: only non-banned members, only the bound asset.
       // alice 57.5 + bob 34.5 = 92 (carol banned; BNB rows excluded).
       const standing = await mining.getCommunityStanding({
@@ -1301,13 +1265,6 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           communityId: boundCommunity,
         }),
       ).toBeNull();
-      expect(
-        await mining.listCommunityRanking({
-          snapshotId,
-          configVersion: baselineVersion,
-          limit: 10,
-        }),
-      ).toEqual([standing]);
       const memberPowers = await mining.listMemberPowers({
         snapshotId,
         publicProfileIds: [
@@ -1325,7 +1282,8 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         [
           [alice, "1138.67", true],
           [bob, "34.5000000000000001", false],
-          [carol, "0", false],
+          // No privacy row: everyone since Decision 0148.
+          [carol, "0", true],
         ].sort(),
       );
       // Balance asset IDs come from the account's active wallets only.

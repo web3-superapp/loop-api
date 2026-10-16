@@ -529,7 +529,7 @@ const rankingSchema = {
               position: {
                 anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
                 description:
-                  "rank() among positive powers; null while the power is zero (in the snapshot, not ranked). Always public.",
+                  "rank() among positive powers; null while the power is zero (in the settled hour, not ranked). Always public.",
               },
               power: {
                 anyOf: [decimalSchema, { type: "null" }],
@@ -550,7 +550,7 @@ const rankingSchema = {
           type: "integer",
           minimum: 0,
           description:
-            "Accounts with positive power in the snapshot; items may hold more rows (zero-power accounts with position null).",
+            "Accounts with positive power in the settled hour; items may hold more rows (zero-power accounts with position null).",
         },
       },
     },
@@ -578,9 +578,13 @@ const rankingSchema = {
               position: {
                 anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
                 description:
-                  "rank() among communities with positive power; null while zero (bound and weighted, not ranked).",
+                  "rank() among communities with positive power; null while zero (bound, not ranked).",
               },
-              power: decimalSchema,
+              power: {
+                ...decimalSchema,
+                description:
+                  "Decision 0148: the non-banned members' power of the settled hour that belongs to the community — NFT self power of its instances, referral NFT units from its instances × the coefficient, and self power on the bound asset.",
+              },
               community: {
                 type: "object",
                 additionalProperties: false,
@@ -597,8 +601,17 @@ const rankingSchema = {
                   },
                 },
               },
-              weight: decimalSchema,
-              participants: { type: "integer", minimum: 0 },
+              weight: {
+                ...decimalSchema,
+                description:
+                  "Decision 0148: the community's NFT coefficient under the settled hour's parameter version (listed, else the version default, else 0).",
+              },
+              participants: {
+                type: "integer",
+                minimum: 0,
+                description:
+                  "Members with positive community power in the hour.",
+              },
             },
           },
         },
@@ -694,7 +707,7 @@ export const miningRankResourceSchema = {
     ranking: {
       ...rankingSchema,
       description:
-        "Every account in the snapshot (users), every bound community with an approved weight (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). One page of at most 50 rows; follow nextCursor.",
+        "Decision 0148: every account of the newest settled hour by nft_total_power + asset_total_power (users), every community with a bound asset (communities), positive power first by rank and zero power after it with position null; or every inviter with a direct invitee (referrals). MINING_SNAPSHOT_NOT_AVAILABLE while no hour is settled. One page of at most 50 rows; follow nextCursor.",
     },
     myPosition: positionSchema,
     me: rankMeSchema,
@@ -703,7 +716,11 @@ export const miningRankResourceSchema = {
       description:
         "Next page; null on the last page, after 500 rows in total, or when the cursor secret is not configured.",
     },
-    snapshot: snapshotSchema,
+    snapshot: {
+      ...snapshotSchema,
+      description:
+        "Decision 0148, users / communities: the settled hour ranked, in the snapshot shape — snapshotId = epochId, computedAt = hourEnd, blockNumber \"0\", blockHash = 0x + the hour's input digest, formulaVersion = the parameter version, priceVersion = mining_hourly:<hourStart>, holdingsSource chain, never stale. Referrals: the snapshot lane's block as before.",
+    },
     display: {
       type: "object",
       additionalProperties: false,

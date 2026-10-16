@@ -112,6 +112,33 @@ export interface SetCommunityWeightInput {
   readonly requestId: string;
 }
 
+/**
+ * The settled hour the power ranks read (Decision 0148): the newest
+ * `mining_epochs` row with `status = 'settled'` and its parameter version.
+ */
+export interface MiningRankEpochRecord {
+  readonly epochId: string;
+  readonly hourStart: string;
+  readonly hourEnd: string;
+  readonly settledAt: string;
+  /** SHA-256 hex of the canonical settlement inputs (always set when settled). */
+  readonly inputDigest: string;
+  /** `mining_parameter_versions.config_version` of the epoch's version. */
+  readonly configVersion: string;
+}
+
+/**
+ * One account's place in a settled hour (Decision 0148). The participant
+ * count is always answered, also for an account without a row.
+ */
+export interface MiningEpochAccountStandingRecord {
+  /** Null when the account has no row in the hour (no power in it). */
+  readonly totalPower: string | null;
+  readonly position: number | null;
+  /** Accounts with positive power in the hour. */
+  readonly participantCount: number;
+}
+
 /** One account's standing in a snapshot. */
 export interface MiningAccountStandingRecord {
   readonly totalPower: string;
@@ -131,9 +158,9 @@ export interface MiningRankedAccountRecord {
   /** `privacy_preferences_v2.anonymous_mode`; false when the account has no row. */
   readonly anonymousMode: boolean;
   /**
-   * `privacy_preferences_v2.mining_power_visibility = 'everyone'`; false when
-   * the account has no row (the column defaults to `self`), the same default
-   * `listMemberPowers` applies (Decision 0049).
+   * `privacy_preferences_v2.mining_power_visibility = 'everyone'`; true when
+   * the account has no row (the column defaults to `everyone` since
+   * Decision 0148), the same default `listMemberPowers` applies.
    */
   readonly powerVisibleToOthers: boolean;
   /** Stored `user_profiles.avatar_ref` of the active profile (Decision 0100). */
@@ -141,8 +168,12 @@ export interface MiningRankedAccountRecord {
 }
 
 /**
- * A community's standing: the power of its non-banned members on its bound
- * asset under the snapshot, which already carries the community weight.
+ * A community's standing. Under a snapshot (community detail): the power of
+ * its non-banned members on its bound asset, which already carries the
+ * community weight. On the rank (Decision 0148): the members' self power of
+ * one settled hour that belongs to the community — NFT holdings of the
+ * community's instances plus holdings of its bound asset — and `weight` is
+ * the community coefficient of the hour's parameter version.
  */
 export interface MiningCommunityStandingRecord {
   readonly communityId: string;
@@ -300,24 +331,38 @@ export interface MiningRepository {
     readonly snapshotId: string;
     readonly ownerUserId: string;
   }): Promise<MiningAccountStandingRecord | null>;
+  /**
+   * The newest settled hour (Decision 0148), the only source of the users
+   * and communities ranks; null while no hour has been settled.
+   */
+  getLatestRankEpoch(): Promise<MiningRankEpochRecord | null>;
+  /**
+   * The account's hourly total power (`nft_total_power + asset_total_power`)
+   * in the epoch, its place, and the epoch's participant count.
+   */
+  getEpochAccountStanding(input: {
+    readonly epochId: string;
+    readonly ownerUserId: string;
+  }): Promise<MiningEpochAccountStandingRecord>;
+  /** Every account of the settled hour by total power (Decision 0148). */
   listAccountRanking(input: {
-    readonly snapshotId: string;
+    readonly epochId: string;
     readonly limit: number;
     readonly after?: MiningAccountRankAfter;
   }): Promise<readonly MiningRankedAccountRecord[]>;
+  /** Every community with a bound asset by its members' power in the hour. */
   listCommunityRanking(input: {
-    readonly snapshotId: string;
-    readonly configVersion: string;
+    readonly epochId: string;
     readonly limit: number;
     readonly after?: MiningCommunityRankAfter;
   }): Promise<readonly MiningCommunityStandingRecord[]>;
   /**
    * The best-ranked standing among the communities the account is a
-   * non-banned member of (Decision 0100); null when none is ranked.
+   * non-banned member of (Decision 0100) in the settled hour; null when none
+   * is ranked.
    */
   getMemberBestCommunityStanding(input: {
-    readonly snapshotId: string;
-    readonly configVersion: string;
+    readonly epochId: string;
     readonly ownerUserId: string;
   }): Promise<MiningCommunityStandingRecord | null>;
   /** Inviters by direct invitee count (Decision 0100); live, not snapshot-bound. */
@@ -467,6 +512,8 @@ export function createUnavailableMiningRepository(): MiningRepository {
     setCommunityWeight: unavailable,
     listAccountPowers: unavailable,
     getAccountStanding: unavailable,
+    getLatestRankEpoch: unavailable,
+    getEpochAccountStanding: unavailable,
     listAccountRanking: unavailable,
     listCommunityRanking: unavailable,
     getMemberBestCommunityStanding: unavailable,

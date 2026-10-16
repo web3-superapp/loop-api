@@ -123,6 +123,9 @@ function repositoryFake(
     listFormulaVersions: vi.fn(() => Promise.resolve([draftFormula])),
     getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
     getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+    // No settled hour: the users / communities ranks are unavailable
+    // (Decision 0148).
+    getLatestRankEpoch: vi.fn(() => Promise.resolve(null)),
     // Without an active wallet an absent account is "not in the snapshot";
     // the snapshot-pending case sets this to true (Decision 0057).
     hasActiveWallet: vi.fn(() => Promise.resolve(false)),
@@ -284,9 +287,19 @@ describe("LOOP API V2 mining module", () => {
         scope,
         me: null,
         nextCursor: null,
+        // Decision 0148: the power ranks wait for a settled hour, not for
+        // the snapshot baseline.
         ranking: {
           status: "unavailable",
-          reasonCode: "MINING_FORMULA_BASELINE_PENDING",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+        },
+        myPosition: {
+          status: "unavailable",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+        },
+        snapshot: {
+          status: "unavailable",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
         },
         display: {
           anonymousMemberKey: "mining.rank.anonymousMember",
@@ -489,6 +502,33 @@ describe("LOOP API V2 mining module", () => {
       holdingsSource: "chain",
     };
     const other = "9c1f0f2e-5a7b-4c3d-8e9f-0a1b2c3d4e5f";
+    /** The settled hour the power ranks read (Decision 0148). */
+    const epochId = "6f1d2c3b-4a59-4e8d-9c7b-6a5f4e3d2c1b";
+    const rankEpoch = {
+      epochId,
+      hourStart: "2026-10-16T03:00:00.000Z",
+      hourEnd: "2026-10-16T04:00:00.000Z",
+      settledAt: "2026-10-16T04:02:59.800Z",
+      inputDigest: "a".repeat(64),
+      configVersion: "miningHourlyV1-dev",
+    };
+    const rankSnapshot = {
+      snapshotId: epochId,
+      blockNumber: "0",
+      blockHash: `0x${"a".repeat(64)}`,
+      formulaVersion: "miningHourlyV1-dev",
+      priceVersion: "mining_hourly:2026-10-16T03:00:00.000Z",
+      computedAt: "2026-10-16T04:00:00.000Z",
+      stale: false,
+      latestAttempt: {
+        snapshotId: epochId,
+        status: "complete",
+        computedAt: "2026-10-16T04:00:00.000Z",
+        reasonCode: null,
+        unreadInputs: [],
+      },
+      holdingsSource: "chain",
+    };
 
     function approvedRepository(overrides: Partial<MiningRepository> = {}) {
       return repositoryFake({
@@ -497,6 +537,14 @@ describe("LOOP API V2 mining module", () => {
           Promise.resolve([approvedBaseline, draftFormula]),
         ),
         getLatestSnapshot: vi.fn(() => Promise.resolve(snapshot)),
+        getLatestRankEpoch: vi.fn(() => Promise.resolve(rankEpoch)),
+        getEpochAccountStanding: vi.fn(() =>
+          Promise.resolve({
+            totalPower: "1000",
+            position: 2,
+            participantCount: 3,
+          }),
+        ),
         getAccountStanding: vi.fn(() =>
           Promise.resolve({
             totalPower: "1000",
@@ -1012,7 +1060,8 @@ describe("LOOP API V2 mining module", () => {
           participants: 3,
         },
         myPosition: { status: "available", position: 2, power: "1000" },
-        snapshot: { snapshotId },
+        // The settled hour in the unchanged snapshot shape (Decision 0148).
+        snapshot: rankSnapshot,
         display: {
           anonymousMemberKey: "mining.rank.anonymousMember",
           ruleKey: "mining.rank.display.anonymousModeOnly",
@@ -1083,7 +1132,7 @@ describe("LOOP API V2 mining module", () => {
       });
       const unranked = await createApp(
         approvedRepository({
-          getAccountStanding: vi.fn(() =>
+          getEpochAccountStanding: vi.fn(() =>
             Promise.resolve({
               totalPower: "0",
               position: null,
@@ -1188,6 +1237,207 @@ describe("LOOP API V2 mining module", () => {
       }
     });
 
+    describe("power ranks on the settled hour (Decision 0148)", () => {
+      it("ranks from the newest settled hour even without a complete snapshot, with ties, zero power last, and the hour as the snapshot block", async () => {
+        const listAccountRanking = vi.fn(() =>
+          Promise.resolve([
+            {
+              ownerUserId: other,
+              totalPower: "1.725",
+              position: 1,
+              publicProfileId: null,
+              alias: null,
+              anonymousMode: false,
+              powerVisibleToOthers: true,
+              avatarRef: null,
+            },
+            {
+              ownerUserId: "00000000-0000-4000-8000-000000000001",
+              totalPower: "1.5",
+              position: 2,
+              publicProfileId: null,
+              alias: null,
+              anonymousMode: false,
+              powerVisibleToOthers: true,
+              avatarRef: null,
+            },
+            {
+              ownerUserId: s7AccountId,
+              totalPower: "1.5",
+              position: 2,
+              publicProfileId: null,
+              alias: null,
+              anonymousMode: false,
+              powerVisibleToOthers: true,
+              avatarRef: null,
+            },
+            {
+              ownerUserId: "00000000-0000-4000-8000-000000000002",
+              totalPower: "0",
+              position: null,
+              publicProfileId: null,
+              alias: null,
+              anonymousMode: false,
+              powerVisibleToOthers: true,
+              avatarRef: null,
+            },
+          ]),
+        );
+        const getEpochAccountStanding = vi.fn(() =>
+          Promise.resolve({
+            totalPower: "1.5",
+            position: 2,
+            participantCount: 3,
+          }),
+        );
+        const listCommunityRanking = vi.fn(() => Promise.resolve([]));
+        const getMemberBestCommunityStanding = vi.fn(() =>
+          Promise.resolve(null),
+        );
+        const { app } = await createApp(
+          approvedRepository({
+            // The snapshot lane has nothing complete: the ranks do not care.
+            getLatestSnapshot: vi.fn(() => Promise.resolve(null)),
+            listAccountRanking,
+            getEpochAccountStanding,
+            listCommunityRanking,
+            getMemberBestCommunityStanding,
+          }),
+        );
+        const users = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users",
+          headers: s7CommonHeaders(),
+        });
+        expect(users.statusCode).toBe(200);
+        const body = users.json<{
+          ranking: { items: { position: number | null; power: string }[] };
+        }>();
+        expect(
+          body.ranking.items.map((row) => [row.position, row.power]),
+        ).toEqual([
+          [1, "1.725"],
+          [2, "1.5"],
+          [2, "1.5"],
+          [null, "0"],
+        ]);
+        expect(users.json()).toMatchObject({
+          ranking: { status: "available", participants: 3 },
+          myPosition: { status: "available", position: 2, power: "1.5" },
+          me: { rank: 2, value: "1.5" },
+          snapshot: rankSnapshot,
+        });
+        expect(listAccountRanking).toHaveBeenCalledWith({
+          epochId,
+          limit: 31,
+        });
+        expect(getEpochAccountStanding).toHaveBeenCalledWith({
+          epochId,
+          ownerUserId: s7AccountId,
+        });
+        const communities = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=communities",
+          headers: s7CommonHeaders(),
+        });
+        expect(communities.json()).toMatchObject({
+          ranking: { status: "available", items: [], participants: 0 },
+          me: null,
+          snapshot: rankSnapshot,
+        });
+        expect(listCommunityRanking).toHaveBeenCalledWith({
+          epochId,
+          limit: 31,
+        });
+        expect(getMemberBestCommunityStanding).toHaveBeenCalledWith({
+          epochId,
+          ownerUserId: s7AccountId,
+        });
+      });
+
+      it("answers an account without a row in the hour as not ranked, never pending", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getEpochAccountStanding: vi.fn(() =>
+              Promise.resolve({
+                totalPower: null,
+                position: null,
+                participantCount: 3,
+              }),
+            ),
+            hasActiveWallet: vi.fn(() => Promise.resolve(true)),
+          }),
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users",
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          // Everyone else's place is still counted.
+          ranking: { status: "available", participants: 3 },
+          myPosition: {
+            status: "unavailable",
+            reasonCode: "MINING_RANK_NOT_RANKED",
+          },
+          me: null,
+        });
+      });
+
+      it("keeps the unavailable snapshot shape (not a 500) while no hour is settled, and the referral rank live", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getLatestRankEpoch: vi.fn(() => Promise.resolve(null)),
+          }),
+        );
+        const reason = {
+          status: "unavailable",
+          reasonCode: "MINING_SNAPSHOT_NOT_AVAILABLE",
+        };
+        for (const scope of ["users", "communities"]) {
+          const response = await app.inject({
+            method: "GET",
+            url: `/v2/mining/rank?scope=${scope}`,
+            headers: s7CommonHeaders(),
+          });
+          expect(response.statusCode, scope).toBe(200);
+          expect(response.json(), scope).toMatchObject({
+            ranking: reason,
+            myPosition: reason,
+            snapshot: reason,
+            me: null,
+            nextCursor: null,
+            formula: { status: "approved" },
+          });
+        }
+        const referrals = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=referrals",
+          headers: s7CommonHeaders(),
+        });
+        expect(referrals.json()).toMatchObject({
+          ranking: { status: "available", scope: "referrals" },
+        });
+      });
+
+      it("answers 503 when the settled hour cannot be read", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getLatestRankEpoch: vi.fn(() =>
+              Promise.reject(new MiningRepositoryUnavailableError()),
+            ),
+          }),
+        );
+        const response = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users",
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode).toBe(503);
+      });
+    });
+
     describe("rank pages, me, and the referral rank (Decision 0100)", () => {
       const ownerFor = (index: number): string =>
         `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
@@ -1239,7 +1489,7 @@ describe("LOOP API V2 mining module", () => {
         // Zero power, no ranked community: me is null on both scopes.
         const unranked = await createApp(
           approvedRepository({
-            getAccountStanding: vi.fn(() =>
+            getEpochAccountStanding: vi.fn(() =>
               Promise.resolve({
                 totalPower: "0",
                 position: null,
@@ -1292,7 +1542,7 @@ describe("LOOP API V2 mining module", () => {
         }>();
         expect(firstBody.ranking.items).toHaveLength(2);
         expect(listAccountRanking).toHaveBeenLastCalledWith({
-          snapshotId,
+          epochId,
           limit: 3,
         });
         expect(typeof firstBody.nextCursor).toBe("string");
@@ -1303,7 +1553,7 @@ describe("LOOP API V2 mining module", () => {
         });
         expect(second.statusCode).toBe(200);
         expect(listAccountRanking).toHaveBeenLastCalledWith({
-          snapshotId,
+          epochId,
           limit: 3,
           after: { totalPower: "999", ownerUserId: ownerFor(2) },
         });
@@ -1595,12 +1845,11 @@ describe("LOOP API V2 mining module", () => {
         reasonCode: "MINING_SNAPSHOT_INCOMPLETE",
         unreadInputs: incompleteAttempt.unreadInputs,
       };
+      // The power ranks read the settled hour instead (Decision 0148).
       const readUrls = [
         "/v2/mining/summary",
         "/v2/mining/assets",
         "/v2/mining/rewards",
-        "/v2/mining/rank?scope=users",
-        "/v2/mining/rank?scope=communities",
         `/v2/mining/communities/${communityId}`,
       ];
 
@@ -1646,24 +1895,27 @@ describe("LOOP API V2 mining module", () => {
           ],
           source: { snapshotId, stale: true, latestAttempt: attemptProjection },
         });
-        for (const url of [
-          "/v2/mining/rank?scope=users",
-          `/v2/mining/communities/${communityId}`,
-        ]) {
-          const response = await app.inject({
-            method: "GET",
-            url,
-            headers: s7CommonHeaders(),
-          });
-          expect(response.statusCode, url).toBe(200);
-          expect(response.json(), url).toMatchObject({
-            snapshot: {
-              snapshotId,
-              stale: true,
-              latestAttempt: attemptProjection,
-            },
-          });
-        }
+        const detail = await app.inject({
+          method: "GET",
+          url: `/v2/mining/communities/${communityId}`,
+          headers: s7CommonHeaders(),
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json()).toMatchObject({
+          snapshot: {
+            snapshotId,
+            stale: true,
+            latestAttempt: attemptProjection,
+          },
+        });
+        // The power ranks read the settled hour (Decision 0148): the
+        // snapshot lane's attempts never mark them stale.
+        const rank = await app.inject({
+          method: "GET",
+          url: "/v2/mining/rank?scope=users",
+          headers: s7CommonHeaders(),
+        });
+        expect(rank.json()).toMatchObject({ snapshot: rankSnapshot });
       });
 
       it("publishes no number while the version in force has only an incomplete attempt: never a zero for an unread holding", async () => {
@@ -1749,7 +2001,6 @@ describe("LOOP API V2 mining module", () => {
             { totalPower: pending, included: [], excluded: [] },
           ],
           ["/v2/mining/rewards", { estimatedToday: pending }],
-          ["/v2/mining/rank?scope=users", { myPosition: pending }],
           [
             `/v2/mining/communities/${communityId}`,
             { myContribution: pending },
