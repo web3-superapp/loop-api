@@ -50,7 +50,7 @@
 ## 4. Consequences
 
 - 旧工厂实例零行为变化：事件、表行、报价、核验（0x10C4、十一 / 十字段哈希、500 万）全部照旧；`fixedEconomics` JSON 与 configHash 字节不变。
-- 新工厂部署后需更新的 env（键不变，值换）：`HOOKS_LAUNCH_FACTORY_ADDRESS` / `HOOKS_LAUNCH_FACTORY_CODE_HASH`（若当前目标是 LoopDynamic 工厂）、`LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `LAUNCH2_DYNAMIC_FACTORY_CODE_HASH`、`LAUNCH2_DYNAMIC_ROUTER_ADDRESS` / `LAUNCH2_DYNAMIC_ROUTER_CODE_HASH`（部署脚本每次新部署 LoopRouter）、`LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS`（若重部署）；旧工厂继续索引须保留在 `LAUNCH2_LEGACY_FACTORIES`。旧模板保存的草稿在新工厂上 `template_mismatch`，须重新保存再签。
+- 新工厂部署后需更新的 env（键不变，值换）：`HOOKS_LAUNCH_FACTORY_ADDRESS` / `HOOKS_LAUNCH_FACTORY_CODE_HASH`（若当前目标是 LoopDynamic 工厂）、`LAUNCH2_DYNAMIC_FACTORY_ADDRESS` / `LAUNCH2_DYNAMIC_FACTORY_CODE_HASH`、`LAUNCH2_DYNAMIC_ROUTER_ADDRESS` / `LAUNCH2_DYNAMIC_ROUTER_CODE_HASH`（部署脚本每次新部署 LoopRouter）、`LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS`（若重部署）；旧工厂继续索引须保留在 `LAUNCH2_LEGACY_FACTORIES`。（**0153 修订**：这些 router / registry env 只描述**当前**工厂；旧工厂实例的路由从其工厂 getter 读取，API 也读 `LAUNCH2_LEGACY_FACTORIES` 作为信任名单——旧工厂必须留在该名单里，否则其实例 503 `LAUNCH2_DYNAMIC_FACTORY_UNKNOWN`。）旧模板保存的草稿在新工厂上 `template_mismatch`，须重新保存再签。
 - 旧 Hook 实例的读面 `buyFeeToken = meme`；App 显示买入税币种应以该字段为准（前端同步另批）。
 - 0015 §12 风险照搬：USD1 冻结 Hook 时付税买入也会回滚（报价模拟会如实 revert）；带紧限价的第三方部分成交按申报额收税（读模型按事件实值记）。
 - 内盘报价改用曲线链上上限，旧实例读到的是 500 万，与之前相同。

@@ -7,6 +7,7 @@ import {
 } from "../../src/features/launch2/launch2-pool.js";
 import type {
   Launch2DynamicChain,
+  Launch2DynamicFactoryRouting,
   Launch2DynamicHookState,
   Launch2DynamicSwapCall,
   Launch2InstanceRecord,
@@ -43,9 +44,48 @@ export const launch2RouterRegistry =
   "0x4444444444444444444444444444444444444444";
 const zero = "0x0000000000000000000000000000000000000000";
 
+/** Decision 0153: the current LoopDynamic Factory of the fixtures. */
+export const launch2DynamicFactory =
+  "0x5725000000000000000000000000000000005725";
+export const launch2DynamicFactoryCodeHash = `0x${"5d".repeat(32)}`;
+export const launch2HookDeploymentFactory =
+  "0x4e62000000000000000000000000000000004e62";
+/** Decision 0153: an older LoopDynamic Factory with its own router / registry. */
+export const launch2LegacyDynamicFactory =
+  "0xd05e000000000000000000000000000000008c4d";
+export const launch2LegacyLoopRouter =
+  "0x135c000000000000000000000000000000000135";
+export const launch2LegacyRouterRegistry =
+  "0x9bcd000000000000000000000000000000009bcd";
+
 export const launch2DynamicEnv = Object.freeze({
   LAUNCH2_DYNAMIC_ROUTER_ADDRESS: launch2LoopRouter,
   LAUNCH2_DYNAMIC_ROUTER_CODE_HASH: launch2LoopRouterCodeHash,
+});
+
+/**
+ * Decision 0153: the trusted LoopDynamic Factories (the fixture instance's
+ * Factory is the current one). Spread into a test config's env.
+ */
+export const launch2DynamicFactoryEnv = Object.freeze({
+  LAUNCH2_DYNAMIC_FACTORY_ADDRESS: launch2DynamicFactory,
+  LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: launch2DynamicFactoryCodeHash,
+  LAUNCH2_LEGACY_FACTORIES: `v3:${launch2LegacyDynamicFactory}`,
+});
+
+export const launch2DefaultFactoryRoutings: Readonly<
+  Record<string, Launch2DynamicFactoryRouting | null>
+> = Object.freeze({
+  [launch2DynamicFactory]: Object.freeze({
+    router: launch2LoopRouter,
+    routerRegistry: launch2RouterRegistry,
+    hookDeploymentFactory: launch2HookDeploymentFactory,
+  }),
+  [launch2LegacyDynamicFactory]: Object.freeze({
+    router: launch2LegacyLoopRouter,
+    routerRegistry: launch2LegacyRouterRegistry,
+    hookDeploymentFactory: "0x8613000000000000000000000000000000008613",
+  }),
 });
 
 export function dynamicPoolIdFor(
@@ -62,6 +102,7 @@ export function graduatedDynamicInstance(
   const poolId = dynamicPoolIdFor(base.addresses.meme);
   return {
     ...base,
+    factoryAddress: launch2DynamicFactory,
     addresses: { ...base.addresses, hook: zero, priceRecorder: zero },
     poolHookKind: "loopDynamic",
     dynamicPool: { hook: launch2DynamicHook, poolId, boundBlock: "4000" },
@@ -90,6 +131,16 @@ export interface FakeLaunch2DynamicState {
     | { readonly status: "reverted"; readonly errorName: string | null };
   swaps: Launch2DynamicSwapCall[];
   claims: { roundId: bigint; wallet: string }[];
+  /** Decision 0153: each Factory's routing (absent key = reverts → null). */
+  factoryRoutings: Record<string, Launch2DynamicFactoryRouting | null>;
+  /** Decision 0153: `factory.loopHook(launchId)` (any Factory / launch). */
+  factoryHook: string | null;
+  failFactoryRead: boolean;
+  /** Decision 0153: the Factories whose routing was read (cache checks). */
+  factoryReads: string[];
+  factoryHookReads: string[];
+  /** Decision 0153: the routers `verifyRouter` was asked about. */
+  routerChecks: string[];
 }
 
 export function defaultDynamicState(
@@ -108,6 +159,12 @@ export function defaultDynamicState(
     claim: { status: "ok", amount: 12n * wad },
     swaps: [],
     claims: [],
+    factoryRoutings: { ...launch2DefaultFactoryRoutings },
+    factoryHook: launch2DynamicHook,
+    failFactoryRead: false,
+    factoryReads: [],
+    factoryHookReads: [],
+    routerChecks: [],
     ...overrides,
   };
 }
@@ -175,7 +232,23 @@ export function createFakeLaunch2DynamicChain(
   const fixtureMeme = `0x${"a".repeat(36)}6666`;
   return {
     router: launch2LoopRouter,
-    verifyRouter: () => Promise.resolve(state.routerCheck),
+    verifyRouter: (router = launch2LoopRouter) => {
+      state.routerChecks.push(router.toLowerCase());
+      return Promise.resolve(state.routerCheck);
+    },
+    readFactoryRouting: (factory) => {
+      state.factoryReads.push(factory.toLowerCase());
+      if (state.failFactoryRead) {
+        return Promise.reject(new Error("rpc down"));
+      }
+      return Promise.resolve(
+        state.factoryRoutings[factory.toLowerCase()] ?? null,
+      );
+    },
+    readFactoryHook: (input) => {
+      state.factoryHookReads.push(input.factory.toLowerCase());
+      return Promise.resolve(state.factoryHook);
+    },
     readHookState: (input) => {
       if (state.failRead) return Promise.reject(new Error("rpc down"));
       return Promise.resolve(hookState(fixtureMeme, input.wallet));

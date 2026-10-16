@@ -58,6 +58,13 @@ export const launch2DynamicReasonCodes = Object.freeze({
   hookNotIndexed: "LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED",
   hookMismatch: "LAUNCH2_DYNAMIC_HOOK_MISMATCH",
   hookNotInitialized: "LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED",
+  // Decision 0153: the instance's Factory is not a trusted LoopDynamic
+  // Factory (not LAUNCH2_DYNAMIC_FACTORY_ADDRESS / a v3 legacy entry, or
+  // it has no LoopDynamic routing getters).
+  factoryUnknown: "LAUNCH2_DYNAMIC_FACTORY_UNKNOWN",
+  // Decision 0153: the current Factory's loopRouter() / routerRegistry()
+  // differ from LAUNCH2_DYNAMIC_ROUTER_ADDRESS / _REGISTRY_ADDRESS.
+  routerMismatch: "LAUNCH2_DYNAMIC_ROUTER_MISMATCH",
   // 422 VALIDATION_FAILED.
   exactOutUnsupported: "LAUNCH2_EXACT_OUT_UNSUPPORTED",
   notApplicable: "LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE",
@@ -92,6 +99,8 @@ export const launch2DynamicReasonMessagesZh: Readonly<
   LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED: "外盘池子正在同步，请稍后再试",
   LAUNCH2_DYNAMIC_HOOK_MISMATCH: "外盘池子校验未通过，暂不可交易",
   LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED: "外盘池子尚未初始化",
+  LAUNCH2_DYNAMIC_FACTORY_UNKNOWN: "外盘池子来源未登记，暂不可交易",
+  LAUNCH2_DYNAMIC_ROUTER_MISMATCH: "外盘路由配置不一致，暂不可交易",
   LAUNCH2_EXACT_OUT_UNSUPPORTED: "该池子只支持按支付金额交易",
   LAUNCH2_DYNAMIC_POOL_NOT_APPLICABLE: "该项目的外盘没有奖励轮次",
   LAUNCH2_DYNAMIC_ROUND_INVALID: "轮次编号无效",

@@ -72,6 +72,7 @@ import {
   type Launch2BuybackRecord,
   type Launch2Chain,
   type Launch2DynamicChain,
+  type Launch2DynamicFactoryRouting,
   type Launch2DynamicHookState,
   type Launch2DynamicSwapCall,
   type Launch2InstanceRecord,
@@ -199,10 +200,23 @@ export interface Launch2ServiceDependencies {
    */
   readonly dynamicChain?: Launch2DynamicChain | null;
   /**
-   * Decision 0131: LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS — when set, a
-   * LoopDynamic Hook must point at this trusted-router list.
+   * Decision 0131: LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS. Decision 0153:
+   * when set, the **current** LoopDynamic Factory's `routerRegistry()` must
+   * equal it (else 503 LAUNCH2_DYNAMIC_ROUTER_MISMATCH); every Hook is
+   * checked against its own Factory's registry.
    */
   readonly dynamicRouterRegistry?: string | null;
+  /**
+   * Decision 0153: the trusted LoopDynamic Factories — `current`
+   * (LAUNCH2_DYNAMIC_FACTORY_ADDRESS) and `legacy` (the v3 entries of
+   * LAUNCH2_LEGACY_FACTORIES), lower-case. A LoopDynamic instance of any
+   * other Factory is 503 LAUNCH2_DYNAMIC_FACTORY_UNKNOWN. Absent / null =
+   * none (every LoopDynamic read 503).
+   */
+  readonly dynamicFactories?: {
+    readonly current: string | null;
+    readonly legacy: readonly string[];
+  } | null;
   /**
    * Decision 0126: `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS` (default 180): the
    * on-chain deadline a pool or curve prepare encodes, counted from the
@@ -1985,10 +1999,94 @@ export function createLaunch2Service(
   }
 
   /**
+   * Decision 0153: the routing of the instance's own LoopDynamic Factory.
+   * Every redeploy ships a new LoopRouter / registry, so a Hook is checked
+   * against the Factory that deployed it — never against the one configured
+   * router. The Factory must be trusted (`dynamicFactories`); its immutable
+   * `loopRouter()` / `routerRegistry()` / `loopHookDeploymentFactory()` are
+   * read once per Factory (in flight shared, a failure not cached). For the
+   * current Factory the chain must agree with the configuration
+   * (LAUNCH2_DYNAMIC_ROUTER_ADDRESS / _REGISTRY_ADDRESS), else 503
+   * LAUNCH2_DYNAMIC_ROUTER_MISMATCH: a wrong env is surfaced, not bypassed.
+   */
+  const dynamicRoutings = new Map<
+    string,
+    Promise<Launch2DynamicFactoryRouting | null>
+  >();
+  /** `${factory}:${launchId}:${hook}` whose `loopHook(launchId)` matched. */
+  const dynamicFactoryHooks = new Set<string>();
+
+  async function dynamicRoutingOf(
+    record: Launch2InstanceRecord,
+    reader: Launch2DynamicChain,
+  ): Promise<Launch2DynamicFactoryRouting> {
+    const factory = record.factoryAddress.toLowerCase();
+    const trusted = deps.dynamicFactories ?? null;
+    const current = trusted?.current?.toLowerCase() ?? null;
+    if (
+      trusted === null ||
+      (factory !== current &&
+        !trusted.legacy.some((entry) => entry.toLowerCase() === factory))
+    ) {
+      return unavailableWith(launch2DynamicReasonCodes.factoryUnknown);
+    }
+    let pending = dynamicRoutings.get(factory);
+    if (pending === undefined) {
+      pending = reader.readFactoryRouting(factory);
+      dynamicRoutings.set(factory, pending);
+      pending.catch(() => {
+        if (dynamicRoutings.get(factory) === pending) {
+          dynamicRoutings.delete(factory);
+        }
+      });
+    }
+    const routing = await chainRead(() => pending);
+    if (routing === null) {
+      return unavailableWith(launch2DynamicReasonCodes.factoryUnknown);
+    }
+    if (factory === current) {
+      const registry = deps.dynamicRouterRegistry?.toLowerCase() ?? null;
+      if (
+        routing.router !== reader.router.toLowerCase() ||
+        (registry !== null && routing.routerRegistry !== registry)
+      ) {
+        return unavailableWith(launch2DynamicReasonCodes.routerMismatch);
+      }
+    }
+    return routing;
+  }
+
+  /**
+   * Decision 0153: the instance detail's `pool.router` for a graduated
+   * LoopDynamic instance — its own Factory's LoopRouter; null when the
+   * Factory is untrusted / unreadable (the detail never guesses one).
+   */
+  async function dynamicRouterForView(
+    record: Launch2InstanceRecord,
+  ): Promise<string | null> {
+    const reader = deps.dynamicChain ?? null;
+    if (
+      reader === null ||
+      record.graduation === null ||
+      hookKindOf(record) !== "loopDynamic"
+    ) {
+      return null;
+    }
+    try {
+      return (await dynamicRoutingOf(record, reader)).router;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The bound Hook of a graduated LoopDynamic instance at one block, with
-   * the router / PoolManager / pool id cross-checked: the Hook must trust
-   * the configured LoopRouter, share its PoolManager, and serve the pool
-   * the lane indexed (`LoopHookBound` = `Graduated.officialPoolId`).
+   * the router / PoolManager / pool id cross-checked. Decision 0153: the
+   * Hook must be its Factory's `loopHook(launchId)` (deployed through that
+   * Factory's Hook deployment factory), trust **that Factory's** LoopRouter
+   * and registry, share the router's PoolManager, and serve the pool the
+   * lane indexed (`LoopHookBound` = `Graduated.officialPoolId`). `router`
+   * is the LoopRouter the instance trades through.
    */
   async function dynamicHookAt(
     record: Launch2InstanceRecord,
@@ -1997,6 +2095,7 @@ export function createLaunch2Service(
   ): Promise<{
     readonly chain: Launch2DynamicChain;
     readonly hook: string;
+    readonly router: string;
     readonly state: Launch2DynamicHookState;
   }> {
     const bound = record.dynamicPool ?? null;
@@ -2004,9 +2103,22 @@ export function createLaunch2Service(
       return unavailableWith(launch2DynamicReasonCodes.hookNotIndexed);
     }
     const reader = dynamicChain();
+    const routing = await dynamicRoutingOf(record, reader);
+    const hook = bound.hook.toLowerCase();
+    const factory = record.factoryAddress.toLowerCase();
+    const hookKey = `${factory}:${record.launchId.toLowerCase()}:${hook}`;
+    if (!dynamicFactoryHooks.has(hookKey)) {
+      const deployed = await chainRead(() =>
+        reader.readFactoryHook({ factory, launchId: record.launchId }),
+      );
+      if (deployed !== hook) {
+        return unavailableWith(launch2DynamicReasonCodes.hookMismatch);
+      }
+      dynamicFactoryHooks.add(hookKey);
+    }
     let manager: string | null = null;
     if (verifyRouter) {
-      const check = await chainRead(() => reader.verifyRouter());
+      const check = await chainRead(() => reader.verifyRouter(routing.router));
       if (check.status !== "ok") return unavailableWith(check.reasonCode);
       manager = check.poolManager;
     }
@@ -2014,22 +2126,20 @@ export function createLaunch2Service(
       reader.readHookState({ hook: bound.hook, wallet }),
     );
     if (
-      state.trustedRouter !== reader.router ||
+      state.trustedRouter !== routing.router ||
+      state.routerRegistry !== routing.routerRegistry ||
       (manager !== null && state.manager !== manager) ||
       state.poolId !== bound.poolId.toLowerCase() ||
       (record.graduation !== null &&
         record.graduation.poolId.toLowerCase() !== state.poolId) ||
-      state.meme !== record.addresses.meme.toLowerCase() ||
-      (deps.dynamicRouterRegistry !== undefined &&
-        deps.dynamicRouterRegistry !== null &&
-        state.routerRegistry !== deps.dynamicRouterRegistry.toLowerCase())
+      state.meme !== record.addresses.meme.toLowerCase()
     ) {
       return unavailableWith(launch2DynamicReasonCodes.hookMismatch);
     }
     if (!state.initialized) {
       return unavailableWith(launch2DynamicReasonCodes.hookNotInitialized);
     }
-    return { chain: reader, hook: bound.hook.toLowerCase(), state };
+    return { chain: reader, hook, router: routing.router, state };
   }
 
   /**
@@ -2076,6 +2186,7 @@ export function createLaunch2Service(
     const {
       chain: reader,
       hook,
+      router,
       state,
     } = await dynamicHookAt(record, address, true);
     const meme = record.addresses.meme.toLowerCase();
@@ -2109,6 +2220,7 @@ export function createLaunch2Service(
         reader.simulateSwap({
           blockNumber: state.blockNumber,
           from: address,
+          router,
           data,
           override,
           neutralHook,
@@ -2214,7 +2326,8 @@ export function createLaunch2Service(
         meme: formatLaunch2Amount(state.wallet?.memeBalance ?? 0n),
       }),
       exceedsBalance: amountIn > inputBalance,
-      router: reader.router,
+      // Decision 0153: the instance's own Factory's LoopRouter.
+      router,
       poolId: state.poolId,
       poolKey: key,
       zeroForOne,
@@ -2248,7 +2361,7 @@ export function createLaunch2Service(
       state,
       key,
       zeroForOne,
-      router: reader.router,
+      router,
       numbers,
       chain: reader,
     };
@@ -2361,6 +2474,7 @@ export function createLaunch2Service(
             const simulated = await reader.simulateSwap({
               blockNumber: state.blockNumber,
               from: address,
+              router,
               data,
               override: overrideFor(approvalPending),
               neutralHook: null,
@@ -2900,11 +3014,7 @@ export function createLaunch2Service(
       }
       throw error;
     };
-    const {
-      chain: reader,
-      hook,
-      state,
-    } = await dynamicHookAt(
+    const { hook, router, state } = await dynamicHookAt(
       record,
       wallet === null ? null : wallet.address.toLowerCase(),
       true,
@@ -2945,7 +3055,7 @@ export function createLaunch2Service(
               .catch(withHookKind),
           );
     return {
-      reader,
+      router,
       hook,
       state,
       summary,
@@ -2974,7 +3084,7 @@ export function createLaunch2Service(
     // draw the LoopDynamic panel (exactIn only), never the OfficialTax one.
     const wallet = await walletFor(input.principal, input.walletId, false);
     const {
-      reader,
+      router,
       hook,
       state,
       summary,
@@ -2998,7 +3108,8 @@ export function createLaunch2Service(
         status: "active",
         hook,
         poolId: state.poolId,
-        router: reader.router,
+        // Decision 0153: the instance's own Factory's LoopRouter.
+        router,
         routerRegistry:
           state.routerRegistry === "0x0000000000000000000000000000000000000000"
             ? null
@@ -3731,6 +3842,7 @@ export function createLaunch2Service(
         poolStats,
         balances,
         tradingHold,
+        dynamicRouter,
       ] = await Promise.all([
         store
           .listBuybacks({
@@ -3770,6 +3882,7 @@ export function createLaunch2Service(
           ? Promise.resolve(notGraduatedBalances)
           : walletBalancesOf(record, wallet.address),
         tradingHoldForView(),
+        dynamicRouterForView(record),
       ]);
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
@@ -3854,7 +3967,7 @@ export function createLaunch2Service(
                   // S171: LoopDynamic pools trade through the LoopRouter, not the OfficialPoolRouter.
                   router:
                     hookKindOf(record) === "loopDynamic"
-                      ? (deps.dynamicChain?.router ?? null)
+                      ? dynamicRouter
                       : (deps.poolChain?.router ?? null),
                   tradeCount: record.pool.tradeCount,
                   buyCount: record.pool.buyCount,

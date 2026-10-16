@@ -2352,6 +2352,8 @@ export async function buildApp(
             chainReference: config.launchChain.chainReference,
             router: config.launch2.dynamicRouter.address,
             expectedRuntimeCodeHash: config.launch2.dynamicRouter.codeHash,
+            legacyRuntimeCodeHashes:
+              config.launch2.dynamicLegacyRouterCodeHashes,
           })
         : null;
   const launch2Service =
@@ -2374,6 +2376,12 @@ export async function buildApp(
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,
+          // Decision 0153: an instance's router comes from its own Factory,
+          // which must be one of these.
+          dynamicFactories: {
+            current: config.hooksLaunch.dynamicFactory?.address ?? null,
+            legacy: config.launch2.dynamicLegacyFactories,
+          },
           // Decision 0136: the chain guard hold refuses launch2 writes.
           chainGuardHolds:
             config.chainGuardEnabled === true &&

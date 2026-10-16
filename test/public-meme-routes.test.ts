@@ -23,6 +23,10 @@ import {
   publicMemeListSchema,
 } from "../src/routes/public-meme.js";
 import {
+  launch2DynamicFactoryEnv,
+  launch2LegacyDynamicFactory,
+  launch2LegacyLoopRouter,
+  launch2LegacyRouterRegistry,
   createFakeLaunch2DynamicChain,
   defaultDynamicState,
   graduatedDynamicInstance,
@@ -116,6 +120,7 @@ describe("public MEME routes (Decision 0147)", () => {
     const app = await buildApp({
       config: s7TestConfig({
         ...launch2Env,
+        ...launch2DynamicFactoryEnv,
         ...launch2PoolEnv,
         ...options.env,
       }),
@@ -582,6 +587,50 @@ describe("public MEME routes (Decision 0147)", () => {
     ).toMatchObject({
       dynamic: null,
       dynamicReasonCode: "LAUNCH2_CHAIN_READ_FAILED",
+    });
+  });
+
+  it("answers a legacy-Factory instance through its own router; an untrusted Factory names FACTORY_UNKNOWN (Decision 0153)", async () => {
+    const legacy = graduatedDynamicInstance({
+      instanceId: "00000000-0000-4000-8000-00000000d05e",
+      factoryAddress: launch2LegacyDynamicFactory,
+    });
+    const foreign = graduatedDynamicInstance({
+      instanceId: "00000000-0000-4000-8000-0000000f0e19",
+      factoryAddress: "0x9999999999999999999999999999999999999999",
+    });
+    const { app } = await createApp({
+      repository: seeded(legacy, foreign),
+      dynamic: defaultDynamicState({
+        hook: {
+          trustedRouter: launch2LegacyLoopRouter,
+          routerRegistry: launch2LegacyRouterRegistry,
+        },
+      }),
+    });
+    const detail = await get(app, `/public/v1/meme/${legacy.instanceId}`);
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ dynamic: { buyFeeToken: "meme" } });
+    expect(
+      (await get(app, `/public/v1/meme/${foreign.instanceId}`)).json(),
+    ).toEqual({
+      code: "CAPABILITY_UNAVAILABLE",
+      reasonCode: "LAUNCH2_DYNAMIC_FACTORY_UNKNOWN",
+    });
+    const list = await get(app, "/public/v1/meme");
+    expect(list.statusCode).toBe(200);
+    const rows = new Map(
+      list
+        .json<{ items: Record<string, unknown>[] }>()
+        .items.map((item) => [item["instanceId"], item]),
+    );
+    expect(rows.get(legacy.instanceId)).toMatchObject({
+      dynamicReasonCode: null,
+    });
+    expect(rows.get(legacy.instanceId)?.["dynamic"]).not.toBeNull();
+    expect(rows.get(foreign.instanceId)).toMatchObject({
+      dynamic: null,
+      dynamicReasonCode: "LAUNCH2_DYNAMIC_FACTORY_UNKNOWN",
     });
   });
 

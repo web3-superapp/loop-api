@@ -391,6 +391,12 @@ export interface Launch2DynamicSwapCall {
   readonly blockNumber: bigint;
   readonly from: string;
   readonly data: string;
+  /**
+   * Decision 0153: the LoopRouter the swap goes through — the router of the
+   * instance's own Factory (`loopRouter()`), not necessarily the configured
+   * one. The allowance override names it as the spender.
+   */
+  readonly router: string;
   /** In-call override of the input token (`balance` null = real balance). */
   readonly override: {
     readonly token: string;
@@ -404,11 +410,48 @@ export interface Launch2DynamicSwapCall {
   readonly neutralHook: string | null;
 }
 
-export interface Launch2DynamicChain {
-  /** `LAUNCH2_DYNAMIC_ROUTER_ADDRESS` (LoopRouter, lower-case). */
+/**
+ * Decision 0153: the immutable routing of one LoopDynamic Factory, read from
+ * its own getters (`loopRouter()`, `routerRegistry()`,
+ * `loopHookDeploymentFactory()`), lower-case. `routerRegistry` is the zero
+ * address for a `LoopRouterOnly` Factory.
+ */
+export interface Launch2DynamicFactoryRouting {
   readonly router: string;
-  /** Runtime code hash = `LAUNCH2_DYNAMIC_ROUTER_CODE_HASH`, and `manager()`. */
-  verifyRouter(): Promise<Launch2PoolRouterCheck>;
+  readonly routerRegistry: string;
+  readonly hookDeploymentFactory: string;
+}
+
+export interface Launch2DynamicChain {
+  /**
+   * `LAUNCH2_DYNAMIC_ROUTER_ADDRESS` (LoopRouter, lower-case): the router of
+   * the **current** LoopDynamic Factory. Decision 0153: an instance trades
+   * through its own Factory's router (`readFactoryRouting`).
+   */
+  readonly router: string;
+  /**
+   * The router's runtime code hash is an accepted one
+   * (`LAUNCH2_DYNAMIC_ROUTER_CODE_HASH`, plus Decision 0153's
+   * `LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES`), and its `manager()`.
+   * `router` absent = the configured one. Cached per router once verified.
+   */
+  verifyRouter(router?: string): Promise<Launch2PoolRouterCheck>;
+  /**
+   * Decision 0153: the Factory's `loopRouter()` / `routerRegistry()` /
+   * `loopHookDeploymentFactory()`; null when the Factory reverts (not a
+   * LoopDynamic Factory). RPC failures reject.
+   */
+  readFactoryRouting(
+    factory: string,
+  ): Promise<Launch2DynamicFactoryRouting | null>;
+  /**
+   * Decision 0153: `factory.loopHook(launchId)` (= its Hook deployment
+   * factory's `hookOf`), lower-case; null when the call reverts.
+   */
+  readFactoryHook(input: {
+    readonly factory: string;
+    readonly launchId: string;
+  }): Promise<string | null>;
   readHookState(input: {
     readonly hook: string;
     readonly wallet: string | null;

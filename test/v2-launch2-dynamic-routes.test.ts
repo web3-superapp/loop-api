@@ -18,6 +18,7 @@ import {
   launch2PoolQuoteSchema,
 } from "../src/routes/v2/launch2-schemas.js";
 import {
+  launch2DynamicFactoryEnv,
   createFakeLaunch2DynamicChain,
   defaultDynamicState,
   dynamicPoolIdFor,
@@ -99,6 +100,7 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     const app = await buildApp({
       config: s7TestConfig({
         ...launch2Env,
+        ...launch2DynamicFactoryEnv,
         ...launch2PoolEnv,
         ...(options.writes === false ? {} : launch2WritesEnv),
       }),
@@ -543,7 +545,10 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     const { repository } = seeded(record);
     const { app } = await createApp({
       repository,
-      dynamic: defaultDynamicState({ hook: { poolId } }),
+      dynamic: defaultDynamicState({
+        hook: { poolId },
+        factoryHook: launch2DynamicHookS209,
+      }),
     });
     const response = await get(
       app,
@@ -595,7 +600,10 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     const { repository } = seeded(record);
     const { app } = await createApp({
       repository,
-      dynamic: defaultDynamicState({ hook: { poolId } }),
+      dynamic: defaultDynamicState({
+        hook: { poolId },
+        factoryHook: odd,
+      }),
     });
     const response = await get(
       app,

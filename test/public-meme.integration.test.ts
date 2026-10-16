@@ -15,6 +15,8 @@ import { formatLaunch2Amount } from "../src/features/launch2/launch2-contract.js
 import { launch2PriceAt } from "../src/features/launch2/launch2-curve-math.js";
 import { launch2PublicChangePct } from "../src/features/launch2/launch2-public.js";
 import {
+  launch2DynamicFactory,
+  launch2DynamicFactoryEnv,
   createFakeLaunch2DynamicChain,
   defaultDynamicState,
   dynamicPoolIdFor,
@@ -189,7 +191,10 @@ async function instance(input: {
       projectId,
       owner,
       chainId,
-      "0x1111111111111111111111111111111111111111",
+      // Decision 0153: a LoopDynamic instance must be a trusted Factory's.
+      input.dynamicHook === undefined
+        ? "0x1111111111111111111111111111111111111111"
+        : launch2DynamicFactory,
       hex(32),
       draft.configHash,
       hex(20),
@@ -529,7 +534,11 @@ beforeAll(async () => {
   }
 
   app = await buildApp({
-    config: s7TestConfig({ ...launch2Env, ...launch2PoolEnv }),
+    config: s7TestConfig({
+      ...launch2Env,
+      ...launch2PoolEnv,
+      ...launch2DynamicFactoryEnv,
+    }),
     contractSurface: "runtime",
     database: {
       ...s7Database({}),

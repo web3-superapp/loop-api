@@ -1003,6 +1003,24 @@ const environmentSchema = z
       .trim()
       .regex(/^0x[0-9a-fA-F]{40}$/u, "must be a 0x-prefixed 20-byte address")
       .optional(),
+    // Decision 0153: the API resolves a LoopDynamic instance's router from
+    // its own Factory; the trusted older LoopDynamic Factories are the v3
+    // entries of the worker's list (same value, same validation).
+    LAUNCH2_LEGACY_FACTORIES: optionalCredential(2_048),
+    // Decision 0153: further accepted LoopRouter runtime code hashes (older
+    // Factories' routers), comma-separated; blank = only
+    // LAUNCH2_DYNAMIC_ROUTER_CODE_HASH.
+    LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES: z.preprocess(
+      blankStringToUndefined,
+      z
+        .string()
+        .trim()
+        .regex(
+          /^0x[0-9a-fA-F]{64}(\s*,\s*0x[0-9a-fA-F]{64})*$/u,
+          "must be comma-separated 0x-prefixed 32-byte hashes",
+        )
+        .optional(),
+    ),
   })
   .superRefine((value, context) => {
     refineAddressCodeHashPair(
@@ -1864,6 +1882,14 @@ export interface AppConfig {
     } | null;
     /** Decision 0131: LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS (lower-case). */
     readonly dynamicRouterRegistry: string | null;
+    /**
+     * Decision 0153: the v3 entries of LAUNCH2_LEGACY_FACTORIES (lower-case)
+     * — the older LoopDynamic Factories whose instances stay readable and
+     * tradable through their own Factory's LoopRouter.
+     */
+    readonly dynamicLegacyFactories: readonly string[];
+    /** Decision 0153: LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES (lower-case). */
+    readonly dynamicLegacyRouterCodeHashes: readonly string[];
   };
   /**
    * Decision 0061: whether the `mining-snapshot` lane counts the
@@ -4093,6 +4119,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_DYNAMIC_FACTORY_CODE_HASH: blankAsUndefined(
       environment["LAUNCH2_DYNAMIC_FACTORY_CODE_HASH"],
     ),
+    LAUNCH2_LEGACY_FACTORIES: environment["LAUNCH2_LEGACY_FACTORIES"],
+    LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES:
+      environment["LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES"],
   });
 
   if (!parsed.success) {
@@ -4276,6 +4305,22 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       dynamicRouterRegistry:
         parsed.data.LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS?.toLowerCase() ??
         null,
+      dynamicLegacyFactories: Object.freeze(
+        parseLaunch2LegacyFactoriesEnvironment(
+          parsed.data.LAUNCH2_LEGACY_FACTORIES,
+          parsed.data.HOOKS_LAUNCH_FACTORY_ADDRESS,
+          parsed.data.LAUNCH2_DYNAMIC_FACTORY_ADDRESS,
+        )
+          // v2 predates the LoopDynamic Factory.
+          .filter((entry) => entry.generation !== "v2")
+          .map((entry) => entry.address),
+      ),
+      dynamicLegacyRouterCodeHashes: Object.freeze(
+        (parsed.data.LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES ?? "")
+          .split(",")
+          .map((hash) => hash.trim().toLowerCase())
+          .filter((hash) => hash !== ""),
+      ),
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
     miningSettlement: parseMiningSettlementApi(parsed.data),

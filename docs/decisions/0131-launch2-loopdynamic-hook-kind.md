@@ -49,11 +49,11 @@
 ## 5. 报价算法（LoopDynamic）
 
 - exactIn only；`mode=exactOut` 在任何链读之前 422 `LAUNCH2_EXACT_OUT_UNSUPPORTED`。
-- 一个区块内：读 Hook（`trustedRouter` 必须是配置的 LoopRouter、`manager` = LoopRouter 的 PoolManager、`poolId` = 索引的绑定 = `Graduated.officialPoolId`、`meme` = 实例 MEME；可选 `routerRegistry` = `LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS`），否则 503 `LAUNCH2_DYNAMIC_HOOK_MISMATCH`。
+- 一个区块内：读 Hook（`trustedRouter` 必须是配置的 LoopRouter、`manager` = LoopRouter 的 PoolManager、`poolId` = 索引的绑定 = `Graduated.officialPoolId`、`meme` = 实例 MEME；可选 `routerRegistry` = `LAUNCH2_DYNAMIC_ROUTER_REGISTRY_ADDRESS`），否则 503 `LAUNCH2_DYNAMIC_HOOK_MISMATCH`。（**0153 修订**：期望的 router / registry 改为实例所属工厂的 `loopRouter()` / `routerRegistry()`，工厂须在信任名单内（否则 `LAUNCH2_DYNAMIC_FACTORY_UNKNOWN`），Hook 须是该工厂 `loopHook(launchId)`；配置的 LoopRouter / registry 只用于断言当前工厂（不符 `LAUNCH2_DYNAMIC_ROUTER_MISMATCH`）。）
 - `eth_call` 模拟 `LoopRouter.swapExactInput(key, zeroForOne, amountIn, 0, MIN/MAX_SQRT_PRICE±1, deadline)`，从钱包发起，输入币余额与对 LoopRouter 的授权只在调用内覆盖（Decision 0124 的 ERC-20 槽位探测，按 spender 参数化后复用）。返回 `(amountSpent, amountReceived)`。
 - 买：`taxBps = buyFeePpm / 100`（200），`taxToken = meme`，税 = 由净额反推的 2 %（两个毛额对应同一净额时取较大者，最多差 1 wei）；`rewardWeight` = 本笔 USD1（当这笔交易执行 `_rollCandle` 之后轮次处于激活态，用 `PriceMath` 的 TS 精确移植判断；钱包等于 `rewardExcludedBuyer` 时为 0）。
 - 卖：再做一次「中性」模拟——同一调用另外覆盖 Hook 槽位 0（`initialized=1, armed=0`）与槽位 1（`candleId = 2^256−1`，不滚 K 线），只收基础税。池子成交量与 Hook 收费无关（费是 afterSwap 的 delta），所以 `动态税 = 中性净额 − 实际净额` 精确；`dynamicTaxBps = 动态税 × 10000 / 中性净额`（POST_SWAP 时即成交后跌幅）；`taxAmount` = 基础 + 动态。存储布局按 `forge inspect`（f711d58）核对，写在 `launch2DynamicNeutralHookSlots`。
-- 交易准备：同上重新模拟，calldata = `swapExactInput(..., minOut, ..., deadline = prepare 时刻 + 180 s)`，授权对象 = LoopRouter，kind 仍是 `pool_buy` / `pool_sell`，对手方信任 = 实例合约 + 经代码哈希校验的 LoopRouter。
+- 交易准备：同上重新模拟，calldata = `swapExactInput(..., minOut, ..., deadline = prepare 时刻 + 180 s)`，授权对象 = LoopRouter，kind 仍是 `pool_buy` / `pool_sell`，对手方信任 = 实例合约 + 经代码哈希校验的 LoopRouter。（**0153 修订**：LoopRouter = 实例所属工厂的 `loopRouter()`，旧工厂实例经其旧路由交易。）
 
 ## 6. configHash（S165：`buyFeePpm` 进 `TEMPLATE_HASH`）
 

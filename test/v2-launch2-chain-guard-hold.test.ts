@@ -12,6 +12,7 @@ import type {
 import { launch2TradingHoldOf } from "../src/features/launch2/launch2-trading-hold.js";
 import { launch2InstanceDetailResourceSchema } from "../src/routes/v2/launch2-schemas.js";
 import {
+  launch2DynamicFactoryEnv,
   createFakeLaunch2DynamicChain,
   defaultDynamicState,
   graduatedDynamicInstance,
@@ -115,6 +116,7 @@ describe("launch2 under the chain guard hold (Decision 0136)", () => {
     const app = await buildApp({
       config: s7TestConfig({
         ...launch2Env,
+        ...launch2DynamicFactoryEnv,
         ...launch2PoolEnv,
         ...launch2WritesEnv,
         ...(options.enabled === false ? {} : { CHAIN_GUARD_ENABLED: "true" }),

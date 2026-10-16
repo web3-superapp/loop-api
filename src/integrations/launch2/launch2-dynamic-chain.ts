@@ -23,6 +23,7 @@ import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { launch2DynamicNeutralHookSlots } from "../../features/launch2/launch2-dynamic.js";
 import type {
   Launch2DynamicChain,
+  Launch2DynamicFactoryRouting,
   Launch2DynamicHookState,
   Launch2DynamicRoundState,
   Launch2DynamicSwapCall,
@@ -31,6 +32,7 @@ import type {
 import {
   loopDynamicBuybackAdapterAbi,
   loopDynamicHookAbi,
+  loopDynamicLaunchFactoryAbi,
   loopRouterAbi,
   poolManagerAbi,
 } from "../launch/hooks-launch-protocol-abi.generated.js";
@@ -57,6 +59,14 @@ import {
  * a "neutral" simulation additionally overrides the Hook's `initialized /
  * armed` and `candleId` slots so only the base fee applies (the sell fee
  * split). It never signs or sends.
+ *
+ * Decision 0153: every redeploy ships a new LoopRouter, so a LoopDynamic
+ * instance trades through **its own Factory's** router. The reader takes
+ * the router per call (`simulateSwap.router`, `verifyRouter(router)`), reads
+ * a Factory's immutable routing (`loopRouter()` / `routerRegistry()` /
+ * `loopHookDeploymentFactory()`) and its `loopHook(launchId)`, and accepts
+ * a router whose runtime code hash is the configured one or one of the
+ * listed legacy hashes. Which Factories are trusted is the service's call.
  */
 
 const revertAbi = [
@@ -80,6 +90,8 @@ const revertAbi = [
 const lower = (value: string): string => value.toLowerCase();
 /** Name-addressed reads (`functionName: string`). */
 const hookAbi = loopDynamicHookAbi as Abi;
+/** Decision 0153: name-addressed Factory reads. */
+const factoryAbi = loopDynamicLaunchFactoryAbi as Abi;
 
 /** Decodes a custom error name, unwrapping the v4 `WrappedError`. */
 export function launch2DynamicErrorName(data: Hex | null): string | null {
@@ -137,20 +149,30 @@ export function createLaunch2DynamicChain(input: {
   readonly rpcUrls: readonly string[];
   readonly router: string;
   readonly expectedRuntimeCodeHash: string;
+  /**
+   * Decision 0153: `LAUNCH2_DYNAMIC_LEGACY_ROUTER_CODE_HASHES` — further
+   * accepted LoopRouter runtime code hashes (older Factories' routers).
+   */
+  readonly legacyRuntimeCodeHashes?: readonly string[];
   readonly transport?: Transport;
   readonly retryAfterMs?: number;
   readonly now?: () => number;
   /** Decision 0150: the launch slot (viem chain); absent = 97. */
   readonly chainReference?: 56 | 97;
 }): Launch2DynamicChain {
+  const legacyHashes = input.legacyRuntimeCodeHashes ?? [];
   if (
     !/^0x[0-9a-fA-F]{40}$/u.test(input.router) ||
-    !/^0x[0-9a-fA-F]{64}$/u.test(input.expectedRuntimeCodeHash)
+    !/^0x[0-9a-fA-F]{64}$/u.test(input.expectedRuntimeCodeHash) ||
+    legacyHashes.some((hash) => !/^0x[0-9a-fA-F]{64}$/u.test(hash))
   ) {
     throw new Error("Launch2 LoopRouter address / code hash are malformed");
   }
   const router = lower(input.router);
-  const expectedCodeHash = lower(input.expectedRuntimeCodeHash);
+  const acceptedCodeHashes = new Set([
+    lower(input.expectedRuntimeCodeHash),
+    ...legacyHashes.map(lower),
+  ]);
   const retryAfterMs = input.retryAfterMs ?? 60_000;
   const now = input.now ?? Date.now;
   const transport =
@@ -165,17 +187,23 @@ export function createLaunch2DynamicChain(input: {
     chain: viemLaunchChain(input.chainReference ?? 97),
     transport,
   });
-  let verified: Launch2PoolRouterCheck | null = null;
-  let failedAt = 0;
-  let inFlight: Promise<Launch2PoolRouterCheck> | null = null;
+  /** Decision 0153: one verification state per router address. */
+  const checks = new Map<
+    string,
+    {
+      verified: Launch2PoolRouterCheck | null;
+      failedAt: number;
+      inFlight: Promise<Launch2PoolRouterCheck> | null;
+    }
+  >();
   const layouts = new Map<string, TokenLayout | null>();
 
-  async function checkRouter(): Promise<Launch2PoolRouterCheck> {
-    const code = await client.getCode({ address: router as Address });
+  async function checkRouter(target: string): Promise<Launch2PoolRouterCheck> {
+    const code = await client.getCode({ address: target as Address });
     if (
       code === undefined ||
       code === "0x" ||
-      lower(keccak256(code)) !== expectedCodeHash
+      !acceptedCodeHashes.has(lower(keccak256(code)))
     ) {
       return {
         status: "unavailable",
@@ -183,11 +211,34 @@ export function createLaunch2DynamicChain(input: {
       };
     }
     const manager = await client.readContract({
-      address: router as Address,
+      address: target as Address,
       abi: loopRouterAbi,
       functionName: "manager",
     });
     return { status: "ok", poolManager: lower(manager) };
+  }
+
+  /** A Factory view, or null when the Factory reverts (RPC errors throw). */
+  async function factoryRead(
+    factory: string,
+    functionName: string,
+    args: readonly unknown[] = [],
+  ): Promise<string | null> {
+    try {
+      return lower(
+        String(
+          await client.readContract({
+            address: factory as Address,
+            abi: factoryAbi,
+            functionName,
+            args,
+          }),
+        ),
+      );
+    } catch (error) {
+      if (isLaunch2ContractRevert(error)) return null;
+      throw error;
+    }
   }
 
   async function hookRead<T>(
@@ -223,10 +274,14 @@ export function createLaunch2DynamicChain(input: {
   }
 
   async function overrideFor(
-    call: Pick<Launch2DynamicSwapCall, "override" | "neutralHook" | "from"> & {
+    call: Pick<
+      Launch2DynamicSwapCall,
+      "override" | "neutralHook" | "from" | "router"
+    > & {
       readonly blockNumber?: bigint;
     },
   ): Promise<StateOverride | undefined | "unsupported"> {
+    const spender = lower(call.router);
     const entries: StateOverride = [];
     if (call.override !== null) {
       const { token, balance, allowance } = call.override;
@@ -239,7 +294,7 @@ export function createLaunch2DynamicChain(input: {
           client,
           key,
           lower(call.from),
-          router,
+          spender,
           block,
         );
         layouts.set(key, layout);
@@ -249,7 +304,7 @@ export function createLaunch2DynamicChain(input: {
         {
           slot: nestedSlot(
             lower(call.from),
-            router,
+            spender,
             layout.allowanceBase,
             layout.order,
           ),
@@ -278,20 +333,63 @@ export function createLaunch2DynamicChain(input: {
   return Object.freeze<Launch2DynamicChain>({
     router,
 
-    async verifyRouter() {
-      if (verified?.status === "ok") return verified;
-      if (verified !== null && now() - failedAt < retryAfterMs) return verified;
-      if (inFlight !== null) return inFlight;
-      inFlight = checkRouter()
+    async verifyRouter(target = router) {
+      const key = lower(target);
+      if (!/^0x[0-9a-f]{40}$/u.test(key)) {
+        return {
+          status: "unavailable",
+          reasonCode: "LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH",
+        };
+      }
+      let entry = checks.get(key);
+      if (entry === undefined) {
+        entry = { verified: null, failedAt: 0, inFlight: null };
+        checks.set(key, entry);
+      }
+      const state = entry;
+      if (state.verified?.status === "ok") return state.verified;
+      if (state.verified !== null && now() - state.failedAt < retryAfterMs) {
+        return state.verified;
+      }
+      if (state.inFlight !== null) return state.inFlight;
+      state.inFlight = checkRouter(key)
         .then((result) => {
-          verified = result;
-          if (result.status !== "ok") failedAt = now();
+          state.verified = result;
+          if (result.status !== "ok") state.failedAt = now();
           return result;
         })
         .finally(() => {
-          inFlight = null;
+          state.inFlight = null;
         });
-      return inFlight;
+      return state.inFlight;
+    },
+
+    async readFactoryRouting(factory) {
+      const address = lower(factory);
+      const [loopRouter, routerRegistry, hookDeploymentFactory] =
+        await Promise.all([
+          factoryRead(address, "loopRouter"),
+          factoryRead(address, "routerRegistry"),
+          factoryRead(address, "loopHookDeploymentFactory"),
+        ]);
+      if (
+        loopRouter === null ||
+        routerRegistry === null ||
+        hookDeploymentFactory === null
+      ) {
+        return null;
+      }
+      return Object.freeze<Launch2DynamicFactoryRouting>({
+        router: loopRouter,
+        routerRegistry,
+        hookDeploymentFactory,
+      });
+    },
+
+    async readFactoryHook(request) {
+      return factoryRead(lower(request.factory), "loopHook", [
+        request.launchId,
+      ]);
     },
 
     async readHookState(request): Promise<Launch2DynamicHookState> {
@@ -458,7 +556,7 @@ export function createLaunch2DynamicChain(input: {
       try {
         const result = await client.call({
           account: call.from as Address,
-          to: router as Address,
+          to: lower(call.router) as Address,
           data: call.data as Hex,
           blockNumber: call.blockNumber,
           ...(stateOverride === undefined ? {} : { stateOverride }),
@@ -523,8 +621,11 @@ export function createLaunch2DynamicChain(input: {
     },
 
     async estimateGas(call) {
+      // Decision 0153: the call target (the instance's LoopRouter) is the
+      // spender the allowance override names.
       const stateOverride = await overrideFor({
         from: call.from,
+        router: call.to,
         override: call.override,
         neutralHook: null,
       });
