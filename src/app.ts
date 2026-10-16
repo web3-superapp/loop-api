@@ -2633,9 +2633,10 @@ export async function buildApp(
       ...(options.publicMeme?.nowMs === undefined
         ? {}
         : { nowMs: options.publicMeme.nowMs }),
-      ...(options.publicMeme?.ratePerWindow === undefined
-        ? {}
-        : { ratePerWindow: options.publicMeme.ratePerWindow }),
+      ratePerWindow:
+        options.publicMeme?.ratePerWindow ?? config.publicRateLimit.perMinute,
+      trustProxy: config.trustProxy,
+      clientIpHeaders: config.publicRateLimit.clientIpHeaders,
       ...(options.publicMeme?.budgetsMs === undefined
         ? {}
         : { budgetsMs: options.publicMeme.budgetsMs }),

@@ -105,6 +105,7 @@ describe("public MEME routes (Decision 0147)", () => {
       readonly dynamic?: FakeLaunch2DynamicState | null;
       readonly ratePerWindow?: number;
       readonly clock?: { ms: number };
+      readonly env?: Readonly<Record<string, string>>;
     } = {},
   ) {
     const repository = options.repository ?? createInMemoryLaunch2Repository();
@@ -112,7 +113,11 @@ describe("public MEME routes (Decision 0147)", () => {
       options.dynamic === undefined ? defaultDynamicState() : options.dynamic;
     const clock = options.clock ?? { ms: 1_000_000 };
     const app = await buildApp({
-      config: s7TestConfig({ ...launch2Env, ...launch2PoolEnv }),
+      config: s7TestConfig({
+        ...launch2Env,
+        ...launch2PoolEnv,
+        ...options.env,
+      }),
       contractSurface: "runtime",
       database: {
         ...s7Database({}),
@@ -648,10 +653,22 @@ describe("public MEME routes (Decision 0147)", () => {
     expect(limited.headers["access-control-allow-origin"]).toBe("*");
     expect(limited.headers["retry-after"]).toBe("45");
     expect(limited.headers["cache-control"]).toBe("no-store");
+    expect(limited.headers["x-ratelimit-limit"]).toBe("2");
+    expect(limited.headers["x-ratelimit-remaining"]).toBe("0");
     expect(limited.json()).toEqual({
       code: "RATE_LIMITED",
       reasonCode: "PUBLIC_RATE_LIMITED",
     });
+    // TRUST_PROXY is off: forwarded headers never open a new window.
+    const forged = await app.inject({
+      method: "GET",
+      url: "/public/v1/meme",
+      headers: {
+        "x-forwarded-for": "198.51.100.77",
+        "cf-connecting-ip": "198.51.100.78",
+      },
+    });
+    expect(forged.statusCode).toBe(429);
     // Another IP has its own window.
     const other = await app.inject({
       method: "GET",
@@ -667,6 +684,72 @@ describe("public MEME routes (Decision 0147)", () => {
     expect(preflight.statusCode).toBe(204);
     clock.ms += 45_000;
     expect((await get(app, "/public/v1/meme")).statusCode).toBe(200);
+  });
+
+  it("S211: behind a proxy, keys each visitor on the right-most public X-Forwarded-For", async () => {
+    const clock = { ms: 1_000_000 };
+    const { app } = await createApp({
+      clock,
+      env: { TRUST_PROXY: "true", PUBLIC_RATE_LIMIT_PER_MINUTE: "10" },
+    });
+    // Every request reaches Fastify from the proxy container's address.
+    const viaProxy = (headers: Record<string, string>) =>
+      app.inject({
+        method: "GET",
+        url: "/public/v1/meme",
+        remoteAddress: "172.18.0.5",
+        headers,
+      });
+    for (let index = 0; index < 10; index += 1) {
+      expect(
+        (await viaProxy({ "x-forwarded-for": "203.0.113.1" })).statusCode,
+      ).toBe(200);
+    }
+    const limited = await viaProxy({ "x-forwarded-for": "203.0.113.1" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers["x-ratelimit-limit"]).toBe("10");
+    // A forged left part, or a forged cf-connecting-ip (not configured by
+    // default), does not escape the visitor's window.
+    expect(
+      (await viaProxy({ "x-forwarded-for": "1.2.3.4, 203.0.113.1" }))
+        .statusCode,
+    ).toBe(429);
+    expect(
+      (
+        await viaProxy({
+          "x-forwarded-for": "203.0.113.1",
+          "cf-connecting-ip": "198.51.100.9",
+          "x-real-ip": "198.51.100.10",
+        })
+      ).statusCode,
+    ).toBe(429);
+    // Another visitor behind the same proxy has its own window.
+    expect(
+      (await viaProxy({ "x-forwarded-for": "203.0.113.2" })).statusCode,
+    ).toBe(200);
+  });
+
+  it("S211: PUBLIC_CLIENT_IP_HEADERS can put cf-connecting-ip first", async () => {
+    const { app } = await createApp({
+      ratePerWindow: 1,
+      env: {
+        TRUST_PROXY: "true",
+        PUBLIC_CLIENT_IP_HEADERS: "cf-connecting-ip,x-forwarded-for",
+      },
+    });
+    const viaTunnel = (client: string) =>
+      app.inject({
+        method: "GET",
+        url: "/public/v1/meme",
+        remoteAddress: "172.18.0.6",
+        headers: {
+          "cf-connecting-ip": client,
+          "x-forwarded-for": "162.158.1.1",
+        },
+      });
+    expect((await viaTunnel("2001:db8::1")).statusCode).toBe(200);
+    expect((await viaTunnel("2001:DB8:0:0:0:0:0:1")).statusCode).toBe(429);
+    expect((await viaTunnel("2001:db8::2")).statusCode).toBe(200);
   });
 
   it("shares one answer per URL for 5 s", async () => {

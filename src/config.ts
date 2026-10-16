@@ -17,6 +17,10 @@ import {
   parseLaunch2LegacyFactories,
   type Launch2FactoryGeneration,
 } from "./features/launch2/launch2-generation.js";
+import {
+  publicClientIpHeaderNames,
+  type PublicClientIpHeaderName,
+} from "./core/http/client-ip.js";
 import type { LaunchContractConfig } from "./integrations/launch/launch-contract-adapter.js";
 import {
   memeContractReasonCodes,
@@ -741,6 +745,10 @@ const environmentSchema = z
     TOKEN_LOGO_URL_MODE: z.enum(["proxy", "upstream"]),
     API_DOCS_ENABLED: booleanString,
     TRUST_PROXY: booleanString,
+    /** Decision 0147 revision S211: `/public/*` requests per minute per visitor. */
+    PUBLIC_RATE_LIMIT_PER_MINUTE: positiveIntegerString(10, 10_000),
+    /** Decision 0147 revision S211: forwarded headers the public limiter reads. */
+    PUBLIC_CLIENT_IP_HEADERS: z.string().trim().min(1).max(200),
     LOG_LEVEL: z.enum([
       "fatal",
       "error",
@@ -1654,6 +1662,15 @@ export interface AppConfig {
   readonly tokenLogoUrlMode: "proxy" | "upstream";
   readonly apiDocsEnabled: boolean;
   readonly trustProxy: boolean;
+  /**
+   * Decision 0147 revision S211: the public surface's rate limit (requests
+   * per one-minute window per visitor, per process) and the forwarded
+   * headers (in order) that name the visitor when `trustProxy` is on.
+   */
+  readonly publicRateLimit: {
+    readonly perMinute: number;
+    readonly clientIpHeaders: readonly PublicClientIpHeaderName[];
+  };
   readonly logLevel:
     "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
   readonly v2SessionEnabled: boolean;
@@ -3770,6 +3787,27 @@ function assertDatabaseUrl(url: URL): void {
   }
 }
 
+/**
+ * Decision 0147 revision S211: `none`, or a comma list of distinct names
+ * from `publicClientIpHeaderNames`, read in the order given.
+ */
+export function parsePublicClientIpHeaders(
+  value: string,
+): readonly PublicClientIpHeaderName[] {
+  if (value === "none") return Object.freeze([]);
+  const names = value.split(",").map((name) => name.trim().toLowerCase());
+  const known: readonly string[] = publicClientIpHeaderNames;
+  if (
+    names.some((name) => !known.includes(name)) ||
+    new Set(names).size !== names.length
+  ) {
+    throw new ConfigurationError([
+      `PUBLIC_CLIENT_IP_HEADERS: must be none or distinct names from ${publicClientIpHeaderNames.join(", ")}`,
+    ]);
+  }
+  return Object.freeze(names as PublicClientIpHeaderName[]);
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const rawNodeEnv = environment["NODE_ENV"] ?? "development";
   const parsed = environmentSchema.safeParse({
@@ -3782,6 +3820,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["API_DOCS_ENABLED"] ??
       (rawNodeEnv === "production" ? "false" : "true"),
     TRUST_PROXY: environment["TRUST_PROXY"] ?? "false",
+    PUBLIC_RATE_LIMIT_PER_MINUTE:
+      environment["PUBLIC_RATE_LIMIT_PER_MINUTE"] ?? "120",
+    PUBLIC_CLIENT_IP_HEADERS:
+      environment["PUBLIC_CLIENT_IP_HEADERS"] ?? "x-forwarded-for",
     LOG_LEVEL: environment["LOG_LEVEL"] ?? "info",
     V2_SESSION_ENABLED:
       environment["V2_SESSION_ENABLED"] ??
@@ -4043,6 +4085,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     tokenLogoUrlMode: parsed.data.TOKEN_LOGO_URL_MODE,
     apiDocsEnabled: parsed.data.API_DOCS_ENABLED,
     trustProxy: parsed.data.TRUST_PROXY,
+    publicRateLimit: Object.freeze({
+      perMinute: parsed.data.PUBLIC_RATE_LIMIT_PER_MINUTE,
+      clientIpHeaders: parsePublicClientIpHeaders(
+        parsed.data.PUBLIC_CLIENT_IP_HEADERS,
+      ),
+    }),
     logLevel: parsed.data.LOG_LEVEL,
     v2SessionEnabled: parsed.data.V2_SESSION_ENABLED,
     v2ModulesEnabled,

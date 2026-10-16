@@ -63,7 +63,7 @@
 
 ## 5. 风险与未做
 
-- **staging 的 `request.ip`**：`TRUST_PROXY` 只信任回环（`127.0.0.0/8`、`::1`）。staging 的 Caddy / cloudflared 走 docker 网络连 API 时，`request.ip` 是代理容器地址，所有访客会落在同一个限流桶（120 次 / 分钟 ≈ 20+ 个同时打开的页面，按网页 15 s / 60 s 刷新估算）。要做到真正按访客限流，需要把可信代理网段配进 `TRUST_PROXY`（另立决策），本批不动 `ops/`。
+- **staging 的 `request.ip`**：`TRUST_PROXY` 只信任回环（`127.0.0.0/8`、`::1`）。staging 的 Caddy / cloudflared 走 docker 网络连 API 时，`request.ip` 是代理容器地址，所有访客会落在同一个限流桶（120 次 / 分钟 ≈ 20+ 个同时打开的页面，按网页 15 s / 60 s 刷新估算）。要做到真正按访客限流，需要把可信代理网段配进 `TRUST_PROXY`（另立决策），本批不动 `ops/`。 **（S211 已修订，见文末「修订（S211）」。）**
 - 限流与合并读都在单进程内存里，多副本时各自计数。
 - 列表里每个已毕业 LoopDynamic 行都会读一次 Hook（四个一组并发，合并读 5 s）；实例多了以后可以改成读索引状态。
 - 网页本身（`ops/web/meme-page`、Vercel `loop-meme`）不在本批。
@@ -96,3 +96,60 @@
 - 预算是固定值；若 dev / staging 的 RPC 常态就 > 8 s，页面会稳定看到 `PUBLIC_UPSTREAM_TIMEOUT`，应先查 RPC（运维速查的 publicnode / NodeReal 项），再考虑调预算。
 
 证据：`test/public-meme-resilience.test.ts`（根因复现、单飞 N=6 只调一次、失败共享且不缓存、预算 503 且 signal 已中止、超时后不叠读、迟到成功入 memo、列表 / K 线预算、真实 socket 断开后不写、错误码与脱敏消息入日志）；`test/public-meme-routes.test.ts`、`test/public-meme.integration.test.ts` 不变通过。
+
+## 修订（S211，2026-10-16）：公开面限流按真实访客计数
+
+依据：§5 第一条风险（staging 全站访客共用一个桶）。只改 `/public/*` 限流的**计数键**、阈值配置与 429 头；字段集合、鉴权口径、`/v2` 行为与日志全部不变，故不新开决策号。**无迁移、无新依赖**；新增两个 env（下表），缺省值与改动前等价或更严。
+
+### 事实（写本节时核对）
+
+- `src/app.ts` 的 Fastify `trustProxy` 只信任回环（`127.0.0.0/8`、`::1/128`，Decision 本地隧道口径，`docs/local-development.md`）。staging 的 Caddy、cloudflared 与 API 在同一个 docker 网络，连进来的对端是容器地址（`172.x`），不在信任表里，所以 `request.ip` = 代理容器地址——即使 `TRUST_PROXY=true`。
+- **`ops/staging/api-staging.env` 里已经是 `TRUST_PROXY=true`**（不是 false）；改动前它对公开面没有效果（原因同上）。这意味着本批代码一部署，staging 立即按访客计数，所以缺省读哪个头必须在现有拓扑下就不可伪造（见下）。
+- staging 的 API 容器没有 `ports:`，只在 docker 网络里，入口只有 Caddy（`ops/staging-direct-https.sh`：`reverse_proxy api:3000`，只加了 `header_up X-Forwarded-Proto https`）与 cloudflared（隧道）。外部无法绕过代理直连 API。
+- Caddy 2.x 在没配 `trusted_proxies` 时**丢弃**客户端带来的 `X-Forwarded-For`，换成它看到的对端地址；但它**不设** `X-Real-IP`，也**不删** `CF-Connecting-IP`，客户端自带的这两个头会原样转给 API。
+- Cloudflare 边缘总是覆盖 `CF-Connecting-IP`，并把客户端地址**追加**到 `X-Forwarded-For` 末尾（客户端自带的部分在左边）。cloudflared 不再追加。
+
+### 取 IP 的规则（`publicClientKey`，`src/core/http/client-ip.ts`）
+
+| `TRUST_PROXY` | 计数键                                                                                                                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `false`       | `request.ip`（与改动前相同，任何转发头都不看）                                                                                                                                                                                                     |
+| `true`        | 按 `PUBLIC_CLIENT_IP_HEADERS` 列出的顺序取**第一个得出公网地址**的头：`cf-connecting-ip` / `x-real-ip` 必须恰好一个合法地址；`x-forwarded-for` 从**右往左**取第一个公网地址。都没有 → `request.ip`。地址统一规范化（IPv6 小写压缩、IPv4 映射还原） |
+
+- 「公网」= 排除 `0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.168/16`、`::`、`::1`、`fc00::/7`、`fe80::/10`；非法值、带逗号的单值头、空值都跳过，不信任。
+- 不用 `request.ip` 优先：在非回环代理后面它是代理地址（全员一个桶）；不用 `X-Forwarded-For` 最左：那是客户端自己写的。
+- 支持的顺序就是主代理定的 `cf-connecting-ip` → `x-real-ip` → `x-forwarded-for`，但**读哪几个由 env 决定，缺省只读 `x-forwarded-for`**。理由：按上面的事实，现在的 staging 直连 Caddy 路径上，`cf-connecting-ip` 与 `x-real-ip` 是客户端可以随便写的，若缺省三者全开，部署后任何人换一个头值就得到新桶（限流失效，且能把 1 万键的表刷满后清空、连带清掉别人的窗口）。而 `x-forwarded-for` 右起第一个公网地址在两条路径上都是真实访客：Caddy 路径上它被 Caddy 改写成对端，隧道路径上 Cloudflare 追加在最右。
+- 只有当**每一条**到 API 的路径都会覆盖某个头时，才把它加进列表：例如源站只接受 Cloudflare（生产方案 ①，Caddy 在 Cloudflare 后面且源站锁 Cloudflare 网段），或 Caddyfile 加了 `header_up -Cf-Connecting-Ip` / `header_up X-Real-IP {remote_host}`。
+- 只影响 `/public/*` 的限流键；计数键不落库、不进日志；`/v2` 的 `request.ip`、配额与日志不变。
+
+### 配置
+
+| env                            | 缺省              | 范围 / 取值                                                                                                      |
+| ------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_RATE_LIMIT_PER_MINUTE` | `120`             | 整数 10–10000；每访客每一分钟固定窗口，越界拒绝启动                                                              |
+| `PUBLIC_CLIENT_IP_HEADERS`     | `x-forwarded-for` | `none`，或 `cf-connecting-ip`、`x-real-ip`、`x-forwarded-for` 的不重复逗号列表（按给出的顺序读）；其它值拒绝启动 |
+
+- 仍是进程内存实现：**多副本时各自计数**，有效上限 ≈ 副本数 × 阈值；键表上限 1 万（满了先删过期窗口，仍满则清空）。
+- 429 现在带 `X-RateLimit-Limit`（= 阈值）与 `X-RateLimit-Remaining: 0`（另有原来的 `Retry-After`、`Cache-Control: no-store`、CORS `*`）。helmet / 安全头策略不限制自定义响应头，未冲突。只在 429 上加，200 不加（200 会被 CDN / 浏览器缓存 15 s，剩余次数在缓存里没有意义）。`openapi/loop-public.v1.json` 的 429 增加这些响应头的声明与描述，字段集合不变。
+
+### 各环境应设
+
+- **staging（香港，Caddy 直连 + cloudflared 隧道，都在 docker 网络内、API 无对外端口、不可绕过）**：`TRUST_PROXY=true`（`api-staging.env` 已有）+ 缺省 `x-forwarded-for`。建议在 `ops/staging/api-staging.local.env`（或 `api-staging.env`）显式写上这两行（本批不改 `ops/`）：
+
+  ```text
+  PUBLIC_RATE_LIMIT_PER_MINUTE=120
+  PUBLIC_CLIENT_IP_HEADERS=x-forwarded-for
+  ```
+
+  若以后 api-staging 改回只走 Cloudflare（Caddy 下线或源站锁 Cloudflare），可改成 `cf-connecting-ip,x-forwarded-for`。
+
+- **dev（本机 cloudflared 经回环连 Fastify）**：现有 `TRUST_PROXY=true` 下 `request.ip` 本就是真实访客；缺省 `x-forwarded-for` 右起公网地址与之相同，不用加 env。
+- **生产（docs/29 §6 未定）**：① Cloudflare 前置 → 源站必须只放行 Cloudflare 网段，然后 `TRUST_PROXY=true`、`PUBLIC_CLIENT_IP_HEADERS=cf-connecting-ip,x-forwarded-for`；若 Cloudflare 后面还有 Caddy 且未配 `trusted_proxies`，`x-forwarded-for` 会是 Cloudflare 边缘地址，所以 `cf-connecting-ip` 必须排第一。② / ③ 云负载均衡（如 ALB，追加到 XFF 末尾）或直连 Caddy → `TRUST_PROXY=true` + 缺省 `x-forwarded-for`。API 能被公网直连（不经代理）时一律 `TRUST_PROXY=false`。
+
+### 剩余风险
+
+- IPv6 访客按完整地址计数，同一 /64 内换地址可以绕开；需要时再按 /64 聚合。
+- 同一 NAT / 运营商出口后的访客仍共用一个桶（与任何按 IP 限流相同）；阈值可按 env 调。
+- 若有人把 `cf-connecting-ip` / `x-real-ip` 加进 env 而某条路径不覆盖该头，限流可被绕过——这是部署配置的责任，已在 `.env.example` 与本节写明。
+
+证据：`test/public-client-key.test.ts`（关 / 开、三头优先级、按 env 子集与顺序、伪造 XFF 左段、私网跳过、全私网回落、单值头非法 / 私网 / 多值、IPv6 与映射地址规范化、端口与方括号形式、私网段判定、env 缺省 / 解析 / 越界拒绝）；`test/public-meme-routes.test.ts`（429 的两个新头、`TRUST_PROXY=false` 时转发头不开新窗口、代理后按 XFF 右段分访客且伪造左段 / 未配置的 `cf-connecting-ip` 不逃出窗口、env 阈值生效、`cf-connecting-ip` 优先配置下 IPv6 规范化计数）。

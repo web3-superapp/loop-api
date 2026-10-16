@@ -381,7 +381,24 @@
             }
           },
           "429": {
-            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer.",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" }
+              },
+              "retry-after": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,1}$" }
+              },
+              "x-ratelimit-limit": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{1,4}$" }
+              },
+              "x-ratelimit-remaining": {
+                "schema": { "type": "string", "const": "0" }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -404,7 +421,7 @@
                       "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                     }
                   },
-                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer."
                 }
               }
             }
@@ -969,7 +986,24 @@
             }
           },
           "429": {
-            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer.",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" }
+              },
+              "retry-after": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,1}$" }
+              },
+              "x-ratelimit-limit": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{1,4}$" }
+              },
+              "x-ratelimit-remaining": {
+                "schema": { "type": "string", "const": "0" }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -992,7 +1026,7 @@
                       "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                     }
                   },
-                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer."
                 }
               }
             }
@@ -1177,7 +1211,24 @@
             }
           },
           "429": {
-            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer.",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" }
+              },
+              "retry-after": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,1}$" }
+              },
+              "x-ratelimit-limit": {
+                "schema": { "type": "string", "pattern": "^[1-9][0-9]{1,4}$" }
+              },
+              "x-ratelimit-remaining": {
+                "schema": { "type": "string", "const": "0" }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1200,7 +1251,7 @@
                       "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                     }
                   },
-                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer."
                 }
               }
             }

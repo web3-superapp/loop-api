@@ -1339,9 +1339,14 @@ contain it. Every `/public/*` answer carries
 included; `/v2` gets none); a `200` is `Cache-Control: public, max-age=15`, every
 error `no-store`. Failures are `{ code, reasonCode }` (`400 INVALID_REQUEST`,
 `404 NOT_FOUND`, `429 RATE_LIMITED` + `Retry-After`, `503 CAPABILITY_UNAVAILABLE`
-with the launch2 reason as is); a 503 never carries a partial body. Per client IP
-(`request.ip`, `TRUST_PROXY` rules) 120 requests per one-minute fixed window, in
-process memory; identical URLs share one answer for 5 s, and concurrent reads of
+with the launch2 reason as is); a 503 never carries a partial body. Per visitor
+`PUBLIC_RATE_LIMIT_PER_MINUTE` (default 120, 10–10000) requests per one-minute
+fixed window, in process memory (each replica counts on its own); a `429` also
+carries `X-RateLimit-Limit` and `X-RateLimit-Remaining: 0`. The visitor
+(S211) is `request.ip` with `TRUST_PROXY=false`; with `TRUST_PROXY=true` it is
+the first public address among `PUBLIC_CLIENT_IP_HEADERS` (default
+`x-forwarded-for`, read as its right-most public entry; `cf-connecting-ip` /
+`x-real-ip` only when listed), else `request.ip`. `/v2` is unaffected. Identical URLs share one answer for 5 s, and concurrent reads of
 one URL share one in-flight read (S207 single-flight; a failure reaches every
 waiter as the same 503 and is not cached). Each read has a time budget — detail
 8 s, list 10 s, candles 5 s, inside the 15 s `handlerTimeout` — answering

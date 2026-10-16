@@ -5,6 +5,10 @@ import type {
   HookHandlerDoneFunction,
 } from "fastify";
 
+import {
+  publicClientKey,
+  type PublicClientIpHeaderName,
+} from "../core/http/client-ip.js";
 import { V2ApiError } from "../core/http/v2-error.js";
 import { opaqueIdPatternSource } from "../core/ids/opaque-id.js";
 import { evmAddressPatternSource } from "../features/chain/chain-contract.js";
@@ -28,9 +32,13 @@ import type { Launch2Service } from "../features/launch2/launch2-service.js";
  * fee and buyback totals, the bound community's public profile. Never a
  * wallet, user, viewer, owner, or buyer field.
  *
- * Abuse guard: a fixed one-minute window per client IP (in memory, per
- * process; `request.ip` honours `TRUST_PROXY`), 429 `RATE_LIMITED` with
- * `Retry-After`. Identical URLs share one answer for 5 s (only 200s), so
+ * Abuse guard: a fixed one-minute window per visitor (in memory, per
+ * process; `PUBLIC_RATE_LIMIT_PER_MINUTE`, default 120), 429
+ * `RATE_LIMITED` with `Retry-After`, `X-RateLimit-Limit` and
+ * `X-RateLimit-Remaining: 0`. S211: the visitor is `publicClientKey` —
+ * with `TRUST_PROXY` on, the first public address among
+ * `PUBLIC_CLIENT_IP_HEADERS` (default `x-forwarded-for`, right-most
+ * public entry), else `request.ip`. Identical URLs share one answer for 5 s (only 200s), so
  * a burst costs at most one Hook read per instance per 5 s.
  *
  * S207 (Decision 0147 revision): concurrent reads of one URL share one
@@ -51,6 +59,7 @@ import type { Launch2Service } from "../features/launch2/launch2-service.js";
 
 export const publicMemeCacheControl = "public, max-age=15";
 export const publicRateLimitWindowMs = 60_000;
+/** Default of `PUBLIC_RATE_LIMIT_PER_MINUTE` (S211: configurable). */
 export const publicRateLimitPerWindow = 120;
 export const publicResponseMemoMs = 5_000;
 /**
@@ -71,8 +80,12 @@ export interface PublicMemeRouteOptions {
   readonly service: Launch2Service;
   /** Test seam: the clock of the rate limiter and the memo (ms). */
   readonly nowMs?: () => number;
-  /** Test seam: requests per window per client IP. */
+  /** Requests per window per visitor (`PUBLIC_RATE_LIMIT_PER_MINUTE`). */
   readonly ratePerWindow?: number;
+  /** S211: `TRUST_PROXY`; off keys the limiter on `request.ip`. */
+  readonly trustProxy?: boolean;
+  /** S211: `PUBLIC_CLIENT_IP_HEADERS`, read in order when trusted. */
+  readonly clientIpHeaders?: readonly PublicClientIpHeaderName[];
   /** Test seam: per-read time budgets (ms). */
   readonly budgetsMs?: Partial<Record<PublicReadKind, number>>;
 }
@@ -148,7 +161,14 @@ const publicErrors = {
   },
   429: {
     ...publicErrorSchema,
-    description: `RATE_LIMITED: ${launch2PublicReasonCodes.rateLimited} (Retry-After seconds)`,
+    headers: {
+      "access-control-allow-origin": { type: "string", const: "*" },
+      "cache-control": { type: "string", const: "no-store" },
+      "retry-after": { type: "string", pattern: "^[1-9][0-9]{0,1}$" },
+      "x-ratelimit-limit": { type: "string", pattern: "^[1-9][0-9]{1,4}$" },
+      "x-ratelimit-remaining": { type: "string", const: "0" },
+    },
+    description: `RATE_LIMITED: ${launch2PublicReasonCodes.rateLimited} (Retry-After seconds; X-RateLimit-Limit = PUBLIC_RATE_LIMIT_PER_MINUTE, X-RateLimit-Remaining = 0). Per visitor: with TRUST_PROXY on, the first public address among PUBLIC_CLIENT_IP_HEADERS, else the peer.`,
   },
   503: {
     ...publicErrorSchema,
@@ -650,6 +670,8 @@ export function registerPublicMemeRoutes(
 ): void {
   const nowMs = options.nowMs ?? Date.now;
   const ratePerWindow = options.ratePerWindow ?? publicRateLimitPerWindow;
+  const trustProxy = options.trustProxy ?? false;
+  const clientIpHeaders = options.clientIpHeaders ?? ["x-forwarded-for"];
   const windows = new Map<string, { start: number; count: number }>();
   const memo = new Map<string, { at: number; body: unknown }>();
 
@@ -741,10 +763,14 @@ export function registerPublicMemeRoutes(
             done();
             return;
           }
-          const retryAfter = admit(request.ip);
+          const retryAfter = admit(
+            publicClientKey(request, trustProxy, clientIpHeaders),
+          );
           if (retryAfter !== null) {
             reply.header("cache-control", "no-store");
             reply.header("retry-after", String(retryAfter));
+            reply.header("x-ratelimit-limit", String(ratePerWindow));
+            reply.header("x-ratelimit-remaining", "0");
             void reply.code(429).send({
               code: "RATE_LIMITED",
               reasonCode: launch2PublicReasonCodes.rateLimited,
