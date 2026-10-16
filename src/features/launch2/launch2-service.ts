@@ -317,14 +317,20 @@ export interface Launch2Service {
   listPublicMemes(input: {
     readonly stage?: unknown;
     readonly limit?: unknown;
+    /** S207: the route's time budget; no further chain read once aborted. */
+    readonly signal?: AbortSignal;
   }): Promise<Resource>;
   /** Decision 0147: one MEME's public page facts. */
-  getPublicMeme(input: { readonly instanceId: string }): Promise<Resource>;
+  getPublicMeme(input: {
+    readonly instanceId: string;
+    readonly signal?: AbortSignal;
+  }): Promise<Resource>;
   /** Decision 0147: one MEME's public 5-minute candles. */
   listPublicMemeCandles(input: {
     readonly instanceId: string;
     readonly interval?: unknown;
     readonly limit?: unknown;
+    readonly signal?: AbortSignal;
   }): Promise<Resource>;
 }
 
@@ -2392,6 +2398,17 @@ export function createLaunch2Service(
   // Decision 0147: the public MEME page read surface (no principal)
   // -------------------------------------------------------------------------
 
+  /**
+   * S207: once the route's time budget is spent, stop before the next
+   * chain / database read (the route has already answered 503
+   * PUBLIC_UPSTREAM_TIMEOUT to every waiter).
+   */
+  function publicStopIfAborted(signal: AbortSignal | undefined): void {
+    if (signal?.aborted === true) {
+      unavailableWith(launch2PublicReasonCodes.upstreamTimeout);
+    }
+  }
+
   function publicInvalid(reasonCode: string): never {
     throw V2ApiError.fromCode("INVALID_REQUEST", { reasonCode });
   }
@@ -2461,6 +2478,7 @@ export function createLaunch2Service(
   async function listPublicMemes(input: {
     readonly stage?: unknown;
     readonly limit?: unknown;
+    readonly signal?: AbortSignal;
   }): Promise<Resource> {
     const filter =
       input.stage === undefined
@@ -2502,6 +2520,7 @@ export function createLaunch2Service(
     const dynamics = new Map<string, Launch2DynamicHookState | string>();
     const live = rows.filter(publicLiveDynamic);
     for (let index = 0; index < live.length; index += 4) {
+      publicStopIfAborted(input.signal);
       const reads = await Promise.all(
         live.slice(index, index + 4).map(async (record) => {
           try {
@@ -2548,6 +2567,7 @@ export function createLaunch2Service(
 
   async function getPublicMeme(input: {
     readonly instanceId: string;
+    readonly signal?: AbortSignal;
   }): Promise<Resource> {
     const record = await visibleInstance(input.instanceId);
     const hookKind = hookKindOf(record);
@@ -2555,6 +2575,7 @@ export function createLaunch2Service(
     const facts = (await publicFactsOf([record.instanceId])).get(
       record.instanceId,
     ) as Launch2PublicMemeFacts;
+    publicStopIfAborted(input.signal);
     const dynamicRead = publicLiveDynamic(record)
       ? await dynamicPoolRead(record, hookKind, null)
       : null;
@@ -2718,6 +2739,7 @@ export function createLaunch2Service(
     readonly instanceId: string;
     readonly interval?: unknown;
     readonly limit?: unknown;
+    readonly signal?: AbortSignal;
   }): Promise<Resource> {
     if (
       input.interval !== undefined &&
@@ -2758,6 +2780,7 @@ export function createLaunch2Service(
       rows.length === 0 &&
       hookKindOf(record) === "loopDynamic"
     ) {
+      publicStopIfAborted(input.signal);
       rows = await read("pool");
     }
     return Object.freeze({

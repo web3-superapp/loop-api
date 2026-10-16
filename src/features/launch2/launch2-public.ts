@@ -15,6 +15,8 @@ export const launch2PublicReasonCodes = Object.freeze({
   limitInvalid: "PUBLIC_LIMIT_INVALID",
   stageInvalid: "PUBLIC_STAGE_INVALID",
   notFound: "PUBLIC_NOT_FOUND",
+  /** S207: the read did not finish inside its time budget (503). */
+  upstreamTimeout: "PUBLIC_UPSTREAM_TIMEOUT",
 } as const);
 
 /** `stage` filter of the public list. */

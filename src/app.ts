@@ -322,7 +322,10 @@ import { registerDiscoveryRoutes } from "./routes/discovery.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
-import { registerPublicMemeRoutes } from "./routes/public-meme.js";
+import {
+  registerPublicMemeRoutes,
+  type PublicMemeRouteOptions,
+} from "./routes/public-meme.js";
 import { registerWellKnownRoutes } from "./routes/well-known.js";
 import {
   createStreamUserIdentitySource,
@@ -634,6 +637,8 @@ export interface BuildAppOptions {
   readonly publicMeme?: {
     readonly nowMs?: () => number;
     readonly ratePerWindow?: number;
+    /** S207: per-read time budgets (ms). */
+    readonly budgetsMs?: PublicMemeRouteOptions["budgetsMs"];
   };
   readonly launch2Chain?: Launch2Chain | null;
   /** Decision 0124: test seam for the official-pool router reader. */
@@ -2631,6 +2636,9 @@ export async function buildApp(
       ...(options.publicMeme?.ratePerWindow === undefined
         ? {}
         : { ratePerWindow: options.publicMeme.ratePerWindow }),
+      ...(options.publicMeme?.budgetsMs === undefined
+        ? {}
+        : { budgetsMs: options.publicMeme.budgetsMs }),
     });
   }
   if (includeV1) {

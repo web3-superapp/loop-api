@@ -33,6 +33,17 @@ import type { Launch2Service } from "../features/launch2/launch2-service.js";
  * `Retry-After`. Identical URLs share one answer for 5 s (only 200s), so
  * a burst costs at most one Hook read per instance per 5 s.
  *
+ * S207 (Decision 0147 revision): concurrent reads of one URL share one
+ * in-flight read (single-flight; a failure reaches every waiter as the
+ * same 503, never a second upstream call), and each read has a time
+ * budget well inside Fastify's 15 s `handlerTimeout` (detail 8 s, list
+ * 10 s, candles 5 s) answering 503 `PUBLIC_UPSTREAM_TIMEOUT`. Before the
+ * budget, a slow Hook read ran past `handlerTimeout`: Fastify sent its
+ * `FST_ERR_HANDLER_TIMEOUT` through the error handler (projected to 500)
+ * and the handler's own late send then logged "Reply was already sent".
+ * The handler and the error handler never send twice or into a closed
+ * response.
+ *
  * Failures answer `{ code, reasonCode }` with the service's reason code
  * as is (503 `CAPABILITY_UNAVAILABLE` / `LAUNCH2_*`, 404 `NOT_FOUND`, 400
  * `INVALID_REQUEST`); a 503 never carries a partial body.
@@ -42,6 +53,17 @@ export const publicMemeCacheControl = "public, max-age=15";
 export const publicRateLimitWindowMs = 60_000;
 export const publicRateLimitPerWindow = 120;
 export const publicResponseMemoMs = 5_000;
+/**
+ * S207: time budget (ms) of one public read, chain reads included. All
+ * stay well below the server's 15 s `handlerTimeout` / request abort
+ * deadline so the page sees a sanitized 503, never the framework timeout.
+ */
+export const publicReadBudgetsMs = Object.freeze({
+  detail: 8_000,
+  list: 10_000,
+  candles: 5_000,
+});
+export type PublicReadKind = keyof typeof publicReadBudgetsMs;
 const publicMemoMaximumEntries = 500;
 const publicRateLimitMaximumKeys = 10_000;
 
@@ -51,6 +73,8 @@ export interface PublicMemeRouteOptions {
   readonly nowMs?: () => number;
   /** Test seam: requests per window per client IP. */
   readonly ratePerWindow?: number;
+  /** Test seam: per-read time budgets (ms). */
+  readonly budgetsMs?: Partial<Record<PublicReadKind, number>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +153,7 @@ const publicErrors = {
   503: {
     ...publicErrorSchema,
     description:
-      "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body.",
+      "CAPABILITY_UNAVAILABLE with the launch2 reason as is (PUBLIC_UPSTREAM_TIMEOUT when the read exceeds its time budget, LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body.",
   },
 } as const;
 
@@ -532,6 +556,15 @@ function publicErrorOf(error: unknown): PublicError {
             : code,
     };
   }
+  // S207 backstop: Fastify's own `handlerTimeout` (a FastifyError with
+  // statusCode 503) is a timeout like the route budget, not a 500.
+  if (errorCodeOf(error) === "FST_ERR_HANDLER_TIMEOUT") {
+    return {
+      statusCode: 503,
+      code: "CAPABILITY_UNAVAILABLE",
+      reasonCode: launch2PublicReasonCodes.upstreamTimeout,
+    };
+  }
   const statusCode = (error as { statusCode?: unknown }).statusCode;
   if (typeof statusCode === "number" && statusCode >= 400 && statusCode < 500) {
     return {
@@ -545,6 +578,65 @@ function publicErrorOf(error: unknown): PublicError {
     code: "INTERNAL_ERROR",
     reasonCode: "INTERNAL_ERROR",
   };
+}
+
+function errorCodeOf(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/u.test(code)
+    ? code
+    : null;
+}
+
+/**
+ * The error's message for the log: one line, ≤ 200 code points, URLs
+ * replaced (a provider error could carry an RPC URL with its key).
+ */
+function safeErrorMessage(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const line = error.message
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, "<url>")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return [...line].slice(0, 200).join("");
+}
+
+/**
+ * S207: the reply was already sent (Fastify's handler timeout, or the
+ * error handler) or the client's response stream is gone: never write
+ * again. `request.raw.destroyed` is not used — on Node 24 an
+ * `IncomingMessage` is destroyed once its (empty) body is read, while the
+ * client is still waiting (see `request-abort-signal.ts`).
+ */
+export function publicReplyClosed(reply: FastifyReply): boolean {
+  return reply.sent || reply.raw.destroyed;
+}
+
+function publicTimeoutError(): V2ApiError {
+  return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+    reasonCode: launch2PublicReasonCodes.upstreamTimeout,
+  });
+}
+
+/** `read` settles, or the signal aborts first: 503 PUBLIC_UPSTREAM_TIMEOUT. */
+function withDeadline<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(publicTimeoutError());
+      return;
+    }
+    const onAbort = () => reject(publicTimeoutError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    read.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function setCorsHeaders(reply: FastifyReply): void {
@@ -583,22 +675,54 @@ export function registerPublicMemeRoutes(
     );
   }
 
-  async function memoized(
+  const budgets: Record<PublicReadKind, number> = {
+    ...publicReadBudgetsMs,
+    ...options.budgetsMs,
+  };
+  const flights = new Map<string, Promise<unknown>>();
+
+  /**
+   * Decision 0147 memo + S207 single-flight: a 200 of one URL is shared
+   * for 5 s; while a read of that URL is in flight every request joins it
+   * (one upstream call, one shared answer or 503). The shared answer
+   * settles at the budget (503 PUBLIC_UPSTREAM_TIMEOUT); the flight stays
+   * registered until the underlying read itself settles, so a timed-out
+   * read is never piled on, and a late success still fills the memo.
+   */
+  function shared(
     request: FastifyRequest,
-    read: () => Promise<unknown>,
+    kind: PublicReadKind,
+    read: (signal: AbortSignal) => Promise<unknown>,
   ): Promise<unknown> {
     const key = request.raw.url ?? request.url;
-    const at = nowMs();
     const hit = memo.get(key);
-    if (hit !== undefined && at - hit.at < publicResponseMemoMs)
-      return hit.body;
-    const body = await read();
-    if (memo.size >= publicMemoMaximumEntries) memo.clear();
-    memo.set(key, { at: nowMs(), body });
-    return body;
+    if (hit !== undefined && nowMs() - hit.at < publicResponseMemoMs) {
+      return Promise.resolve(hit.body);
+    }
+    const inFlight = flights.get(key);
+    if (inFlight !== undefined) return inFlight;
+    const signal = AbortSignal.timeout(budgets[kind]);
+    const underlying = Promise.resolve().then(() => read(signal));
+    const answer = withDeadline(underlying, signal);
+    flights.set(key, answer);
+    // Every waiter handles `answer`; this keeps a flight nobody awaits
+    // from becoming an unhandled rejection.
+    answer.catch(() => undefined);
+    underlying.then(
+      (body) => {
+        if (memo.size >= publicMemoMaximumEntries) memo.clear();
+        memo.set(key, { at: nowMs(), body });
+        if (flights.get(key) === answer) flights.delete(key);
+      },
+      () => {
+        if (flights.get(key) === answer) flights.delete(key);
+      },
+    );
+    return answer;
   }
 
   function sendOk(reply: FastifyReply, body: unknown) {
+    if (publicReplyClosed(reply)) return reply;
     reply.header("cache-control", publicMemeCacheControl);
     return reply.code(200).send(body);
   }
@@ -638,9 +762,25 @@ export function registerPublicMemeRoutes(
             {
               requestId: request.id,
               errorClass: error instanceof Error ? error.name : typeof error,
+              errorCode: errorCodeOf(error),
+              errorMessage: safeErrorMessage(error),
             },
             "Unhandled error in public request",
           );
+        } else if (projected.statusCode === 503) {
+          request.log.info(
+            {
+              requestId: request.id,
+              reasonCode: projected.reasonCode,
+              errorCode: errorCodeOf(error),
+            },
+            "Public read unavailable",
+          );
+        }
+        if (publicReplyClosed(reply)) {
+          // S207: never a second send (e.g. a late failure after the
+          // framework's handler timeout) and never into a closed stream.
+          return reply;
         }
         setCorsHeaders(reply);
         reply.header("cache-control", "no-store");
@@ -705,8 +845,9 @@ export function registerPublicMemeRoutes(
         },
         async (request, reply) => {
           const query = request.query as Record<string, unknown>;
-          const body = await memoized(request, () =>
+          const body = await shared(request, "list", (signal) =>
             options.service.listPublicMemes({
+              signal,
               ...(query["stage"] === undefined
                 ? {}
                 : { stage: query["stage"] }),
@@ -739,8 +880,8 @@ export function registerPublicMemeRoutes(
         },
         async (request, reply) => {
           const { instanceId } = request.params as { instanceId: string };
-          const body = await memoized(request, () =>
-            options.service.getPublicMeme({ instanceId }),
+          const body = await shared(request, "detail", (signal) =>
+            options.service.getPublicMeme({ instanceId, signal }),
           );
           return sendOk(reply, body);
         },
@@ -775,9 +916,10 @@ export function registerPublicMemeRoutes(
         async (request, reply) => {
           const { instanceId } = request.params as { instanceId: string };
           const query = request.query as Record<string, unknown>;
-          const body = await memoized(request, () =>
+          const body = await shared(request, "candles", (signal) =>
             options.service.listPublicMemeCandles({
               instanceId,
+              signal,
               ...(query["interval"] === undefined
                 ? {}
                 : { interval: query["interval"] }),
