@@ -1888,6 +1888,19 @@ const hooksLaunchFixedEconomicsSchema = {
           description:
             "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories.",
         },
+        // Decision 0152 (S209 generation). The service already emitted both; the response schema
+        // lagged behind and fast-json-stringify answered 500 for every S209 draft (S215 finding).
+        maxCumulativeBuy: {
+          ...uintStringSchema,
+          description:
+            "Decision 0152: the Factory's per-address curve purchase cap `maxCumulativeBuy()`, a raw MEME integer (5000000000000000000000000 = 5,000,000 MEME). Absent on templates of pre-S209 Factories.",
+        },
+        buyFeeToken: {
+          type: "string",
+          enum: ["meme", "usd1"],
+          description:
+            "Decision 0152: which side the 2 % buy fee is taken from — `usd1` on S209 Factories (hook permission bits 0x10CC), `meme` before.",
+        },
       },
     },
   },

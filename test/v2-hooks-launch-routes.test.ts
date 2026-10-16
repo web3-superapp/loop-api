@@ -10,7 +10,10 @@ import {
   hooksLaunchLoopDynamicTemplateHash,
   parseHooksLaunchDraft,
 } from "../src/features/launch/hooks-launch-config.js";
-import { testnetLoopDynamicParams } from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
+import {
+  s209LoopDynamicParams,
+  testnetLoopDynamicParams,
+} from "./helpers/hooks-launch-loop-dynamic-fixtures.js";
 import {
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
@@ -724,6 +727,49 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(unsaved.json()).toMatchObject({
       detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
     });
+  });
+
+  it("serialises an S209 draft: maxCumulativeBuy and buyFeeToken pass the response schema (Decision 0152, S215 finding)", async () => {
+    // Before this fix fast-json-stringify refused the two 0152 fields the
+    // service already emitted ("#/properties/draft does not match schema")
+    // and every S209 project answered 500 on save and on GET hooks-config.
+    const template = {
+      params: s209LoopDynamicParams,
+      templateHash: hooksLaunchLoopDynamicTemplateHash(
+        s209LoopDynamicParams,
+      ).toLowerCase(),
+    };
+    const dynamicReader: HooksLaunchFactoryReader = {
+      ...factoryReader,
+      hookKind: "loopDynamic",
+      nftSaleDuration: () => Promise.resolve({ seconds: 3_600, legacy: false }),
+      loopDynamicTemplate: () => Promise.resolve(template),
+    };
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: dynamicReader,
+      submissions: submissionsFake(),
+      overrides: { ...enabled, HOOKS_LAUNCH_HOOK_KIND: "loopDynamic" },
+    });
+    const savedResponse = await saveDraft(app);
+    expect(savedResponse.statusCode).toBe(200);
+    const saved = savedResponse.json<{
+      config: { fixedEconomics: Record<string, unknown> };
+    }>();
+    expect(saved.config.fixedEconomics["loopDynamic"]).toMatchObject({
+      maxCumulativeBuy: s209LoopDynamicParams.maxCumulativeBuy,
+      buyFeeToken: "usd1",
+    });
+    const read = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config`,
+      headers: s7CommonHeaders(),
+    });
+    expect(read.statusCode).toBe(200);
+    expect(
+      read.json<{
+        draft: { config: { fixedEconomics: Record<string, unknown> } };
+      }>().draft.config.fixedEconomics["loopDynamic"],
+    ).toMatchObject({ buyFeeToken: "usd1" });
   });
 
   it("saves, prepares and accepts a LoopDynamic launch against the Factory template (Decision 0132)", async () => {
