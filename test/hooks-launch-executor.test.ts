@@ -39,9 +39,15 @@ async function setup(
     readonly latestConfig?: Parameters<
       typeof fakeRepository
     >[0]["latestConfig"];
+    /** Decision 0150: the chain the owner signed for (default 97). */
+    readonly signedChainId?: number;
+    readonly launchSlot?: HooksLaunchExecutorPolicy["launchSlot"];
   } = {},
 ) {
-  const payload = await signedPayload(options.deadline ?? nowSeconds + 900);
+  const payload = await signedPayload(
+    options.deadline ?? nowSeconds + 900,
+    options.signedChainId ?? 97,
+  );
   const store = fakeRepository({
     payload,
     ...(options.latestConfig === undefined
@@ -52,7 +58,10 @@ async function setup(
   const executor = createHooksLaunchExecutor({
     repository: store.repository,
     chain: fake.chain,
-    policy,
+    policy:
+      options.launchSlot === undefined
+        ? policy
+        : { ...policy, launchSlot: options.launchSlot },
     executorId: "hooks-executor:test:1",
     now: () => nowSeconds,
   });
@@ -126,6 +135,56 @@ describe("Hooks deployment executor (Decision 0112)", () => {
       expect(store.events).toHaveLength(0);
     },
   );
+
+  describe("Decision 0150 launch slot", () => {
+    const mainnet = { chainReference: 56, mainnetAcknowledged: true } as const;
+
+    it("stays idle on chain 56 without LAUNCH_MAINNET_ACK and claims nothing", async () => {
+      const { store, fake, executor } = await setup({
+        signedChainId: 56,
+        launchSlot: { chainReference: 56, mainnetAcknowledged: false },
+      });
+      fake.state.chainId = 56;
+      const result = await executor.runOnce();
+      expect(result.idleReason).toBe("LAUNCH_MAINNET_NOT_ACKNOWLEDGED");
+      expect(store.task.status).toBe("awaiting_executor");
+      expect(store.events).toHaveLength(0);
+    });
+
+    it("stays idle when a mainnet slot meets a testnet node", async () => {
+      const { store, executor } = await setup({
+        signedChainId: 56,
+        launchSlot: mainnet,
+      });
+      const result = await executor.runOnce();
+      expect(result.idleReason).toBe("HOOKS_EXECUTOR_WRONG_CHAIN");
+      expect(store.task.status).toBe("awaiting_executor");
+    });
+
+    it("signs and broadcasts a chain-56 task on chain 56 with the ack", async () => {
+      const { store, fake, executor } = await setup({
+        signedChainId: 56,
+        launchSlot: mainnet,
+      });
+      fake.state.chainId = 56;
+      const result = await executor.runOnce();
+      expect(result.idleReason).toBeNull();
+      expect(store.task.status).toBe("broadcast");
+      expect(store.reservations).toHaveLength(1);
+    });
+
+    it("never executes an authorization signed for another chain", async () => {
+      const { store, fake, executor } = await setup({
+        signedChainId: 97,
+        launchSlot: mainnet,
+      });
+      fake.state.chainId = 56;
+      await executor.runOnce();
+      expect(store.task.status).not.toBe("broadcast");
+      expect(store.task.txHash).toBeNull();
+      expect(store.reservations).toHaveLength(0);
+    });
+  });
 
   it("fails an expired signature without signing or sending", async () => {
     const { store, fake, executor } = await setup({

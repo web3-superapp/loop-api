@@ -9,9 +9,14 @@ provider contracts before planning or changing behavior.
 
 ## Hard boundaries
 
-- Development and Hyperliquid Testnet are the only enabled environments.
+- Development and Hyperliquid Testnet are the only enabled environments. The
+  BSC Mainnet launch slot (`LAUNCH_CHAIN_ID=56` Hooks / launch2 / Mining claim
+  action paths) opens only through Decision 0150's `LAUNCH_MAINNET_ACK`,
+  default off.
 - Mainnet, withdrawals, automated trading, Pay, and payment endpoints remain
-  disabled until explicit numbered security/product decisions enable them.
+  disabled until explicit numbered security/product decisions enable them;
+  for the BSC launch slot that decision is 0150 (exact ack phrase, each write
+  lane's own switch plus `BSC_WRITES_ENABLED`, default closed).
 - Never commit or log provider secrets, Privy refresh tokens, wallet keys,
   recovery phrases, Hyperliquid agent keys, Firebase service accounts, APNs
   private keys, Cloudflare tunnel credentials, access tokens, signed URLs, or

@@ -59,6 +59,58 @@ export function launchChainIdFor(
     : bscChainId;
 }
 
+/**
+ * Decision 0150: the exact phrase `LAUNCH_MAINNET_ACK` must equal before
+ * any launch-slot action path (Hooks Factory / LoopDynamic / pool router
+ * keys, the four server-signed write lanes, the MEME v2 and Mining claim
+ * device-signed prepares) may run on BSC Mainnet (`LAUNCH_CHAIN_ID=56`).
+ * Blank keeps every one of them closed exactly as before 0150.
+ */
+export const launchMainnetAckPhrase =
+  "I_UNDERSTAND_THIS_IS_BSC_MAINNET_WITH_REAL_FUNDS" as const;
+
+/** Decision 0150: the launch slot as an action path sees it. */
+export interface LaunchSlotPolicy {
+  readonly chainReference: LaunchChainReference;
+  /** True only with `LAUNCH_CHAIN_ID=56` and the exact ack phrase. */
+  readonly mainnetAcknowledged: boolean;
+}
+
+/** The pre-0150 slot every action path assumed (BSC Testnet). */
+export const testnetLaunchSlot: LaunchSlotPolicy = Object.freeze({
+  chainReference: bscTestnetChainReference,
+  mainnetAcknowledged: false,
+});
+
+export const launchSlotReasonCodes = Object.freeze({
+  /** Decision 0150: chain 56 without `LAUNCH_MAINNET_ACK`. */
+  mainnetNotAcknowledged: "LAUNCH_MAINNET_NOT_ACKNOWLEDGED",
+} as const);
+
+/**
+ * Decision 0150: whether a launch-slot action path may act on its slot:
+ * BSC Testnet always (unchanged), BSC Mainnet only when acknowledged.
+ */
+export function launchSlotActionsOpen(slot: LaunchSlotPolicy): boolean {
+  // The reference is 56 or 97: anything but the testnet is mainnet.
+  return (
+    slot.chainReference === bscTestnetChainReference || slot.mainnetAcknowledged
+  );
+}
+
+/**
+ * Decision 0150: the action-path check against the chain a node reports:
+ * `wrong_chain` when it is not the configured slot, `not_acknowledged` for
+ * an unacknowledged mainnet slot, else null.
+ */
+export function launchSlotRefusal(
+  slot: LaunchSlotPolicy,
+  observedChainReference: number,
+): "wrong_chain" | "not_acknowledged" | null {
+  if (observedChainReference !== slot.chainReference) return "wrong_chain";
+  return launchSlotActionsOpen(slot) ? null : "not_acknowledged";
+}
+
 export function nativeSymbolForLaunchChain(
   chainId: LaunchChainId,
 ): typeof bscNativeSymbol | typeof bscTestnetNativeSymbol {

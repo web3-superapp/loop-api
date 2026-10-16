@@ -18,8 +18,24 @@ import type {
  */
 
 /** The advisory lock key the Hooks executor uses for the same account. */
-export function submitterNonceLockKey(address: string): string {
-  return `hooks_launch_executor_nonce:97:${address.toLowerCase()}`;
+export function submitterNonceLockKey(
+  address: string,
+  chainReference: 56 | 97 = 97,
+): string {
+  return `hooks_launch_executor_nonce:${chainReference}:${address.toLowerCase()}`;
+}
+
+/**
+ * Decision 0150: the integer chain id the hooks / launch2 signer tables are
+ * written and read with — the configured launch slot (56 or 97; default 97,
+ * the pre-0150 constant). Interpolated only after this check.
+ */
+export function launchSlotChainReference(value: number | undefined): 56 | 97 {
+  const reference = value ?? 97;
+  if (reference !== 56 && reference !== 97) {
+    throw new Error("launch slot chain reference must be 56 or 97");
+  }
+  return reference;
 }
 
 type Row = Record<string, unknown>;
@@ -88,7 +104,9 @@ function mapPublication(row: Row): Launch2PublicationRecord {
 
 export function createPostgresLaunch2PublicationRepository(
   pool: Pool,
+  options: { readonly chainReference?: 56 | 97 } = {},
 ): Launch2PublicationRepository {
+  const chainReference = launchSlotChainReference(options.chainReference);
   async function inTransaction<T>(
     work: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
@@ -248,7 +266,7 @@ export function createPostgresLaunch2PublicationRepository(
         const submitter = input.submitterAddress.toLowerCase();
         await client.query(
           "select pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [submitterNonceLockKey(submitter)],
+          [submitterNonceLockKey(submitter, chainReference)],
         );
         const locked = await client.query<Row>(
           `select status, tx_hash from public.launch2_snapshot_publications
@@ -268,7 +286,7 @@ export function createPostgresLaunch2PublicationRepository(
         // broadcast transactions.
         const held = await client.query<{ nonce: string }>(
           `select nonce::text as nonce from public.hooks_launch_executor_nonces
-             where chain_id = 97 and executor_address = $1 and state = 'pending'
+             where chain_id = ${chainReference} and executor_address = $1 and state = 'pending'
                and nonce >= $2::bigint
            union
            select tx_nonce::text from public.launch2_snapshot_publications

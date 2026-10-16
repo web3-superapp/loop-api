@@ -73,6 +73,11 @@ export interface MiningRewardsServiceDependencies {
   readonly contractAddress: string | null;
   /** CAIP-2 id of the launch slot the claim contract lives on. */
   readonly chainId: string;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with `LAUNCH_MAINNET_ACK`. Absent /
+   * false keeps MINING_CLAIM_MAINNET_CLOSED on 56 exactly as before.
+   */
+  readonly mainnetAcknowledged?: boolean;
   readonly writesEnabled: boolean;
   readonly usdtAddress: string | null;
   readonly confirmations: number;
@@ -343,12 +348,14 @@ export function miningClaimUnavailableReason(
     | "signer"
     | "contractAddress"
     | "chainId"
+    | "mainnetAcknowledged"
     | "writesEnabled"
     | "wallets"
   >,
 ): string | null {
   if (deps.repository === null) return reasons.settlementUnavailable;
-  if (deps.chainId === bscChainId) return reasons.claimMainnetClosed;
+  if (deps.chainId === bscChainId && deps.mainnetAcknowledged !== true)
+    return reasons.claimMainnetClosed;
   if (deps.contractAddress === null) return reasons.claimContractNotConfigured;
   if (
     deps.chain === null ||

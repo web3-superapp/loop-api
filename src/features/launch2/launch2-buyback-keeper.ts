@@ -28,6 +28,8 @@
  * the instance waiting with a reason code.
  */
 
+import { launchSlotReasonCodes } from "../chain/chain-contract.js";
+
 export const launch2BuybackKeeperLane = "launch2_buyback_keeper";
 
 export const launch2BuybackAttemptStatuses = Object.freeze([
@@ -344,6 +346,12 @@ export interface Launch2BuybackKeeperChain {
 
 export interface Launch2BuybackKeeperPolicy {
   readonly chainId: string;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with `LAUNCH_MAINNET_ACK`. On a
+   * chain-56 slot without it every tick is unavailable
+   * (LAUNCH_MAINNET_NOT_ACKNOWLEDGED); ignored on 97.
+   */
+  readonly mainnetAcknowledged?: boolean;
   /** The preferred configured Factory (OfficialTax, else LoopDynamic). */
   readonly factoryAddress: string;
   /**
@@ -793,6 +801,9 @@ export function createLaunch2BuybackKeeper(options: {
     const expected = Number(policy.chainId.split(":")[1]);
     if ((await chain.chainId()) !== expected) {
       return unavailable(launch2KeeperReasonCodes.chainMismatch);
+    }
+    if (expected === 56 && policy.mainnetAcknowledged !== true) {
+      return unavailable(launchSlotReasonCodes.mainnetNotAcknowledged);
     }
     // Boot verified the Factory keepers; a boot-time read failure leaves
     // it to the first tick. Never act unverified.

@@ -38,7 +38,7 @@ describe("000087 mining power visibility default migration contract (Decision 01
   });
 
   it("is the schema head and matches the contract default", () => {
-    expect(latestMigrationName).toBe("000088_fiat_fx_rates");
+    expect(latestMigrationName).toBe("000089_launch_slot_mainnet_chain_ids");
     expect(defaultPrivacyV2Values.visibility.miningPower).toBe("everyone");
   });
 });

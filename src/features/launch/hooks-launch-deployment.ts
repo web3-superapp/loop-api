@@ -1,6 +1,11 @@
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import { getCreate2Address } from "viem";
 import {
+  launchSlotRefusal,
+  testnetLaunchSlot,
+  type LaunchSlotPolicy,
+} from "../chain/chain-contract.js";
+import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
   type HooksLaunchProjectConfigRepository,
@@ -218,6 +223,11 @@ export function createHooksLaunchDeploymentService(input: {
   readonly maxSaltAttempts: number;
   /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails closed. */
   readonly fixedBuybackRecipient?: string | null;
+  /**
+   * Decision 0150: the configured launch slot (absent = BSC Testnet). The
+   * reader must be on it, and chain 56 needs `LAUNCH_MAINNET_ACK`.
+   */
+  readonly launchSlot?: LaunchSlotPolicy;
 }): HooksLaunchDeploymentService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1_000));
   let activePreparations = 0;
@@ -228,7 +238,10 @@ export function createHooksLaunchDeploymentService(input: {
         reader === null ||
         configs === null ||
         wallets === null ||
-        reader.chainId !== 97
+        launchSlotRefusal(
+          input.launchSlot ?? testnetLaunchSlot,
+          reader.chainId,
+        ) !== null
       ) {
         throw new HooksLaunchDeploymentError(
           "unavailable",

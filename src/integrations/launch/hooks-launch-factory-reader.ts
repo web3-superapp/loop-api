@@ -12,7 +12,6 @@ import {
   type Address,
   type Transport,
 } from "viem";
-import { bscTestnet } from "viem/chains";
 
 import {
   hooksLaunchLegacyNftSaleDurationSeconds,
@@ -22,6 +21,7 @@ import {
   type HooksLaunchLoopDynamicParams,
 } from "../../features/launch/hooks-launch-config.js";
 import type { HooksLaunchFactoryReader } from "../../features/launch/hooks-launch-deployment.js";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
 import {
   loopDynamicLaunchFactoryAbi,
@@ -248,9 +248,15 @@ export function createHooksLaunchFactoryReader(input: {
    * OfficialTax, unchanged.
    */
   readonly hookKind?: "officialTax" | "loopDynamic";
+  /**
+   * Decision 0150: the launch slot the Factory lives on (the node must
+   * report it; it is the EIP-712 domain chain id); absent = 97.
+   */
+  readonly chainReference?: 56 | 97;
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
 }): HooksLaunchFactoryReader {
+  const chainReference = input.chainReference ?? 97;
   if (
     !/^0x[0-9a-fA-F]{40}$/.test(input.factoryAddress) ||
     !/^0x[0-9a-fA-F]{64}$/.test(input.expectedRuntimeCodeHash) ||
@@ -261,7 +267,7 @@ export function createHooksLaunchFactoryReader(input: {
   const factoryAddress = input.factoryAddress as Address;
   const loopDynamic = input.hookKind === "loopDynamic";
   const client = createPublicClient({
-    chain: bscTestnet,
+    chain: viemLaunchChain(chainReference),
     transport:
       input.transport ??
       fallback(input.rpcUrls.map((url) => http(url, { timeout: 8_000 }))),
@@ -274,7 +280,7 @@ export function createHooksLaunchFactoryReader(input: {
         client.getBytecode({ address: factoryAddress }),
       ]);
       if (
-        chainId !== 97 ||
+        chainId !== chainReference ||
         code === undefined ||
         code === "0x" ||
         keccak256(code).toLowerCase() !==
@@ -312,7 +318,7 @@ export function createHooksLaunchFactoryReader(input: {
 
   return Object.freeze({
     factoryAddress,
-    chainId: 97,
+    chainId: chainReference,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
     ...(loopDynamic
       ? {

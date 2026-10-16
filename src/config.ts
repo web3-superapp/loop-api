@@ -7,6 +7,7 @@ import {
   bscChainReference,
   bscTestnetChainId,
   bscTestnetChainReference,
+  launchMainnetAckPhrase,
   parseDecimalAmount,
   type LaunchChainId,
   type LaunchChainReference,
@@ -129,6 +130,14 @@ const optionalEvidenceReference = z.preprocess(
  */
 const launchChainEnvironmentShape = {
   LAUNCH_CHAIN_ID: z.enum(["56", "97"]),
+  // Decision 0150: the mainnet switch. Blank (default) keeps every
+  // launch-slot action path closed on 56 exactly as before; only the exact
+  // phrase opens them (each write lane still needs its own switch and
+  // BSC_WRITES_ENABLED=true). Never trimmed: anything else refuses boot.
+  LAUNCH_MAINNET_ACK: z.preprocess(
+    blankStringToUndefined,
+    z.string().max(128).optional(),
+  ),
   LAUNCH_BSC_RPC_URLS: optionalCredential(4_096),
   LAUNCH_BSC_CONFIRMATIONS: optionalPositiveIntegerString(1, 1_000),
   LAUNCH_BSC_REORG_DEPTH_BLOCKS: optionalPositiveIntegerString(1, 1_000),
@@ -145,6 +154,7 @@ function launchChainEnvironmentDefaults(
 ): Record<keyof typeof launchChainEnvironmentShape, string | undefined> {
   return {
     LAUNCH_CHAIN_ID: environment["LAUNCH_CHAIN_ID"] ?? "56",
+    LAUNCH_MAINNET_ACK: environment["LAUNCH_MAINNET_ACK"],
     LAUNCH_BSC_RPC_URLS: environment["LAUNCH_BSC_RPC_URLS"],
     LAUNCH_BSC_CONFIRMATIONS: environment["LAUNCH_BSC_CONFIRMATIONS"],
     LAUNCH_BSC_REORG_DEPTH_BLOCKS: environment["LAUNCH_BSC_REORG_DEPTH_BLOCKS"],
@@ -262,15 +272,84 @@ function refineLaunchContractEnvironment(
   }
 }
 
+/**
+ * Decision 0150: true only with `LAUNCH_CHAIN_ID=56` and
+ * `LAUNCH_MAINNET_ACK` equal to the exact phrase. Every "BSC Testnet only"
+ * rule below is relaxed to "BSC Testnet, or BSC Mainnet acknowledged".
+ */
+function launchMainnetAcknowledged(value: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+}): boolean {
+  return (
+    value.LAUNCH_CHAIN_ID === "56" &&
+    value.LAUNCH_MAINNET_ACK === launchMainnetAckPhrase
+  );
+}
+
+/** Decision 0150: the launch slot admits its action paths (97, or 56 + ack). */
+function launchSlotActionsPermitted(value: {
+  readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+}): boolean {
+  return value.LAUNCH_CHAIN_ID === "97" || launchMainnetAcknowledged(value);
+}
+
+/**
+ * Decision 0150: a server-signed launch-slot write lane (`key` = its
+ * enable switch). On 97 nothing changes; on 56 without the ack the pre-0150
+ * refusal is returned verbatim; on 56 with the ack the lane also needs the
+ * one repository-wide write switch `BSC_WRITES_ENABLED=true`.
+ */
+function launchSlotWriteLaneIssues(
+  key: string,
+  data: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
+    readonly BSC_WRITES_ENABLED?: boolean | undefined;
+  },
+): readonly string[] {
+  if (data.LAUNCH_CHAIN_ID === "97") return [];
+  if (!launchMainnetAcknowledged(data)) {
+    return [
+      `${key}: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)`,
+    ];
+  }
+  return data.BSC_WRITES_ENABLED === true
+    ? []
+    : [
+        `${key}: on LAUNCH_CHAIN_ID=56 also requires BSC_WRITES_ENABLED=true (Decision 0150)`,
+      ];
+}
+
 function refineLaunchChainEnvironment(
   value: {
     readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
     readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
     readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
     readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
   },
   context: z.RefinementCtx,
 ): void {
+  // Decision 0150: the ack is the exact phrase or blank, and only with 56
+  // (a testnet environment never carries the mainnet phrase).
+  if (value.LAUNCH_MAINNET_ACK !== undefined) {
+    if (value.LAUNCH_MAINNET_ACK !== launchMainnetAckPhrase) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "must be blank or exactly the Decision 0150 acknowledgement phrase",
+        path: ["LAUNCH_MAINNET_ACK"],
+      });
+    } else if (value.LAUNCH_CHAIN_ID !== "56") {
+      context.addIssue({
+        code: "custom",
+        message: "is permitted only when LAUNCH_CHAIN_ID=56",
+        path: ["LAUNCH_MAINNET_ACK"],
+      });
+    }
+  }
   if (value.LAUNCH_CHAIN_ID !== "56") {
     return;
   }
@@ -376,6 +455,7 @@ export const hooksLaunchDefaultSaleLeadSeconds = 86_400;
 function refineHooksLaunchFactoryEnvironment(
   value: {
     readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
     readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
     readonly HOOKS_LAUNCH_FACTORY_CODE_HASH?: string | undefined;
   },
@@ -396,7 +476,7 @@ function refineHooksLaunchFactoryEnvironment(
       ],
     });
   }
-  if (value.LAUNCH_CHAIN_ID !== "97") {
+  if (!launchSlotActionsPermitted(value)) {
     context.addIssue({
       code: "custom",
       message: "is permitted only when LAUNCH_CHAIN_ID=97",
@@ -428,6 +508,7 @@ function refineHooksLaunchFactoryEnvironment(
 function refineLaunch2PoolRouterEnvironment(
   value: {
     readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
     readonly LAUNCH2_POOL_ROUTER_ADDRESS?: string | undefined;
     readonly LAUNCH2_POOL_ROUTER_CODE_HASH?: string | undefined;
   },
@@ -448,7 +529,7 @@ function refineLaunch2PoolRouterEnvironment(
       ],
     });
   }
-  if (value.LAUNCH_CHAIN_ID !== "97") {
+  if (!launchSlotActionsPermitted(value)) {
     context.addIssue({
       code: "custom",
       message: "is permitted only when LAUNCH_CHAIN_ID=97",
@@ -483,6 +564,7 @@ function blankAsUndefined(value: string | undefined): string | undefined {
 function refineAddressCodeHashPair(
   value: Readonly<Record<string, unknown>> & {
     readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
   },
   context: z.RefinementCtx,
   addressKey: string,
@@ -498,7 +580,7 @@ function refineAddressCodeHashPair(
       path: [address === undefined ? addressKey : codeHashKey],
     });
   }
-  if (value.LAUNCH_CHAIN_ID !== "97") {
+  if (!launchSlotActionsPermitted(value)) {
     context.addIssue({
       code: "custom",
       message: "is permitted only when LAUNCH_CHAIN_ID=97",
@@ -1135,6 +1217,10 @@ const environmentSchema = z
 const reconciliationWorkerEnvironmentSchema = z
   .object({
     // S169: the `testnet_faucet_pending_sweep` lane (Decision 0128 §9).
+    // Decision 0150: the repository-wide write switch, read here only as
+    // the extra mainnet gate of the server-signed launch-slot lanes (56 +
+    // LAUNCH_MAINNET_ACK). BSC Testnet lanes do not consult it.
+    BSC_WRITES_ENABLED: booleanString,
     TESTNET_FAUCET_ENABLED: booleanString,
     TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS: positiveIntegerString(120, 86_400),
     NODE_ENV: z.enum(["development", "test", "production"]),
@@ -1479,6 +1565,11 @@ export interface LaunchChainConfig {
   /** Always the primary `BSC_LOG_ADDRESS_CHUNK_SIZE` (Decision 0078). */
   readonly logAddressChunkSize: number;
   readonly sharedWithPrimary: boolean;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with the exact `LAUNCH_MAINNET_ACK`
+   * phrase. Always false on 97 (the ack is refused there).
+   */
+  readonly mainnetAcknowledged: boolean;
 }
 
 /**
@@ -2333,6 +2424,7 @@ export const defaultLaunchChainReorgDepthBlocks = 15;
 export function parseLaunchChainConfig(
   data: {
     readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
     readonly LAUNCH_BSC_RPC_URLS?: string | undefined;
     readonly LAUNCH_BSC_CONFIRMATIONS?: number | undefined;
     readonly LAUNCH_BSC_REORG_DEPTH_BLOCKS?: number | undefined;
@@ -2353,6 +2445,7 @@ export function parseLaunchChainConfig(
       reorgDepthBlocks: primary.reorgDepthBlocks,
       logAddressChunkSize: primary.logAddressChunkSize,
       sharedWithPrimary: true,
+      mainnetAcknowledged: launchMainnetAcknowledged(data),
     });
   }
   return Object.freeze({
@@ -2365,6 +2458,7 @@ export function parseLaunchChainConfig(
       data.LAUNCH_BSC_REORG_DEPTH_BLOCKS ?? defaultLaunchChainReorgDepthBlocks,
     logAddressChunkSize: primary.logAddressChunkSize,
     sharedWithPrimary: false,
+    mainnetAcknowledged: false,
   });
 }
 
@@ -2911,6 +3005,9 @@ export interface HooksLaunchExecutorConfig {
  */
 export function parseHooksLaunchExecutor(data: {
   readonly LAUNCH_CHAIN_ID: "56" | "97";
+  /** Decision 0150: the mainnet ack and the repository-wide write switch. */
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+  readonly BSC_WRITES_ENABLED?: boolean | undefined;
   /** Decision 0131 (absent = officialTax). */
   readonly HOOKS_LAUNCH_HOOK_KIND?: "officialTax" | "loopDynamic";
   readonly HOOKS_LAUNCH_EXECUTOR_ENABLED: "off" | "on";
@@ -2938,11 +3035,9 @@ export function parseHooksLaunchExecutor(data: {
       "HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY: a 32-byte hex key is required when HOOKS_LAUNCH_EXECUTOR_ENABLED=on",
     );
   }
-  if (data.LAUNCH_CHAIN_ID !== "97") {
-    issues.push(
-      "HOOKS_LAUNCH_EXECUTOR_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
-    );
-  }
+  issues.push(
+    ...launchSlotWriteLaneIssues("HOOKS_LAUNCH_EXECUTOR_ENABLED", data),
+  );
   // Decision 0132: a loopDynamic executor deploys on the LoopDynamic
   // Factory (and verifies LoopDynamic modules); the OfficialTax pair is not
   // its target.
@@ -3010,6 +3105,8 @@ function normalizedKey(key: string): `0x${string}` {
  */
 export function parseLaunch2SnapshotPublisher(data: {
   readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+  readonly BSC_WRITES_ENABLED?: boolean | undefined;
   readonly LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: boolean;
   readonly LAUNCH2_SNAPSHOT_SIGNER_PRIVATE_KEYS?: string | undefined;
   readonly LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY?: string | undefined;
@@ -3045,11 +3142,9 @@ export function parseLaunch2SnapshotPublisher(data: {
       "LAUNCH2_SNAPSHOT_SUBMITTER_PRIVATE_KEY: a 32-byte hex key (or HOOKS_LAUNCH_EXECUTOR_PRIVATE_KEY) is required when LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED=true",
     );
   }
-  if (data.LAUNCH_CHAIN_ID !== "97") {
-    issues.push(
-      "LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
-    );
-  }
+  issues.push(
+    ...launchSlotWriteLaneIssues("LAUNCH2_SNAPSHOT_PUBLISHER_ENABLED", data),
+  );
   if (issues.length > 0) {
     throw new ConfigurationError(issues);
   }
@@ -3084,6 +3179,8 @@ export interface Launch2BuybackKeeperConfig {
  */
 export function parseLaunch2DynamicPoke(data: {
   readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+  readonly BSC_WRITES_ENABLED?: boolean | undefined;
   readonly LAUNCH2_DYNAMIC_POKE_ENABLED: boolean;
   readonly LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY?: string | undefined;
   readonly LAUNCH2_DYNAMIC_POKE_INTERVAL_SECONDS: number;
@@ -3099,11 +3196,9 @@ export function parseLaunch2DynamicPoke(data: {
       "LAUNCH2_DYNAMIC_POKE_PRIVATE_KEY: a 32-byte hex key is required when LAUNCH2_DYNAMIC_POKE_ENABLED=true",
     );
   }
-  if (data.LAUNCH_CHAIN_ID !== "97") {
-    issues.push(
-      "LAUNCH2_DYNAMIC_POKE_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
-    );
-  }
+  issues.push(
+    ...launchSlotWriteLaneIssues("LAUNCH2_DYNAMIC_POKE_ENABLED", data),
+  );
   if (issues.length > 0) throw new ConfigurationError(issues);
   return Object.freeze({
     privateKey: normalizedKey(key),
@@ -3122,6 +3217,8 @@ export function parseLaunch2DynamicPoke(data: {
  */
 export function parseLaunch2BuybackKeeper(data: {
   readonly LAUNCH_CHAIN_ID: "56" | "97";
+  readonly LAUNCH_MAINNET_ACK?: string | undefined;
+  readonly BSC_WRITES_ENABLED?: boolean | undefined;
   readonly LAUNCH2_BUYBACK_KEEPER_ENABLED: boolean;
   readonly LAUNCH2_BUYBACK_KEEPER_PRIVATE_KEY?: string | undefined;
   readonly HOOKS_LAUNCH_FACTORY_ADDRESS?: string | undefined;
@@ -3164,11 +3261,9 @@ export function parseLaunch2BuybackKeeper(data: {
       "LAUNCH2_BUYBACK_KEEPER_ENABLED: requires HOOKS_LAUNCH_FACTORY_ADDRESS or LAUNCH2_DYNAMIC_FACTORY_ADDRESS (the keeper is verified against the Factory keepers)",
     );
   }
-  if (data.LAUNCH_CHAIN_ID !== "97") {
-    issues.push(
-      "LAUNCH2_BUYBACK_KEEPER_ENABLED: permitted only when LAUNCH_CHAIN_ID=97 (BSC Mainnet signing stays closed)",
-    );
-  }
+  issues.push(
+    ...launchSlotWriteLaneIssues("LAUNCH2_BUYBACK_KEEPER_ENABLED", data),
+  );
   if (data.LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS < 10) {
     issues.push(
       "LAUNCH2_BUYBACK_KEEPER_INTERVAL_SECONDS: must be at least 10 (BuybackExecutor.MIN_SUCCESS_INTERVAL)",
@@ -4213,6 +4308,42 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
  * configuration. Its read-only provider capabilities have independent,
  * default-off switches and never inherit the API process's private-read flag.
  */
+/**
+ * Decision 0150 (stricter on mainnet): on `LAUNCH_CHAIN_ID=56` with the ack,
+ * the three server-signed lanes that honour CHAIN_GUARD_HOLD (Hooks
+ * executor, buyback keeper, poke keeper) refuse boot unless the chain guard
+ * lane is on too, so a USD1 pause / freeze always stops them. BSC Testnet
+ * keeps the pre-0150 rule (the guard is optional there).
+ */
+function assertMainnetLaneChainGuard(
+  data: {
+    readonly LAUNCH_CHAIN_ID: "56" | "97";
+    readonly LAUNCH_MAINNET_ACK?: string | undefined;
+    readonly HOOKS_LAUNCH_EXECUTOR_ENABLED: "off" | "on";
+    readonly LAUNCH2_BUYBACK_KEEPER_ENABLED: boolean;
+    readonly LAUNCH2_DYNAMIC_POKE_ENABLED: boolean;
+  },
+  environment: NodeJS.ProcessEnv,
+): void {
+  if (!launchMainnetAcknowledged(data)) return;
+  const lanes = [
+    data.HOOKS_LAUNCH_EXECUTOR_ENABLED === "on"
+      ? "HOOKS_LAUNCH_EXECUTOR_ENABLED"
+      : null,
+    data.LAUNCH2_BUYBACK_KEEPER_ENABLED
+      ? "LAUNCH2_BUYBACK_KEEPER_ENABLED"
+      : null,
+    data.LAUNCH2_DYNAMIC_POKE_ENABLED ? "LAUNCH2_DYNAMIC_POKE_ENABLED" : null,
+  ].filter((lane): lane is string => lane !== null);
+  if (lanes.length === 0 || parseChainGuardEnabled(environment)) return;
+  throw new ConfigurationError(
+    lanes.map(
+      (lane) =>
+        `${lane}: on LAUNCH_CHAIN_ID=56 also requires CHAIN_GUARD_ENABLED=true (Decision 0150)`,
+    ),
+  );
+}
+
 export function loadReconciliationWorkerConfig(
   environment: NodeJS.ProcessEnv,
 ): ReconciliationWorkerConfig {
@@ -4223,6 +4354,7 @@ export function loadReconciliationWorkerConfig(
       environment["HYPERLIQUID_RECONCILIATION_READS_ENABLED"] ?? "false",
     HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED:
       environment["HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED"] ?? "false",
+    BSC_WRITES_ENABLED: environment["BSC_WRITES_ENABLED"] ?? "false",
     TESTNET_FAUCET_ENABLED: environment["TESTNET_FAUCET_ENABLED"] ?? "false",
     TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS:
       environment["TESTNET_FAUCET_PENDING_TIMEOUT_SECONDS"] ?? "900",
@@ -4417,6 +4549,7 @@ export function loadReconciliationWorkerConfig(
     ...parsed.data,
     BSC_USD1_VERIFIED: false,
   });
+  assertMainnetLaneChainGuard(parsed.data, environment);
 
   return Object.freeze({
     nodeEnv: parsed.data.NODE_ENV,

@@ -13,7 +13,7 @@ import {
   type Log,
   type Transport,
 } from "viem";
-import { bscTestnet } from "viem/chains";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 
 import type {
   Launch2BuybackChainState,
@@ -204,7 +204,10 @@ export function createLaunch2Chain(input: {
     );
   const transport =
     input.transport ?? fallback([...endpoints], { retryCount: 0 });
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(expectedChainId),
+    transport,
+  });
   // Decision 0129 §2: one client per endpoint, asked in order when the
   // fallback's answer misses a mint anchor (an empty answer is a success to
   // the fallback transport, so it never moves on by itself).
@@ -212,7 +215,10 @@ export function createLaunch2Chain(input: {
     input.transport !== undefined
       ? []
       : endpoints.map((endpoint) =>
-          createPublicClient({ chain: bscTestnet, transport: endpoint }),
+          createPublicClient({
+            chain: viemLaunchChain(expectedChainId),
+            transport: endpoint,
+          }),
         );
 
   async function read<T>(

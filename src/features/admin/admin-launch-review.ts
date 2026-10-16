@@ -524,6 +524,12 @@ export function createAdminLaunchReviewConsoleService(options: {
    * next to the template's `fixedEconomics.chainId` (always 56).
    */
   readonly deploymentChainId: LaunchChainReference;
+  /**
+   * Decision 0150: `LAUNCH_MAINNET_ACK` opened chain 56. Published as
+   * `deploymentMainnetAcknowledged: true` only then (absent otherwise, so
+   * every pre-0150 detail stays byte-identical).
+   */
+  readonly deploymentMainnetAcknowledged?: boolean;
   readonly review: HooksLaunchReviewService;
   readonly audit: Pick<AdminRepository, "appendAudit">;
   readonly sessionSecret: string;
@@ -923,6 +929,9 @@ export function createAdminLaunchReviewConsoleService(options: {
           testnetAcceptances: detail.testnetAcceptances,
           deploymentTasks: detail.deploymentTasks,
           deploymentChainId: options.deploymentChainId,
+          ...(options.deploymentMainnetAcknowledged === true
+            ? { deploymentMainnetAcknowledged: true }
+            : {}),
           snapshotPublications: detail.snapshotPublications,
           buybackAttempts: detail.buybackAttempts,
           snapshotReleases: detail.snapshotReleases,

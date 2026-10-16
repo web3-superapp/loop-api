@@ -42,6 +42,7 @@ describe("loadReconciliationWorkerConfig", () => {
         reorgDepthBlocks: 64,
         logAddressChunkSize: 8,
         sharedWithPrimary: true,
+        mainnetAcknowledged: false,
       },
       launchContract: null,
       launchIndexerEnabled: false,
@@ -444,6 +445,7 @@ describe("loadReconciliationWorkerConfig", () => {
       reorgDepthBlocks: 15,
       logAddressChunkSize: 8,
       sharedWithPrimary: false,
+      mainnetAcknowledged: false,
     });
     // The indexer lane keeps driving only the primary chain: it needs
     // BSC_RPC_URLS regardless of the launch slot.

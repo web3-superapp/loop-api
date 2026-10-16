@@ -7,6 +7,7 @@ import type {
   Launch2BuybackAttemptRepository,
   Launch2BuybackKeeperChain,
 } from "../src/features/launch2/launch2-buyback-keeper.js";
+import { launchMainnetAckPhrase } from "../src/features/chain/chain-contract.js";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -258,6 +259,42 @@ describe("reconciliation worker runtime", () => {
       { workerId },
       "LOOP reconciliation worker stopped",
     );
+  });
+
+  it("logs LAUNCH_MAINNET_ACKNOWLEDGED once on chain 56 with the ack, never on 97 or without it (Decision 0150)", async () => {
+    const run = async (environment: Record<string, string>) => {
+      const logger = fakeLogger();
+      await runReconciliationWorker({
+        config: loadReconciliationWorkerConfig({
+          NODE_ENV: "test",
+          LOG_LEVEL: "silent",
+          DATABASE_URL:
+            "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
+          SPOT_AGENT_LIFECYCLE_MAINTENANCE_ENABLED: "false",
+          ISSUANCE_RATE_RECORD_CLEANUP_ENABLED: "false",
+          ...environment,
+        }),
+        logger,
+        signalSource: fakeSignalSource(),
+        configureOutboundKeepAlive: () => undefined,
+        createDatabase: () => fakeDatabase([]),
+        createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      });
+      return vi
+        .mocked(logger.warn)
+        .mock.calls.filter(
+          ([fields]) =>
+            (fields as { reasonCode?: string }).reasonCode ===
+            "LAUNCH_MAINNET_ACKNOWLEDGED",
+        );
+    };
+    expect(await run({})).toHaveLength(0);
+    expect(await run({ LAUNCH_CHAIN_ID: "97" })).toHaveLength(0);
+    const acknowledged = await run({
+      LAUNCH_MAINNET_ACK: launchMainnetAckPhrase,
+    });
+    expect(acknowledged).toHaveLength(1);
+    expect(JSON.stringify(acknowledged)).not.toContain("http");
   });
 
   it("passes the explicit atomic Hyperliquid registry only when enabled", async () => {
@@ -1444,6 +1481,8 @@ describe("hooks_launch_executor lane (Decision 0112)", () => {
       privateKey: `0x${"42".repeat(32)}`,
       factoryAddress: "0x1111111111111111111111111111111111111111",
       rpcUrls: ["https://bsc-testnet.example/rpc"],
+      // Decision 0150: the configured slot signs (EIP-155 chain id).
+      chainReference: 97,
     });
     expect(repositoryFactory).toHaveBeenCalledWith(120);
     expect(events).toEqual(["ping", "run-hooks-executor", "close"]);
@@ -1580,6 +1619,7 @@ describe("launch2_snapshot_publisher lane (Decision 0118)", () => {
     expect(createLaunch2PublisherChain).toHaveBeenCalledWith({
       privateKey: `0x${"42".repeat(32)}`,
       rpcUrls: ["https://bsc-testnet.example/rpc"],
+      expectedChainId: 97,
     });
     const enabled = vi
       .mocked(logger.info)
@@ -1808,6 +1848,7 @@ describe("launch2_buyback_keeper lane (Decision 0121)", () => {
       expect(createChain).toHaveBeenCalledWith({
         privateKey: keeperKey,
         rpcUrls: ["https://bsc-testnet.example/rpc"],
+        expectedChainId: 97,
       });
       const enabled = vi
         .mocked(logger.info)

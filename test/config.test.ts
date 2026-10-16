@@ -658,6 +658,7 @@ describe("launch chain slot (Decision 0038)", () => {
       reorgDepthBlocks: 96,
       logAddressChunkSize: 8,
       sharedWithPrimary: true,
+      mainnetAcknowledged: false,
     });
     expect(Object.isFrozen(config.launchChain)).toBe(true);
   });
@@ -927,6 +928,7 @@ describe("launch chain slot (Decision 0038)", () => {
       reorgDepthBlocks: 64,
       logAddressChunkSize: 8,
       sharedWithPrimary: true,
+      mainnetAcknowledged: false,
     });
   });
 
@@ -963,6 +965,7 @@ describe("launch chain slot (Decision 0038)", () => {
       reorgDepthBlocks: 15,
       logAddressChunkSize: 8,
       sharedWithPrimary: false,
+      mainnetAcknowledged: false,
     });
     expect(config.bscChain).toBeNull();
   });
@@ -988,6 +991,7 @@ describe("launch chain slot (Decision 0038)", () => {
       reorgDepthBlocks: 15,
       logAddressChunkSize: 8,
       sharedWithPrimary: false,
+      mainnetAcknowledged: false,
     });
     // The primary slot is untouched by the launch slot.
     expect(config.bscChain).toMatchObject({

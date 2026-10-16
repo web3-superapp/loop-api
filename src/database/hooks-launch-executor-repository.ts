@@ -1,4 +1,8 @@
 import type { Pool, PoolClient } from "pg";
+import {
+  launchSlotChainReference,
+  submitterNonceLockKey,
+} from "./launch2-snapshot-publication-repository.js";
 
 import type { HooksLaunchDeploymentStatus } from "../features/launch/hooks-launch-deployment-status.js";
 import type {
@@ -169,8 +173,13 @@ async function insertEvent(
 
 export function createPostgresHooksLaunchExecutorRepository(
   pool: Pool,
-  options: { readonly leaseSeconds: number },
+  options: {
+    readonly leaseSeconds: number;
+    /** Decision 0150: the launch slot (default 97, the pre-0150 constant). */
+    readonly chainReference?: 56 | 97;
+  },
 ): HooksLaunchExecutorRepository {
+  const chainReference = launchSlotChainReference(options.chainReference);
   if (
     !Number.isSafeInteger(options.leaseSeconds) ||
     options.leaseSeconds < 10 ||
@@ -217,7 +226,7 @@ export function createPostgresHooksLaunchExecutorRepository(
         const picked = await client.query<TaskRow>(
           `select ${taskColumns} from public.hooks_launch_deployment_tasks
            where not (job_id = any($1::uuid[]))
-             and chain_id = 97 and factory_address = $5 and (
+             and chain_id = ${chainReference} and factory_address = $5 and (
              status in ('awaiting_executor', 'reorged')
              or (status = 'failed' and failure_retryable and attempt_count < $2
                and updated_at < clock_timestamp() - make_interval(secs => $3))
@@ -417,7 +426,7 @@ export function createPostgresHooksLaunchExecutorRepository(
         const executor = input.executorAddress.toLowerCase();
         await client.query(
           "select pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [`hooks_launch_executor_nonce:97:${executor}`],
+          [submitterNonceLockKey(executor, chainReference)],
         );
         // Decision 0118 / 0121: the snapshot publisher and the buyback
         // keeper may sign from the same account (same advisory lock); their
@@ -425,7 +434,7 @@ export function createPostgresHooksLaunchExecutorRepository(
         const pending = await client.query<{ nonce: string }>(
           `select nonce::text as nonce from (
              select nonce from public.hooks_launch_executor_nonces
-             where chain_id = 97 and executor_address = $1 and state = 'pending'
+             where chain_id = ${chainReference} and executor_address = $1 and state = 'pending'
                and nonce >= $2::bigint
              union
              select tx_nonce from public.launch2_snapshot_publications
@@ -452,7 +461,7 @@ export function createPostgresHooksLaunchExecutorRepository(
         await client.query(
           `insert into public.hooks_launch_executor_nonces
              (chain_id, executor_address, nonce, job_id, purpose, tx_hash)
-           values (97, $1, $2::bigint, $3, $4, $5)`,
+           values (${chainReference}, $1, $2::bigint, $3, $4, $5)`,
           [executor, nonce.toString(), input.jobId, input.purpose, txHash],
         );
         let updated: TaskRow;

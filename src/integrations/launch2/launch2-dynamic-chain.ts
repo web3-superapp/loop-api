@@ -18,7 +18,7 @@ import {
   type StateOverride,
   type Transport,
 } from "viem";
-import { bscTestnet } from "viem/chains";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 
 import { launch2DynamicNeutralHookSlots } from "../../features/launch2/launch2-dynamic.js";
 import type {
@@ -140,6 +140,8 @@ export function createLaunch2DynamicChain(input: {
   readonly transport?: Transport;
   readonly retryAfterMs?: number;
   readonly now?: () => number;
+  /** Decision 0150: the launch slot (viem chain); absent = 97. */
+  readonly chainReference?: 56 | 97;
 }): Launch2DynamicChain {
   if (
     !/^0x[0-9a-fA-F]{40}$/u.test(input.router) ||
@@ -159,7 +161,10 @@ export function createLaunch2DynamicChain(input: {
       ),
       { retryCount: 0 },
     );
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(input.chainReference ?? 97),
+    transport,
+  });
   let verified: Launch2PoolRouterCheck | null = null;
   let failedAt = 0;
   let inFlight: Promise<Launch2PoolRouterCheck> | null = null;

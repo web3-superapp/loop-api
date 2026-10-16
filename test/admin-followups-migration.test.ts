@@ -33,6 +33,6 @@ describe("000058 admin follow-ups", () => {
     expect(captureSql(followups.down)).toContain(
       "S130 facts exist; refusing to roll back 000058",
     );
-    expect(latestMigrationName).toBe("000088_fiat_fx_rates");
+    expect(latestMigrationName).toBe("000089_launch_slot_mainnet_chain_ids");
   });
 });

@@ -3,6 +3,7 @@ import { decodeFunctionData } from "viem";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { launchMainnetAckPhrase } from "../src/features/chain/chain-contract.js";
 import {
   launch2Template,
   parseLaunch2Amount,
@@ -41,6 +42,7 @@ import {
 import {
   createFakeMemeSlotClient,
   defaultMemeFunds,
+  memeUsd1,
 } from "./helpers/meme-service-fakes.js";
 import {
   s7CommandHeaders,
@@ -1030,6 +1032,63 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(blocked.json()).toMatchObject({
       code: "POLICY_BLOCKED",
       detailsSafe: { reasonCode: "ASSET_NOT_IN_CANARY_ALLOWLIST" },
+    });
+  });
+
+  describe("Decision 0150 mainnet switch", () => {
+    const mainnetEnv = {
+      LAUNCH_CHAIN_ID: "56",
+      BSC_WRITE_CANARY_ASSETS: `eip155:56:${memeUsd1}`,
+    } as const;
+
+    it("refuses to configure launch2 on chain 56 without LAUNCH_MAINNET_ACK", () => {
+      expect(() =>
+        s7TestConfig({ ...launch2Env, ...launch2WritesEnv, ...mainnetEnv }),
+      ).toThrow(
+        /HOOKS_LAUNCH_FACTORY_ADDRESS: is permitted only when LAUNCH_CHAIN_ID=97/u,
+      );
+    });
+
+    it("reads and prepares on chain 56 with LAUNCH_MAINNET_ACK (writes still behind BSC_WRITES_ENABLED)", async () => {
+      const repository = createInMemoryLaunch2Repository();
+      const instance = instanceFixture({ chainId: "eip155:56" });
+      repository.instances.set(instance.instanceId, instance);
+      const { app } = await createApp({
+        repository,
+        env: { ...mainnetEnv, LAUNCH_MAINNET_ACK: launchMainnetAckPhrase },
+      });
+      const list = await get(app, "/v2/launch2/instances");
+      expect(list.statusCode).toBe(200);
+      const prepared = await post(
+        app,
+        `/v2/launch2/instances/${instance.instanceId}/nft/prepare`,
+        { walletId },
+      );
+      expect(JSON.stringify(prepared.json())).not.toContain(
+        "LAUNCH2_MAINNET_SIGNING_CLOSED",
+      );
+      expect(JSON.stringify(prepared.json())).not.toContain(
+        "LAUNCH2_CHAIN_NOT_CONFIGURED",
+      );
+      // Past the mainnet gate: the prepare reaches the (testnet-shaped)
+      // fake chain reads.
+      expect(JSON.stringify(prepared.json())).not.toContain(
+        "LAUNCH2_WRITES_DISABLED",
+      );
+      const { app: closed } = await createApp({
+        repository,
+        writes: false,
+        env: { ...mainnetEnv, LAUNCH_MAINNET_ACK: launchMainnetAckPhrase },
+      });
+      const refused = await post(
+        closed,
+        `/v2/launch2/instances/${instance.instanceId}/nft/prepare`,
+        { walletId },
+      );
+      expect(refused.statusCode).toBe(503);
+      expect(refused.json()).toMatchObject({
+        detailsSafe: { reasonCode: "LAUNCH2_WRITES_DISABLED" },
+      });
     });
   });
 

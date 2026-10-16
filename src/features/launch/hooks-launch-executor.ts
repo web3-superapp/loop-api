@@ -1,6 +1,12 @@
 import { hashTypedData, recoverAddress, type Hex } from "viem";
 
 import {
+  launchSlotRefusal,
+  testnetLaunchSlot,
+  type LaunchSlotPolicy,
+} from "../chain/chain-contract.js";
+
+import {
   createHooksLaunchDeploymentTypedData,
   hooksLaunchId,
 } from "./hooks-launch-deployment-crypto.js";
@@ -32,7 +38,7 @@ import {
  * receipt to the configured confirmations, detects reorgs by block hash,
  * verifies every module by read-back, and only then activates the launch
  * through `LoopLaunchFactory.activateLaunch`. A failed check never
- * activates. BSC Testnet (97) only.
+ * activates. BSC Testnet (97), or BSC Mainnet only under Decision 0150.
  */
 
 export {
@@ -63,6 +69,8 @@ export type HooksLaunchExecutorFailureCode =
 /** Lane-level reasons: nothing is claimed or changed while one holds. */
 export type HooksLaunchExecutorIdleReason =
   | "HOOKS_EXECUTOR_WRONG_CHAIN"
+  /** Decision 0150: a chain-56 slot without `LAUNCH_MAINNET_ACK`. */
+  | "LAUNCH_MAINNET_NOT_ACKNOWLEDGED"
   | "HOOKS_FACTORY_CODE_MISMATCH"
   /**
    * Decision 0132: a LoopDynamic Factory whose `hookKind()` /
@@ -174,7 +182,7 @@ export interface HooksLaunchExecutorRepository {
    */
   acquire(input: {
     readonly executorId: string;
-    /** Only tasks signed for this Factory (chain 97) are ever leased. */
+    /** Only tasks signed for this Factory on the configured slot are leased. */
     readonly factoryAddress: string;
     readonly maxAttempts: number;
     readonly retryDelaySeconds: number;
@@ -308,6 +316,12 @@ export interface HooksLaunchExecutorChain {
 
 export interface HooksLaunchExecutorPolicy {
   /**
+   * Decision 0150: the configured launch slot (absent = BSC Testnet, the
+   * pre-0150 constant). The node must report this chain, the task must be
+   * signed for it, and chain 56 also needs the ack.
+   */
+  readonly launchSlot?: LaunchSlotPolicy;
+  /**
    * Decision 0132: the target Factory's Hook kind (absent = officialTax).
    * Must equal the chain client's; a mismatch idles the lane.
    */
@@ -373,6 +387,8 @@ async function authorizationValid(input: {
   readonly payload: HooksLaunchSignedSubmission;
   /** Decision 0132: a LoopDynamic Factory's `TEMPLATE_HASH`. */
   readonly templateHash: string | null;
+  /** Decision 0150: the configured slot; a task of another chain fails. */
+  readonly chainReference: number;
 }): Promise<boolean> {
   const { task, payload } = input;
   const request = payload.request;
@@ -392,7 +408,7 @@ async function authorizationValid(input: {
       return false;
     }
     const typed = createHooksLaunchDeploymentTypedData({
-      chainId: 97,
+      chainId: input.chainReference,
       verifyingContract: task.factoryAddress,
       request,
       ...(input.templateHash === null
@@ -476,6 +492,7 @@ export function createHooksLaunchExecutor(options: {
   const executorAddress = chain.executorAddress.toLowerCase();
   let transitions = 0;
   const loopDynamic = (policy.hookKind ?? "officialTax") === "loopDynamic";
+  const slot = policy.launchSlot ?? testnetLaunchSlot;
   /**
    * Decision 0132: the LoopDynamic template verified by this tick's
    * preflight (null for OfficialTax: the constant template, no read).
@@ -562,6 +579,7 @@ export function createHooksLaunchExecutor(options: {
           task,
           payload,
           templateHash: template?.templateHash ?? null,
+          chainReference: slot.chainReference,
         }))
       )
         continue;
@@ -907,7 +925,7 @@ export function createHooksLaunchExecutor(options: {
       factoryAddress: task.factoryAddress,
       factoryCodeHash: policy.factoryCodeHash,
       launchId: hooksLaunchId({
-        chainId: 97,
+        chainId: slot.chainReference,
         factory: task.factoryAddress,
         projectOwner: task.projectOwner,
         configVersion: task.configVersion,
@@ -1274,7 +1292,12 @@ export function createHooksLaunchExecutor(options: {
         processed: 0,
         transitions: 0,
       });
-      if (chainId !== 97) return idle("HOOKS_EXECUTOR_WRONG_CHAIN");
+      // Decision 0150: the configured slot (97 unchanged; 56 needs the ack).
+      const slotRefusal = launchSlotRefusal(slot, chainId);
+      if (slotRefusal === "wrong_chain")
+        return idle("HOOKS_EXECUTOR_WRONG_CHAIN");
+      if (slotRefusal === "not_acknowledged")
+        return idle("LAUNCH_MAINNET_NOT_ACKNOWLEDGED");
       if (
         factoryHash === null ||
         factoryHash.toLowerCase() !== policy.factoryCodeHash.toLowerCase()

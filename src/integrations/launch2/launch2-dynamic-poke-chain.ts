@@ -7,8 +7,8 @@ import {
   type Hex,
   type Transport,
 } from "viem";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { privateKeyToAccount } from "viem/accounts";
-import { bscTestnet } from "viem/chains";
 
 import { encodeLaunch2DynamicPoke } from "../../features/launch2/launch2-dynamic.js";
 import type { Launch2DynamicPokeChain } from "../../features/launch2/launch2-dynamic-poke.js";
@@ -33,7 +33,13 @@ export function createLaunch2DynamicPokeChain(input: {
   readonly rpcUrls: readonly string[];
   readonly transport?: Transport;
   readonly receiptTimeoutMs?: number;
+  /**
+   * Decision 0150: the launch slot the poke is signed for (EIP-155 chain
+   * id); absent = 97, the pre-0150 constant.
+   */
+  readonly chainReference?: 56 | 97;
 }): Launch2DynamicPokeChain {
+  const chainReference = input.chainReference ?? 97;
   if (input.rpcUrls.length === 0 && input.transport === undefined) {
     throw new Error("LAUNCH2_DYNAMIC_POKE_RPC_NOT_CONFIGURED");
   }
@@ -46,7 +52,10 @@ export function createLaunch2DynamicPokeChain(input: {
       { retryCount: 0 },
     );
   const account = privateKeyToAccount(input.privateKey);
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(chainReference),
+    transport,
+  });
 
   return Object.freeze<Launch2DynamicPokeChain>({
     pokerAddress: lower(account.address),
@@ -94,7 +103,7 @@ export function createLaunch2DynamicPokeChain(input: {
         }),
       ]);
       const rawTx = await account.signTransaction({
-        chainId: 97,
+        chainId: chainReference,
         type: "legacy",
         to: hook as Address,
         data: pokeData,

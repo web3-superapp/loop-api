@@ -1,4 +1,5 @@
 import { waitFor, type PeriodicLane } from "../../bsc-meme-indexer-worker.js";
+import { launchSlotReasonCodes } from "../chain/chain-contract.js";
 import type { ChainGuardHoldCheck } from "../chain-guard/chain-guard-hold.js";
 import { launch2DynamicCandleSeconds } from "./launch2-dynamic.js";
 import type { Launch2Repository } from "./launch2-ports.js";
@@ -70,6 +71,12 @@ export function createLaunch2DynamicPokeLane(options: {
   readonly chain: Launch2DynamicPokeChain;
   readonly chainId: string;
   readonly expectedChainReference?: number;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with `LAUNCH_MAINNET_ACK`. On a
+   * chain-56 slot without it every tick is unavailable
+   * (LAUNCH_MAINNET_NOT_ACKNOWLEDGED); ignored on 97.
+   */
+  readonly mainnetAcknowledged?: boolean;
   readonly intervalSeconds: number;
   /**
    * Decision 0134: the chain guard's hold check; a non-null answer is this
@@ -91,6 +98,12 @@ export function createLaunch2DynamicPokeLane(options: {
     if (held !== null && held !== undefined) return { ...held };
     if ((await options.chain.chainId()) !== expected) {
       return { kind: "unavailable", reasonCode: "LAUNCH2_CHAIN_MISMATCH" };
+    }
+    if (expected === 56 && options.mainnetAcknowledged !== true) {
+      return {
+        kind: "unavailable",
+        reasonCode: launchSlotReasonCodes.mainnetNotAcknowledged,
+      };
     }
     const instances = await options.repository.listLaneInstances(
       options.chainId,

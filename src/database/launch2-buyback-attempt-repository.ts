@@ -8,7 +8,10 @@ import type {
   Launch2BuybackAttemptStatus,
   Launch2BuybackKeeperCandidate,
 } from "../features/launch2/launch2-buyback-keeper.js";
-import { submitterNonceLockKey } from "./launch2-snapshot-publication-repository.js";
+import {
+  launchSlotChainReference,
+  submitterNonceLockKey,
+} from "./launch2-snapshot-publication-repository.js";
 
 /**
  * Decision 0121: PostgreSQL side of the buyback keeper. A passing
@@ -94,11 +97,12 @@ export async function heldKeeperNonces(
   client: PoolClient,
   address: string,
   fromNonce: bigint,
+  chainReference: 56 | 97 = 97,
 ): Promise<readonly bigint[]> {
   const held = await client.query<{ nonce: string }>(
     `select nonce::text as nonce from (
        select nonce from public.hooks_launch_executor_nonces
-       where chain_id = 97 and executor_address = $1 and state = 'pending'
+       where chain_id = ${launchSlotChainReference(chainReference)} and executor_address = $1 and state = 'pending'
          and nonce >= $2::bigint
        union
        select tx_nonce from public.launch2_snapshot_publications
@@ -117,7 +121,9 @@ export async function heldKeeperNonces(
 
 export function createPostgresLaunch2BuybackAttemptRepository(
   pool: Pool,
+  options: { readonly chainReference?: 56 | 97 } = {},
 ): Launch2BuybackAttemptRepository {
+  const chainReference = launchSlotChainReference(options.chainReference);
   async function inTransaction<T>(
     work: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
@@ -277,7 +283,7 @@ export function createPostgresLaunch2BuybackAttemptRepository(
         const keeper = input.keeperAddress.toLowerCase();
         await client.query(
           "select pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [submitterNonceLockKey(keeper)],
+          [submitterNonceLockKey(keeper, chainReference)],
         );
         const locked = await client.query<Row>(
           `select status, tx_hash from public.launch2_buyback_attempts
@@ -297,6 +303,7 @@ export function createPostgresLaunch2BuybackAttemptRepository(
           client,
           keeper,
           input.chainPendingNonce,
+          chainReference,
         )) {
           if (reserved === nonce) nonce += 1n;
           else if (reserved > nonce) break;

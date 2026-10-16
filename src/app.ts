@@ -113,8 +113,9 @@ import {
   bscChainId,
   bscChainReference,
   bscNativeAssetId,
-  bscTestnetChainId,
   launchChainReasonCodes,
+  launchSlotActionsOpen,
+  type LaunchSlotPolicy,
 } from "./features/chain/chain-contract.js";
 import {
   createWalletReadService,
@@ -2077,9 +2078,28 @@ export async function buildApp(
   }
   // Decision 0108: Hooks launch config / signing / deployment tasks. Off by
   // default (HOOKS_LAUNCH_ENABLED); the Factory reader exists only on the
-  // BSC Testnet launch slot with a configured Factory + code hash. Missing
-  // pieces leave the services fail-closed (CAPABILITY_UNAVAILABLE).
+  // BSC Testnet launch slot (or 56 with the Decision 0150 ack) with a
+  // configured Factory + code hash. Missing pieces leave the services
+  // fail-closed (CAPABILITY_UNAVAILABLE).
   const hooksLaunchEnabled = config.hooksLaunch.enabled;
+  // Decision 0150: the launch slot as the action paths see it — BSC Testnet
+  // unchanged; chain 56 only with LAUNCH_MAINNET_ACK (else every Hooks /
+  // launch2 path below stays closed exactly as before).
+  const launchSlot: LaunchSlotPolicy = Object.freeze({
+    chainReference: config.launchChain.chainReference,
+    mainnetAcknowledged: config.launchChain.mainnetAcknowledged,
+  });
+  const launchSlotOpen = launchSlotActionsOpen(launchSlot);
+  if (launchSlot.mainnetAcknowledged) {
+    // One loud line per boot; no secret, no endpoint.
+    app.log.warn(
+      {
+        reasonCode: "LAUNCH_MAINNET_ACKNOWLEDGED",
+        launchChainId: config.launchChain.chainId,
+      },
+      "LAUNCH_MAINNET_ACKNOWLEDGED: the launch slot is BSC Mainnet with real funds (Decision 0150)",
+    );
+  }
   // Decision 0132 (supersedes the 0131 fail-closed stub):
   // HOOKS_LAUNCH_HOOK_KIND=loopDynamic saves, reviews and prepares / accepts
   // signatures for the LoopDynamic Factory (LAUNCH2_DYNAMIC_FACTORY_*,
@@ -2110,12 +2130,13 @@ export async function buildApp(
       : injectedHooksFactoryReader !== undefined
         ? injectedHooksFactoryReader
         : hooksTargetFactory !== null &&
-            config.launchChain.chainId === bscTestnetChainId &&
+            launchSlotOpen &&
             config.launchChain.rpcUrls.length > 0
           ? createHooksLaunchFactoryReader({
               factoryAddress: hooksTargetFactory.address,
               expectedRuntimeCodeHash: hooksTargetFactory.codeHash,
               rpcUrls: config.launchChain.rpcUrls,
+              chainReference: config.launchChain.chainReference,
               ...(config.hooksLaunch.hookKind === "loopDynamic"
                 ? { hookKind: "loopDynamic" as const }
                 : {}),
@@ -2139,6 +2160,7 @@ export async function buildApp(
         signatureLifetimeSeconds: 900,
         maxSaltAttempts: 1_000_000,
         fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
+        launchSlot,
       })
     : undefined;
   const hooksLaunchSubmissionService = hooksLaunchEnabled
@@ -2148,6 +2170,7 @@ export async function buildApp(
         reader: hooksFactoryReader,
         repository: database.hooksLaunchSubmissions ?? null,
         fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
+        launchSlot,
       })
     : undefined;
   const miningRuntimeAvailable =
@@ -2250,8 +2273,7 @@ export async function buildApp(
     config.hooksLaunch.dynamicFactory === null
       ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
       : options.launch2Chain === undefined &&
-          (config.launchChain.chainId !== bscTestnetChainId ||
-            config.launchChain.rpcUrls.length === 0)
+          (!launchSlotOpen || config.launchChain.rpcUrls.length === 0)
         ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
         : database.launch2 === undefined
           ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
@@ -2262,7 +2284,10 @@ export async function buildApp(
     options.launch2Chain !== undefined
       ? options.launch2Chain
       : launch2Registered && launch2UnavailableReason === null
-        ? createLaunch2Chain({ rpcUrls: config.launchChain.rpcUrls })
+        ? createLaunch2Chain({
+            rpcUrls: config.launchChain.rpcUrls,
+            expectedChainId: config.launchChain.chainReference,
+          })
         : null;
   // Decision 0124: the official-pool router reader exists only with the
   // router address + code hash and the launch slot endpoints; its code hash
@@ -2273,10 +2298,11 @@ export async function buildApp(
       : launch2Registered &&
           launch2UnavailableReason === null &&
           config.launch2.poolRouter !== null &&
-          config.launchChain.chainId === bscTestnetChainId &&
+          launchSlotOpen &&
           config.launchChain.rpcUrls.length > 0
         ? createLaunch2PoolChain({
             rpcUrls: config.launchChain.rpcUrls,
+            chainReference: config.launchChain.chainReference,
             router: config.launch2.poolRouter.address,
             expectedRuntimeCodeHash: config.launch2.poolRouter.codeHash,
           })
@@ -2319,10 +2345,11 @@ export async function buildApp(
       : launch2Registered &&
           launch2UnavailableReason === null &&
           config.launch2.dynamicRouter !== null &&
-          config.launchChain.chainId === bscTestnetChainId &&
+          launchSlotOpen &&
           config.launchChain.rpcUrls.length > 0
         ? createLaunch2DynamicChain({
             rpcUrls: config.launchChain.rpcUrls,
+            chainReference: config.launchChain.chainReference,
             router: config.launch2.dynamicRouter.address,
             expectedRuntimeCodeHash: config.launch2.dynamicRouter.codeHash,
           })
@@ -2338,6 +2365,8 @@ export async function buildApp(
           writes: config.bscWrites,
           cursorCodec: v2CursorCodec,
           chainId: config.launchChain.chainId,
+          // Decision 0150: chain 56 signs only with LAUNCH_MAINNET_ACK.
+          mainnetAcknowledged: config.launchChain.mainnetAcknowledged,
           unavailableReason: launch2UnavailableReason,
           quoteTtlSeconds: config.launch2.quoteTtlSeconds,
           defaultSlippageBps: config.launch2.defaultSlippageBps,
@@ -2437,6 +2466,8 @@ export async function buildApp(
           : createMiningClaimSigner(config.miningSettlement.signerPrivateKey),
       contractAddress: config.miningSettlement.claimContractAddress,
       chainId: config.launchChain.chainId,
+      // Decision 0150: chain 56 claims only with LAUNCH_MAINNET_ACK.
+      mainnetAcknowledged: config.launchChain.mainnetAcknowledged,
       writesEnabled: config.bscWrites !== null,
       usdtAddress: config.miningSettlement.usdtAddress,
       confirmations: config.miningSettlement.claimConfirmations,
@@ -2932,6 +2963,7 @@ export async function buildApp(
       launchReview: createAdminLaunchReviewConsoleService({
         repository: database.adminLaunchReview ?? null,
         deploymentChainId: config.launchChain.chainReference,
+        deploymentMainnetAcknowledged: config.launchChain.mainnetAcknowledged,
         review: createHooksLaunchReviewService({
           repository: database.hooksLaunchReview ?? null,
           factory: hooksFactoryReader,

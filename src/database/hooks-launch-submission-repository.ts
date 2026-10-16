@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { launchSlotChainReference } from "./launch2-snapshot-publication-repository.js";
 import type { HooksLaunchDeploymentStatus } from "../features/launch/hooks-launch-deployment-status.js";
 import {
   HooksLaunchSubmissionError,
@@ -15,6 +16,7 @@ interface JobRow {
   job_id: string;
   project_id: string;
   config_version: number;
+  chain_id: number;
   factory_address: string;
   status: HooksLaunchDeploymentStatus;
   meme_address: string;
@@ -96,7 +98,7 @@ async function loadJob(
     jobId: row.job_id,
     projectId: row.project_id,
     configVersion: row.config_version,
-    chainId: 97,
+    chainId: launchSlotChainReference(row.chain_id),
     factoryAddress: row.factory_address,
     status: row.status,
     memeAddress: row.meme_address,
@@ -132,7 +134,12 @@ async function loadJob(
 
 export function createPostgresHooksLaunchSubmissionRepository(
   pool: Pool,
+  options: {
+    /** Decision 0150: the launch slot (default 97, the pre-0150 constant). */
+    readonly chainReference?: 56 | 97;
+  } = {},
 ): HooksLaunchSubmissionRepository {
+  const chainReference = launchSlotChainReference(options.chainReference);
   async function findReplay(owner: string, key: string) {
     const result = await pool.query<JobRow>(
       `select t.*,c.fingerprint from public.hooks_launch_submission_commands c join public.hooks_launch_deployment_tasks t using(job_id) where c.owner_user_id=$1 and c.idempotency_key=$2`,
@@ -247,7 +254,7 @@ export function createPostgresHooksLaunchSubmissionRepository(
           throw new HooksLaunchSubmissionError("conflict");
         if (!row) {
           const inserted = await client.query<JobRow>(
-            `insert into public.hooks_launch_deployment_tasks(job_id,project_id,config_version,owner_user_id,chain_id,factory_address,project_owner,owner_nonce,binding_hash,meme_address,hook_address) values($1,$2,$3,$4,97,$5,$6,$7,$8,$9,$10) returning *`,
+            `insert into public.hooks_launch_deployment_tasks(job_id,project_id,config_version,owner_user_id,chain_id,factory_address,project_owner,owner_nonce,binding_hash,meme_address,hook_address) values($1,$2,$3,$4,${chainReference},$5,$6,$7,$8,$9,$10) returning *`,
             [
               randomUUID(),
               input.projectId,

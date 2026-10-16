@@ -29074,7 +29074,11 @@
                             ],
                             "description": "Decision 0112 state machine: awaiting_executor → claimed → broadcast → confirmed → verified → activated; failed (failure.retryable → retried), reorged (→ claimed, same transaction re-sent), cancelled."
                           },
-                          "chainId": { "type": "integer", "enum": [97] },
+                          "chainId": {
+                            "type": "integer",
+                            "enum": [56, 97],
+                            "description": "The launch slot the task was signed for: 97 on BSC Testnet; 56 only under Decision 0150's LAUNCH_MAINNET_ACK."
+                          },
                           "factoryAddress": {
                             "type": "string",
                             "pattern": "^0x[0-9a-fA-F]{40}$"
@@ -29351,6 +29355,11 @@
                       "type": "integer",
                       "enum": [56, 97],
                       "description": "Decision 0117, read-only: the chain this API deploys Hooks launches to (LAUNCH_CHAIN_ID). versions[].config.fixedEconomics.chainId is the template value (always 56) and is not the deployment chain."
+                    },
+                    "deploymentMainnetAcknowledged": {
+                      "type": "boolean",
+                      "description": "Decision 0150, read-only diagnostics: present (true) only when deploymentChainId is 56 and LAUNCH_MAINNET_ACK opened the mainnet action paths; absent otherwise (BSC Testnet, or 56 with every Hooks / launch2 action path closed).",
+                      "enum": [true]
                     },
                     "snapshotPublications": {
                       "type": "array",

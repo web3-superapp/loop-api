@@ -456,6 +456,13 @@ export function createPostgresDatabase(
       ? {}
       : { launchChainId: config.launchChain.chainId },
   );
+  // Decision 0150: the signer tables follow the launch slot (default 97).
+  const launchSlotRepositoryOptions =
+    config.launchChain === undefined
+      ? {}
+      : ({
+          chainReference: config.launchChain.chainId === "eip155:56" ? 56 : 97,
+        } as const);
   const mining = createPostgresMiningRepository(pool);
   const referral = createPostgresReferralRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
@@ -528,14 +535,26 @@ export function createPostgresDatabase(
         ? {}
         : { launchChainId: config.launchChain.chainId }),
     }),
-    hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(pool),
+    hooksLaunchSubmissions: createPostgresHooksLaunchSubmissionRepository(
+      pool,
+      launchSlotRepositoryOptions,
+    ),
     hooksLaunchExecutor: (leaseSeconds: number) =>
-      createPostgresHooksLaunchExecutorRepository(pool, { leaseSeconds }),
+      createPostgresHooksLaunchExecutorRepository(pool, {
+        leaseSeconds,
+        ...launchSlotRepositoryOptions,
+      }),
     launchChain: createPostgresLaunchChainRepository(pool),
     meme: createPostgresMemeRepository(pool),
     launch2: createPostgresLaunch2Repository(pool),
-    launch2Publications: createPostgresLaunch2PublicationRepository(pool),
-    launch2BuybackAttempts: createPostgresLaunch2BuybackAttemptRepository(pool),
+    launch2Publications: createPostgresLaunch2PublicationRepository(
+      pool,
+      launchSlotRepositoryOptions,
+    ),
+    launch2BuybackAttempts: createPostgresLaunch2BuybackAttemptRepository(
+      pool,
+      launchSlotRepositoryOptions,
+    ),
     launch2MemeAssets: createPostgresLaunch2MemeAssetRepository(pool),
     miningSettlement: createPostgresMiningSettlementRepository(pool),
     testnetFaucet: createPostgresTestnetFaucetRepository(pool),

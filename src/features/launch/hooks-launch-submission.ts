@@ -10,6 +10,11 @@ import {
 } from "viem";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
 import {
+  launchSlotRefusal,
+  testnetLaunchSlot,
+  type LaunchSlotPolicy,
+} from "../chain/chain-contract.js";
+import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
   type HooksLaunchProjectConfigRepository,
@@ -122,7 +127,8 @@ export interface HooksLaunchDeploymentJob {
   readonly jobId: string;
   readonly projectId: string;
   readonly configVersion: number;
-  readonly chainId: 97;
+  /** Decision 0150: the launch slot the task was signed for (56 or 97). */
+  readonly chainId: 56 | 97;
   readonly factoryAddress: string;
   readonly status: HooksLaunchDeploymentStatus;
   /** Predicted (EIP-712-bound) MEME address; S125 meaning unchanged. */
@@ -224,6 +230,11 @@ export function createHooksLaunchSubmissionService(input: {
   readonly now?: () => number;
   /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails closed. */
   readonly fixedBuybackRecipient?: string | null;
+  /**
+   * Decision 0150: the configured launch slot (absent = BSC Testnet). The
+   * reader must be on it, and chain 56 needs `LAUNCH_MAINNET_ACK`.
+   */
+  readonly launchSlot?: LaunchSlotPolicy;
 }): HooksLaunchSubmissionService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1000));
   return {
@@ -244,7 +255,10 @@ export function createHooksLaunchSubmissionService(input: {
         !wallets ||
         !reader ||
         !repository ||
-        reader.chainId !== 97
+        launchSlotRefusal(
+          input.launchSlot ?? testnetLaunchSlot,
+          reader.chainId,
+        ) !== null
       )
         throw new HooksLaunchSubmissionError("unavailable");
       const parsed = hooksLaunchSubmissionSchema.safeParse(command.body);
@@ -271,7 +285,7 @@ export function createHooksLaunchSubmissionService(input: {
       let digest: Hex;
       try {
         const typed = createHooksLaunchDeploymentTypedData({
-          chainId: 97,
+          chainId: reader.chainId,
           verifyingContract: reader.factoryAddress,
           request,
           ...(templateHash === null ? {} : { templateHash }),
@@ -381,7 +395,7 @@ export function createHooksLaunchSubmissionService(input: {
         if ((await reader.nonce(wallet.address)) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({
-          chainId: 97,
+          chainId: reader.chainId,
           factory: reader.factoryAddress,
           projectOwner: request.projectOwner,
           configVersion: request.configVersion,

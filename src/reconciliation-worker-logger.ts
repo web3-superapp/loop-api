@@ -167,7 +167,9 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP chain guard incident resolved"
   | "LOOP chain guard hold engaged; the lane skips its ticks"
   | "LOOP chain guard hold released"
-  | "LOOP chain guard alert was not delivered";
+  | "LOOP chain guard alert was not delivered"
+  // Decision 0150: the launch slot is BSC Mainnet with LAUNCH_MAINNET_ACK.
+  | "LOOP launch slot is BSC Mainnet with real funds (LAUNCH_MAINNET_ACKNOWLEDGED, Decision 0150)";
 
 /** One holding a mining snapshot attempt could not value (Decision 0057). */
 export interface ReconciliationWorkerUnreadInput {

@@ -174,8 +174,13 @@ export interface Launch2ServiceDependencies {
   readonly wallets: AccountWalletRepository | null;
   readonly writes: BscWriteConfig | null;
   readonly cursorCodec: V2CursorCodec | null;
-  /** CAIP-2 id of the launch slot (`eip155:97`). */
+  /** CAIP-2 id of the launch slot (`eip155:97`, or 56 under Decision 0150). */
   readonly chainId: LaunchChainId;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with `LAUNCH_MAINNET_ACK`. Absent /
+   * false keeps LAUNCH2_MAINNET_SIGNING_CLOSED on 56 exactly as before.
+   */
+  readonly mainnetAcknowledged?: boolean;
   /** Non-null keeps every route unavailable with this reason. */
   readonly unavailableReason: string | null;
   readonly quoteTtlSeconds: number;
@@ -1377,7 +1382,8 @@ export function createLaunch2Service(
     if (deps.writes === null) {
       return unavailableWith(launch2ReasonCodes.writesDisabled);
     }
-    if (deps.chainId === bscChainId) {
+    // Decision 0150: chain 56 signs only with LAUNCH_MAINNET_ACK.
+    if (deps.chainId === bscChainId && deps.mainnetAcknowledged !== true) {
       return unavailableWith(launch2ReasonCodes.mainnetClosed);
     }
     return deps.writes;

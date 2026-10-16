@@ -95255,7 +95255,11 @@
                               "type": "integer",
                               "minimum": 1
                             },
-                            "chainId": { "type": "integer", "enum": [97] },
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "The launch slot the task was signed for (LAUNCH_CHAIN_ID): 97 on BSC Testnet; 56 only while Decision 0150's LAUNCH_MAINNET_ACK is set."
+                            },
                             "factoryAddress": {
                               "type": "string",
                               "pattern": "^0x[0-9a-f]{40}$"
@@ -97078,7 +97082,7 @@
                     "typedData": {
                       "type": "object",
                       "additionalProperties": true,
-                      "description": "EIP-712 typed data (domain 'LOOP Launch Factory' v1, chainId 97, primaryType LaunchRequest) for the project wallet to sign. uint64/uint256 message fields are decimal strings."
+                      "description": "EIP-712 typed data (domain 'LOOP Launch Factory' v1, chainId = the launch slot: 97 on BSC Testnet, 56 only under Decision 0150's LAUNCH_MAINNET_ACK, primaryType LaunchRequest) for the project wallet to sign. uint64/uint256 message fields are decimal strings."
                     },
                     "hookDeployer": {
                       "type": "string",
@@ -97795,7 +97799,11 @@
                       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                     },
                     "configVersion": { "type": "integer", "minimum": 1 },
-                    "chainId": { "type": "integer", "enum": [97] },
+                    "chainId": {
+                      "type": "integer",
+                      "enum": [56, 97],
+                      "description": "The launch slot the task was signed for (LAUNCH_CHAIN_ID): 97 on BSC Testnet; 56 only while Decision 0150's LAUNCH_MAINNET_ACK is set."
+                    },
                     "factoryAddress": {
                       "type": "string",
                       "pattern": "^0x[0-9a-f]{40}$"
@@ -98747,7 +98755,11 @@
                       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                     },
                     "configVersion": { "type": "integer", "minimum": 1 },
-                    "chainId": { "type": "integer", "enum": [97] },
+                    "chainId": {
+                      "type": "integer",
+                      "enum": [56, 97],
+                      "description": "The launch slot the task was signed for (LAUNCH_CHAIN_ID): 97 on BSC Testnet; 56 only while Decision 0150's LAUNCH_MAINNET_ACK is set."
+                    },
                     "factoryAddress": {
                       "type": "string",
                       "pattern": "^0x[0-9a-f]{40}$"
@@ -99558,7 +99570,11 @@
                       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                     },
                     "configVersion": { "type": "integer", "minimum": 1 },
-                    "chainId": { "type": "integer", "enum": [97] },
+                    "chainId": {
+                      "type": "integer",
+                      "enum": [56, 97],
+                      "description": "The launch slot the task was signed for (LAUNCH_CHAIN_ID): 97 on BSC Testnet; 56 only while Decision 0150's LAUNCH_MAINNET_ACK is set."
+                    },
                     "factoryAddress": {
                       "type": "string",
                       "pattern": "^0x[0-9a-f]{40}$"

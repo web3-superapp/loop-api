@@ -15,7 +15,7 @@ import {
   type StateOverride,
   type Transport,
 } from "viem";
-import { bscTestnet } from "viem/chains";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 
 import type {
   Launch2PoolCall,
@@ -259,6 +259,8 @@ export function createLaunch2PoolChain(input: {
   /** Re-verify a failed router check after this long (default 60 s). */
   readonly retryAfterMs?: number;
   readonly now?: () => number;
+  /** Decision 0150: the launch slot (viem chain); absent = 97. */
+  readonly chainReference?: 56 | 97;
 }): Launch2PoolChain {
   if (
     !/^0x[0-9a-fA-F]{40}$/u.test(input.router) ||
@@ -278,7 +280,10 @@ export function createLaunch2PoolChain(input: {
       ),
       { retryCount: 0 },
     );
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(input.chainReference ?? 97),
+    transport,
+  });
   let verified: Launch2PoolRouterCheck | null = null;
   let failedAt = 0;
   let inFlight: Promise<Launch2PoolRouterCheck> | null = null;

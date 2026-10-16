@@ -47,6 +47,8 @@ const createdAt = "2026-10-09T00:00:00.000Z";
 const signer = privateKeyToAccount(`0x${"01".repeat(32)}`);
 const enabled = {
   HOOKS_LAUNCH_ENABLED: "on",
+  // Decision 0150: the injected readers are BSC Testnet (97) readers.
+  LAUNCH_CHAIN_ID: "97",
   // Decision 0122: the fixed buyback recipient the test drafts name.
   LAUNCH2_BUYBACK_RECIPIENT: "0x1234567890123456789012345678901234567890",
 } as const;

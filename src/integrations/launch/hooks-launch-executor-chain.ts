@@ -20,7 +20,7 @@ import {
   type Transport,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { bscTestnet } from "viem/chains";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 
 import {
   HooksLaunchChainRevertError,
@@ -133,9 +133,15 @@ export function createHooksLaunchExecutorChain(input: {
    * the module read-back differ.
    */
   readonly hookKind?: "officialTax" | "loopDynamic";
+  /**
+   * Decision 0150: the launch slot the transactions are signed for (EIP-155
+   * chain id); absent = 97, the pre-0150 constant.
+   */
+  readonly chainReference?: 56 | 97;
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
 }): HooksLaunchExecutorChain {
+  const chainReference = input.chainReference ?? 97;
   if (!/^0x[0-9a-fA-F]{40}$/u.test(input.factoryAddress)) {
     throw new HooksLaunchExecutorChainRefusedError(
       "HOOKS_LAUNCH_FACTORY_UNAVAILABLE",
@@ -155,7 +161,10 @@ export function createHooksLaunchExecutorChain(input: {
       { retryCount: 0 },
     );
   const account = privateKeyToAccount(input.privateKey);
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(chainReference),
+    transport,
+  });
   const factory = lower(input.factoryAddress) as Address;
   const loopDynamic = input.hookKind === "loopDynamic";
 
@@ -253,7 +262,7 @@ export function createHooksLaunchExecutorChain(input: {
       throw new Error("Executor nonce out of range");
     }
     const rawTx = await account.signTransaction({
-      chainId: 97,
+      chainId: chainReference,
       type: "legacy",
       to: factory,
       data,

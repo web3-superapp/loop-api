@@ -12,8 +12,8 @@ import {
   type Hex,
   type Transport,
 } from "viem";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { privateKeyToAccount } from "viem/accounts";
-import { bscTestnet } from "viem/chains";
 
 import {
   Launch2KeeperRevertError,
@@ -109,7 +109,10 @@ export function createLaunch2BuybackKeeperChain(input: {
       { retryCount: 0 },
     );
   const account = privateKeyToAccount(input.privateKey);
-  const client = createPublicClient({ chain: bscTestnet, transport });
+  const client = createPublicClient({
+    chain: viemLaunchChain(chainId),
+    transport,
+  });
 
   async function read<T>(
     address: string,

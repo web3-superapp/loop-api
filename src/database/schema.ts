@@ -1,4 +1,4 @@
-export const latestMigrationName = "000088_fiat_fx_rates";
+export const latestMigrationName = "000089_launch_slot_mainnet_chain_ids";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

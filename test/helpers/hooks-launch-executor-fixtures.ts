@@ -46,7 +46,7 @@ export const launchId = hooksLaunchId({
   configHash,
 }).toLowerCase();
 
-export async function signedPayload(deadline: number) {
+export async function signedPayload(deadline: number, chainId = 97) {
   const request = {
     configHash,
     projectOwner,
@@ -60,7 +60,8 @@ export async function signedPayload(deadline: number) {
     nonce: "0",
   };
   const typed = createHooksLaunchDeploymentTypedData({
-    chainId: 97,
+    // Decision 0150: the slot the owner signs for (default BSC Testnet).
+    chainId,
     verifyingContract: factoryAddress,
     request,
   });

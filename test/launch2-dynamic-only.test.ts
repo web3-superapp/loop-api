@@ -519,6 +519,7 @@ describe("Decision 0133 launch2_event lane with only the LoopDynamic Factory", (
     });
     expect(createLaunch2Chain).toHaveBeenCalledWith({
       rpcUrls: ["https://bsc-testnet.example/rpc"],
+      expectedChainId: 97,
     });
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({

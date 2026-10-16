@@ -1997,7 +1997,7 @@ export const hooksLaunchSigningRequestResourceSchema = {
       type: "object",
       additionalProperties: true,
       description:
-        "EIP-712 typed data (domain 'LOOP Launch Factory' v1, chainId 97, primaryType LaunchRequest) for the project wallet to sign. uint64/uint256 message fields are decimal strings.",
+        "EIP-712 typed data (domain 'LOOP Launch Factory' v1, chainId = the launch slot: 97 on BSC Testnet, 56 only under Decision 0150's LAUNCH_MAINNET_ACK, primaryType LaunchRequest) for the project wallet to sign. uint64/uint256 message fields are decimal strings.",
     },
     hookDeployer: addressSchema,
     hookInitCodeHash: bytes32Schema,
@@ -2173,7 +2173,12 @@ export const hooksLaunchDeploymentJobSchema = {
     jobId: { type: "string", pattern: opaqueIdPatternSource },
     projectId: { type: "string", pattern: opaqueIdPatternSource },
     configVersion: { type: "integer", minimum: 1 },
-    chainId: { type: "integer", const: 97 },
+    chainId: {
+      type: "integer",
+      enum: [56, 97],
+      description:
+        "The launch slot the task was signed for (LAUNCH_CHAIN_ID): 97 on BSC Testnet; 56 only while Decision 0150's LAUNCH_MAINNET_ACK is set.",
+    },
     factoryAddress: addressSchema,
     status: {
       ...hooksLaunchDeploymentStatusSchema,

@@ -1,5 +1,6 @@
 import { waitFor, type PeriodicLane } from "./bsc-meme-indexer-worker.js";
 import type { HooksLaunchExecutorConfig } from "./config.js";
+import type { LaunchSlotPolicy } from "./features/chain/chain-contract.js";
 import type { ChainGuardHoldCheck } from "./features/chain-guard/chain-guard-hold.js";
 import {
   createHooksLaunchExecutor,
@@ -17,7 +18,8 @@ function isAborted(signal: AbortSignal): boolean {
 
 /**
  * Decision 0112: the `hooks_launch_executor` lane of the worker process.
- * One tick = preflight (chain 97, pinned Factory code hash, executor
+ * One tick = preflight (the launch slot — 97, or 56 with the Decision 0150
+ * ack —, pinned Factory code hash, executor
  * authorized) + up to `tasksPerTick` leased tasks advanced as far as each
  * goes without waiting on the chain. Infrastructure errors back off; the
  * lease lets another worker resume a task after a crash.
@@ -27,6 +29,8 @@ export function createHooksLaunchExecutorLane(options: {
   readonly chain: HooksLaunchExecutorChain;
   readonly config: HooksLaunchExecutorConfig;
   readonly executorId: string;
+  /** Decision 0150: the configured launch slot (absent = BSC Testnet). */
+  readonly launchSlot?: LaunchSlotPolicy;
   readonly now?: () => number;
   /**
    * Decision 0134: the chain guard's hold check; a non-null answer is this
@@ -49,6 +53,9 @@ export function createHooksLaunchExecutorLane(options: {
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.onStep === undefined ? {} : { onStep: options.onStep }),
     policy: {
+      ...(options.launchSlot === undefined
+        ? {}
+        : { launchSlot: options.launchSlot }),
       // Decision 0132: absent for OfficialTax (unchanged policy object).
       ...(options.config.hookKind === "loopDynamic"
         ? { hookKind: "loopDynamic" as const }

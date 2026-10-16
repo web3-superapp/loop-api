@@ -166,7 +166,11 @@ import type {
   BscIndexerWalletSetRepository,
 } from "./database/bsc-indexer-repository.js";
 import type { ChainRegistryRepository } from "./database/chain-registry-repository.js";
-import { bscChainId } from "./features/chain/chain-contract.js";
+import {
+  bscChainId,
+  launchSlotActionsOpen,
+  type LaunchSlotPolicy,
+} from "./features/chain/chain-contract.js";
 import {
   asChainCallClient,
   createBscReadClient,
@@ -544,6 +548,18 @@ export async function runReconciliationWorker(
     });
   }
 
+  // Decision 0150: one loud line whenever the launch slot is BSC Mainnet
+  // with the ack (no secret, no endpoint). Absent on 97 and on 56 without it.
+  if (options.config.launchChain.mainnetAcknowledged) {
+    options.logger.warn(
+      {
+        ...logFields(),
+        reasonCode: "LAUNCH_MAINNET_ACKNOWLEDGED",
+      },
+      "LOOP launch slot is BSC Mainnet with real funds (LAUNCH_MAINNET_ACKNOWLEDGED, Decision 0150)",
+    );
+  }
+
   try {
     database = databaseFactory(options.config, options.logger);
     for (const [signal, handler] of shutdownHandlers) {
@@ -701,6 +717,14 @@ export async function runReconciliationWorker(
     // stays on 56. With the four contract keys blank it idles with
     // LAUNCH_CONTRACT_BASELINE_PENDING; it never signs or submits.
     const launchChainConfig = options.config.launchChain;
+    // Decision 0150: the launch slot as the action paths see it. BSC Testnet
+    // is unchanged; chain 56 opens only with LAUNCH_MAINNET_ACK (config load
+    // already refused every write lane on 56 without it).
+    const launchSlot: LaunchSlotPolicy = Object.freeze({
+      chainReference: launchChainConfig.chainReference,
+      mainnetAcknowledged: launchChainConfig.mainnetAcknowledged,
+    });
+    const launchSlotOpen = launchSlotActionsOpen(launchSlot);
     const launchIndexerWorker = ((): LaunchIndexerWorker | null => {
       if (
         !options.config.launchIndexerEnabled ||
@@ -1081,7 +1105,8 @@ export async function runReconciliationWorker(
             ),
           };
     // Hooks deployment executor (Decision 0112), default off. Config load
-    // already refused boot for `on` without a key / Factory / chain 97.
+    // already refused boot for `on` without a key / Factory / chain 97 (or 56
+    // with LAUNCH_MAINNET_ACK + BSC_WRITES_ENABLED + CHAIN_GUARD_ENABLED, 0150).
     const hooksExecutorConfig = options.config.hooksLaunchExecutor;
     if (hooksExecutorConfig !== null) {
       const repositoryFactory = database.hooksLaunchExecutor;
@@ -1095,6 +1120,7 @@ export async function runReconciliationWorker(
           privateKey: hooksExecutorConfig.privateKey,
           factoryAddress: hooksExecutorConfig.factoryAddress,
           rpcUrls: launchChainConfig.rpcUrls,
+          chainReference: launchChainConfig.chainReference,
           // Decision 0132: the LoopDynamic Factory (template + read-back).
           ...(hooksExecutorConfig.hookKind === "loopDynamic"
             ? { hookKind: "loopDynamic" as const }
@@ -1135,6 +1161,7 @@ export async function runReconciliationWorker(
             chain,
             config: hooksExecutorConfig,
             executorId,
+            launchSlot,
             ...chainGuardHold("hooks_launch_executor"),
             onStep: (event) => {
               const log =
@@ -1197,8 +1224,7 @@ export async function runReconciliationWorker(
           ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
           : factories === null
             ? "LAUNCH2_FACTORY_NOT_CONFIGURED"
-            : launchChainConfig.chainId !== "eip155:97" ||
-                launchChainConfig.rpcUrls.length === 0
+            : !launchSlotOpen || launchChainConfig.rpcUrls.length === 0
               ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
               : null;
       if (
@@ -1220,6 +1246,7 @@ export async function runReconciliationWorker(
             repository: database.launch2,
             chain: (options.createLaunch2Chain ?? createLaunch2Chain)({
               rpcUrls: launchChainConfig.rpcUrls,
+              expectedChainId: launchChainConfig.chainReference,
             }),
             chainId: launchChainConfig.chainId,
             factories,
@@ -1236,7 +1263,10 @@ export async function runReconciliationWorker(
                     reader: (
                       options.createLaunch2TokenIdentityReader ??
                       createLaunch2TokenIdentityReader
-                    )({ rpcUrls: launchChainConfig.rpcUrls }),
+                    )({
+                      rpcUrls: launchChainConfig.rpcUrls,
+                      expectedChainId: launchChainConfig.chainReference,
+                    }),
                   },
                 }),
             onWarning: (warning) => {
@@ -1306,15 +1336,15 @@ export async function runReconciliationWorker(
     }
     // MEME v2 snapshot publisher (Decision 0118), default off. Config load
     // already refused boot for `true` without ≥ 2 signer keys, a submitter
-    // key, or chain 97; a missing RPC / store keeps it idle with the reason.
+    // key, or chain 97 (or 56 + ack + BSC_WRITES_ENABLED, Decision 0150); a
+    // missing RPC / store keeps it idle with the reason.
     const publisherConfig = options.config.launch2SnapshotPublisher;
     if (publisherConfig !== null) {
       const reason =
         database.launch2 === undefined ||
         database.launch2Publications === undefined
           ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
-          : launchChainConfig.chainId !== "eip155:97" ||
-              launchChainConfig.rpcUrls.length === 0
+          : !launchSlotOpen || launchChainConfig.rpcUrls.length === 0
             ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
             : null;
       let publisherChain: ReturnType<
@@ -1328,6 +1358,7 @@ export async function runReconciliationWorker(
           )({
             privateKey: publisherConfig.submitterPrivateKey,
             rpcUrls: launchChainConfig.rpcUrls,
+            expectedChainId: launchChainConfig.chainReference,
           });
         } catch (error) {
           refused =
@@ -1353,7 +1384,7 @@ export async function runReconciliationWorker(
       } else {
         const signers = createLaunch2SnapshotSigners({
           privateKeys: publisherConfig.signerPrivateKeys,
-          chainId: 97,
+          chainId: launchChainConfig.chainReference,
         });
         memeLanes.push(
           (
@@ -1366,6 +1397,7 @@ export async function runReconciliationWorker(
             signers,
             policy: {
               chainId: launchChainConfig.chainId,
+              mainnetAcknowledged: launchSlot.mainnetAcknowledged,
               confirmations: publisherConfig.confirmations,
               maxGasPriceWei:
                 BigInt(publisherConfig.maxGasPriceGwei) * 10n ** 9n,
@@ -1431,8 +1463,8 @@ export async function runReconciliationWorker(
     }
     // MEME v2 buyback keeper (Decision 0121), default off. Config load
     // already refused boot for `true` without a key, the Factory, or chain
-    // 97. Here the Factory's keepers are read: a key that is neither
-    // refuses boot; an unreadable Factory leaves the check to the lane's
+    // 97 (56 only with the Decision 0150 ack and switches). Here the
+    // Factory's keepers are read: a key that is neither refuses boot; an unreadable Factory leaves the check to the lane's
     // first tick (it never acts unverified). A missing RPC / store keeps
     // the lane idle with the reason.
     const keeperConfig = options.config.launch2BuybackKeeper;
@@ -1440,8 +1472,7 @@ export async function runReconciliationWorker(
       let refused: string | null =
         database.launch2BuybackAttempts === undefined
           ? "LAUNCH2_REPOSITORY_UNAVAILABLE"
-          : launchChainConfig.chainId !== "eip155:97" ||
-              launchChainConfig.rpcUrls.length === 0
+          : !launchSlotOpen || launchChainConfig.rpcUrls.length === 0
             ? "LAUNCH2_CHAIN_NOT_CONFIGURED"
             : null;
       let keeperChain: ReturnType<
@@ -1455,6 +1486,7 @@ export async function runReconciliationWorker(
           )({
             privateKey: keeperConfig.privateKey,
             rpcUrls: launchChainConfig.rpcUrls,
+            expectedChainId: launchChainConfig.chainReference,
           });
         } catch (error) {
           refused =
@@ -1486,6 +1518,7 @@ export async function runReconciliationWorker(
           ...chainGuardHold("launch2_buyback_keeper"),
           policy: {
             chainId: launchChainConfig.chainId,
+            mainnetAcknowledged: launchSlot.mainnetAcknowledged,
             factoryAddress: keeperConfig.factoryAddress,
             factoryAddresses: keeperConfig.factoryAddresses,
             confirmations: keeperConfig.confirmations,
@@ -1576,12 +1609,13 @@ export async function runReconciliationWorker(
       }
     }
     // Decision 0131: LoopDynamic poke() keeper, default off. Config load
-    // already refused boot for `true` without a key or off chain 97.
+    // already refused boot for `true` without a key or off chain 97 (or 56
+    // with the Decision 0150 ack and write / chain-guard switches).
     const pokeConfig = options.config.launch2DynamicPoke;
     if (pokeConfig !== null) {
       if (
         database.launch2 === undefined ||
-        launchChainConfig.chainId !== "eip155:97" ||
+        !launchSlotOpen ||
         launchChainConfig.rpcUrls.length === 0
       ) {
         options.logger.warn(
@@ -1601,12 +1635,15 @@ export async function runReconciliationWorker(
         )({
           privateKey: pokeConfig.privateKey,
           rpcUrls: launchChainConfig.rpcUrls,
+          chainReference: launchChainConfig.chainReference,
         });
         memeLanes.push(
           createLaunch2DynamicPokeLane({
             repository: database.launch2,
             chain: pokeChain,
             chainId: launchChainConfig.chainId,
+            expectedChainReference: launchChainConfig.chainReference,
+            mainnetAcknowledged: launchSlot.mainnetAcknowledged,
             intervalSeconds: pokeConfig.intervalSeconds,
             ...chainGuardHold("launch2_dynamic_poke"),
             onStep: (step) => {

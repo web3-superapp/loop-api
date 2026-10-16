@@ -461,6 +461,25 @@ describe("Decision 0121 keeper tick", () => {
     expect(chain.factoryKeepers).toHaveBeenCalledTimes(1);
   });
 
+  it("Decision 0150: on chain 56 runs only with LAUNCH_MAINNET_ACK", async () => {
+    const closed = setup({ chainId: "eip155:56" });
+    closed.chain.chainId = () => Promise.resolve(56);
+    expect(await closed.keeper.runOnce()).toMatchObject({
+      kind: "unavailable",
+      reasonCode: "LAUNCH_MAINNET_NOT_ACKNOWLEDGED",
+    });
+    expect(closed.chain.factoryKeepers).not.toHaveBeenCalled();
+    expect(closed.store.rows).toEqual([]);
+    const open = setup({ chainId: "eip155:56", mainnetAcknowledged: true });
+    open.chain.chainId = () => Promise.resolve(56);
+    expect((await open.keeper.runOnce()).kind).toBe("ran");
+    // The ack never admits another chain.
+    open.chain.chainId = () => Promise.resolve(97);
+    expect((await open.keeper.runOnce()).reasonCode).toBe(
+      "LAUNCH2_BUYBACK_KEEPER_CHAIN_MISMATCH",
+    );
+  });
+
   it("executes, follows the receipt to confirmed, waits for the ledger row, then the next order after the interval", async () => {
     const { chain, keeper: subject, store, steps } = setup();
     // Order 1: simulate → pending (written first) → signed → broadcast.

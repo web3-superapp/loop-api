@@ -6,7 +6,7 @@ import {
   type Address,
   type Transport,
 } from "viem";
-import { bscTestnet } from "viem/chains";
+import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 
 import type { Launch2TokenIdentityReader } from "../../features/launch2/launch2-meme-assets.js";
 
@@ -27,8 +27,11 @@ export function createLaunch2TokenIdentityReader(input: {
       input.rpcUrls.map((url) => http(url, { timeout: 10_000, retryCount: 1 })),
       { retryCount: 0 },
     );
-  const client = createPublicClient({ chain: bscTestnet, transport });
   const expectedChainId = input.expectedChainId ?? 97;
+  const client = createPublicClient({
+    chain: viemLaunchChain(expectedChainId),
+    transport,
+  });
   return Object.freeze({
     async readTokenIdentity(address: string) {
       if ((await client.getChainId()) !== expectedChainId) {

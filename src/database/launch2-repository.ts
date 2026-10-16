@@ -1960,7 +1960,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           join unnest($2::text[], $4::text[]) as f(address, generation)
             on f.address = t.factory_address
           where t.status = 'activated'
-            and t.chain_id = 97
+            and t.chain_id = $5::integer
             and not exists (
               select 1 from public.launch2_instances i where i.job_id = t.job_id)
           on conflict do nothing
@@ -1971,6 +1971,8 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           input.factories.map((factory) => factory.address.toLowerCase()),
           launch2PriceAt(0n).toString(10),
           input.factories.map((factory) => factory.generation),
+          // Decision 0150: the task table's integer chain id of the slot.
+          input.chainId === "eip155:56" ? 56 : 97,
         ],
       );
       return rows.map((row) => row.instance_id);

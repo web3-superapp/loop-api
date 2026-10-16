@@ -461,7 +461,8 @@ and aggregate discovery experience.
 - No wallet keys, recovery phrases, Privy refresh tokens, or long-lived provider
   secrets in Flutter, fixtures, logs, or Git
 - No Mainnet, withdrawals, automated trading, Pay, or payment backend in the
-  current phase
+  current phase; the one exception is the BSC Mainnet launch slot, which opens
+  only through Decision 0150's `LAUNCH_MAINNET_ACK` (default off)
 - No custom matching engine, ledger, bridge, IM, RTC, or proprietary risk score
 - No social surface beyond the narrow accepted-friend graph: no unfriend,
   blocking, wallet/QR discovery, alias history, cross-group correlation, or

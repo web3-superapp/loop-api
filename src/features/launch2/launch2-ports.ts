@@ -147,7 +147,7 @@ export interface Launch2SnapshotPublication {
 }
 
 export interface Launch2Chain {
-  /** Lane-facing: the node must be chain 97 (else unavailable). */
+  /** Lane-facing: the node must be the configured slot (97, or 56 under Decision 0150; else unavailable). */
   verifyChain(): Promise<"ok" | "wrong_chain">;
   getHead(): Promise<Launch2ChainHead>;
   getBlock(

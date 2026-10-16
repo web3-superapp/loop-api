@@ -1,5 +1,6 @@
 import { keccak256, stringToHex } from "viem";
 
+import { launchSlotReasonCodes } from "../chain/chain-contract.js";
 import { buildLaunchMerkleTree } from "../launch/launch-merkle.js";
 import {
   launch2CanOpenWithoutHolders,
@@ -353,6 +354,12 @@ export interface Launch2SnapshotSigner {
 
 export interface Launch2PublisherPolicy {
   readonly chainId: string;
+  /**
+   * Decision 0150: `LAUNCH_CHAIN_ID=56` with `LAUNCH_MAINNET_ACK`. On a
+   * chain-56 slot without it every tick is unavailable
+   * (LAUNCH_MAINNET_NOT_ACKNOWLEDGED); ignored on 97.
+   */
+  readonly mainnetAcknowledged?: boolean;
   readonly confirmations: number;
   readonly maxGasPriceWei: bigint;
   readonly gasLimitCap: bigint;
@@ -925,6 +932,15 @@ export function createLaunch2SnapshotPublisher(options: {
       return Object.freeze({
         kind: "unavailable",
         reasonCode: launch2PublisherReasonCodes.chainMismatch,
+        candidates: 0,
+        steps: 0,
+        waiting: {},
+      });
+    }
+    if (expected === 56 && policy.mainnetAcknowledged !== true) {
+      return Object.freeze({
+        kind: "unavailable",
+        reasonCode: launchSlotReasonCodes.mainnetNotAcknowledged,
         candidates: 0,
         steps: 0,
         waiting: {},

@@ -66,7 +66,10 @@ async function user(): Promise<string> {
   return result.rows[0]!.id;
 }
 
-async function task(factoryAddress = hex(20)) {
+async function task(
+  factoryAddress = hex(20),
+  submissionRepository = submissions,
+) {
   const owner = await user();
   const projectId = randomUUID();
   await pool.query(
@@ -113,7 +116,7 @@ async function task(factoryAddress = hex(20)) {
     memeSalt: `0x${"00".repeat(32)}`,
     nonce: "0",
   };
-  const job = await submissions.accept({
+  const job = await submissionRepository.accept({
     ownerUserId: owner,
     projectId,
     idempotencyKey: randomUUID(),
@@ -385,5 +388,104 @@ describe("Hooks executor repository (000059)", () => {
         expect.objectContaining({ kind: "claimed", actor: "exec-c" }),
       ],
     });
+  });
+});
+
+describe("Decision 0150 chain-56 launch slot (000089)", () => {
+  const mainnetSubmissions = createPostgresHooksLaunchSubmissionRepository(
+    pool,
+    { chainReference: 56 },
+  );
+  const mainnetExecutor = createPostgresHooksLaunchExecutorRepository(pool, {
+    leaseSeconds: 30,
+    chainReference: 56,
+  });
+
+  it("records chain-56 tasks and nonces, and never mixes them with chain 97", async () => {
+    const factory = hex(20);
+    const mainnet = await task(factory, mainnetSubmissions);
+    const testnet = await task(factory);
+    const rows = await pool.query<{ job_id: string; chain_id: number }>(
+      "select job_id, chain_id from public.hooks_launch_deployment_tasks where job_id = any($1::uuid[])",
+      [[mainnet.jobId, testnet.jobId]],
+    );
+    expect(
+      Object.fromEntries(rows.rows.map((row) => [row.job_id, row.chain_id])),
+    ).toEqual({ [mainnet.jobId]: 56, [testnet.jobId]: 97 });
+    expect(
+      (
+        await mainnetSubmissions.getOwned(
+          mainnet.owner,
+          mainnet.projectId,
+          mainnet.jobId,
+        )
+      )?.chainId,
+    ).toBe(56);
+    // Each slot leases only its own chain's task.
+    const leased56 = await mainnetExecutor.acquire({
+      executorId: "exec-56",
+      factoryAddress: factory,
+      maxAttempts: 3,
+      retryDelaySeconds: 10,
+      exclude: [],
+    });
+    expect(leased56?.jobId).toBe(mainnet.jobId);
+    expect(leased56?.chainId).toBe(56);
+    expect(
+      await mainnetExecutor.acquire({
+        executorId: "exec-56",
+        factoryAddress: factory,
+        maxAttempts: 3,
+        retryDelaySeconds: 10,
+        exclude: [mainnet.jobId],
+      }),
+    ).toBeNull();
+    expect((await acquire("exec-97", factory))?.jobId).toBe(testnet.jobId);
+    // Nonces are reserved per chain: the same account starts at 0 on both.
+    const executorAddress = hex(20);
+    const sent56 = await mainnetExecutor.reserveAndRecord({
+      jobId: mainnet.jobId,
+      executorId: "exec-56",
+      executorAddress,
+      purpose: "deploy",
+      chainPendingNonce: 0n,
+      sign: () => Promise.resolve({ txHash: hex(32), rawTx: "0x56" }),
+    });
+    const sent97 = await executorRepository.reserveAndRecord({
+      jobId: testnet.jobId,
+      executorId: "exec-97",
+      executorAddress,
+      purpose: "deploy",
+      chainPendingNonce: 0n,
+      sign: () => Promise.resolve({ txHash: hex(32), rawTx: "0x97" }),
+    });
+    expect([sent56?.txNonce, sent97?.txNonce]).toEqual([0n, 0n]);
+    const nonces = await pool.query<{ chain_id: number }>(
+      "select chain_id from public.hooks_launch_executor_nonces where job_id = $1",
+      [mainnet.jobId],
+    );
+    expect(nonces.rows).toEqual([{ chain_id: 56 }]);
+  });
+
+  it("still refuses any chain other than 56 and 97", async () => {
+    // The update guard trigger fires first on an existing row, so read the
+    // constraint definitions themselves.
+    const checks = await pool.query<{ table: string; definition: string }>(
+      `select conrelid::regclass::text as table, pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conname in ('hooks_launch_deployment_tasks_chain_id_check',
+                          'hooks_launch_executor_nonces_chain_id_check')
+        order by 1`,
+    );
+    expect(checks.rows).toEqual([
+      {
+        table: "hooks_launch_deployment_tasks",
+        definition: "CHECK ((chain_id = ANY (ARRAY[56, 97])))",
+      },
+      {
+        table: "hooks_launch_executor_nonces",
+        definition: "CHECK ((chain_id = ANY (ARRAY[56, 97])))",
+      },
+    ]);
   });
 });
