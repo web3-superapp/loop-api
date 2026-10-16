@@ -94,6 +94,10 @@ import {
   walletNetWorthSnapshotLane,
 } from "./wallet-networth-snapshot-worker.js";
 import type { WalletNetWorthSnapshotRepository } from "./database/wallet-networth-snapshot-repository.js";
+import type { FiatFxRateRepository } from "./database/fiat-fx-rate-repository.js";
+import { createFiatFxRateLane, fiatFxRateLane } from "./fiat-fx-rate-worker.js";
+import { createFrankfurterFiatFxProvider } from "./integrations/fx/frankfurter-adapter.js";
+import type { ProviderFetch } from "./integrations/market/provider-http.js";
 import type { SquareFeedIngestRepository } from "./features/square/square-ingest.js";
 import {
   launch2BuybackKeeperDefaults,
@@ -313,6 +317,8 @@ export interface ReconciliationWorkerDatabase {
   readonly squareFeed?: SquareFeedIngestRepository;
   /** Decision 0145 `wallet_networth_snapshot` lane; absent keeps it off. */
   readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
+  /** Decision 0149 `fiat_fx_rate` lane; absent keeps it off. */
+  readonly fiatFxRates?: FiatFxRateRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -414,6 +420,8 @@ export interface RunReconciliationWorkerOptions {
   readonly createTestnetFaucetSweepLane?: typeof createTestnetFaucetSweepLane;
   readonly createSquareFeedIngestLane?: typeof createSquareFeedIngestLane;
   readonly createWalletNetWorthSnapshotLane?: typeof createWalletNetWorthSnapshotLane;
+  /** Decision 0149 test seam: the FX provider's transport. */
+  readonly fiatFxFetch?: ProviderFetch;
   /** Test seam for the launch slot's read client (Decision 0077). */
   readonly createLaunchReadClient?: (
     config: ReconciliationWorkerConfig["launchChain"],
@@ -916,6 +924,63 @@ export async function runReconciliationWorker(
                 },
                 "LOOP wallet net worth snapshot pass finished",
               );
+            },
+            onInfrastructureBackoff: (event) => {
+              options.logger.warn(
+                { ...logFields(), ...event },
+                "LOOP reconciliation worker infrastructure retry scheduled",
+              );
+            },
+          }),
+        );
+      }
+    }
+    // Decision 0149: the fiat FX reference rate (default ECB via
+    // Frankfurter). Needs only the table; a provider failure writes nothing.
+    const fiatFxConfig = options.config.fiatFxRate ?? null;
+    if (fiatFxConfig !== null) {
+      const fiatFxRepository = database.fiatFxRates;
+      if (fiatFxRepository === undefined) {
+        options.logger.info(
+          {
+            ...logFields(),
+            lane: fiatFxRateLane,
+            reasonCode: "FIAT_FX_RATE_UNAVAILABLE",
+          },
+          "LOOP fiat fx rate lane stays idle",
+        );
+      } else {
+        memeLanes.push(
+          createFiatFxRateLane({
+            repository: fiatFxRepository,
+            provider: createFrankfurterFiatFxProvider({
+              url: fiatFxConfig.providerUrl,
+              base: fiatFxConfig.base,
+              quote: fiatFxConfig.quote,
+              ...(options.fiatFxFetch === undefined
+                ? {}
+                : { fetch: options.fiatFxFetch }),
+            }),
+            refreshMs: fiatFxConfig.refreshMs,
+            onPass: (result) => {
+              if (result.written) {
+                options.logger.info(
+                  { ...logFields(), lane: fiatFxRateLane, inserted: 1 },
+                  "LOOP fiat fx rate refreshed",
+                );
+              } else {
+                options.logger.warn(
+                  {
+                    ...logFields(),
+                    lane: fiatFxRateLane,
+                    inserted: 0,
+                    ...(result.reasonCode === null
+                      ? {}
+                      : { reasonCode: result.reasonCode }),
+                  },
+                  "LOOP fiat fx rate refresh failed",
+                );
+              }
             },
             onInfrastructureBackoff: (event) => {
               options.logger.warn(

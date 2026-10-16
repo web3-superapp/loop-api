@@ -141,16 +141,45 @@ export const walletNetWorthHistoryResourceSchema = {
     },
     fiat: {
       description:
-        "current.netWorthUsd at the fixed FIAT_CNY_PER_USD rate (2 places); null when no rate is configured.",
+        "Decision 0149: current.netWorthUsd in CNY at the latest recorded reference rate (amount 2 places, half away from zero) with its provenance; null when no rate has ever been recorded or the rate read failed.",
       anyOf: [
         {
           type: "object",
           additionalProperties: false,
-          required: ["currency", "rate", "amount"],
+          required: [
+            "currency",
+            "rate",
+            "amount",
+            "source",
+            "asOf",
+            "fetchedAt",
+            "quality",
+          ],
           properties: {
             currency: { type: "string", const: "CNY" },
-            rate: usdSchema,
-            amount: usdSchema,
+            rate: { ...usdSchema, description: "CNY per 1 USD." },
+            amount: {
+              ...usdSchema,
+              description: "CNY as an exact decimal string (2 places).",
+            },
+            source: {
+              type: "string",
+              pattern: "^[a-z]{2,16}$",
+              description:
+                "Rate provider key (ecb = European Central Bank reference rate).",
+            },
+            asOf: {
+              type: "string",
+              format: "date",
+              description: "The provider's observation date.",
+            },
+            fetchedAt: { type: "string", format: "date-time" },
+            quality: {
+              type: "string",
+              enum: ["fresh", "stale"],
+              description:
+                "fresh: fetched within the last 26 hours; stale: older, or the provider's date was already more than five days old at fetch time.",
+            },
           },
         },
         { type: "null" },

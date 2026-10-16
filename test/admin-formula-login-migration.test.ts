@@ -54,9 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe(
-      "000087_mining_power_visibility_default_everyone",
-    );
+    expect(latestMigrationName).toBe("000088_fiat_fx_rates");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

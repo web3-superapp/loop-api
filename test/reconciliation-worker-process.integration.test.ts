@@ -44,6 +44,8 @@ function workerEnvironment(): NodeJS.ProcessEnv {
     DATABASE_URL: databaseUrl,
     HYPERLIQUID_RECONCILIATION_READS_ENABLED: "false",
     HYPERLIQUID_SPOT_RECONCILIATION_READS_ENABLED: "false",
+    // Decision 0149: no outbound FX fetch from the test process.
+    FIAT_FX_RATE_ENABLED: "false",
   };
 }
 

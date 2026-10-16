@@ -67,6 +67,14 @@ describe("loadReconciliationWorkerConfig", () => {
       squareFeedIngest: { intervalMs: 60_000, usd1Address: null },
       // Decision 0145: the hourly net worth snapshot lane is on by default.
       walletNetWorthSnapshot: { intervalMs: 3_600_000, batchSize: 200 },
+      fiatFxRate: {
+        providerUrl:
+          "https://api.frankfurter.dev/v2/providers/ecb/rate/USD/CNY",
+        source: "ecb",
+        base: "USD",
+        quote: "CNY",
+        refreshMs: 3_600_000,
+      },
       hyperliquidReconciliationReads: null,
       hyperliquidSpotReconciliationReads: null,
       spotAgentLifecycleMaintenanceEnabled: true,

@@ -1,5 +1,4 @@
-export const latestMigrationName =
-  "000087_mining_power_visibility_default_everyone";
+export const latestMigrationName = "000088_fiat_fx_rates";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -183,4 +182,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.square_posts",
   "public.square_post_likes",
   "public.wallet_networth_snapshots",
+  "public.fiat_fx_rates",
 ] as const);

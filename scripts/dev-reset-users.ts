@@ -235,6 +235,8 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     square_post_likes: "user",
     // Decision 0145: hourly net worth snapshots of the user's wallets
     wallet_networth_snapshots: "user",
+    // Decision 0149: reference FX rates, not user data.
+    fiat_fx_rates: "platform",
     // MEME
     meme_tokens: "mixed",
     meme_intents: "user",

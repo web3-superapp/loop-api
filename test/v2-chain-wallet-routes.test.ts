@@ -54,6 +54,7 @@ import type {
   WalletNetWorthSnapshotRecord,
   WalletNetWorthSnapshotRepository,
 } from "../src/database/wallet-networth-snapshot-repository.js";
+import type { FiatFxRateRepository } from "../src/database/fiat-fx-rate-repository.js";
 import type {
   PrivyBalanceReader,
   PrivyWalletReader,
@@ -2420,6 +2421,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       snapshots: WalletNetWorthSnapshotRepository | undefined,
       overrides: Readonly<Record<string, string>> = {},
       facts: MarketFactService | undefined = marketFactsFake("fresh"),
+      fiatRates?: FiatFxRateRepository,
     ) {
       const dependencies = fakes();
       return createApp(
@@ -2430,6 +2432,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
             ...(snapshots === undefined
               ? {}
               : { walletNetWorthSnapshots: snapshots }),
+            ...(fiatRates === undefined ? {} : { fiatFxRates: fiatRates }),
           },
         },
         overrides,
@@ -2456,9 +2459,27 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
         },
       ];
       const fake = snapshotsFake({ points, baseline });
-      const { app } = await historyApp(fake.repository, {
-        FIAT_CNY_PER_USD: "7.1130",
-      });
+      const fetchedAt = new Date(Date.now() - 3_600_000).toISOString();
+      const readLatestRate = vi.fn(() =>
+        Promise.resolve({
+          base: "USD",
+          quote: "CNY",
+          rate: "7.113",
+          source: "ecb",
+          providerAsOf: "2026-10-15",
+          fetchedAt,
+          quality: "fresh" as const,
+        }),
+      );
+      const { app } = await historyApp(
+        fake.repository,
+        {},
+        marketFactsFake("fresh"),
+        {
+          recordRate: vi.fn(() => Promise.resolve()),
+          readLatest: readLatestRate,
+        },
+      );
       const response = await app.inject({
         method: "GET",
         url: historyUrl("7d"),
@@ -2480,13 +2501,49 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
         change24h: { usd: "352.815", pct: "5.8803", baselineAt: baseline.at },
         high: { netWorthUsd: "6500", at: points[0]?.at },
         low: { netWorthUsd: "6100.5", at: points[1]?.at },
-        fiat: { currency: "CNY", rate: "7.113", amount: "45187.57" },
+        fiat: {
+          currency: "CNY",
+          rate: "7.113",
+          amount: "45187.57",
+          source: "ecb",
+          asOf: "2026-10-15",
+          fetchedAt,
+          quality: "fresh",
+        },
         source: "dexscreener",
         contractVersion: "2.0",
       });
       expect(fake.readDownsampled).toHaveBeenCalledWith(
         expect.objectContaining({ bucketSeconds: 14_400, limit: 120 }),
       );
+      expect(readLatestRate).toHaveBeenCalledWith({
+        base: "USD",
+        quote: "CNY",
+      });
+    });
+
+    it("publishes fiat null when the rate read fails, without failing the history", async () => {
+      const { app } = await historyApp(
+        snapshotsFake().repository,
+        {},
+        marketFactsFake("fresh"),
+        {
+          recordRate: vi.fn(() => Promise.resolve()),
+          readLatest: vi.fn(() =>
+            Promise.reject(new Error("relation does not exist")),
+          ),
+        },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: historyUrl("1d"),
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        current: { netWorthUsd: "6352.815" },
+        fiat: null,
+      });
     });
 
     it("answers current alone, without a 24 h change or fiat, before the first snapshot", async () => {

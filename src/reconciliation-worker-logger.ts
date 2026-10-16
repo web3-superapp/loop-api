@@ -52,6 +52,8 @@ const indexerLanes = new Set([
   "launch2_dynamic_poke",
   // Decision 0134: the read-only chain guard.
   "chain_guard",
+  // Decision 0149: the fiat FX reference rate.
+  "fiat_fx_rate",
 ]);
 const chainGuardKindSet: ReadonlySet<string> = new Set(chainGuardIncidentKinds);
 const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
@@ -155,6 +157,9 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP square feed ingest wrote event posts"
   | "LOOP wallet net worth snapshot lane stays idle"
   | "LOOP wallet net worth snapshot pass finished"
+  | "LOOP fiat fx rate lane stays idle"
+  | "LOOP fiat fx rate refreshed"
+  | "LOOP fiat fx rate refresh failed"
   | "LOOP chain guard lane stays idle"
   | "LOOP chain guard lane enabled"
   | "LOOP chain guard lane is limited"

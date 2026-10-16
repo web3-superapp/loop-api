@@ -64,9 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe(
-      "000087_mining_power_visibility_default_everyone",
-    );
+    expect(latestMigrationName).toBe("000088_fiat_fx_rates");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

@@ -375,7 +375,7 @@ describe("Decision 0145 history service edges", () => {
           unavailableCount: 1,
           asOf: "2026-10-15T12:00:00.000Z",
         }),
-      fiatCnyPerUsd: null,
+      fiatRates: null,
       now: () => new Date("2026-10-15T12:10:00.000Z"),
     });
     const result = await service.getHistory({
@@ -399,7 +399,7 @@ describe("Decision 0145 history service edges", () => {
       wallets,
       snapshots: null,
       measure: null,
-      fiatCnyPerUsd: null,
+      fiatRates: null,
     });
     await expect(
       service.getHistory({
@@ -428,20 +428,9 @@ describe("Decision 0145 configuration", () => {
       "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
   };
 
-  it("parses FIAT_CNY_PER_USD into a canonical positive decimal or null", () => {
-    expect(loadConfig(appBase).fiatCnyPerUsd).toBeNull();
-    expect(
-      loadConfig({ ...appBase, FIAT_CNY_PER_USD: "" }).fiatCnyPerUsd,
-    ).toBeNull();
-    expect(
-      loadConfig({ ...appBase, FIAT_CNY_PER_USD: "7.1130" }).fiatCnyPerUsd,
-    ).toBe("7.113");
-    for (const bad of ["0", "-7", "7.123456789", "1000", "7e0", "abc"]) {
-      expect(
-        () => loadConfig({ ...appBase, FIAT_CNY_PER_USD: bad }),
-        bad,
-      ).toThrow(/FIAT_CNY_PER_USD/);
-    }
+  it("no longer reads FIAT_CNY_PER_USD (Decision 0149): a leftover value is ignored", () => {
+    const config = loadConfig({ ...appBase, FIAT_CNY_PER_USD: "not-a-rate" });
+    expect(config).not.toHaveProperty("fiatCnyPerUsd");
   });
 
   it("turns the lane off and bounds its interval and batch", () => {

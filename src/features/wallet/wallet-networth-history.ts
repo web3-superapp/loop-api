@@ -6,6 +6,10 @@ import type {
   AccountWalletRepository,
 } from "../../database/account-wallet-repository.js";
 import type {
+  FiatFxRateRecord,
+  FiatFxRateRepository,
+} from "../../database/fiat-fx-rate-repository.js";
+import type {
   WalletNetWorthQuality,
   WalletNetWorthSnapshotRecord,
   WalletNetWorthSnapshotRepository,
@@ -99,15 +103,29 @@ export interface WalletNetWorthHistoryResource {
   } | null;
   readonly high: { readonly at: string; readonly netWorthUsd: string } | null;
   readonly low: { readonly at: string; readonly netWorthUsd: string } | null;
-  readonly fiat: {
-    readonly currency: "CNY";
-    readonly rate: string;
-    readonly amount: string;
-  } | null;
+  readonly fiat: WalletNetWorthFiat | null;
   readonly source: "dexscreener";
   readonly observedAt: string;
   readonly contractVersion: typeof v2ContractVersion;
 }
+
+/** Decision 0149: the CNY line with the rate's provenance. */
+export interface WalletNetWorthFiat {
+  readonly currency: "CNY";
+  /** CNY per USD, decimal string. */
+  readonly rate: string;
+  /** `current.netWorthUsd × rate`, 2 places, half away from zero. */
+  readonly amount: string;
+  /** Provider key, e.g. `ecb`. */
+  readonly source: string;
+  /** The provider's observation date, `YYYY-MM-DD`. */
+  readonly asOf: string;
+  readonly fetchedAt: string;
+  readonly quality: "fresh" | "stale";
+}
+
+/** A rate fetched longer ago than this is `stale` (Decision 0149 §3). */
+export const walletNetWorthFiatFreshMs = 26 * 3_600_000;
 
 export interface WalletNetWorthHistoryService {
   getHistory(input: {
@@ -133,8 +151,11 @@ export interface CreateWalletNetWorthHistoryServiceInput {
         signal: AbortSignal,
       ) => Promise<WalletNetWorthMeasurement | null>)
     | null;
-  /** FIAT_CNY_PER_USD as a canonical positive decimal, or null. */
-  readonly fiatCnyPerUsd: string | null;
+  /**
+   * Decision 0149: the `fiat_fx_rates` reader; `null` (not composed), no
+   * row, or a failed read all publish `fiat: null`.
+   */
+  readonly fiatRates: Pick<FiatFxRateRepository, "readLatest"> | null;
   readonly now?: () => Date;
 }
 
@@ -184,6 +205,14 @@ export function createWalletNetWorthHistoryService(
         observedAt.getTime() - policy.windowMs,
       ).toISOString();
 
+      const fiatRates = input.fiatRates;
+      const fiatPending: Promise<FiatFxRateRecord | null> =
+        fiatRates === null
+          ? Promise.resolve(null)
+          : fiatRates
+              .readLatest({ base: "USD", quote: "CNY" })
+              .catch(() => null);
+
       const measure = input.measure;
       const livePending: Promise<WalletNetWorthMeasurement | null> =
         measure === null
@@ -213,10 +242,11 @@ export function createWalletNetWorthHistoryService(
         ]);
       } catch {
         void livePending.catch(() => undefined);
+        void fiatPending.catch(() => undefined);
         throw unavailable(walletNetWorthHistoryReasonCodes.historyUnavailable);
       }
 
-      const live = await livePending;
+      const [live, fiatRate] = await Promise.all([livePending, fiatPending]);
       const current =
         live !== null
           ? Object.freeze({
@@ -272,25 +302,40 @@ export function createWalletNetWorthHistoryService(
           baseline === null ? null : change(current.netWorthUsd, baseline),
         high: pickExtreme(extremes.high, current, "high"),
         low: pickExtreme(extremes.low, current, "low"),
-        fiat:
-          input.fiatCnyPerUsd === null
-            ? null
-            : Object.freeze({
-                currency: "CNY" as const,
-                rate: input.fiatCnyPerUsd,
-                amount: roundHalfAwayFromZero(
-                  multiplyDecimalStrings(
-                    current.netWorthUsd,
-                    input.fiatCnyPerUsd,
-                  ),
-                  walletNetWorthFiatDigits,
-                ),
-              }),
+        fiat: projectFiat(current.netWorthUsd, fiatRate, observedAt),
         source: "dexscreener" as const,
         observedAt: observedAt.toISOString(),
         contractVersion: v2ContractVersion,
       });
     },
+  });
+}
+
+/** Decision 0149 §3: the CNY line, or null without a recorded rate. */
+export function projectFiat(
+  netWorthUsd: string,
+  rate: FiatFxRateRecord | null,
+  observedAt: Date,
+): WalletNetWorthFiat | null {
+  if (rate === null) {
+    return null;
+  }
+  const fetchedMs = Date.parse(rate.fetchedAt);
+  const fresh =
+    rate.quality === "fresh" &&
+    Number.isFinite(fetchedMs) &&
+    observedAt.getTime() - fetchedMs <= walletNetWorthFiatFreshMs;
+  return Object.freeze({
+    currency: "CNY" as const,
+    rate: rate.rate,
+    amount: roundHalfAwayFromZero(
+      multiplyDecimalStrings(netWorthUsd, rate.rate),
+      walletNetWorthFiatDigits,
+    ),
+    source: rate.source,
+    asOf: rate.providerAsOf,
+    fetchedAt: rate.fetchedAt,
+    quality: fresh ? ("fresh" as const) : ("stale" as const),
   });
 }
 

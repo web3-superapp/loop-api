@@ -1837,7 +1837,7 @@ export async function buildApp(
                 prices,
               });
             },
-      fiatCnyPerUsd: config.fiatCnyPerUsd,
+      fiatRates: database.fiatFxRates ?? null,
       ...(options.walletNetWorthNow === undefined
         ? {}
         : { now: options.walletNetWorthNow }),

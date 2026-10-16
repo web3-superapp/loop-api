@@ -792,8 +792,6 @@ const environmentSchema = z
     BSC_WRITE_CANARY_DAILY_MAX_USD: optionalCredential(32),
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
-    // Decision 0145: fixed CNY per USD rate for the net worth history.
-    FIAT_CNY_PER_USD: optionalCredential(32),
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     PASSKEY_ANDROID_PACKAGE: optionalCredential(255),
     PASSKEY_ANDROID_CERT_SHA256: optionalCredential(4_096),
@@ -1202,6 +1200,10 @@ const reconciliationWorkerEnvironmentSchema = z
       86_400_000,
     ),
     WALLET_NETWORTH_SNAPSHOT_BATCH: positiveIntegerString(1, 1_000),
+    // Decision 0149: the fiat_fx_rate lane, default on.
+    FIAT_FX_RATE_ENABLED: booleanString,
+    FIAT_FX_PROVIDER_URL: z.string().trim().min(1).max(512),
+    FIAT_FX_REFRESH_SECONDS: positiveIntegerString(60, 86_400),
     BSC_USD1_TOKEN_ADDRESS: optionalCredential(64),
     BSC_USD1_VERIFIED: booleanString,
     WALLET_INTENT_RECONCILE_ENABLED: booleanString,
@@ -1768,12 +1770,6 @@ export interface AppConfig {
    */
   readonly chainGuardEnabled?: boolean;
   readonly walletGasReserve: WalletGasReserveConfig;
-  /**
-   * Decision 0145: `FIAT_CNY_PER_USD`, a positive decimal (at most 8
-   * fraction digits, below 1000) in canonical form; null when unset, and
-   * the net worth history then publishes `fiat: null`.
-   */
-  readonly fiatCnyPerUsd: string | null;
   /** Passkey association files published at `/.well-known` (Decision 0063). */
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
   /** Universal Links / App Links for `/u/{loopId}` (Decision 0090). */
@@ -1988,6 +1984,20 @@ export interface ReconciliationWorkerConfig {
   readonly walletNetWorthSnapshot?: {
     readonly intervalMs: number;
     readonly batchSize: number;
+  } | null;
+  /**
+   * Decision 0149 `fiat_fx_rate` lane (`FIAT_FX_RATE_ENABLED`, default
+   * true; `FIAT_FX_PROVIDER_URL`, default the ECB reference rate via
+   * Frankfurter; `FIAT_FX_REFRESH_SECONDS`, default 3600, 60–86 400).
+   * Absent or null keeps it off.
+   */
+  readonly fiatFxRate?: {
+    readonly providerUrl: string;
+    /** Provider key from the URL, lower case (`ecb`). */
+    readonly source: string;
+    readonly base: "USD";
+    readonly quote: "CNY";
+    readonly refreshMs: number;
   } | null;
   /**
    * `market_sparkline_warm` lane (Decision 0074); default on. It only ever
@@ -3225,25 +3235,43 @@ function parseWalletGasReserve(value: string): WalletGasReserveConfig {
   });
 }
 
-/** Decision 0145: `FIAT_CNY_PER_USD`, canonical positive decimal or null. */
-function parseFiatCnyPerUsd(value: string | undefined): string | null {
-  if (value === undefined) {
-    return null;
+/** Decision 0149: default fiat FX provider (ECB reference rate via Frankfurter). */
+export const defaultFiatFxProviderUrl =
+  "https://api.frankfurter.dev/v2/providers/ecb/rate/USD/CNY";
+
+/**
+ * Decision 0149: `FIAT_FX_PROVIDER_URL` must be https and name one provider
+ * (`/providers/{key}/`), whose key becomes the published `source`.
+ */
+function parseFiatFxProviderUrl(value: string): {
+  readonly providerUrl: string;
+  readonly source: string;
+} {
+  let url: URL | null;
+  try {
+    url = new URL(value);
+  } catch {
+    url = null;
   }
-  const match = /^(0|[1-9][0-9]{0,2})(?:\.([0-9]{1,8}))?$/.exec(value);
-  const fraction = (match?.[2] ?? "").replace(/0+$/, "");
-  const canonical =
-    match === null
+  const source =
+    url === null
       ? null
-      : fraction.length === 0
-        ? (match[1] ?? "0")
-        : `${match[1] ?? "0"}.${fraction}`;
-  if (canonical === null || /^0(\.0*)?$/.test(canonical)) {
+      : (/\/providers\/([A-Za-z]{2,16})\//.exec(url.pathname)?.[1] ?? null);
+  if (
+    url === null ||
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    source === null
+  ) {
     throw new ConfigurationError([
-      "FIAT_CNY_PER_USD: must be a positive decimal below 1000 with at most 8 fraction digits",
+      "FIAT_FX_PROVIDER_URL: must be an https URL naming one provider (/providers/{key}/)",
     ]);
   }
-  return canonical;
+  return Object.freeze({
+    providerUrl: url.toString(),
+    source: source.toLowerCase(),
+  });
 }
 
 export const defaultPasskeyAndroidPackage = "com.cywd.loop";
@@ -3818,7 +3846,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["BSC_WRITE_CANARY_DAILY_MAX_USD"],
     LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
-    FIAT_CNY_PER_USD: environment["FIAT_CNY_PER_USD"],
     MINING_MOCK_HOLDINGS_ENABLED:
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
     PASSKEY_ANDROID_PACKAGE:
@@ -4100,7 +4127,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     chainGuardAlerts: parseChainGuardAlertConfig(environment),
     chainGuardEnabled: parseChainGuardEnabled(environment),
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
-    fiatCnyPerUsd: parseFiatCnyPerUsd(parsed.data.FIAT_CNY_PER_USD),
     passkeyRelyingParty,
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
     bscWrites: parseBscWriteConfig(parsed.data),
@@ -4221,6 +4247,10 @@ export function loadReconciliationWorkerConfig(
       environment["WALLET_NETWORTH_SNAPSHOT_INTERVAL_MS"] ?? "3600000",
     WALLET_NETWORTH_SNAPSHOT_BATCH:
       environment["WALLET_NETWORTH_SNAPSHOT_BATCH"] ?? "200",
+    FIAT_FX_RATE_ENABLED: environment["FIAT_FX_RATE_ENABLED"] ?? "true",
+    FIAT_FX_PROVIDER_URL:
+      environment["FIAT_FX_PROVIDER_URL"] ?? defaultFiatFxProviderUrl,
+    FIAT_FX_REFRESH_SECONDS: environment["FIAT_FX_REFRESH_SECONDS"] ?? "3600",
     COMMUNITY_MEMBER_BUY_FEED_ENABLED:
       environment["COMMUNITY_MEMBER_BUY_FEED_ENABLED"] ?? "true",
     COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS:
@@ -4457,6 +4487,14 @@ export function loadReconciliationWorkerConfig(
       ? Object.freeze({
           intervalMs: parsed.data.WALLET_NETWORTH_SNAPSHOT_INTERVAL_MS,
           batchSize: parsed.data.WALLET_NETWORTH_SNAPSHOT_BATCH,
+        })
+      : null,
+    fiatFxRate: parsed.data.FIAT_FX_RATE_ENABLED
+      ? Object.freeze({
+          ...parseFiatFxProviderUrl(parsed.data.FIAT_FX_PROVIDER_URL),
+          base: "USD",
+          quote: "CNY",
+          refreshMs: parsed.data.FIAT_FX_REFRESH_SECONDS * 1_000,
         })
       : null,
     squareFeedIngest: parsed.data.SQUARE_FEED_INGEST_ENABLED

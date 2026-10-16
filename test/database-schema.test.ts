@@ -206,6 +206,7 @@ describe("database schema readiness contract", () => {
       "public.square_posts",
       "public.square_post_likes",
       "public.wallet_networth_snapshots",
+      "public.fiat_fx_rates",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

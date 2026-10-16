@@ -368,7 +368,7 @@ describe("Decision 0145 wallet net worth history on PostgreSQL", () => {
                 asOf: now.toISOString(),
               },
         ),
-      fiatCnyPerUsd: "7.1",
+      fiatRates: null,
       now: () => now,
     });
     const read = (range: string) =>
@@ -388,7 +388,7 @@ describe("Decision 0145 wallet net worth history on PostgreSQL", () => {
       change24h: null,
       high: { netWorthUsd: "150" },
       low: { netWorthUsd: "150" },
-      fiat: { currency: "CNY", rate: "7.1", amount: "1065" },
+      fiat: null,
       source: "dexscreener",
       contractVersion: "2.0",
     });
@@ -519,7 +519,7 @@ describe("Decision 0145 wallet net worth history on PostgreSQL", () => {
       wallets: createPostgresAccountWalletRepository(pool),
       snapshots: createPostgresWalletNetWorthSnapshotRepository(pool),
       measure: null,
-      fiatCnyPerUsd: null,
+      fiatRates: null,
       now: () => now,
     });
     const result = await service.getHistory({
@@ -546,7 +546,7 @@ describe("Decision 0145 wallet net worth history on PostgreSQL", () => {
       wallets: createPostgresAccountWalletRepository(pool),
       snapshots: repository,
       measure: null,
-      fiatCnyPerUsd: null,
+      fiatRates: null,
     });
     const error = await rejection(
       service.getHistory({
