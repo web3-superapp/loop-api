@@ -47,6 +47,15 @@ export function launch2PriceAt(sold: bigint): bigint {
   return (virtualUsd1 * virtualMeme * launch2Wad) / (remaining * remaining);
 }
 
+/**
+ * Decision 0147: `p(s) = N / (Tv − s)²` with `N = Qv·Tv·WAD` — the two
+ * constants of `launch2PriceAt`, for SQL that prices many sold supplies
+ * at once (`div(N, (Tv − s)²)` equals `launch2PriceAt(s)`).
+ */
+export const launch2CurvePriceNumerator =
+  virtualUsd1 * virtualMeme * launch2Wad;
+export const launch2CurveVirtualMeme = virtualMeme;
+
 export function launch2FloorBps(amount: bigint, bps: bigint): bigint {
   return (amount * bps) / denominator;
 }

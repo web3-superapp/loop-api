@@ -322,6 +322,7 @@ import { registerDiscoveryRoutes } from "./routes/discovery.js";
 import { registerAgentAuthorizationRoutes } from "./routes/agent-authorizations.js";
 import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerPublicMemeRoutes } from "./routes/public-meme.js";
 import { registerWellKnownRoutes } from "./routes/well-known.js";
 import {
   createStreamUserIdentitySource,
@@ -527,7 +528,7 @@ function sendFrameworkJson(
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
-  readonly contractSurface?: "runtime" | "v1" | "v2" | "admin";
+  readonly contractSurface?: "runtime" | "v1" | "v2" | "admin" | "public";
   readonly database?: Database;
   /** Decision 0102: test seam for the console's MEME pause signer. */
   readonly memePauseSender?: MemePauseSender | null;
@@ -629,6 +630,11 @@ export interface BuildAppOptions {
   readonly memeContractAdapter?: MemeContractAdapter;
   /** Test seams for the MEME v2 read model (Decision 0114). */
   readonly launch2Service?: Launch2Service;
+  /** Decision 0147: test seams of the public MEME surface's rate limiter. */
+  readonly publicMeme?: {
+    readonly nowMs?: () => number;
+    readonly ratePerWindow?: number;
+  };
   readonly launch2Chain?: Launch2Chain | null;
   /** Decision 0124: test seam for the official-pool router reader. */
   readonly launch2PoolChain?: Launch2PoolChain | null;
@@ -790,6 +796,10 @@ export async function buildApp(
   const contractSurface = options.contractSurface ?? "runtime";
   const includeV1 = contractSurface === "runtime" || contractSurface === "v1";
   const includeV2 = contractSurface === "runtime" || contractSurface === "v2";
+  // Decision 0147: the public MEME page read surface has its own artifact
+  // (the V1 artifact is frozen byte-for-byte).
+  const includePublic =
+    contractSurface === "runtime" || contractSurface === "public";
   // Decision 0102: the console mounts only with all three ADMIN_* values.
   const adminMounted =
     (contractSurface === "runtime" || contractSurface === "admin") &&
@@ -1038,7 +1048,19 @@ export async function buildApp(
         "ERC-20 allowance inventory from indexed Approval events with live allowance() reads",
     },
   ] as const;
-  const runtimeOpenApiTags = [...v1OpenApiTags, v2OpenApiTags[1]] as const;
+  const publicOpenApiTags = [
+    { name: "health", description: "Process and dependency health" },
+    {
+      name: "public",
+      description:
+        "Decision 0147: unauthenticated, cross-origin read-only MEME page facts (no wallet, user, or viewer field)",
+    },
+  ] as const;
+  const runtimeOpenApiTags = [
+    ...v1OpenApiTags,
+    v2OpenApiTags[1],
+    publicOpenApiTags[1],
+  ] as const;
 
   const adminOpenApiTags = [
     { name: "admin-session", description: "Operator login and logout" },
@@ -1091,12 +1113,19 @@ export async function buildApp(
                 "Operator console management surface (Decisions 0102, 0109). Mounted only when ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are configured; every route except POST /admin/v1/session needs the loop_admin_session cookie. Decision 0109: individual accounts with one role each (platform_admin, reviewer, testnet_acceptor, auditor); every protected route checks the role's permission server-side (403 PERMISSION_DENIED); the ADMIN_USERNAME bootstrap administrator is a platform_admin and cannot approve or accept.",
               version: config.serviceVersion,
             }
-          : {
-              title: "LOOP API",
-              description:
-                "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
-              version: config.serviceVersion,
-            },
+          : contractSurface === "public"
+            ? {
+                title: "LOOP Public API",
+                description:
+                  "Decision 0147: unauthenticated, cross-origin, read-only facts for the public MEME web page. No Bearer token, no contract headers; Access-Control-Allow-Origin: * and Cache-Control: public, max-age=15 on a 200; per-IP rate limit; failures are { code, reasonCode }.",
+                version: config.serviceVersion,
+              }
+            : {
+                title: "LOOP API",
+                description:
+                  "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
+                version: config.serviceVersion,
+              },
       servers: [{ url: config.publicBaseUrl.replace(/\/$/, "") }],
       tags:
         contractSurface === "v1"
@@ -1105,10 +1134,12 @@ export async function buildApp(
             ? [...v2OpenApiTags]
             : contractSurface === "admin"
               ? [...adminOpenApiTags]
-              : [...runtimeOpenApiTags],
+              : contractSurface === "public"
+                ? [...publicOpenApiTags]
+                : [...runtimeOpenApiTags],
       components: {
         securitySchemes: {
-          ...(contractSurface === "admin"
+          ...(contractSurface === "admin" || contractSurface === "public"
             ? {}
             : {
                 privyBearer: {
@@ -2589,6 +2620,19 @@ export async function buildApp(
   // contract surface: the platform credential managers fetch these files from
   // the API origin itself, and they are neither a V1 nor a V2 business route.
   registerWellKnownRoutes(app, config);
+  if (includePublic) {
+    // Decision 0147: the public MEME page read surface (no auth, CORS `*`),
+    // outside `/v2`; its own artifact `openapi/loop-public.v1.json`.
+    registerPublicMemeRoutes(app, {
+      service: launch2Service,
+      ...(options.publicMeme?.nowMs === undefined
+        ? {}
+        : { nowMs: options.publicMeme.nowMs }),
+      ...(options.publicMeme?.ratePerWindow === undefined
+        ? {}
+        : { ratePerWindow: options.publicMeme.ratePerWindow }),
+    });
+  }
   if (includeV1) {
     registerBootstrapRoute(
       app,

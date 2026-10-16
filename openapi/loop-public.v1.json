@@ -1,0 +1,1249 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LOOP Public API",
+    "description": "Decision 0147: unauthenticated, cross-origin, read-only facts for the public MEME web page. No Bearer token, no contract headers; Access-Control-Allow-Origin: * and Cache-Control: public, max-age=15 on a 200; per-IP rate limit; failures are { code, reasonCode }.",
+    "version": "0.1.0"
+  },
+  "components": { "securitySchemes": {}, "schemas": {} },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "summary": "Report whether the HTTP process is alive",
+        "tags": ["health"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "service", "version"],
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"] },
+                    "service": { "type": "string", "enum": ["loop-api"] },
+                    "version": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["request_timeout"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "summary": "Report whether required infrastructure is reachable",
+        "tags": ["health"],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "checks"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ready", "not_ready"]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["database"],
+                      "properties": {
+                        "database": { "type": "string", "enum": ["up", "down"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "message", "request_id"],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["internal_error"] },
+                    "message": { "type": "string", "minLength": 1 },
+                    "request_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "checks"],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["ready", "not_ready"]
+                        },
+                        "checks": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["database"],
+                          "properties": {
+                            "database": {
+                              "type": "string",
+                              "enum": ["up", "down"]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "headers": {
+                        "cache-control": {
+                          "type": "string",
+                          "description": "Sensitive and operational responses are never cached",
+                          "enum": ["no-store"]
+                        },
+                        "x-request-id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Server-generated request correlation ID"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": ["code", "message", "request_id"],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["request_timeout"]
+                        },
+                        "message": { "type": "string", "minLength": 1 },
+                        "request_id": { "type": "string", "format": "uuid" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/v1/meme": {
+      "get": {
+        "operationId": "listPublicMemes",
+        "summary": "Public MEME list for the MEME web page",
+        "tags": ["public"],
+        "description": "Decision 0147. No authentication, no contract headers; CORS `*`, `Cache-Control: public, max-age=15`, per-IP rate limit. Activated launch2 instances, newest first. stage: all (default) | graduated | curve (not graduated); limit 1–50 (default 50). dynamic: the LoopDynamic Hook's armed() and current dynamic sell tax (bps) for a graduated LoopDynamic instance, null otherwise. A row whose Hook read is unavailable keeps dynamic null and names the 503 reason in dynamicReasonCode (the detail of that instance answers the 503).",
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 16 },
+            "in": "query",
+            "name": "stage",
+            "required": false,
+            "description": "all (default) | graduated | curve"
+          },
+          {
+            "schema": { "type": "string", "maxLength": 8 },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "1–50, default 50"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "public, max-age=15" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["items", "generatedAt"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 50,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "instanceId",
+                          "name",
+                          "symbol",
+                          "logoUrl",
+                          "stage",
+                          "memeTokenAddress",
+                          "communityName",
+                          "lastPriceUsd1",
+                          "dynamic",
+                          "dynamicReasonCode"
+                        ],
+                        "properties": {
+                          "instanceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "name": { "type": "string", "minLength": 1 },
+                          "symbol": { "type": "string", "minLength": 1 },
+                          "logoUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2048
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "stage": {
+                            "type": "string",
+                            "enum": [
+                              "upcoming",
+                              "nft_sale",
+                              "snapshot_pending",
+                              "closed_no_holders",
+                              "priority",
+                              "public",
+                              "graduated",
+                              "paused"
+                            ]
+                          },
+                          "memeTokenAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$"
+                          },
+                          "communityName": {
+                            "anyOf": [
+                              { "type": "string", "minLength": 1 },
+                              { "type": "null" }
+                            ]
+                          },
+                          "lastPriceUsd1": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "dynamic": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["armed", "currentDynamicTaxBps"],
+                                "properties": {
+                                  "armed": { "type": "boolean" },
+                                  "currentDynamicTaxBps": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 10000
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "dynamicReasonCode": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Set (with dynamic null) when this graduated LoopDynamic row's Hook read is unavailable — the reason the detail answers with its 503. Null otherwise."
+                          }
+                        }
+                      }
+                    },
+                    "generatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST: PUBLIC_LIMIT_INVALID | PUBLIC_STAGE_INVALID | PUBLIC_CANDLE_INTERVAL_UNSUPPORTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "INVALID_REQUEST: PUBLIC_LIMIT_INVALID | PUBLIC_STAGE_INVALID | PUBLIC_CANDLE_INTERVAL_UNSUPPORTED"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/v1/meme/{instanceId}": {
+      "get": {
+        "operationId": "getPublicMeme",
+        "summary": "One MEME's public page facts",
+        "tags": ["public"],
+        "description": "Decision 0147. instance (identity, contracts, explorer, socials from the creator's saved links), the bound community's public profile (null when none), the indexed last price with its 24 h change, dynamic (graduated LoopDynamic only: the Hook read at one block — armed, current round, current dynamic tax, pending pot = carry + the round's dynamic fees, last closed round; null for OfficialTax or before graduation), totals (curve 10 % tax, pool base buy fee in MEME / base sell fee in USD1, dynamic fees, USD1 equivalent at the last price, rewards allocated / claimed, buyback ledger). Hook read failures answer 503 with the launch2 reason as is.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "instanceId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "public, max-age=15" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "instance",
+                    "community",
+                    "price",
+                    "dynamic",
+                    "totals",
+                    "generatedAt"
+                  ],
+                  "properties": {
+                    "instance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "instanceId",
+                        "name",
+                        "symbol",
+                        "logoUrl",
+                        "description",
+                        "stage",
+                        "graduatedAt",
+                        "createdAt",
+                        "memeTokenAddress",
+                        "hookAddress",
+                        "poolId",
+                        "escrowAddress",
+                        "chainId",
+                        "explorerBaseUrl",
+                        "socials"
+                      ],
+                      "properties": {
+                        "instanceId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                        },
+                        "name": { "type": "string", "minLength": 1 },
+                        "symbol": { "type": "string", "minLength": 1 },
+                        "logoUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2048
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "description": {
+                          "anyOf": [
+                            { "type": "string", "minLength": 1 },
+                            { "type": "null" }
+                          ]
+                        },
+                        "stage": {
+                          "type": "string",
+                          "enum": [
+                            "upcoming",
+                            "nft_sale",
+                            "snapshot_pending",
+                            "closed_no_holders",
+                            "priority",
+                            "public",
+                            "graduated",
+                            "paused"
+                          ]
+                        },
+                        "graduatedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "memeTokenAddress": {
+                          "type": "string",
+                          "pattern": "^0x[0-9a-f]{40}$"
+                        },
+                        "hookAddress": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "poolId": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "escrowAddress": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "chainId": {
+                          "type": "string",
+                          "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                        },
+                        "explorerBaseUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2048
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "socials": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["website", "x", "telegram"],
+                          "properties": {
+                            "website": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "x": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "telegram": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 2048
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "community": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "communityId",
+                            "name",
+                            "slogan",
+                            "description",
+                            "memberCount",
+                            "verified",
+                            "avatarUrl"
+                          ],
+                          "properties": {
+                            "communityId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "name": { "type": "string", "minLength": 1 },
+                            "slogan": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1 },
+                                { "type": "null" }
+                              ],
+                              "description": "First non-empty line of the community description, ≤ 60 code points (communities keep no separate tagline)."
+                            },
+                            "description": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1 },
+                                { "type": "null" }
+                              ]
+                            },
+                            "memberCount": { "type": "integer", "minimum": 0 },
+                            "verified": { "type": "boolean" },
+                            "avatarUrl": {
+                              "type": "null",
+                              "description": "Always null: community logos are App presets or authenticated media."
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "price": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["lastPriceUsd1", "change24hPct", "asOf"],
+                      "properties": {
+                        "lastPriceUsd1": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "change24hPct": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^-?(0|[1-9][0-9]{0,40})\\.[0-9]{2}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "asOf": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "dynamic": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "hookKind",
+                            "armed",
+                            "currentRound",
+                            "currentDynamicTaxBps",
+                            "maxDynamicFeeBps",
+                            "baseBuyFeeBps",
+                            "baseSellFeeBps",
+                            "pendingPotUsd1",
+                            "carryUsd1",
+                            "currentRoundDynamicFeesUsd1",
+                            "roundCloseRule",
+                            "lastClosedRound",
+                            "asOfBlock"
+                          ],
+                          "properties": {
+                            "hookKind": {
+                              "type": "string",
+                              "enum": ["loopDynamic"]
+                            },
+                            "armed": {
+                              "type": "boolean",
+                              "description": "The Hook's armed(): a reward round is active (悬挂状态开启)."
+                            },
+                            "currentRound": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "roundId",
+                                    "startCandle",
+                                    "openPriceUsd1",
+                                    "buyerCount",
+                                    "totalBuyWeightUsd1"
+                                  ],
+                                  "properties": {
+                                    "roundId": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "startCandle": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "openPriceUsd1": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                                      "description": "Open price of the current 5-minute candle: the round closes at the first candle that closes at or above its open (Decision 0144)."
+                                    },
+                                    "buyerCount": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    },
+                                    "totalBuyWeightUsd1": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "currentDynamicTaxBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "description": "Dynamic sell tax at the current price: min(drop, cap) in bps; 0 = base 2 % only."
+                            },
+                            "maxDynamicFeeBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            },
+                            "baseBuyFeeBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            },
+                            "baseSellFeeBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            },
+                            "pendingPotUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+                              "description": "carry + the armed round's dynamic fees (= dynamic-pool potUsd1). At close half goes to the round's buyers, half is carried."
+                            },
+                            "carryUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            "currentRoundDynamicFeesUsd1": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            "roundCloseRule": {
+                              "type": "string",
+                              "enum": ["closeAtOrAboveOpen", "closeAboveOpen"]
+                            },
+                            "lastClosedRound": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "roundId",
+                                    "closedAt",
+                                    "allocationUsd1",
+                                    "buyerCount"
+                                  ],
+                                  "properties": {
+                                    "roundId": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "closedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "allocationUsd1": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                    },
+                                    "buyerCount": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  }
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "asOfBlock": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "totals": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "curveTaxUsd1",
+                        "poolBaseBuyFeeMeme",
+                        "poolBaseSellFeeUsd1",
+                        "dynamicFeesUsd1",
+                        "totalTaxUsd1Equivalent",
+                        "rewardsAllocatedUsd1",
+                        "rewardsClaimedUsd1",
+                        "buyback"
+                      ],
+                      "properties": {
+                        "curveTaxUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "poolBaseBuyFeeMeme": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "poolBaseSellFeeUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "dynamicFeesUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "totalTaxUsd1Equivalent": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "rewardsAllocatedUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "rewardsClaimedUsd1": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                        },
+                        "buyback": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "executedCount",
+                                "spentUsd1",
+                                "boughtMeme",
+                                "escrowRemainingUsd1",
+                                "recipientAddress",
+                                "lastAt"
+                              ],
+                              "properties": {
+                                "executedCount": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "spentUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "boughtMeme": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "escrowRemainingUsd1": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                },
+                                "recipientAddress": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "lastAt": {
+                                  "anyOf": [
+                                    { "type": "string", "format": "date-time" },
+                                    { "type": "null" }
+                                  ]
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "generatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND | PUBLIC_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND | PUBLIC_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/v1/meme/{instanceId}/candles": {
+      "get": {
+        "operationId": "listPublicMemeCandles",
+        "summary": "One MEME's public 5-minute candles",
+        "tags": ["public"],
+        "description": "Decision 0147. interval: 5m only (any other value 400 PUBLIC_CANDLE_INTERVAL_UNSUPPORTED); limit 1–300 (default 300), newest buckets, oldest first. Graduated: source pool — a LoopDynamic Hook's own CandleClosed candles (open / close, high / low widened to the bucket's swaps, volume = swap USD1), else the indexed pool swaps; not graduated: source curve — curve trades priced at the curve's marginal price after each trade, volume = USD1 gross. Prices are USD1 per MEME.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "maxLength": 16 },
+            "in": "query",
+            "name": "interval",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "maxLength": 8 },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "path",
+            "name": "instanceId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "access-control-allow-origin": {
+                "schema": { "type": "string", "const": "*" }
+              },
+              "cache-control": {
+                "schema": { "type": "string", "const": "public, max-age=15" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["interval", "source", "candles", "generatedAt"],
+                  "properties": {
+                    "interval": { "type": "string", "enum": ["5m"] },
+                    "source": { "type": "string", "enum": ["pool", "curve"] },
+                    "candles": {
+                      "type": "array",
+                      "maxItems": 300,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["t", "o", "h", "l", "c", "v"],
+                        "properties": {
+                          "t": { "type": "string", "format": "date-time" },
+                          "o": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "h": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "l": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "c": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "v": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                              },
+                              { "type": "null" }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "generatedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST: PUBLIC_LIMIT_INVALID | PUBLIC_STAGE_INVALID | PUBLIC_CANDLE_INTERVAL_UNSUPPORTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "INVALID_REQUEST: PUBLIC_LIMIT_INVALID | PUBLIC_STAGE_INVALID | PUBLIC_CANDLE_INTERVAL_UNSUPPORTED"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND | PUBLIC_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND | PUBLIC_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "RATE_LIMITED: PUBLIC_RATE_LIMITED (Retry-After seconds)"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "reasonCode"],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "INVALID_REQUEST",
+                        "NOT_FOUND",
+                        "RATE_LIMITED",
+                        "CAPABILITY_UNAVAILABLE",
+                        "INTERNAL_ERROR"
+                      ]
+                    },
+                    "reasonCode": {
+                      "type": "string",
+                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                    }
+                  },
+                  "description": "CAPABILITY_UNAVAILABLE with the launch2 reason as is (LAUNCH2_REPOSITORY_UNAVAILABLE, LAUNCH2_CHAIN_READ_FAILED, LAUNCH2_DYNAMIC_ROUTER_NOT_CONFIGURED, LAUNCH2_DYNAMIC_ROUTER_CODE_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INDEXED, LAUNCH2_DYNAMIC_HOOK_MISMATCH, LAUNCH2_DYNAMIC_HOOK_NOT_INITIALIZED, V2_LAUNCH2_MODULE_DEFERRED, …); never a partial body."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [{ "url": "https://api-dev.quant-dinger.cc" }],
+  "tags": [
+    { "name": "health", "description": "Process and dependency health" },
+    {
+      "name": "public",
+      "description": "Decision 0147: unauthenticated, cross-origin read-only MEME page facts (no wallet, user, or viewer field)"
+    }
+  ]
+}

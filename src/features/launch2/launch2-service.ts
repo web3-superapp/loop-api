@@ -81,6 +81,7 @@ import {
   type Launch2PoolTradeRecord,
   type Launch2PoolTradeStats,
   type Launch2PositionRecord,
+  type Launch2PublicMemeFacts,
   type Launch2Repository,
   type Launch2TradeRecord,
   type Launch2ViewerChainState,
@@ -133,6 +134,21 @@ import {
   projectLaunch2Overview,
 } from "./launch2-overview.js";
 import { launch2ProjectProfileProjection } from "./launch2-project-profile.js";
+import {
+  launch2PublicCandleIntervals,
+  launch2PublicCandleMaximumLimit,
+  launch2PublicChangePct,
+  launch2PublicCurvePriceAt,
+  launch2PublicExplorerBaseUrl,
+  launch2PublicListDefaultLimit,
+  launch2PublicListMaximumLimit,
+  launch2PublicReasonCodes,
+  launch2PublicSlogan,
+  launch2PublicSocials,
+  launch2PublicStageFilters,
+  launch2PublicTotalTaxUsd1,
+  type Launch2PublicStageFilter,
+} from "./launch2-public.js";
 
 /**
  * Decision 0114: the `/v2/launch2/*` service. Lists and details come from
@@ -296,6 +312,19 @@ export interface Launch2Service {
     readonly instanceId: string;
     readonly body: unknown;
     readonly idempotencyKey: string;
+  }): Promise<Resource>;
+  /** Decision 0147: the public MEME page list (no principal, no viewer). */
+  listPublicMemes(input: {
+    readonly stage?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource>;
+  /** Decision 0147: one MEME's public page facts. */
+  getPublicMeme(input: { readonly instanceId: string }): Promise<Resource>;
+  /** Decision 0147: one MEME's public 5-minute candles. */
+  listPublicMemeCandles(input: {
+    readonly instanceId: string;
+    readonly interval?: unknown;
+    readonly limit?: unknown;
   }): Promise<Resource>;
 }
 
@@ -906,6 +935,9 @@ export function createUnavailableLaunch2Service(
     listDynamicRewards: fail,
     prepareDynamicClaim: fail,
     reportDynamicClaim: fail,
+    listPublicMemes: fail,
+    getPublicMeme: fail,
+    listPublicMemeCandles: fail,
   });
 }
 
@@ -2356,23 +2388,409 @@ export function createLaunch2Service(
     return BigInt(value);
   }
 
-  async function getDynamicPool(input: {
-    readonly principal: AuthenticatedLoopPrincipal;
+  // -------------------------------------------------------------------------
+  // Decision 0147: the public MEME page read surface (no principal)
+  // -------------------------------------------------------------------------
+
+  function publicInvalid(reasonCode: string): never {
+    throw V2ApiError.fromCode("INVALID_REQUEST", { reasonCode });
+  }
+
+  function publicLimit(value: unknown, fallback: number, maximum: number) {
+    if (value === undefined) return fallback;
+    const parsed =
+      typeof value === "string" && /^[1-9][0-9]{0,3}$/u.test(value)
+        ? Number(value)
+        : typeof value === "number"
+          ? value
+          : Number.NaN;
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+      publicInvalid(launch2PublicReasonCodes.limitInvalid);
+    }
+    return parsed;
+  }
+
+  async function publicFactsOf(
+    instanceIds: readonly string[],
+  ): Promise<ReadonlyMap<string, Launch2PublicMemeFacts>> {
+    const store = repository();
+    if (store.getPublicMemeFacts === undefined) {
+      return unavailableWith(launch2ReasonCodes.repositoryUnavailable);
+    }
+    const since = new Date(now().getTime() - 86_400_000).toISOString();
+    const rows = await store
+      .getPublicMemeFacts({ instanceIds, since })
+      .catch(translate);
+    const byId = new Map(rows.map((row) => [row.instanceId, row]));
+    for (const id of instanceIds) {
+      if (!byId.has(id)) {
+        return unavailableWith(launch2ReasonCodes.repositoryUnavailable);
+      }
+    }
+    return byId;
+  }
+
+  /** The indexed last price: the pool's last swap once graduated, else the curve. */
+  function publicLastPriceE18(record: Launch2InstanceRecord): bigint {
+    if (record.graduation !== null && record.pool.lastPriceE18 !== null) {
+      return BigInt(record.pool.lastPriceE18);
+    }
+    return BigInt(record.priceE18);
+  }
+
+  function publicHookAddress(record: Launch2InstanceRecord): string | null {
+    if (hookKindOf(record) === "loopDynamic") {
+      return record.dynamicPool?.hook.toLowerCase() ?? null;
+    }
+    return record.addresses.hook.toLowerCase();
+  }
+
+  function publicLiveDynamic(record: Launch2InstanceRecord): boolean {
+    return hookKindOf(record) === "loopDynamic" && record.graduation !== null;
+  }
+
+  function publicTaxBps(state: Launch2DynamicHookState): number {
+    return launch2DynamicWadBps(
+      launch2DynamicEffectiveRateWad(
+        state.currentDropWad,
+        state.maxDynamicFeeWad,
+      ),
+    );
+  }
+
+  async function listPublicMemes(input: {
+    readonly stage?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource> {
+    const filter =
+      input.stage === undefined
+        ? "all"
+        : typeof input.stage === "string" &&
+            (launch2PublicStageFilters as readonly string[]).includes(
+              input.stage,
+            )
+          ? (input.stage as Launch2PublicStageFilter)
+          : publicInvalid(launch2PublicReasonCodes.stageInvalid);
+    const limit = publicLimit(
+      input.limit,
+      launch2PublicListDefaultLimit,
+      launch2PublicListMaximumLimit,
+    );
+    const records = await repository()
+      .listInstances({
+        chainId: deps.chainId,
+        stage: filter === "graduated" ? "graduated" : null,
+        notStage: filter === "curve" ? "graduated" : null,
+        after: null,
+        limit,
+      })
+      .catch(translate);
+    // The stored stage can lag the clock; the derived one decides.
+    const at = nowSeconds();
+    const rows = records.filter((record) => {
+      const stage = stageOf(record, at).stage;
+      return filter === "all"
+        ? true
+        : filter === "graduated"
+          ? stage === "graduated"
+          : stage !== "graduated";
+    });
+    const facts = await publicFactsOf(rows.map((row) => row.instanceId));
+    // Live LoopDynamic Hook reads, four at a time. A row whose Hook read
+    // is unavailable (503) keeps `dynamic: null` and names the reason in
+    // `dynamicReasonCode` — never a guessed state; the detail stays 503.
+    const dynamics = new Map<string, Launch2DynamicHookState | string>();
+    const live = rows.filter(publicLiveDynamic);
+    for (let index = 0; index < live.length; index += 4) {
+      const reads = await Promise.all(
+        live.slice(index, index + 4).map(async (record) => {
+          try {
+            const read = await dynamicHookAt(record, null, true);
+            return { instanceId: record.instanceId, state: read.state };
+          } catch (error) {
+            const reason =
+              error instanceof V2ApiError && error.statusCode === 503
+                ? error.detailsSafe?.["reasonCode"]
+                : undefined;
+            if (typeof reason !== "string") throw error;
+            return { instanceId: record.instanceId, state: reason };
+          }
+        }),
+      );
+      for (const read of reads) dynamics.set(read.instanceId, read.state);
+    }
+    return Object.freeze({
+      items: rows.map((record) => {
+        const read = dynamics.get(record.instanceId) ?? null;
+        const state = typeof read === "string" ? null : read;
+        return Object.freeze({
+          instanceId: record.instanceId,
+          name: record.name,
+          symbol: record.ticker,
+          logoUrl: record.logoUrl,
+          stage: stageOf(record, at).stage,
+          memeTokenAddress: record.addresses.meme.toLowerCase(),
+          communityName: facts.get(record.instanceId)?.community?.name ?? null,
+          lastPriceUsd1: formatLaunch2Amount(publicLastPriceE18(record)),
+          dynamic:
+            state === null
+              ? null
+              : Object.freeze({
+                  armed: state.armed,
+                  currentDynamicTaxBps: publicTaxBps(state),
+                }),
+          dynamicReasonCode: typeof read === "string" ? read : null,
+        });
+      }),
+      generatedAt: now().toISOString(),
+    });
+  }
+
+  async function getPublicMeme(input: {
     readonly instanceId: string;
-    readonly walletId?: unknown;
   }): Promise<Resource> {
     const record = await visibleInstance(input.instanceId);
     const hookKind = hookKindOf(record);
-    if (hookKind !== "loopDynamic") {
-      return notApplicableDynamicPool(record, hookKind, "not_applicable");
+    const at = nowSeconds();
+    const facts = (await publicFactsOf([record.instanceId])).get(
+      record.instanceId,
+    ) as Launch2PublicMemeFacts;
+    const dynamicRead = publicLiveDynamic(record)
+      ? await dynamicPoolRead(record, hookKind, null)
+      : null;
+    const summary =
+      dynamicRead !== null
+        ? dynamicRead.summary
+        : hookKind === "loopDynamic"
+          ? await repository()
+              .dynamicRoundSummary(record.instanceId)
+              .catch(translate)
+          : null;
+    const profile = record.projectProfile;
+    const description =
+      typeof profile?.description === "string" &&
+      profile.description.trim().length > 0
+        ? profile.description.trim()
+        : null;
+    const lastPrice = publicLastPriceE18(record);
+    const referencePrice =
+      record.graduation !== null
+        ? facts.poolReferencePriceE18 === null
+          ? null
+          : BigInt(facts.poolReferencePriceE18)
+        : launch2PublicCurvePriceAt(BigInt(facts.curveSoldAtSince));
+    const priceAsOf =
+      record.graduation !== null && record.pool.lastTradeAt !== null
+        ? record.pool.lastTradeAt
+        : record.projectedAt;
+    const curveTax = BigInt(facts.curveTaxUsd1);
+    const buyFeeMeme =
+      summary !== null
+        ? BigInt(summary.buyFeesMeme)
+        : BigInt(facts.poolTaxMeme);
+    const baseSellFee =
+      summary !== null
+        ? BigInt(summary.baseSellFeesUsd1)
+        : BigInt(facts.poolTaxUsd1);
+    const dynamicFees = summary !== null ? BigInt(summary.extraFeesUsd1) : 0n;
+    const totalTax = launch2PublicTotalTaxUsd1({
+      usd1Parts: [curveTax, baseSellFee, dynamicFees],
+      memeFee: buyFeeMeme,
+      priceE18: lastPrice > 0n ? lastPrice : null,
+    });
+    const buyback = buybackSummaryOf(record, null);
+    let dynamic: Resource | null = null;
+    if (dynamicRead !== null) {
+      const { state, armedRound, buyers } = dynamicRead;
+      const round = state.currentRound;
+      const roundExtra = state.armed && round !== null ? round.extraFees : 0n;
+      const last = facts.lastClosedRound;
+      dynamic = Object.freeze({
+        hookKind: "loopDynamic",
+        armed: state.armed,
+        currentRound:
+          armedRound === null || round === null
+            ? null
+            : Object.freeze({
+                roundId: armedRound,
+                startCandle: round.startCandle.toString(10),
+                // The current 5-minute candle's open: the round closes at
+                // the first candle that closes at or above its open
+                // (Decision 0144).
+                openPriceUsd1: formatLaunch2Amount(
+                  launch2PoolPriceE18(
+                    state.candleOpenSqrtPriceX96,
+                    state.memeIsCurrency0,
+                  ),
+                ),
+                buyerCount: buyers?.buyerCount ?? 0,
+                totalBuyWeightUsd1: formatLaunch2Amount(round.totalBuyWeight),
+              }),
+        currentDynamicTaxBps: publicTaxBps(state),
+        maxDynamicFeeBps: launch2DynamicWadBps(state.maxDynamicFeeWad),
+        baseBuyFeeBps: launch2DynamicBps(state.buyFeePpm),
+        baseSellFeeBps: launch2DynamicBps(state.baseSellFeePpm),
+        pendingPotUsd1: formatLaunch2Amount(state.carry + roundExtra),
+        carryUsd1: formatLaunch2Amount(state.carry),
+        currentRoundDynamicFeesUsd1: formatLaunch2Amount(roundExtra),
+        roundCloseRule: state.roundCloseRule,
+        lastClosedRound:
+          last === null
+            ? null
+            : Object.freeze({
+                roundId: last.roundId,
+                closedAt: last.closedAt,
+                allocationUsd1: formatLaunch2Amount(
+                  BigInt(last.allocationUsd1),
+                ),
+                buyerCount: last.buyerCount,
+              }),
+        asOfBlock: state.blockNumber.toString(10),
+      });
     }
-    if (record.graduation === null) {
-      return notApplicableDynamicPool(record, hookKind, "not_graduated");
+    const community = facts.community;
+    return Object.freeze({
+      instance: Object.freeze({
+        instanceId: record.instanceId,
+        name: record.name,
+        symbol: record.ticker,
+        logoUrl: record.logoUrl,
+        description,
+        stage: stageOf(record, at).stage,
+        graduatedAt: record.graduation?.graduatedAt ?? null,
+        createdAt: record.activatedAt ?? record.registeredAt,
+        memeTokenAddress: record.addresses.meme.toLowerCase(),
+        hookAddress: publicHookAddress(record),
+        poolId: record.graduation?.poolId.toLowerCase() ?? null,
+        escrowAddress: record.addresses.escrow.toLowerCase(),
+        chainId: record.chainId,
+        explorerBaseUrl: launch2PublicExplorerBaseUrl(record.chainId),
+        socials: launch2PublicSocials(
+          launch2ProjectProfileProjection(profile).links,
+        ),
+      }),
+      community:
+        community === null
+          ? null
+          : Object.freeze({
+              communityId: community.communityId,
+              name: community.name,
+              slogan: launch2PublicSlogan(community.description),
+              description: community.description,
+              memberCount: community.memberCount,
+              verified: community.verified,
+              // Community logos are App presets or authenticated media.
+              avatarUrl: null,
+            }),
+      price: Object.freeze({
+        lastPriceUsd1: formatLaunch2Amount(lastPrice),
+        change24hPct: launch2PublicChangePct(lastPrice, referencePrice),
+        asOf: priceAsOf,
+      }),
+      dynamic,
+      totals: Object.freeze({
+        curveTaxUsd1: formatLaunch2Amount(curveTax),
+        poolBaseBuyFeeMeme: formatLaunch2Amount(buyFeeMeme),
+        poolBaseSellFeeUsd1: formatLaunch2Amount(baseSellFee),
+        dynamicFeesUsd1: formatLaunch2Amount(dynamicFees),
+        totalTaxUsd1Equivalent:
+          totalTax === null ? null : formatLaunch2Amount(totalTax),
+        rewardsAllocatedUsd1: formatLaunch2Amount(
+          summary === null ? 0n : BigInt(summary.allocatedUsd1),
+        ),
+        rewardsClaimedUsd1: formatLaunch2Amount(
+          summary === null ? 0n : BigInt(summary.claimedUsd1),
+        ),
+        buyback: Object.freeze({
+          executedCount: Number(record.buyback.count),
+          spentUsd1: buyback["totalUsd1"],
+          boughtMeme: buyback["totalMeme"],
+          escrowRemainingUsd1: buyback["escrowAvailableUsd1"],
+          recipientAddress: record.buybackRecipient.toLowerCase(),
+          lastAt: record.buyback.lastAt,
+        }),
+      }),
+      generatedAt: now().toISOString(),
+    });
+  }
+
+  async function listPublicMemeCandles(input: {
+    readonly instanceId: string;
+    readonly interval?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource> {
+    if (
+      input.interval !== undefined &&
+      !(launch2PublicCandleIntervals as readonly unknown[]).includes(
+        input.interval,
+      )
+    ) {
+      publicInvalid(launch2PublicReasonCodes.intervalUnsupported);
     }
-    // Decision 0132 (S168b follow-up): every dependency 503 after the
-    // registry read names the instance's Hook kind (`pool_hook_kind`, a
-    // database fact), so an App whose first read fails still knows to
-    // draw the LoopDynamic panel (exactIn only), never the OfficialTax one.
+    const limit = publicLimit(
+      input.limit,
+      launch2PublicCandleMaximumLimit,
+      launch2PublicCandleMaximumLimit,
+    );
+    const record = await visibleInstance(input.instanceId);
+    const store = repository();
+    if (store.listPublicCandles === undefined) {
+      return unavailableWith(launch2ReasonCodes.repositoryUnavailable);
+    }
+    const graduated = record.graduation !== null;
+    const read = (kind: "curve" | "pool" | "dynamic") =>
+      store.listPublicCandles!({
+        instanceId: record.instanceId,
+        source: { kind },
+        limit,
+      }).catch(translate);
+    let rows = await read(
+      !graduated
+        ? "curve"
+        : hookKindOf(record) === "loopDynamic"
+          ? "dynamic"
+          : "pool",
+    );
+    // A LoopDynamic pool with no orientation fact (no indexed swap) or no
+    // closed Hook candle yet falls back to the indexed swaps.
+    if (
+      graduated &&
+      rows.length === 0 &&
+      hookKindOf(record) === "loopDynamic"
+    ) {
+      rows = await read("pool");
+    }
+    return Object.freeze({
+      interval: "5m",
+      source: graduated ? "pool" : "curve",
+      candles: rows.map((row) =>
+        Object.freeze({
+          t: row.openTime,
+          o: formatLaunch2Amount(BigInt(row.openE18)),
+          h: formatLaunch2Amount(BigInt(row.highE18)),
+          l: formatLaunch2Amount(BigInt(row.lowE18)),
+          c: formatLaunch2Amount(BigInt(row.closeE18)),
+          v:
+            row.volumeUsd1 === null
+              ? null
+              : formatLaunch2Amount(BigInt(row.volumeUsd1)),
+        }),
+      ),
+      generatedAt: now().toISOString(),
+    });
+  }
+
+  /**
+   * Decision 0131 / 0146 / 0147: the bound Hook at one block plus the
+   * indexed round summary and the armed round's buyers — shared by the
+   * App's dynamic-pool read and the public MEME page. Every dependency 503
+   * names the instance's Hook kind (Decision 0132).
+   */
+  async function dynamicPoolRead(
+    record: Launch2InstanceRecord,
+    hookKind: Launch2PoolHookKind,
+    wallet: AccountWalletRecord | null,
+  ) {
     const withHookKind = (error: unknown): never => {
       if (error instanceof V2ApiError && error.statusCode === 503) {
         throw new V2ApiError({
@@ -2387,7 +2805,6 @@ export function createLaunch2Service(
       }
       throw error;
     };
-    const wallet = await walletFor(input.principal, input.walletId, false);
     const {
       chain: reader,
       hook,
@@ -2432,6 +2849,44 @@ export function createLaunch2Service(
               .catch(translate)
               .catch(withHookKind),
           );
+    return {
+      reader,
+      hook,
+      state,
+      summary,
+      armedRound,
+      buyers,
+      indexedViewerWeight,
+    };
+  }
+
+  async function getDynamicPool(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly walletId?: unknown;
+  }): Promise<Resource> {
+    const record = await visibleInstance(input.instanceId);
+    const hookKind = hookKindOf(record);
+    if (hookKind !== "loopDynamic") {
+      return notApplicableDynamicPool(record, hookKind, "not_applicable");
+    }
+    if (record.graduation === null) {
+      return notApplicableDynamicPool(record, hookKind, "not_graduated");
+    }
+    // Decision 0132 (S168b follow-up): every dependency 503 after the
+    // registry read names the instance's Hook kind (`pool_hook_kind`, a
+    // database fact), so an App whose first read fails still knows to
+    // draw the LoopDynamic panel (exactIn only), never the OfficialTax one.
+    const wallet = await walletFor(input.principal, input.walletId, false);
+    const {
+      reader,
+      hook,
+      state,
+      summary,
+      armedRound,
+      buyers,
+      indexedViewerWeight,
+    } = await dynamicPoolRead(record, hookKind, wallet);
     const roll = launch2DynamicRoll(state, state.blockTimestamp);
     const roundExtra =
       state.armed && state.currentRound !== null
@@ -3046,6 +3501,9 @@ export function createLaunch2Service(
     listDynamicRewards,
     prepareDynamicClaim,
     reportDynamicClaim,
+    listPublicMemes,
+    getPublicMeme,
+    listPublicMemeCandles,
 
     async listPoolTrades(input) {
       const record = await visibleInstance(input.instanceId);

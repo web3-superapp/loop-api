@@ -10,6 +10,8 @@ import {
   type Launch2Stage,
 } from "../features/launch2/launch2-contract.js";
 import {
+  launch2CurvePriceNumerator,
+  launch2CurveVirtualMeme,
   launch2PriceAt,
   launch2ReserveAt,
 } from "../features/launch2/launch2-curve-math.js";
@@ -38,6 +40,8 @@ import {
   type Launch2PoolTradeRecord,
   type Launch2PoolTradeStats,
   type Launch2PositionRecord,
+  type Launch2PublicCandleRecord,
+  type Launch2PublicMemeFacts,
   type Launch2Repository,
   type Launch2TradeRecord,
 } from "../features/launch2/launch2-ports.js";
@@ -1681,6 +1685,225 @@ const intentColumns = `
   created_at
 `;
 
+/**
+ * Decision 0147: the public MEME page's indexed facts, one row per listed
+ * instance (see `Launch2PublicMemeFacts`). Every sum skips reorged
+ * (`removed`) facts. The community is the non-rejected one whose
+ * `bound_asset_key` is `<chainId>:<meme>` (Decision 0125 binds it).
+ */
+const publicMemeFactsSql = `
+  select i.instance_id::text,
+    (select jsonb_build_object(
+        'communityId', c.community_id::text, 'name', c.name,
+        'description', c.description, 'memberCount', c.member_count,
+        'verified', c.verification_status = 'verified')
+      from public.communities c
+      where c.bound_asset_key = i.chain_id || ':' || lower(i.meme_address)
+        and c.verification_status <> 'rejected'
+      order by c.created_at, c.community_id
+      limit 1) as community,
+    t.curve_tax_usd1, t.curve_sold_at_since,
+    p.pool_tax_meme, p.pool_tax_usd1,
+    (select jsonb_build_object(
+        'roundId', r.round_id::text, 'closedAt', r.closed_at,
+        'allocationUsd1', r.allocation_usd1::text,
+        'buyerCount', r.buyer_count)
+      from public.launch2_dynamic_rounds r
+      where r.instance_id = i.instance_id and r.closed
+      order by r.round_id desc
+      limit 1) as last_closed_round,
+    coalesce(
+      (select s.price_e18 from public.launch2_pool_swaps s
+        where s.instance_id = i.instance_id and not s.removed
+          and s.swapped_at <= $2::timestamptz
+        order by s.block_number desc, s.log_index desc limit 1),
+      (select s.price_e18 from public.launch2_pool_swaps s
+        where s.instance_id = i.instance_id and not s.removed
+          and s.swapped_at > $2::timestamptz
+        order by s.block_number asc, s.log_index asc limit 1)
+    )::text as pool_reference_price_e18
+  from public.launch2_instances i
+  cross join lateral (
+    select coalesce(sum(tr.tax_usd1), 0)::text as curve_tax_usd1,
+      coalesce(sum(case when tr.side = 'buy' then tr.meme_amount
+          else -tr.meme_amount end)
+        filter (where tr.traded_at <= $2::timestamptz), 0)::text
+        as curve_sold_at_since
+    from public.launch2_trades tr
+    where tr.instance_id = i.instance_id and not tr.removed
+  ) t
+  cross join lateral (
+    select
+      coalesce(sum(s.tax_amount) filter (where s.tax_token = 'meme'), 0)::text
+        as pool_tax_meme,
+      coalesce(sum(s.tax_amount) filter (where s.tax_token = 'usd1'), 0)::text
+        as pool_tax_usd1
+    from public.launch2_pool_swaps s
+    where s.instance_id = i.instance_id and not s.removed
+  ) p
+  where i.instance_id = any($1::uuid[])
+`;
+
+function mapPublicMemeFacts(row: Row): Launch2PublicMemeFacts {
+  const community = row["community"] as Record<string, unknown> | null;
+  const round = row["last_closed_round"] as Record<string, unknown> | null;
+  const curveSold = text(row, "curve_sold_at_since");
+  if (curveSold.startsWith("-")) throw new Launch2RepositoryUnavailableError();
+  return Object.freeze({
+    instanceId: text(row, "instance_id"),
+    community:
+      community === null
+        ? null
+        : Object.freeze({
+            communityId: String(community["communityId"]),
+            name: String(community["name"]),
+            description:
+              typeof community["description"] === "string" &&
+              community["description"].length > 0
+                ? community["description"]
+                : null,
+            memberCount: Number(community["memberCount"]),
+            verified: community["verified"] === true,
+          }),
+    curveTaxUsd1: text(row, "curve_tax_usd1"),
+    poolTaxMeme: text(row, "pool_tax_meme"),
+    poolTaxUsd1: text(row, "pool_tax_usd1"),
+    lastClosedRound:
+      round === null
+        ? null
+        : Object.freeze({
+            roundId: String(round["roundId"]),
+            closedAt: new Date(String(round["closedAt"])).toISOString(),
+            allocationUsd1: String(round["allocationUsd1"]),
+            buyerCount: Number(round["buyerCount"]),
+          }),
+    poolReferencePriceE18: nullableText(row, "pool_reference_price_e18"),
+    curveSoldAtSince: curveSold,
+  });
+}
+
+/** `2^192`: `price = sqrtP² / 2^192` (currency1 per currency0). */
+const q192Sql = "6277101735386680763835789423207666416102355444464034512896";
+
+/**
+ * Decision 0147: 5-minute curve candles. Each trade is priced at the
+ * curve's marginal price after it, `div(N, (Tv − s)²)` (= `launch2PriceAt`)
+ * with `s` the running sold supply (Σ buy − sell MEME in log order);
+ * volume = USD1 gross (tax included). The newest `$2` buckets, oldest first.
+ */
+const publicCurveCandlesSql = `
+  with t as (
+    select traded_at, block_number, log_index, usd1_gross,
+      sum(case when side = 'buy' then meme_amount else -meme_amount end)
+        over (order by block_number, log_index
+          rows between unbounded preceding and current row) as sold
+    from public.launch2_trades
+    where instance_id = $1 and not removed
+  ),
+  priced as (
+    select to_timestamp(floor(extract(epoch from traded_at) / 300) * 300)
+        as open_time,
+      block_number, log_index, usd1_gross,
+      div($3::numeric, ($4::numeric - sold) * ($4::numeric - sold)) as price
+    from t
+    where sold >= 0 and sold < $4::numeric
+  ),
+  recent as (
+    select distinct open_time from priced order by open_time desc limit $2
+  )
+  select b.open_time,
+    (array_agg(b.price order by b.block_number, b.log_index))[1]::text as open_e18,
+    max(b.price)::text as high_e18,
+    min(b.price)::text as low_e18,
+    (array_agg(b.price order by b.block_number desc, b.log_index desc))[1]::text as close_e18,
+    sum(b.usd1_gross)::text as volume_usd1
+  from priced b
+  join recent r on r.open_time = b.open_time
+  group by b.open_time
+  order by b.open_time asc
+`;
+
+/**
+ * Decision 0147: 5-minute official-pool candles from the indexed
+ * PoolManager swaps (`price_e18` after each swap, USD1 per MEME; volume =
+ * the swap's USD1 leg). Buyback swaps are market swaps here too.
+ */
+const publicPoolCandlesSql = `
+  with b as (
+    select to_timestamp(floor(extract(epoch from swapped_at) / 300) * 300)
+        as open_time,
+      block_number, log_index, price_e18, usd1_amount
+    from public.launch2_pool_swaps
+    where instance_id = $1 and not removed
+  ),
+  recent as (
+    select distinct open_time from b order by open_time desc limit $2
+  )
+  select b.open_time,
+    (array_agg(b.price_e18 order by b.block_number, b.log_index))[1]::text as open_e18,
+    max(b.price_e18)::text as high_e18,
+    min(b.price_e18)::text as low_e18,
+    (array_agg(b.price_e18 order by b.block_number desc, b.log_index desc))[1]::text as close_e18,
+    sum(b.usd1_amount)::text as volume_usd1
+  from b
+  join recent r on r.open_time = b.open_time
+  group by b.open_time
+  order by b.open_time asc
+`;
+
+/**
+ * Decision 0147: a LoopDynamic Hook's own 5-minute candles
+ * (`CandleClosed`: open / close sqrt prices, the prices the round rules
+ * compare), priced with the pool orientation the lane stored on the
+ * instance's indexed `Swap` (`memeIsCurrency0`). High / low widen to the
+ * bucket's swap prices; volume = the bucket's swap USD1 (0 for a candle a
+ * poke closed). No orientation (no indexed swap) = no rows.
+ */
+const publicDynamicCandlesSql = `
+  with orient as (
+    select (payload ->> 'memeIsCurrency0') = 'true' as meme0
+    from public.launch2_events
+    where instance_id = $1 and event_name = 'Swap' and not removed
+      and payload ->> 'memeIsCurrency0' in ('true', 'false')
+    order by block_number desc, log_index desc
+    limit 1
+  ),
+  c as (
+    select distinct on (candle_id) candle_id,
+      open_sqrt_price_x96 as o, close_sqrt_price_x96 as cl
+    from public.launch2_dynamic_candles
+    where instance_id = $1 and not removed
+    order by candle_id desc, block_number desc, log_index desc
+  ),
+  recent as (
+    select * from c where o > 0 and cl > 0 order by candle_id desc limit $2
+  ),
+  priced as (
+    select r.candle_id,
+      case when x.meme0 then div(r.o * r.o * 1000000000000000000, ${q192Sql})
+        else div(${q192Sql} * 1000000000000000000, r.o * r.o) end as open_p,
+      case when x.meme0 then div(r.cl * r.cl * 1000000000000000000, ${q192Sql})
+        else div(${q192Sql} * 1000000000000000000, r.cl * r.cl) end as close_p
+    from recent r cross join orient x
+  )
+  select to_timestamp(p.candle_id * 300) as open_time,
+    p.open_p::text as open_e18,
+    greatest(p.open_p, p.close_p, sw.high)::text as high_e18,
+    least(p.open_p, p.close_p, sw.low)::text as low_e18,
+    p.close_p::text as close_e18,
+    sw.volume::text as volume_usd1
+  from priced p
+  cross join lateral (
+    select max(s.price_e18) as high, min(s.price_e18) as low,
+      coalesce(sum(s.usd1_amount), 0) as volume
+    from public.launch2_pool_swaps s
+    where s.instance_id = $1 and not s.removed
+      and s.swapped_at >= to_timestamp(p.candle_id * 300)
+      and s.swapped_at < to_timestamp((p.candle_id + 1) * 300)
+  ) sw
+  order by p.candle_id asc
+`;
+
 export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
   async function query<T extends Row>(
     textSql: string,
@@ -2239,6 +2462,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           where chain_id = $1
             and (activated_at is not null or hold_reason is not null)
             and ($2::text is null or stage = $2)
+            and ($6::text is null or stage <> $6)
             and ($3::timestamptz is null
               or (coalesce(activated_at, registered_at), instance_id) < ($3::timestamptz, $4::uuid))
           order by coalesce(activated_at, registered_at) desc, instance_id desc
@@ -2250,6 +2474,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           input.after?.activatedAt ?? null,
           input.after?.instanceId ?? null,
           input.limit,
+          input.notStage ?? null,
         ],
       );
       return rows.map(mapInstance);
@@ -2505,6 +2730,45 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
                     : null,
               }),
       });
+    },
+
+    // --- Decision 0147: the public MEME page read surface ---
+    async getPublicMemeFacts(input) {
+      if (input.instanceIds.length === 0) return [];
+      const rows = await query<Row>(publicMemeFactsSql, [
+        [...input.instanceIds],
+        input.since,
+      ]);
+      return rows.map(mapPublicMemeFacts);
+    },
+
+    async listPublicCandles(input) {
+      const sql =
+        input.source.kind === "curve"
+          ? publicCurveCandlesSql
+          : input.source.kind === "pool"
+            ? publicPoolCandlesSql
+            : publicDynamicCandlesSql;
+      const values =
+        input.source.kind === "curve"
+          ? [
+              input.instanceId,
+              input.limit,
+              launch2CurvePriceNumerator.toString(10),
+              launch2CurveVirtualMeme.toString(10),
+            ]
+          : [input.instanceId, input.limit];
+      const rows = await query<Row>(sql, values);
+      return rows.map((row): Launch2PublicCandleRecord =>
+        Object.freeze({
+          openTime: iso(row, "open_time"),
+          openE18: text(row, "open_e18"),
+          highE18: text(row, "high_e18"),
+          lowE18: text(row, "low_e18"),
+          closeE18: text(row, "close_e18"),
+          volumeUsd1: nullableText(row, "volume_usd1"),
+        }),
+      );
     },
 
     async listDynamicRewards(input) {

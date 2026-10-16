@@ -812,6 +812,59 @@ export interface Launch2DynamicRoundBuyerRecord {
   readonly lastCreditedAt: string;
 }
 
+/**
+ * Decision 0147: the public MEME page's indexed facts of one instance.
+ * Raw integer strings (18 decimals); null = no such fact.
+ */
+export interface Launch2PublicMemeFacts {
+  readonly instanceId: string;
+  /** The non-rejected community whose `bound_asset_key` is the MEME. */
+  readonly community: {
+    readonly communityId: string;
+    readonly name: string;
+    readonly description: string | null;
+    readonly memberCount: number;
+    readonly verified: boolean;
+  } | null;
+  /** Σ `launch2_trades.tax_usd1` (curve buy + sell tax, non-removed). */
+  readonly curveTaxUsd1: string;
+  /** Σ `launch2_pool_swaps.tax_amount` with `tax_token = 'meme'` (buys). */
+  readonly poolTaxMeme: string;
+  /** Σ `launch2_pool_swaps.tax_amount` with `tax_token = 'usd1'` (sells). */
+  readonly poolTaxUsd1: string;
+  /** The newest closed `launch2_dynamic_rounds` row. */
+  readonly lastClosedRound: {
+    readonly roundId: string;
+    readonly closedAt: string;
+    readonly allocationUsd1: string;
+    readonly buyerCount: number;
+  } | null;
+  /**
+   * The pool price 24 h ago: the last swap at or before `since`, else the
+   * first swap after it; null without a swap.
+   */
+  readonly poolReferencePriceE18: string | null;
+  /** Σ signed curve MEME (buy − sell) of trades at or before `since`. */
+  readonly curveSoldAtSince: string;
+}
+
+/** Decision 0147: where a public candle series comes from. */
+export type Launch2PublicCandleSource =
+  | { readonly kind: "curve" }
+  | { readonly kind: "pool" }
+  | { readonly kind: "dynamic" };
+
+/** One 5-minute candle (prices USD1 per MEME, raw 18 decimals). */
+export interface Launch2PublicCandleRecord {
+  readonly openTime: string;
+  readonly openE18: string;
+  readonly highE18: string;
+  readonly lowE18: string;
+  readonly closeE18: string;
+  /** USD1 traded in the bucket (raw); null when the source has none. */
+  readonly volumeUsd1: string | null;
+}
+
 /** Decision 0131: the projected round totals of one instance. */
 export interface Launch2DynamicRoundSummary {
   readonly roundCount: number;
@@ -1176,6 +1229,8 @@ export interface Launch2Repository {
   listInstances(input: {
     readonly chainId: string;
     readonly stage: Launch2Stage | null;
+    /** Decision 0147: every stored stage except this one (null = no filter). */
+    readonly notStage?: Launch2Stage | null;
     readonly after: {
       readonly activatedAt: string;
       readonly instanceId: string;
@@ -1286,6 +1341,24 @@ export interface Launch2Repository {
     readonly blockNumber: string;
     readonly claimedAt: string;
   } | null>;
+  // --- Decision 0147: the public MEME page read surface ---
+  /**
+   * One SQL over the indexed facts of each instance: the community bound
+   * to its MEME, the curve tax, the official pool's output tax, the last
+   * closed LoopDynamic round, and the 24 h reference price inputs. Absent
+   * (older fakes) = the public surface answers 503.
+   */
+  getPublicMemeFacts?(input: {
+    readonly instanceIds: readonly string[];
+    /** The 24 h reference cutoff (now − 24 h). */
+    readonly since: string;
+  }): Promise<readonly Launch2PublicMemeFacts[]>;
+  /** At most `limit` 5-minute candles, oldest first (see the source). */
+  listPublicCandles?(input: {
+    readonly instanceId: string;
+    readonly source: Launch2PublicCandleSource;
+    readonly limit: number;
+  }): Promise<readonly Launch2PublicCandleRecord[]>;
   // --- Intents ---
   createIntent(input: {
     readonly ownerUserId: string;

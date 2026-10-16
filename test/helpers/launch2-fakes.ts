@@ -24,6 +24,8 @@ import {
   type Launch2PoolSimulation,
   type Launch2PoolTradeRecord,
   type Launch2PositionRecord,
+  type Launch2PublicCandleRecord,
+  type Launch2PublicMemeFacts,
   type Launch2Repository,
   type Launch2SnapshotMemberRecord,
   type Launch2TradeRecord,
@@ -207,6 +209,15 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
     string,
     { amountUsd1: string; blockNumber: string; claimedAt: string }
   >;
+  /** Decision 0147: public page facts keyed by instance (default: empty). */
+  readonly publicFacts: Map<string, Partial<Launch2PublicMemeFacts>>;
+  /** Decision 0147: public candles keyed `instanceId|kind`. */
+  readonly publicCandles: Map<string, Launch2PublicCandleRecord[]>;
+  /** Decision 0147: the `since` cutoffs the service asked for. */
+  readonly publicFactsCalls: {
+    instanceIds: readonly string[];
+    since: string;
+  }[];
 }
 
 /** Decision 0131: an empty round summary. */
@@ -243,8 +254,39 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
     string,
     { amountUsd1: string; blockNumber: string; claimedAt: string }
   >();
+  const publicFacts = new Map<string, Partial<Launch2PublicMemeFacts>>();
+  const publicCandles = new Map<string, Launch2PublicCandleRecord[]>();
+  const publicFactsCalls: {
+    instanceIds: readonly string[];
+    since: string;
+  }[] = [];
   const unused = () => Promise.reject(new Error("not used in route tests"));
   return {
+    publicFacts,
+    publicCandles,
+    publicFactsCalls,
+    getPublicMemeFacts: (input) => {
+      publicFactsCalls.push(input);
+      return Promise.resolve(
+        input.instanceIds.map((instanceId): Launch2PublicMemeFacts => ({
+          instanceId,
+          community: null,
+          curveTaxUsd1: "0",
+          poolTaxMeme: "0",
+          poolTaxUsd1: "0",
+          lastClosedRound: null,
+          poolReferencePriceE18: null,
+          curveSoldAtSince: "0",
+          ...publicFacts.get(instanceId),
+        })),
+      );
+    },
+    listPublicCandles: (input) =>
+      Promise.resolve(
+        (
+          publicCandles.get(`${input.instanceId}|${input.source.kind}`) ?? []
+        ).slice(-input.limit),
+      ),
     poolTrades,
     dynamicRewards,
     dynamicRoundBuyers,
@@ -361,7 +403,10 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
           (row) =>
             row.chainId === input.chainId &&
             (row.activatedAt !== null || row.holdReason !== null) &&
-            (input.stage === null || row.stage === input.stage),
+            (input.stage === null || row.stage === input.stage) &&
+            (input.notStage === undefined ||
+              input.notStage === null ||
+              row.stage !== input.notStage),
         )
         .sort((a, b) =>
           `${b.activatedAt ?? b.registeredAt}${b.instanceId}`.localeCompare(

@@ -6,11 +6,12 @@ for implemented behavior. Provider REST/WebSocket paths, SDK methods, historical
 prototype routes, and unassigned product ideas are not LOOP APIs.
 
 The committed implemented contracts are `openapi/loop-api.v1.json`,
-`openapi/loop-api.v2.json`, and the operator console surface
-`openapi/loop-admin.v1.json` (Decision 0102). They are generated independently
-from route schemas by `pnpm openapi:generate` and checked for drift by
-`pnpm openapi:check`. V1 is the frozen compatibility surface; new product
-modules use V2; the console management surface is never part of V2.
+`openapi/loop-api.v2.json`, the operator console surface
+`openapi/loop-admin.v1.json` (Decision 0102), and the public MEME page read
+surface `openapi/loop-public.v1.json` (Decision 0147). They are generated
+independently from route schemas by `pnpm openapi:generate` and checked for
+drift by `pnpm openapi:check`. V1 is the frozen compatibility surface; new
+product modules use V2; the console and public surfaces are never part of V2.
 
 `openapi/loop-api.v2.json` is the single source of truth for every count in this
 repository's documentation. It currently publishes **185** V2 operations across
@@ -1314,7 +1315,8 @@ LOOP ID links (`/u/{loopId}`), so it publishes the two static association files
 the platform fetchers read plus a static landing page. All three are
 unauthenticated, carry no user or session fact, are **excluded from the OpenAPI
 artifacts** (`hide: true`; asserted by `test/well-known-app-links-routes.test.ts`),
-and are the only LOOP responses that are not `Cache-Control: no-store`. Since
+and, with the public read surface below (Decision 0147), the only LOOP
+responses that are not `Cache-Control: no-store`. Since
 Decision 0090 both files are always published (the `/u/*` association uses the
 fixed app identity); the passkey half is still fail-closed: without its
 configuration the `webcredentials` key / `get_login_creds` statement is absent.
@@ -1325,6 +1327,29 @@ configuration the `webcredentials` key / `get_login_creds` statement is absent.
 | `GET /.well-known/apple-app-site-association` | No input                    | `{applinks:{details:[{appIDs:["<PASSKEY_IOS_TEAM_ID>.<PASSKEY_IOS_BUNDLE_ID>"],components:[{"/":"/u/*"},{"/":"/c/*"}]}]},webcredentials:{apps:[same]}}` (`/c/*` since Decision 0091; app ID from config since Decision 0106, bundle default `com.cywd.loopapp`); without `PASSKEY_IOS_TEAM_ID`: `{applinks:{details:[]}}` + startup warn `APPLE_TEAM_ID_MISSING`; same headers | `implemented` | always published; Apple CDN fetch and TF build 8 entitlement check unverified |
 | `GET /u/{loopId}`                             | `LOOP-` + 8 alnum, any case | Static HTML landing page (`text/html; charset=utf-8`, `public, max-age=3600`); malformed ID → `404` HTML, `no-store`; no database read                                                                                                                                                                                                                                         | `implemented` | download link only with `APP_DOWNLOAD_URL`                                    |
 | `GET /c/{communityId}/room`                   | canonical lower-case UUIDv4 | Static HTML voice-room invitation page (Decision 0091), same headers as `/u/`; never echoes the community ID; malformed ID → `404` HTML, `no-store`; no database read                                                                                                                                                                                                          | `implemented` | download link only with `APP_DOWNLOAD_URL`                                    |
+
+## Public read surface (Decision 0147, `/public/v1`)
+
+Read-only facts for the single-MEME web page (Vercel, another origin). Outside
+`/v2`, like the well-known files: no Bearer token, no `X-Loop-Contract-Version`,
+no `Idempotency-Key`. Published in its own artifact `openapi/loop-public.v1.json`
+(tag `public`); the frozen `loop-api.v1.json` and `loop-api.v2.json` do not
+contain it. Every `/public/*` answer carries
+`Access-Control-Allow-Origin: *` (errors and the `OPTIONS` preflight `204`
+included; `/v2` gets none); a `200` is `Cache-Control: public, max-age=15`, every
+error `no-store`. Failures are `{ code, reasonCode }` (`400 INVALID_REQUEST`,
+`404 NOT_FOUND`, `429 RATE_LIMITED` + `Retry-After`, `503 CAPABILITY_UNAVAILABLE`
+with the launch2 reason as is); a 503 never carries a partial body. Per client IP
+(`request.ip`, `TRUST_PROXY` rules) 120 requests per one-minute fixed window, in
+process memory; identical URLs share one answer for 5 s. No wallet, user, viewer,
+owner, buyer, or trader field appears anywhere. Evidence:
+`test/public-meme-routes.test.ts`, `test/public-meme.integration.test.ts`.
+
+| Method and path                            | Request                                                                    | Success projection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Interface     | Capability                                                                           |
+| ------------------------------------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------ |
+| `GET /public/v1/meme`                      | `stage` `all` (default) / `graduated` / `curve`, `limit` 1–50 (default 50) | `items[]` newest first: `instanceId`, `name`, `symbol`, `logoUrl`, derived `stage`, `memeTokenAddress`, `communityName` (bound, non-rejected), indexed `lastPriceUsd1`, `dynamic {armed, currentDynamicTaxBps}` (graduated LoopDynamic only, live Hook read), `dynamicReasonCode` (the 503 reason when that row's Hook read is unavailable; `dynamic` then null); `generatedAt`                                                                                                                                                                                                                                                                                                                         | `implemented` | needs `V2_MODULES_ENABLED=launch2`; else 503 `V2_LAUNCH2_MODULE_DEFERRED`            |
+| `GET /public/v1/meme/{instanceId}`         | No input                                                                   | `instance` (identity, derived stage, contracts, `explorerBaseUrl`, `socials` from the saved links), `community` (`name`, `slogan` = first line of the description ≤ 60, `description`, `memberCount`, `verified`, `avatarUrl` null), `price` (`lastPriceUsd1`, `change24hPct` vs the 24 h reference, `asOf`), `dynamic` (graduated LoopDynamic: Hook at one block — `armed`, `currentRound`, `currentDynamicTaxBps`, cap, base fees, `pendingPotUsd1` = carry + round dynamic fees, `lastClosedRound`, `asOfBlock`; null for OfficialTax / before graduation), `totals` (curve tax, pool base buy fee MEME / sell fee USD1, dynamic fees, USD1 equivalent, rewards allocated / claimed, buyback ledger) | `implemented` | Hook / registry failures 503 as `/v2/launch2/.../dynamic-pool` (`LAUNCH2_DYNAMIC_*`) |
+| `GET /public/v1/meme/{instanceId}/candles` | `interval` `5m` only (else 400), `limit` 1–300 (default 300)               | `interval`, `source` `pool` / `curve`, `candles[] {t,o,h,l,c,v}` oldest first (USD1 per MEME): graduated LoopDynamic = the Hook's `CandleClosed` (high / low widened to the bucket's swaps, `v` = swap USD1), else indexed pool swaps; not graduated = curve trades at the marginal price after each trade, `v` = USD1 gross                                                                                                                                                                                                                                                                                                                                                                            | `implemented` | same gate                                                                            |
 
 ## Personalization and inactive alert routes
 
