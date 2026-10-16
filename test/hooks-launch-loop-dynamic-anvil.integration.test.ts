@@ -52,7 +52,7 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
  * LoopDynamicLaunchFactory with `LoopDynamicDefaults`, LoopHookDeployment
  * Factory, LoopRouterRegistry); the API services read the Factory's
  * template from chain, save (configHash over the Hook parameters), approve,
- * prepare (TEMPLATE_HASH in the typed data, Hook salt for 0x10C4), sign and
+ * prepare (TEMPLATE_HASH in the typed data, Hook salt for 0x10CC — Decision 0152: the S209 build), sign and
  * submit; the executor (LoopDynamic preflight) deploys, verifies every
  * LoopDynamic check and activates; the salt is registered at the Hook
  * deployment factory for the predicted Hook address, and the launch2 lane
@@ -285,7 +285,8 @@ describe.skipIf(skipReason !== null)(
         template.templateHash,
       );
       expect(prepared.hookDeployer).toBe(deployed.hookDeploymentFactory);
-      expect(BigInt(prepared.hookAddress) & 0x3fffn).toBe(0x10c4n);
+      // Decision 0152: an S209 Factory (maxCumulativeBuy) mines 0x10CC.
+      expect(BigInt(prepared.hookAddress) & 0x3fffn).toBe(0x10ccn);
       const message = prepared.typedData.message;
       const signature = await privateKeyToAccount(ownerKey).signTypedData({
         domain: {
