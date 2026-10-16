@@ -34,6 +34,8 @@
 
 Bearer（LOOP 会话），wallet 模块路由。`range` 必填，其他值 / 多余参数 400 `INVALID_REQUEST`；钱包不属于调用方 404 `NOT_FOUND`。
 
+> 修订：`fiat` 的最终形状见 Decision 0149 §4。
+
 ```json
 {
   "walletId": "…",
@@ -59,7 +61,7 @@ Bearer（LOOP 会话），wallet 模块路由。`range` 必填，其他值 / 多
 - **current**：请求时按 B 实时测量（`origin: live`，`at` = 响应时刻）；实时读失败或估不了价时退回最新快照（`origin: snapshot`，`quality` 至多 `stale`，`partial` 保持）；两者都没有 → 503 `WALLET_NETWORTH_CURRENT_UNAVAILABLE`。`points` 不重复包含 current。
 - **change24h**：`current − ` 「`current.at − 24 h` 及之前、且不早于 `current.at − 48 h` 的最新快照」；没有这样的快照为 `null`（早于 48 h 的点不叫"24 h 前"）。`usd` 6 位、`pct` 4 位，四舍五入；基准为 0 时 `pct = null`。附 `baselineAt`。
 - **high / low**：窗口内非 `partial` 快照（SQL 取极值，同值取较新的）与非 `partial` 的 current 之间比较；都没有为 `null`。`partial` 点仍出现在 `points` 里（带 quality），但不当极值，避免假低点。
-- **fiat**：`FIAT_CNY_PER_USD`（API 进程 env，正数、< 1000、最多 8 位小数，规范化去尾零；非法值启动拒绝）配了才有，`amount = current × rate` 四舍五入 2 位；未配为 `null`。
+- **fiat**：~~`FIAT_CNY_PER_USD`（API 进程 env）配了才有~~ **已由 Decision 0149 修订（2026-10-16）**：汇率改读 `fiat_fx_rates`（worker lane `fiat_fx_rate`，默认 ECB 参考汇率经 Frankfurter），`fiat` 增加 `source` / `asOf` / `fetchedAt` / `quality`，`FIAT_CNY_PER_USD` 删除；`amount = current × rate` 四舍五入 2 位不变；没有汇率记录为 `null`。
 - **503**：快照仓储未组装或任何快照读取失败 → `CAPABILITY_UNAVAILABLE` + `detailsSafe.reasonCode = WALLET_NETWORTH_HISTORY_UNAVAILABLE`（不新增能力位）。
 - `cache-control: no-store`；所有金额是十进制字符串。
 
