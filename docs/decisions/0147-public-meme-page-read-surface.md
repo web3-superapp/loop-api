@@ -73,3 +73,26 @@
 - `test/public-meme-routes.test.ts`：字段集合与 schema 必填项逐一相等、无禁用字段、CORS / 缓存头、`/v2` 无 CORS、预检 204、400 / 404 / 503（`CHAIN_READ_FAILED` / `ROUTER_NOT_CONFIGURED` / `HOOK_MISMATCH` / 旧仓库）、列表阶段过滤与单行降级、K 线来源与回退、限流窗口与 `Retry-After`、5 s 合并读、纯函数。
 - `test/public-meme.integration.test.ts`（真实 PostgreSQL）：三个接口经真实路由跑真实 SQL——绑定社区（含被拒的同键社区不显示）、内盘税与 24 h 已售量、外盘税与参考价、最近关闭轮、内盘边际价 K 线、外盘 swap K 线、Hook 蜡烛按朝向换算并用桶内 swap 扩高低。
 - 本机对 dev 库（只读连接 `default_transaction_read_only=on`）实测 `GET /public/v1/meme/2f0d01fa-…` 与 `/candles`：见 S203 hand-back。
+
+## 修订（S207，2026-10-16）：真实流量下的 500 与慢请求
+
+依据：dev 日志 2026-10-16 13:00–13:02（网页 `loop-meme.vercel.app` 每 15 s 拉详情、60 s 拉 K 线，经 Cloudflare 隧道）：同一详情 URL 两条并发，`b6869c1c` 跑 18.3 s 后 `500` + `ERROR Unhandled error in public request {errorClass: FastifyError}`，4 s 后 `WARN Reply was already sent`；另一条 3.9 s 得 503。安全边界不变（仍无鉴权、只读、同一字段集合），故不新开决策号；**无迁移、无新 env、无新依赖**。
+
+**根因（已复现）**：`src/app.ts` 的 Fastify 构造参数 `handlerTimeout: 15_000`。Hook 读（`verifyRouter` + `readHookState`，BSC RPC 单次 6 s、多 URL 回退）超过 15 s 时，Fastify `lib/route.js` 的计时器抛出 `FST_ERR_HANDLER_TIMEOUT`（`FastifyError`，`statusCode 503`）并经作用域 `setErrorHandler` 发送；旧的 `publicErrorOf` 只认 `V2ApiError` 与 4xx，把它投影成 `500 INTERNAL_ERROR`。随后 handler 的 Promise 落定、`sendOk` 再 `send` 一次 → `FST_ERR_REP_ALREADY_SENT`（「Reply was already sent」）。`test/public-meme-resilience.test.ts` 第一条用 `handlerTimeout: 60` 逐字复现了同一序列（修前：500 + 已发送告警；修后：503 `PUBLIC_UPSTREAM_TIMEOUT`、只发一次）。`responseTimeMs 18258` 大于 15 s，推测是日志计时起点早于 handler 计时器启动（`onRequest` 钩子、事件循环排队），未单独验证，不改变结论。`requestTimeout`（Node 收完请求头 / 体的时限）对无体 GET 不相关。
+
+| 项          | 做法                                                                                                                                                                                                                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 单飞        | 同一 URL（`request.raw.url`）在途时所有请求共享一个 Promise：只调一次 service；成功进 5 s memo；失败时所有等待者得到同一个 503，**失败不进 memo**。在途记录保留到**底层读本身**落定：超时后到达的请求拿到同一个 503，不会再叠一次 RPC；底层读迟到的成功仍填 memo                                                                 |
+| 时间预算    | `AbortSignal.timeout`：详情 8 s、列表 10 s、K 线 5 s（`publicReadBudgetsMs`，均明显低于 15 s 的 `handlerTimeout` / 请求中止时限）。到点按 `503 CAPABILITY_UNAVAILABLE` / **`PUBLIC_UPSTREAM_TIMEOUT`**（新 reasonCode）回答；signal 传进 service，列表每批 Hook 读前、详情 Hook 读前、K 线回退读前检查，已中止即不再发起下一次读 |
+| 兜底        | error handler 把 `FST_ERR_HANDLER_TIMEOUT` 也投影成 503 `PUBLIC_UPSTREAM_TIMEOUT`，不再是 500                                                                                                                                                                                                                                    |
+| 双发 / 断开 | handler 与 error handler 发送前检查 `reply.sent                                                                                                                                                                                                                                                                                  |     | reply.raw.destroyed`，已发送或客户端响应流已关即直接返回。**不用 `request.raw.destroyed`**：Node 24 上 `IncomingMessage`读完（空）请求体就会 destroyed，客户端其实还在等（见`src/core/http/request-abort-signal.ts`） |
+| 日志        | `Unhandled error in public request` 增加 `errorCode` 与 `errorMessage`（单行、≤ 200 码点、URL 替换为 `<url>`，防 RPC 密钥 URL 落日志；不打请求体）；所有 503 记 `info` `Public read unavailable {reasonCode, errorCode}`，便于区分 RPC 超时、`CHAIN_READ_FAILED`、`HOOK_MISMATCH`                                                |
+| 合同        | `openapi/loop-public.v1.json` 只有 503 描述多列出 `PUBLIC_UPSTREAM_TIMEOUT`（schema 的 `reasonCode` 本就是模式串，字段集合不变）                                                                                                                                                                                                 |
+
+剩余风险：
+
+- 底层 RPC 调用本身不接 signal（`Launch2DynamicChain` 无取消参数），超时后已发出的那一次 RPC 仍会跑完（受 RPC 客户端单次 6 s 约束），只是不再发起后续读；把 signal 下沉到 `rpc-client` 另做。
+- 单飞与 memo 都在单进程内存；多副本各自一份。
+- 预算是固定值；若 dev / staging 的 RPC 常态就 > 8 s，页面会稳定看到 `PUBLIC_UPSTREAM_TIMEOUT`，应先查 RPC（运维速查的 publicnode / NodeReal 项），再考虑调预算。
+
+证据：`test/public-meme-resilience.test.ts`（根因复现、单飞 N=6 只调一次、失败共享且不缓存、预算 503 且 signal 已中止、超时后不叠读、迟到成功入 memo、列表 / K 线预算、真实 socket 断开后不写、错误码与脱敏消息入日志）；`test/public-meme-routes.test.ts`、`test/public-meme.integration.test.ts` 不变通过。
