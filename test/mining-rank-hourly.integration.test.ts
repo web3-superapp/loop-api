@@ -24,8 +24,10 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
  * exact numeric totals of both tracks, shared positions on ties, zero power
  * after the ranked rows, keyset pages, the community split of the hour's
  * power (NFT holdings of the community's instances, the referral NFT units
- * received from them × the coefficient, holdings of its bound asset;
- * banned members excluded; asset referral power not attributed),
+ * received from them × the coefficient — both from any account, member or
+ * not (S208 revision) — and its members' holdings of its bound asset;
+ * accounts the community banned excluded; asset referral power not
+ * attributed; `participantCount` = contributing accounts),
  * the hour's community coefficient as `weight`, and the `everyone` default
  * of a missing privacy row.
  */
@@ -468,6 +470,148 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
       await mining.getMemberBestCommunityStanding({
         epochId: newestEpochId,
         ownerUserId: outsider,
+      }),
+    ).toBeNull();
+  });
+
+  it("counts the community's NFT power of non-member holders and inviters, not their bound-asset holdings, and never a banned account (S208)", async () => {
+    const [one] = users as [string, string, string, string];
+    const holder = await account(null);
+    const inviter = await account(null);
+    const coinOnly = await account(null);
+    const bannedHolder = await account(null);
+    const member = await account(null);
+    await join(communityC, member);
+    await join(communityC, bannedHolder, "banned");
+    const epochId = await settle(
+      "2026-10-16T05:00:00.000Z",
+      [
+        // Non-member NFT holder of C: counts (C's coefficient 1).
+        reward(holder, {
+          nftSelfPower: "0.5",
+          nftTotalPower: "0.5",
+          nftHoldings: [
+            {
+              instanceId: randomUUID(),
+              communityId: communityC,
+              countAtEnd: "1",
+              power: "0.5",
+            },
+          ],
+        }),
+        // Non-member inviter with 0.2 units of C's NFTs: 0.2 × 1 counts.
+        reward(inviter, {
+          nftReferralPower: "0.2",
+          nftTotalPower: "0.2",
+          levels: zeroLevels.map((level) =>
+            level.level === 1
+              ? {
+                  ...level,
+                  effectiveMembers: 1,
+                  nftPower: "0.2",
+                  nftUnitsByCommunity: [
+                    { communityId: communityC, units: "0.2" },
+                  ],
+                }
+              : level,
+          ),
+        }),
+        // Non-member holding only C's bound asset: the coin track needs
+        // membership, so 0 for C.
+        reward(coinOnly, {
+          assetSelfPower: "1",
+          assetTotalPower: "1",
+          assetHoldings: [
+            { assetId: assetC, balanceAtEndRaw: "1", power: "1" },
+          ],
+        }),
+        // Banned in C: neither its NFT nor its asset counts.
+        reward(bannedHolder, {
+          nftSelfPower: "3",
+          nftTotalPower: "3",
+          assetSelfPower: "1",
+          assetTotalPower: "1",
+          nftHoldings: [
+            {
+              instanceId: randomUUID(),
+              communityId: communityC,
+              countAtEnd: "3",
+              power: "3",
+            },
+          ],
+          assetHoldings: [
+            { assetId: assetC, balanceAtEndRaw: "1", power: "1" },
+          ],
+        }),
+        // Member of C on its bound asset: counts.
+        reward(member, {
+          assetSelfPower: "0.3",
+          assetTotalPower: "0.3",
+          assetHoldings: [
+            { assetId: assetC, balanceAtEndRaw: "3", power: "0.3" },
+          ],
+        }),
+        // one (member of A) holds a C instance as a non-member of C, and
+        // keeps its A power.
+        reward(one, {
+          nftSelfPower: "1.5",
+          nftTotalPower: "1.5",
+          nftHoldings: [
+            {
+              instanceId: randomUUID(),
+              communityId: communityA,
+              countAtEnd: "1",
+              power: "1.5",
+            },
+            {
+              instanceId: randomUUID(),
+              communityId: communityC,
+              countAtEnd: "1",
+              power: "1",
+            },
+          ],
+        }),
+      ],
+      "3".repeat(64),
+    );
+    expect((await mining.getLatestRankEpoch())?.epochId).toBe(epochId);
+
+    const communities = await mining.listCommunityRanking({
+      epochId,
+      limit: 10,
+    });
+    expect(
+      communities.map((row) => [
+        row.communityId,
+        row.power,
+        row.participantCount,
+        row.position,
+      ]),
+    ).toEqual([
+      // C: holder 0.5 + inviter 0.2 + member 0.3 + one 1 = 2; four
+      // contributors (coinOnly and bannedHolder are not).
+      [communityC, "2", 4, 1],
+      // A: one's 1.5 (three is banned in A and holds nothing this hour).
+      [communityA, "1.5", 1, 2],
+      [communityB, "0", 0, null],
+    ]);
+    // `me` stays a membership: a non-member contributor has none.
+    expect(
+      await mining.getMemberBestCommunityStanding({
+        epochId,
+        ownerUserId: holder,
+      }),
+    ).toBeNull();
+    expect(
+      await mining.getMemberBestCommunityStanding({
+        epochId,
+        ownerUserId: member,
+      }),
+    ).toMatchObject({ communityId: communityC, position: 1, power: "2" });
+    expect(
+      await mining.getMemberBestCommunityStanding({
+        epochId,
+        ownerUserId: bannedHolder,
       }),
     ).toBeNull();
   });

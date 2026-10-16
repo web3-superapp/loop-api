@@ -1,6 +1,6 @@
 # Decision 0148: Power ranks on the hourly settled power, mining power visible to everyone by default (S205-api)
 
-- Status: Accepted (S205-api), Development / BSC Testnet only
+- Status: Accepted (S205-api; revised S208-api), Development / BSC Testnet only
 - Date: 2026-10-16
 - Baseline: `integration/v2` = `b59c3bf`
 - Inputs: user ruling 2026-10-16 after the staging device walk-through; Decisions 0043
@@ -88,11 +88,9 @@ Differences to state, all by construction:
 - Part 2 is exact while the coefficient does not change inside the hour; when a parameter version
   with another coefficient takes effect mid-hour (`input_summary.versionIds` has more than one id)
   it uses the coefficient at the hour start. Truncation to 18 decimals matches the stored powers.
-- An NFT counts for a community only through members: the holder's self part if the holder is a
-  member, the inviter's referral part if the inviter is a member. Σ of community powers is
-  therefore not Σ of account powers. On dev the three holders of `S138 QA MEME Mining` NFTs are not
-  members; its one member gets 0.15 from referrals, so the board shows that community at 0.15 and
-  every other at 0.
+- ~~An NFT counts for a community only through members.~~ **Superseded by the S208 revision
+  below**: an NFT counts for its community whoever holds it or receives its referral units; only
+  the coin track (part 3) still requires membership.
 
 ### 4. `snapshot` block (shape unchanged)
 
@@ -149,6 +147,42 @@ read the snapshot.
   plus later sign-ups) is expected to be of the same order; the migration prints nothing, run
   `select count(*) from privacy_preferences_v2 where mining_power_visibility = 'self'` before
   deploying to know the number.
+
+## Revision (S208, user ruling 2026-10-16: holding counts)
+
+- Date: 2026-10-16, baseline `integration/v2` = `6f2fc4f`. User ruling option 1: a community's NFT
+  power is counted when an account holds that community's NFTs; community membership is not
+  required. Same route, fields, codes and shapes; OpenAPI descriptions only.
+- Community power over the epoch = Σ over **every account of the hour the community has not
+  banned** (`community_memberships.status = 'banned'` for that community excludes the account from
+  all three parts) of
+  1. `nft_holdings[].power` where `communityId` = the community — **member or not**;
+  2. `trunc(Σ referral_levels[].nftUnitsByCommunity[communityId = the community].units ×
+coefficient, 18)` — **member or not**;
+  3. `asset_holdings[].power` on the bound asset — **members only** (`active` / `muted`), as
+     before: the coin track has no community of its own, so holding the bound asset does not make
+     an outsider's power the community's.
+- Platform-level exclusion: unchanged. There is no platform ban state in the schema; the settlement
+  writes the accounts it pays and the rank reads them as the users board does.
+- Per-row `participants` = accounts with positive community power, members or not. The top-level
+  `participants` (ranked rows on the page) and `me` (best-ranked **non-banned membership**; a
+  non-member holder has no community `me`) are unchanged. The users board, the `snapshot` block and
+  `scope=referrals` are unchanged.
+- Σ of community powers is still not Σ of account powers: asset referral power and non-members'
+  asset power belong to no community, and an unbound instance (coefficient 0) to none.
+- Dev (read-only, newest settled hour `2026-10-16T04:00Z`): `S138 QA MEME Mining` goes from
+  0.15 / 1 participant to **5.43 / 7 participants** — the three non-member holders' self power
+  1.5 + 1.5 + 1.5 plus referral units 0.15 + 0.1 + 0.18 + 0.10 + 0.06 + 0.03 = 0.62 × 1.5 = 0.93
+  (five of the six inviters are non-members). 5.43 equals the hour's `denominator_nft_power`: every
+  NFT power of the hour belongs to that community. Every other bound community stays at 0.
+- SQL (`epochCommunityStandingsSql`): `bound × mining_epoch_rewards(epoch)` left-joined to the
+  account's membership of that community, `where status is distinct from 'banned'`; part 3 is
+  added only when a membership row exists.
+- Tests: `test/mining-rank-hourly.integration.test.ts` adds a newer settled hour with a non-member
+  NFT holder and a non-member inviter of C (counted), a non-member holding only C's bound asset
+  (not counted), an account banned in C holding C's NFT and asset (not counted), a member on the
+  asset (counted) and a member of A holding a C instance (counted for C, A unaffected); C's
+  `participants` = 4; `me` stays null for the non-member and the banned account.
 
 ## Consequences
 

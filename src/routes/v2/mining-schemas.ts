@@ -583,7 +583,7 @@ const rankingSchema = {
               power: {
                 ...decimalSchema,
                 description:
-                  "Decision 0148: the non-banned members' power of the settled hour that belongs to the community — NFT self power of its instances, referral NFT units from its instances × the coefficient, and self power on the bound asset.",
+                  "Decision 0148 (S208 revision): the power of the settled hour that belongs to the community — NFT self power of its instances and referral NFT units from its instances × the coefficient, from any holder or inviter (membership not required), plus the members' self power on the bound asset. Accounts the community banned contribute nothing.",
               },
               community: {
                 type: "object",
@@ -610,7 +610,7 @@ const rankingSchema = {
                 type: "integer",
                 minimum: 0,
                 description:
-                  "Members with positive community power in the hour.",
+                  "Accounts (members or not, never banned by the community) with positive community power in the hour.",
               },
             },
           },

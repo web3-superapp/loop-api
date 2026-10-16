@@ -1107,6 +1107,8 @@ describe("LOOP API V2 mining module", () => {
           boundAssetId: cakeAsset,
         },
         weight: "0.5",
+        // The repository's contributing accounts, members or not (Decision
+        // 0148, S208 revision), passed through unchanged.
         participants: 2,
       });
       expect(communityRanking.myPosition).toEqual({

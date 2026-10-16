@@ -170,10 +170,12 @@ export interface MiningRankedAccountRecord {
 /**
  * A community's standing. Under a snapshot (community detail): the power of
  * its non-banned members on its bound asset, which already carries the
- * community weight. On the rank (Decision 0148): the members' self power of
- * one settled hour that belongs to the community — NFT holdings of the
- * community's instances plus holdings of its bound asset — and `weight` is
- * the community coefficient of the hour's parameter version.
+ * community weight. On the rank (Decision 0148, S208 revision): the power of
+ * one settled hour that belongs to the community — NFT self and referral
+ * power of the community's instances from any account the community has not
+ * banned (membership not required), plus its members' holdings of its bound
+ * asset — and `weight` is the community coefficient of the hour's parameter
+ * version; `participantCount` counts the contributing accounts.
  */
 export interface MiningCommunityStandingRecord {
   readonly communityId: string;
@@ -350,7 +352,10 @@ export interface MiningRepository {
     readonly limit: number;
     readonly after?: MiningAccountRankAfter;
   }): Promise<readonly MiningRankedAccountRecord[]>;
-  /** Every community with a bound asset by its members' power in the hour. */
+  /**
+   * Every community with a bound asset by the hour's power belonging to it
+   * (Decision 0148, S208 revision: NFT power of any non-banned account).
+   */
   listCommunityRanking(input: {
     readonly epochId: string;
     readonly limit: number;

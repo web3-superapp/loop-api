@@ -409,21 +409,26 @@ const epochAccountTotalsSql = `
 `;
 
 /**
- * Decision 0148: community standings over one settled hour. Every community
- * with a bound asset is listed; `weight` is its NFT coefficient under the
- * hour's parameter version (listed coefficient, else the version's
- * `defaultCommunityCoefficient`, else 0 — the calculator's own rule). A
- * non-banned member contributes the part of the hour's power that belongs to
- * the community:
+ * Decision 0148 (S208 revision): community standings over one settled hour.
+ * Every community with a bound asset is listed; `weight` is its NFT
+ * coefficient under the hour's parameter version (listed coefficient, else
+ * the version's `defaultCommunityCoefficient`, else 0 — the calculator's own
+ * rule). Every account of the hour that the community has not banned
+ * contributes the part of its power that belongs to the community:
  *
- * - NFT self: the `nft_holdings[].power` of the community's instances;
- * - NFT referral: the equivalent NFT units the member received from the
- *   community's NFTs (`referral_levels[].nftUnitsByCommunity`) × the
- *   coefficient, truncated to 18 decimals like every stored power (exact
- *   while the coefficient does not change inside the hour);
- * - asset self: the `asset_holdings[].power` of the bound asset. Asset
- *   referral power is stored per level only, not per asset, so it ranks
- *   accounts, not communities.
+ * - NFT self (any holder, member or not): the `nft_holdings[].power` of the
+ *   community's instances;
+ * - NFT referral (any inviter, member or not): the equivalent NFT units the
+ *   account received from the community's NFTs
+ *   (`referral_levels[].nftUnitsByCommunity`) × the coefficient, truncated to
+ *   18 decimals like every stored power (exact while the coefficient does
+ *   not change inside the hour);
+ * - asset self (members only — the coin track has no community of its own):
+ *   the `asset_holdings[].power` of the bound asset. Asset referral power is
+ *   stored per level only, not per asset, so it ranks accounts, not
+ *   communities.
+ *
+ * `participant_count` = contributing accounts with positive community power.
  */
 const epochCommunityStandingsSql = `
   epoch_version as (
@@ -471,16 +476,20 @@ const epochCommunityStandingsSql = `
             coalesce(level->'nftUnitsByCommunity', '[]'::jsonb)
           ) as unit
         where unit->>'communityId' = b.community_id::text
-      ), 0) * b.coefficient, 18) + coalesce((
-        select sum((holding->>'power')::numeric)
-        from jsonb_array_elements(r.asset_holdings) as holding
-        where holding->>'assetId' = b.bound_asset_id
-      ), 0) as power
+      ), 0) * b.coefficient, 18) + case
+        when m.owner_user_id is null then 0
+        else coalesce((
+          select sum((holding->>'power')::numeric)
+          from jsonb_array_elements(r.asset_holdings) as holding
+          where holding->>'assetId' = b.bound_asset_id
+        ), 0)
+      end as power
     from bound as b
-    join public.community_memberships as m
-      on m.community_id = b.community_id and m.status <> 'banned'
-    join public.mining_epoch_rewards as r
-      on r.epoch_id = $1 and r.owner_user_id = m.owner_user_id
+    join public.mining_epoch_rewards as r on r.epoch_id = $1
+    left join public.community_memberships as m
+      on m.community_id = b.community_id
+      and m.owner_user_id = r.owner_user_id
+    where m.status is distinct from 'banned'
   ),
   powers as (
     select
