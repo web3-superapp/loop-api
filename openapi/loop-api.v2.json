@@ -145487,7 +145487,7 @@
         "operationId": "createV2MemeToken",
         "summary": "Create a MEME token draft",
         "tags": ["meme"],
-        "description": "Creates a draft the caller then deploys with a create Intent (Decision 0101). name 1-32 characters, symbol 2-10 of A-Z/0-9, description <= 500, imageMediaId an upload of the caller (POST /v2/media/community-logos), links https only; otherwise 422 VALIDATION_FAILED / MEME_METADATA_INVALID (detailsSafe.field) or MEME_IMAGE_NOT_OWNED. A CREATE2 salt is reserved from the vanity pool (vanity true, the address ends in the configured suffix) or drawn at random (vanity false). The 201 is the token detail with metadataHash, salt, and predictedAddress. MEME_CREATE_DAILY_LIMIT drafts per account per rolling 24 hours: 429 RATE_LIMITED / MEME_CREATE_RATE_LIMITED (detailsSafe.dailyLimit). Idempotency-Key replays the same draft. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode while the meme contract is not configured (MEME_CONTRACT_NOT_CONFIGURED / MEME_USD1_NOT_CONFIGURED) or the store is unreachable.",
+        "description": "Creates a draft the caller then deploys with a create Intent (Decision 0101). name 1-32 characters, symbol 2-10 of A-Z/0-9, description <= 500, imageMediaId an upload of the caller (POST /v2/media/community-logos), links https only; otherwise 422 VALIDATION_FAILED / MEME_METADATA_INVALID (detailsSafe.field) or MEME_IMAGE_NOT_OWNED. A CREATE2 salt is reserved from the vanity pool (vanity true, the address ends in the configured suffix) or drawn at random (vanity false). The 201 is the token detail with metadataHash, salt, and predictedAddress. MEME_CREATE_DAILY_LIMIT drafts per account per rolling 24 hours: 429 RATE_LIMITED / MEME_CREATE_RATE_LIMITED (detailsSafe.dailyLimit). Idempotency-Key replays the same draft. Retired by Decision 0151: 410 MEME_CLASSIC_LAUNCH_RETIRED (nothing written) unless MEME_CLASSIC_CREATE_ENABLED is true; launches go through /v2/launch2. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode while the meme contract is not configured (MEME_CONTRACT_NOT_CONFIGURED / MEME_USD1_NOT_CONFIGURED) or the store is unreachable.",
         "requestBody": {
           "required": true,
           "content": {
@@ -146471,6 +146471,79 @@
                         "INSUFFICIENT_BALANCE",
                         "VERSION_CONFLICT"
                       ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["MEME_CLASSIC_LAUNCH_RETIRED"]
                     },
                     "category": {
                       "type": "string",
@@ -151424,7 +151497,7 @@
         "operationId": "prepareV2MemeIntent",
         "summary": "Prepare a MEME create, buy, or sell Intent",
         "tags": ["meme"],
-        "description": "Decision 0101 (the Decision 0077 discipline). create: the creator deploys their draft (createToken with the reserved salt and metadataHash, optional first buy usd1Amount); a salt already used on chain is replaced first. buy: usd1Amount (fee included). sell: tokenAmount. Every docs/10 check runs at one snapshot block: curve TRADING (409 DATA_STALE MEME_CURVE_FULL / MEME_CURVE_NOT_TRADING), minimum buy 1 USD1 (422 MEME_BELOW_MIN_BUY), wallet cap 40,000,000 tokens (422 MEME_WALLET_CAP_EXCEEDED), balances (409 INSUFFICIENT_BALANCE MEME_USD1_BALANCE_INSUFFICIENT / MEME_SELL_EXCEEDS_BALANCE / MEME_GAS_INSUFFICIENT), minOut <= quote (422 MEME_MIN_OUT_ABOVE_QUOTE), and the Decision 0065 canary (403 POLICY_BLOCKED) with USD1 at par. When the USD1 (buy/create) or token (sell) allowance towards the curve is short, approval carries an exact approve to sign first (nonce N; the call is N+1). 503 CAPABILITY_UNAVAILABLE / MEME_WRITES_DISABLED while BSC_WRITES_ENABLED is off and MEME_MAINNET_SIGNING_CLOSED on chain 56. Idempotency-Key replays the same Intent.",
+        "description": "Decision 0101 (the Decision 0077 discipline). create: the creator deploys their draft (createToken with the reserved salt and metadataHash, optional first buy usd1Amount); a salt already used on chain is replaced first. buy: usd1Amount (fee included). sell: tokenAmount. Every docs/10 check runs at one snapshot block: curve TRADING (409 DATA_STALE MEME_CURVE_FULL / MEME_CURVE_NOT_TRADING), minimum buy 1 USD1 (422 MEME_BELOW_MIN_BUY), wallet cap 40,000,000 tokens (422 MEME_WALLET_CAP_EXCEEDED), balances (409 INSUFFICIENT_BALANCE MEME_USD1_BALANCE_INSUFFICIENT / MEME_SELL_EXCEEDS_BALANCE / MEME_GAS_INSUFFICIENT), minOut <= quote (422 MEME_MIN_OUT_ABOVE_QUOTE), and the Decision 0065 canary (403 POLICY_BLOCKED) with USD1 at par. When the USD1 (buy/create) or token (sell) allowance towards the curve is short, approval carries an exact approve to sign first (nonce N; the call is N+1). 503 CAPABILITY_UNAVAILABLE / MEME_WRITES_DISABLED while BSC_WRITES_ENABLED is off and MEME_MAINNET_SIGNING_CLOSED on chain 56. Idempotency-Key replays the same Intent. Decision 0151: kind create answers 410 MEME_CLASSIC_LAUNCH_RETIRED (nothing written) unless MEME_CLASSIC_CREATE_ENABLED is true; buy and sell are unchanged.",
         "requestBody": {
           "required": true,
           "content": {
@@ -152293,6 +152366,79 @@
                         "INSUFFICIENT_BALANCE",
                         "VERSION_CONFLICT"
                       ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["MEME_CLASSIC_LAUNCH_RETIRED"]
                     },
                     "category": {
                       "type": "string",

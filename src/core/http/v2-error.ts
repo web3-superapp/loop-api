@@ -15,7 +15,7 @@ export const v2ErrorCategories = Object.freeze([
 export type V2ErrorCategory = (typeof v2ErrorCategories)[number];
 
 export type V2ErrorStatusCode =
-  400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
+  400 | 401 | 403 | 404 | 409 | 410 | 422 | 429 | 500 | 502 | 503;
 
 export interface V2ErrorCatalogEntry {
   readonly statusCode: V2ErrorStatusCode;
@@ -135,6 +135,18 @@ export const v2ErrorCatalog = Object.freeze({
     category: "availability",
     retryable: true,
     userMessageKey: "errors.service.maintenance",
+    includeBearerChallenge: false,
+  },
+  /**
+   * Decision 0151: classic MEME launch creation (`POST /v2/meme/tokens`,
+   * create Intents) is retired; every launch goes through Loop Hook
+   * (`/v2/launch2`). Gone, not retryable: the client hides the entry.
+   */
+  MEME_CLASSIC_LAUNCH_RETIRED: {
+    statusCode: 410,
+    category: "availability",
+    retryable: false,
+    userMessageKey: "errors.meme.classicLaunchRetired",
     includeBearerChallenge: false,
   },
   NOT_FOUND: {

@@ -105,6 +105,8 @@ export type MemeBestTradeWindow = (typeof memeBestTradeWindows)[number];
 
 export const memeReasonCodes = Object.freeze({
   tokenNotFound: "MEME_TOKEN_NOT_FOUND",
+  /** Decision 0151: classic launch creation retired (410). */
+  classicLaunchRetired: "MEME_CLASSIC_LAUNCH_RETIRED",
   curveNotTrading: "MEME_CURVE_NOT_TRADING",
   curveFull: "MEME_CURVE_FULL",
   walletCapExceeded: "MEME_WALLET_CAP_EXCEEDED",

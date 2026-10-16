@@ -148,6 +148,7 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `INTERNAL_ERROR`              | 500    | `internal`       | no        | `errors.internal`                   |
 | `INVALID_REQUEST`             | 400    | `validation`     | no        | `errors.request.invalid`            |
 | `MAINTENANCE`                 | 503    | `availability`   | yes       | `errors.service.maintenance`        |
+| `MEME_CLASSIC_LAUNCH_RETIRED` | 410    | `availability`   | no        | `errors.meme.classicLaunchRetired`  |
 | `NOT_FOUND`                   | 404    | `validation`     | no        | `errors.resource.notFound`          |
 | `PERMISSION_DENIED`           | 403    | `authorization`  | no        | `errors.permission.denied`          |
 | `POLICY_BLOCKED`              | 403    | `authorization`  | no        | `errors.policy.blocked`             |

@@ -140,6 +140,15 @@ export const memeCommandErrors = {
   429: v2ErrorResponseSchema(["RATE_LIMITED"]),
 } as const;
 
+/**
+ * Decision 0151: the two classic-launch create surfaces (draft, create
+ * Intent) answer 410 while `MEME_CLASSIC_CREATE_ENABLED` is off.
+ */
+export const memeCreateCommandErrors = {
+  ...memeCommandErrors,
+  410: v2ErrorResponseSchema(["MEME_CLASSIC_LAUNCH_RETIRED"]),
+} as const;
+
 export const memeTokenIdParamsSchema = {
   type: "object",
   additionalProperties: false,

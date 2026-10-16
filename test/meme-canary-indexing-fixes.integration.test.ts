@@ -292,6 +292,7 @@ describe("Decision 0104 canary window and indexing fixes on PostgreSQL", () => {
         saltPoolTarget: 0,
         vanitySuffix: "",
         createDailyLimit: 3,
+        classicCreateEnabled: true,
       },
       repository,
       contract: createFakeMemeAdapter(options.chain),

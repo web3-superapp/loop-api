@@ -539,6 +539,12 @@ const memeEnvironmentShape = {
     .trim()
     .regex(/^[0-9a-fA-F]{0,8}$/u, { message: "must be 0-8 hex characters" }),
   MEME_CREATE_DAILY_LIMIT: positiveIntegerString(1, 1_000),
+  /**
+   * Decision 0151: classic MEME launch creation (drafts and create
+   * Intents) answers 410 MEME_CLASSIC_LAUNCH_RETIRED unless this is
+   * `true`. Reads, buy / sell, and reports are untouched.
+   */
+  MEME_CLASSIC_CREATE_ENABLED: booleanString,
 } as const;
 
 function memeEnvironmentDefaults(
@@ -552,6 +558,8 @@ function memeEnvironmentDefaults(
     MEME_SALT_POOL_TARGET: environment["MEME_SALT_POOL_TARGET"] ?? "50",
     MEME_VANITY_SUFFIX: environment["MEME_VANITY_SUFFIX"] ?? "6666",
     MEME_CREATE_DAILY_LIMIT: environment["MEME_CREATE_DAILY_LIMIT"] ?? "3",
+    MEME_CLASSIC_CREATE_ENABLED:
+      environment["MEME_CLASSIC_CREATE_ENABLED"] ?? "false",
   };
 }
 
@@ -2459,6 +2467,8 @@ export interface MemeConfig {
   /** Lowercase hex; empty disables the vanity suffix. */
   readonly vanitySuffix: string;
   readonly createDailyLimit: number;
+  /** Decision 0151: `MEME_CLASSIC_CREATE_ENABLED` (default false). */
+  readonly classicCreateEnabled: boolean;
 }
 
 /**
@@ -2477,6 +2487,7 @@ export function parseMemeConfig(
     readonly MEME_SALT_POOL_TARGET: number;
     readonly MEME_VANITY_SUFFIX: string;
     readonly MEME_CREATE_DAILY_LIMIT: number;
+    readonly MEME_CLASSIC_CREATE_ENABLED: boolean;
   },
   launchContract: LaunchContractConfig | null,
 ): MemeConfig {
@@ -2525,6 +2536,7 @@ export function parseMemeConfig(
     saltPoolTarget: data.MEME_SALT_POOL_TARGET,
     vanitySuffix: data.MEME_VANITY_SUFFIX.toLowerCase(),
     createDailyLimit: data.MEME_CREATE_DAILY_LIMIT,
+    classicCreateEnabled: data.MEME_CLASSIC_CREATE_ENABLED,
   };
   if (
     address === undefined ||

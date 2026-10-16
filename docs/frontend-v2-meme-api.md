@@ -1,5 +1,7 @@
 # 前端联调：V2 MEME 曲线发射台（S116 / 决策 0101；S116b / 决策 0103 修订）
 
+> **2026-10-16（决策 0151）**：经典发射**新建已停用**，所有发射统一走 Loop Hook（`/v2/launch2`）。`POST /v2/meme/tokens` 与 `POST /v2/meme/tokens/{id}/intents` 的 `kind: "create"` 默认返回 `410`，错误体 `{ code: "MEME_CLASSIC_LAUNCH_RETIRED", category: "availability", retryable: false, userMessageKey: "errors.meme.classicLaunchRetired", detailsSafe: { reasonCode: "MEME_CLASSIC_LAUNCH_RETIRED" } }`，文案「经典发射已停用，请使用 Loop Hook 发射」，不写任何数据。`kind: "buy" | "sell"`、broadcast-report、全部读接口不变；`meme` 能力位不变（不新增 id），客户端按自己的开关隐藏创建入口，收到 410 时不重试。服务端 `MEME_CLASSIC_CREATE_ENABLED=true` 时恢复旧行为（仅演示用）。
+>
 > **2026-10-09（决策 0102）**：`GET /v2/meme/tokens/{memeTokenId}` 的 `memeToken` 多两个键：`listing: "listed" | "hidden"` 与 `listingReason: { reasonCode: string | null, reasonText: string | null } | null`（恰在 `hidden` 时非 null，`reasonText` 是运营写给用户看的一句话）。`hidden` 的代币不出现在 `/v2/meme/tokens` 与 `category=meme`，详情仍可读；客户端把两个键当可选处理并在 hidden 时显示提示。
 >
 > **2026-10-09（决策 0105）**：`listingReason.reasonCode` 对外改为**大写目录码** `OPERATOR_<运营码大写>`

@@ -134,6 +134,13 @@ describe("V2 error code catalog", () => {
       "errors.service.maintenance",
       false,
     ],
+    MEME_CLASSIC_LAUNCH_RETIRED: [
+      410,
+      "availability",
+      false,
+      "errors.meme.classicLaunchRetired",
+      false,
+    ],
     NOT_FOUND: [404, "validation", false, "errors.resource.notFound", false],
     PERMISSION_DENIED: [
       403,
@@ -253,7 +260,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(32);
+    expect(v2ErrorCodes).toHaveLength(33);
   });
 
   it("keeps the category enum at exactly eight values", () => {

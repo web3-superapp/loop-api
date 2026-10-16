@@ -184,6 +184,14 @@ const tradesCursorRoute = "memeTrades";
 const holdersCursorRoute = "memeHolders";
 const decimalAmountPattern = /^(0|[1-9][0-9]{0,40})(\.[0-9]{1,18})?$/u;
 
+function isCreateIntentBody(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as Record<string, unknown>)["kind"] === "create"
+  );
+}
+
 function unavailableWith(reasonCode: string): never {
   throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
 }
@@ -275,6 +283,19 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
       );
     }
     return contract;
+  }
+
+  /**
+   * Decision 0151: classic launch creation is retired unless
+   * `MEME_CLASSIC_CREATE_ENABLED` is true. Checked before anything is read
+   * or written, so a refused request leaves no draft, salt, or Intent.
+   */
+  function assertClassicCreateEnabled(): void {
+    if (!deps.config.classicCreateEnabled) {
+      throw V2ApiError.fromCode("MEME_CLASSIC_LAUNCH_RETIRED", {
+        reasonCode: memeReasonCodes.classicLaunchRetired,
+      });
+    }
   }
 
   function cursorCodec(): V2CursorCodec {
@@ -1203,6 +1224,7 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
     },
 
     async createToken(input) {
+      assertClassicCreateEnabled();
       const contract = contractOrUnavailable();
       let metadata;
       try {
@@ -1290,6 +1312,9 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
     },
 
     prepareIntent(input) {
+      if (isCreateIntentBody(input.body)) {
+        assertClassicCreateEnabled();
+      }
       const contract = contractOrUnavailable();
       return prepareMemeIntent(
         {

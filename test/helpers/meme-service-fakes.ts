@@ -73,6 +73,9 @@ export const memeEnv = Object.freeze({
   MEME_CONTRACT_VERSION: "1.0.0",
   MEME_CONTRACT_START_BLOCK: "100",
   MEME_TOKEN_IMPLEMENTATION: memeImplementation,
+  // Decision 0151: classic creation is off by default; these suites
+  // exercise the pre-0151 behaviour behind the explicit switch.
+  MEME_CLASSIC_CREATE_ENABLED: "true",
 });
 
 export const memeWritesEnv = Object.freeze({

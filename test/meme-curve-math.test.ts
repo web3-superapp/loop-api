@@ -245,6 +245,7 @@ describe("MEME metadata and configuration (Decision 0101)", () => {
       MEME_SALT_POOL_TARGET: 50,
       MEME_VANITY_SUFFIX: "6666",
       MEME_CREATE_DAILY_LIMIT: 3,
+      MEME_CLASSIC_CREATE_ENABLED: false,
     };
     const keys = {
       MEME_CONTRACT_ADDRESS: "0xE108d45e3e9d7b8c9c02c5e10544ad811cb39b8a",
@@ -262,6 +263,12 @@ describe("MEME metadata and configuration (Decision 0101)", () => {
     expect(parseMemeConfig(base, launch).unconfiguredReason).toBe(
       "MEME_CONTRACT_NOT_CONFIGURED",
     );
+    // Decision 0151: the switch is carried through as-is.
+    expect(parseMemeConfig(base, launch).classicCreateEnabled).toBe(false);
+    expect(
+      parseMemeConfig({ ...base, MEME_CLASSIC_CREATE_ENABLED: true }, launch)
+        .classicCreateEnabled,
+    ).toBe(true);
     expect(
       parseMemeConfig(
         { ...base, ...keys, MEME_TOKEN_IMPLEMENTATION: undefined },

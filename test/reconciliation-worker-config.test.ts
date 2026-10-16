@@ -51,6 +51,7 @@ describe("loadReconciliationWorkerConfig", () => {
         saltPoolTarget: 50,
         vanitySuffix: "6666",
         createDailyLimit: 3,
+        classicCreateEnabled: false,
       },
       memeIndexerEnabled: false,
       memeGraduationExecutor: null,

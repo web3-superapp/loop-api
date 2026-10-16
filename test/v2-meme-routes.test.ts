@@ -178,7 +178,8 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       headers: s7CommandHeaders(),
       payload: { name: "Frog", symbol: "FROG" },
     });
-    expect(created.statusCode).toBe(503);
+    // Decision 0151: the retired create answers 410 before the contract check.
+    expect(created.statusCode).toBe(410);
     const capabilities = await get(app, "/v2/meta/capabilities");
     const meme = capabilities
       .json<{ capabilities: { capabilityId: string }[] }>()
@@ -1154,6 +1155,148 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     });
     expect(refused.statusCode).toBe(404);
   });
+  describe("Decision 0151 classic launch retired", () => {
+    const retiredEnv = {
+      ...memeWritesEnv,
+      MEME_CLASSIC_CREATE_ENABLED: "false",
+    };
+
+    function expectRetired(response: {
+      statusCode: number;
+      headers: Record<string, unknown>;
+      json: <T>() => T;
+    }): void {
+      expect(response.statusCode).toBe(410);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = response.json<Record<string, unknown>>();
+      expect(Object.keys(body).sort()).toEqual(errorKeys);
+      expect(body).toMatchObject({
+        code: "MEME_CLASSIC_LAUNCH_RETIRED",
+        category: "availability",
+        retryable: false,
+        userMessageKey: "errors.meme.classicLaunchRetired",
+        detailsSafe: { reasonCode: "MEME_CLASSIC_LAUNCH_RETIRED" },
+        providerReferenceSafe: null,
+      });
+    }
+
+    it("defaults the switch off and refuses a malformed value at boot", () => {
+      const withoutSwitch: Record<string, string> = { ...memeEnv };
+      delete withoutSwitch["MEME_CLASSIC_CREATE_ENABLED"];
+      expect(s7TestConfig(withoutSwitch).meme.classicCreateEnabled).toBe(false);
+      expect(
+        s7TestConfig({ ...memeEnv, MEME_CLASSIC_CREATE_ENABLED: "true" }).meme
+          .classicCreateEnabled,
+      ).toBe(true);
+      expect(() =>
+        s7TestConfig({ ...memeEnv, MEME_CLASSIC_CREATE_ENABLED: "yes" }),
+      ).toThrow(/MEME_CLASSIC_CREATE_ENABLED/);
+    });
+
+    it("answers 410 to a draft and a create Intent and writes nothing", async () => {
+      const { app, repository } = await createApp({ env: retiredEnv });
+      const draft = memeTokenFixture({
+        creatorUserId: s7AccountId,
+        status: "draft",
+        tokenAddress: null,
+        assetId: null,
+      });
+      repository.tokens.set(draft.memeTokenId, draft);
+      const before = structuredClone([...repository.tokens.entries()]);
+
+      expectRetired(
+        await app.inject({
+          method: "POST",
+          url: "/v2/meme/tokens",
+          headers: s7CommandHeaders(),
+          payload: { name: "Frog", symbol: "FROG" },
+        }),
+      );
+      expectRetired(
+        await app.inject({
+          method: "POST",
+          url: `/v2/meme/tokens/${draft.memeTokenId}/intents`,
+          headers: s7CommandHeaders({
+            "idempotency-key": s7IdempotencyKey("2"),
+          }),
+          payload: { kind: "create", walletId, usd1Amount: "5" },
+        }),
+      );
+      expect([...repository.tokens.entries()]).toEqual(before);
+      expect(repository.intents.size).toBe(0);
+
+      // The same Idempotency-Key works once the switch is on: nothing was
+      // recorded against it while retired.
+      const enabled = await createApp({
+        env: { ...memeWritesEnv, MEME_CLASSIC_CREATE_ENABLED: "true" },
+        repository,
+      });
+      const created = await enabled.app.inject({
+        method: "POST",
+        url: "/v2/meme/tokens",
+        headers: s7CommandHeaders(),
+        payload: { name: "Frog", symbol: "FROG" },
+      });
+      expect(created.statusCode).toBe(201);
+    });
+
+    it("keeps reads, buy, sell, reports, and the capability unchanged", async () => {
+      const funds = defaultMemeFunds({ tokenBalance: 1_000_000n * memeE18 });
+      const { app, repository, chain } = await createApp({
+        env: retiredEnv,
+        funds,
+      });
+      const traded = quoteMemeBuy(freshMemeCurve, 1_000n * memeE18);
+      const token = seedTrading(repository, chain, {
+        vUsd1: traded.newVUsd1.toString(),
+        vToken: traded.newVToken.toString(),
+      });
+      for (const url of [
+        "/v2/meme/tokens",
+        `/v2/meme/tokens/${token.memeTokenId}`,
+        `/v2/meme/tokens/${token.memeTokenId}/trades`,
+        `/v2/meme/tokens/${token.memeTokenId}/candles?interval=1h`,
+        `/v2/meme/tokens/${token.memeTokenId}/holders`,
+        `/v2/meme/quote?tokenId=${token.memeTokenId}&side=buy&amount=10`,
+      ]) {
+        expect((await get(app, url)).statusCode, url).toBe(200);
+      }
+      const buy = await app.inject({
+        method: "POST",
+        url: `/v2/meme/tokens/${token.memeTokenId}/intents`,
+        headers: s7CommandHeaders(),
+        payload: { kind: "buy", walletId, usd1Amount: "10" },
+      });
+      expect(buy.statusCode).toBe(201);
+      const sell = await app.inject({
+        method: "POST",
+        url: `/v2/meme/tokens/${token.memeTokenId}/intents`,
+        headers: s7CommandHeaders({ "idempotency-key": s7IdempotencyKey("5") }),
+        payload: { kind: "sell", walletId, tokenAmount: "1000" },
+      });
+      expect(sell.statusCode).toBe(201);
+      const intentId = buy.json<{ memeIntent: { memeIntentId: string } }>()
+        .memeIntent.memeIntentId;
+      const reported = await app.inject({
+        method: "POST",
+        url: `/v2/meme/tokens/${token.memeTokenId}/intents/${intentId}/broadcast-report`,
+        headers: s7CommandHeaders({ "idempotency-key": s7IdempotencyKey("d") }),
+        payload: { txHash: `0x${"9a".repeat(32)}` },
+      });
+      expect(reported.statusCode).toBe(200);
+      expect((await get(app, `/v2/meme/intents/${intentId}`)).statusCode).toBe(
+        200,
+      );
+      const meme = (await get(app, "/v2/meta/capabilities"))
+        .json<{ capabilities: { capabilityId: string }[] }>()
+        .capabilities.find((item) => item.capabilityId === "meme");
+      expect(meme).toMatchObject({
+        availability: "available",
+        reasonCode: null,
+      });
+    });
+  });
+
   describe("Decision 0104 canary and chain-read fixes", () => {
     const post = (
       app: FastifyInstance,
