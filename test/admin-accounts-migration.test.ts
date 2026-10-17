@@ -64,7 +64,9 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000090_launch2_dynamic_usd1_buy_fee");
+    expect(latestMigrationName).toBe(
+      "000091_launch2_pool_user_trades_buyback_tx",
+    );
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

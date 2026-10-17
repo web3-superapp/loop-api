@@ -809,6 +809,106 @@ describe("Decision 0132: LoopDynamic wallet attribution and MEME coverage degrad
     ]);
   });
 
+  it("counts a LoopDynamic buyback routed through the LoopRouter as a buyback, not a user trade (Decision 0158, 000091)", async () => {
+    const target = await instance();
+    const poolId = `0x${"58".repeat(32)}`;
+    const router = `0x${"7c".repeat(20)}`;
+    const swapArgs = (amount0: string) => ({
+      id: poolId,
+      // Every LoopDynamic swap, the buyback's included, reaches the
+      // PoolManager through the shared LoopRouter.
+      sender: router,
+      amount0,
+      amount1: "160000",
+      sqrtPriceX96: (2n ** 96n).toString(10),
+      liquidity: "1",
+      tick: "0",
+      fee: "2500",
+      memeIsCurrency0: "false",
+      poolHookKind: "loopDynamic",
+      dynamicFee: "0",
+    });
+    const graduated = {
+      ...event(
+        target,
+        target.curve,
+        "Graduated",
+        { officialPoolId: poolId, soldSupply: "1", usd1Reserve: "1" },
+        7_000,
+        0,
+      ),
+      transactionHash: hex(32),
+    };
+    const buybackTx = hex(32);
+    const buybackSwap = {
+      ...event(
+        target,
+        `0x${"8".repeat(40)}`,
+        "Swap",
+        swapArgs("-100"),
+        7_001,
+        2,
+      ),
+      transactionHash: buybackTx,
+    };
+    const buyback = {
+      ...event(
+        target,
+        `0x${"9".repeat(40)}`,
+        "BuybackCompleted",
+        {
+          usd1Spent: "100",
+          memeDelivered: "160000",
+          successfulAt: "1800007001",
+        },
+        7_001,
+        5,
+      ),
+      transactionHash: buybackTx,
+    };
+    const userSwaps = [7_002, 7_003].map((block) => ({
+      ...event(
+        target,
+        `0x${"8".repeat(40)}`,
+        "Swap",
+        swapArgs("-50"),
+        block,
+        1,
+      ),
+      transactionHash: hex(32),
+    }));
+    await commit([graduated, buybackSwap, buyback, ...userSwaps], 7_003);
+    const counts = async () =>
+      (
+        await pool.query<{
+          trades: string;
+          user: string;
+          user_buy: string;
+        }>(
+          `select pool_trade_count::text as trades,
+             pool_user_trade_count::text as "user",
+             pool_user_buy_volume_usd1::text as user_buy
+           from public.launch2_instances where instance_id = $1`,
+          [target.instanceId],
+        )
+      ).rows[0];
+    // tradeCount - userTradeCount = the executed buybacks.
+    expect(await counts()).toEqual({ trades: "3", user: "2", user_buy: "100" });
+    // The 000091 backfill applies the same rule to an existing row.
+    await pool.query(
+      `update public.launch2_instances
+         set pool_user_trade_count = pool_trade_count
+       where instance_id = $1`,
+      [target.instanceId],
+    );
+    const { up } =
+      await import("../migrations/000091_launch2_pool_user_trades_buyback_tx.js");
+    const statements: string[] = [];
+    up({ sql: (text: string) => statements.push(text) } as never);
+    await pool.query(statements[0]!);
+    expect((await counts())?.user).toBe("2");
+  });
+
   it("stores an S209 Hook's USD1 buy fee next to a pre-S209 MEME one (Decision 0152, 000090)", async () => {
     const target = await instance();
     const s209Hook = `0x${"d".repeat(36)}10cc`;

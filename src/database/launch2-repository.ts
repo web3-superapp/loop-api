@@ -177,11 +177,22 @@ const nftSaleEndColumn = `
 /**
  * Decision 0127: a pool swap that is not a buyback — its PoolManager caller
  * is neither the instance's buyback adapter (the contract that swaps for
- * the executor) nor the executor itself. Used inside a query over
- * `launch2_pool_swaps` joined to its instance `i`.
+ * the executor) nor the executor itself. Decision 0158: nor a swap in a
+ * transaction that recorded one of the instance's buybacks — a LoopDynamic
+ * buyback reaches the PoolManager through the shared LoopRouter, so its
+ * caller is the router, like every user swap (S221: 2 buybacks counted as
+ * user trades). `swap` is the `launch2_pool_swaps` alias; the instance is
+ * `i`.
  */
-const userSwap = `caller_address is distinct from i.buyback_adapter_address
-  and caller_address is distinct from i.buyback_executor_address`;
+const userSwap = (swap: string): string => `${swap}.caller_address
+    is distinct from i.buyback_adapter_address
+  and ${swap}.caller_address is distinct from i.buyback_executor_address
+  and not exists (
+    select 1 from public.launch2_buybacks b
+    where b.chain_id = ${swap}.chain_id
+      and b.instance_id = ${swap}.instance_id
+      and b.transaction_hash = ${swap}.transaction_hash
+      and not b.removed)`;
 
 const instanceColumns = `
   instance_id::text, job_id::text, project_id::text, config_version,
@@ -971,11 +982,11 @@ async function reproject(
             -- Decision 0127: market trades only — swaps the instance's own
             -- buyback adapter / executor sent to the PoolManager are
             -- buybacks (ledger: launch2_buybacks), not outside trading.
-            'userCount', count(*) filter (where ${userSwap})::text,
-            'userBuyUsd1', coalesce(sum(usd1_amount) filter (where side = 'buy' and ${userSwap}), 0)::text,
-            'userSellUsd1', coalesce(sum(usd1_amount) filter (where side = 'sell' and ${userSwap}), 0)::text)
-          from public.launch2_pool_swaps
-          where instance_id = $1 and not removed) as pool_swaps,
+            'userCount', count(*) filter (where ${userSwap("ps")})::text,
+            'userBuyUsd1', coalesce(sum(ps.usd1_amount) filter (where ps.side = 'buy' and ${userSwap("ps")}), 0)::text,
+            'userSellUsd1', coalesce(sum(ps.usd1_amount) filter (where ps.side = 'sell' and ${userSwap("ps")}), 0)::text)
+          from public.launch2_pool_swaps ps
+          where ps.instance_id = $1 and not ps.removed) as pool_swaps,
         i.meme_address, i.nft_address, i.curve_address, i.hook_address,
         i.project_owner, i.activation_block_number::text as activation_block,
         i.snapshot_root, i.factory_generation
@@ -1514,11 +1525,7 @@ const activitySql = `
         s.swapped_at, s.transaction_hash, s.block_number, s.log_index
       from public.launch2_pool_swaps s
       join visible i on i.instance_id = s.instance_id
-      where not s.removed and ${userSwap}
-        and not exists (
-          select 1 from public.launch2_buybacks b
-          where b.chain_id = s.chain_id
-            and b.transaction_hash = s.transaction_hash and not b.removed)
+      where not s.removed and ${userSwap("s")}
       order by s.swapped_at desc, s.block_number desc, s.log_index desc
       limit $2)
     union all

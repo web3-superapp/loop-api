@@ -63,7 +63,9 @@ describe("000059 Hooks deployment executor", () => {
   });
 
   it("is the head migration and registers the new relations", () => {
-    expect(latestMigrationName).toBe("000090_launch2_dynamic_usd1_buy_fee");
+    expect(latestMigrationName).toBe(
+      "000091_launch2_pool_user_trades_buyback_tx",
+    );
     expect(requiredDatabaseRelations).toEqual(
       expect.arrayContaining([
         "public.hooks_launch_deployment_events",

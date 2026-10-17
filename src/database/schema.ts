@@ -1,4 +1,4 @@
-export const latestMigrationName = "000090_launch2_dynamic_usd1_buy_fee";
+export const latestMigrationName = "000091_launch2_pool_user_trades_buyback_tx";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
