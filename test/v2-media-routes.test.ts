@@ -354,6 +354,7 @@ describe("LOOP API V2 media (Decision 0095)", () => {
       "public, max-age=31536000, immutable",
     );
     expect(image.headers["x-content-type-options"]).toBe("nosniff");
+    expect(image.headers["cross-origin-resource-policy"]).toBe("cross-origin");
     const etag = image.headers["etag"];
     expect(etag).toMatch(/^"[A-Za-z0-9_-]{43}"$/);
     const meta = await sharp(image.rawPayload).metadata();
@@ -365,6 +366,9 @@ describe("LOOP API V2 media (Decision 0095)", () => {
       headers: { "if-none-match": String(etag) },
     });
     expect(revalidated.statusCode).toBe(304);
+    expect(revalidated.headers["cross-origin-resource-policy"]).toBe(
+      "cross-origin",
+    );
   });
 
   it("uploads a community logo with a logo ref", async () => {

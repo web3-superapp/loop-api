@@ -225,7 +225,7 @@ export function registerV2MediaRoutes(
         operationId: "getV2Media",
         summary: "Get an uploaded avatar or community logo",
         description:
-          "Public immutable image resource (Decision 0095); no authentication and no LOOP headers, like the token logo proxy. 200 image/webp with `Cache-Control: public, max-age=31536000, immutable` and a strong ETag; `If-None-Match` answers 304; an unknown ID is 404 NOT_FOUND.",
+          "Public immutable image resource (Decision 0095); no authentication and no LOOP headers, like the token logo proxy. 200 image/webp with `Cache-Control: public, max-age=31536000, immutable` and a strong ETag; `If-None-Match` answers 304; an unknown ID is 404 NOT_FOUND. Decision 0157: `Cross-Origin-Resource-Policy: cross-origin`, so any web origin may embed it.",
         tags: ["profile"],
         security: [],
         params: {
@@ -263,6 +263,9 @@ export function registerV2MediaRoutes(
       reply.header("cache-control", mediaCacheControl);
       reply.header("etag", media.etag);
       reply.header("x-content-type-options", "nosniff");
+      // Decision 0157: helmet's default `same-origin` would make browsers
+      // refuse these public images on other origins (the public MEME page).
+      reply.header("cross-origin-resource-policy", "cross-origin");
       if (ifNoneMatchSatisfied(request.headers["if-none-match"], media.etag)) {
         return reply.code(304).send();
       }

@@ -132524,7 +132524,7 @@
         "operationId": "getV2Media",
         "summary": "Get an uploaded avatar or community logo",
         "tags": ["profile"],
-        "description": "Public immutable image resource (Decision 0095); no authentication and no LOOP headers, like the token logo proxy. 200 image/webp with `Cache-Control: public, max-age=31536000, immutable` and a strong ETag; `If-None-Match` answers 304; an unknown ID is 404 NOT_FOUND.",
+        "description": "Public immutable image resource (Decision 0095); no authentication and no LOOP headers, like the token logo proxy. 200 image/webp with `Cache-Control: public, max-age=31536000, immutable` and a strong ETag; `If-None-Match` answers 304; an unknown ID is 404 NOT_FOUND. Decision 0157: `Cross-Origin-Resource-Policy: cross-origin`, so any web origin may embed it.",
         "parameters": [
           {
             "schema": {
