@@ -298,7 +298,18 @@ export function createHooksLaunchFactoryReader(input: {
       fallback(input.rpcUrls.map((url) => http(url, { timeout: 8_000 }))),
   });
 
-  async function verifyNetworkAndCode(): Promise<void> {
+  // Decision 0155: concurrent reads of one command (the submission runs its
+  // nonce / token / Hook reads in parallel) share one in-flight network and
+  // code check instead of each downloading the ~28 KB Factory code; every
+  // new call after it settles still verifies afresh.
+  let verifying: Promise<void> | null = null;
+  function verifyNetworkAndCode(): Promise<void> {
+    verifying ??= verifyNetworkAndCodeOnce().finally(() => {
+      verifying = null;
+    });
+    return verifying;
+  }
+  async function verifyNetworkAndCodeOnce(): Promise<void> {
     try {
       const [chainId, code] = await Promise.all([
         client.getChainId(),
@@ -426,16 +437,18 @@ export function createHooksLaunchFactoryReader(input: {
           abi: hooksLaunchFactoryAbi,
           functionName: "tokenDeployer",
         });
-        const code = await client.getBytecode({ address: deployer });
+        const [code, initCodeHash] = await Promise.all([
+          client.getBytecode({ address: deployer }),
+          client.readContract({
+            address: deployer,
+            abi: tokenDeployerAbi,
+            functionName: "memeInitCodeHash",
+            args: [request.name, request.ticker, factoryAddress],
+          }),
+        ]);
         if (code === undefined || code === "0x") {
           throw new Error("Token deployer has no code");
         }
-        const initCodeHash = await client.readContract({
-          address: deployer,
-          abi: tokenDeployerAbi,
-          functionName: "memeInitCodeHash",
-          args: [request.name, request.ticker, factoryAddress],
-        });
         return { deployer, initCodeHash };
       } catch {
         throw new Error("Hooks launch factory read unavailable");

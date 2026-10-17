@@ -223,6 +223,16 @@ export interface HooksLaunchSubmissionService {
     jobId: string,
   ): Promise<HooksLaunchDeploymentJob | null>;
 }
+/**
+ * Decision 0155: the wall-clock budget for every chain read of one
+ * submission, well inside the 15 s `handlerTimeout`. A slow or hanging RPC
+ * then ends the command with 503 HOOKS_LAUNCH_FACTORY_UNAVAILABLE and
+ * nothing recorded, instead of the handler timing out while it keeps
+ * running and records (and the executor broadcasts) a task the client was
+ * told failed.
+ */
+export const hooksLaunchSubmissionChainBudgetMs = 8_000;
+
 export function createHooksLaunchSubmissionService(input: {
   readonly configs: HooksLaunchProjectConfigRepository | null;
   readonly wallets: AccountWalletRepository | null;
@@ -236,8 +246,12 @@ export function createHooksLaunchSubmissionService(input: {
    * reader must be on it, and chain 56 needs `LAUNCH_MAINNET_ACK`.
    */
   readonly launchSlot?: LaunchSlotPolicy;
+  /** Decision 0155: chain-read budget per submission (test seam). */
+  readonly chainBudgetMs?: number;
 }): HooksLaunchSubmissionService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1000));
+  const chainBudgetMs =
+    input.chainBudgetMs ?? hooksLaunchSubmissionChainBudgetMs;
   return {
     async cancelOwned(ownerUserId, projectId, jobId) {
       if (!input.repository)
@@ -271,14 +285,27 @@ export function createHooksLaunchSubmissionService(input: {
         throw new HooksLaunchSubmissionError("invalid");
       const body = parsed.data;
       const request = body.request;
+      // Decision 0155: one deadline for all chain reads of this command.
+      const chainDeadline = Date.now() + chainBudgetMs;
+      const withinChainBudget = <T>(work: Promise<T>): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        const expired = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new HooksLaunchSubmissionError("unavailable")),
+            Math.max(0, chainDeadline - Date.now()),
+          );
+        });
+        return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+      };
       // Decision 0132: a LoopDynamic Factory's TEMPLATE_HASH is in the
       // signed struct; OfficialTax keeps the constant (no read).
       const loopDynamic = reader.hookKind === "loopDynamic";
       let templateHash: string | null = null;
       if (loopDynamic) {
         try {
-          templateHash = (await readHooksLaunchFactoryTemplate(reader))
-            .templateHash;
+          templateHash = (
+            await withinChainBudget(readHooksLaunchFactoryTemplate(reader))
+          ).templateHash;
         } catch {
           throw new HooksLaunchSubmissionError("unavailable");
         }
@@ -388,12 +415,31 @@ export function createHooksLaunchSubmissionService(input: {
       let memeAddress: string;
       let hookAddress: string;
       try {
-        await assertHooksLaunchFactoryTemplate(
-          reader,
-          draft.config,
-          () => new HooksLaunchSubmissionError("template_mismatch"),
-        );
-        if ((await reader.nonce(wallet.address)) !== BigInt(request.nonce))
+        // Decision 0155: the independent Factory reads run concurrently
+        // under the command's chain budget; results are still checked in
+        // the original order (template, nonce, MEME, Hook).
+        const [templateCheck, nonceRead, tokenRead, hookRead, templateRead] =
+          await withinChainBudget(
+            Promise.allSettled([
+              assertHooksLaunchFactoryTemplate(
+                reader,
+                draft.config,
+                () => new HooksLaunchSubmissionError("template_mismatch"),
+              ),
+              reader.nonce(wallet.address),
+              reader.tokenDeployment(request),
+              reader.hookDeployment(request),
+              loopDynamic
+                ? readHooksLaunchFactoryTemplate(reader)
+                : Promise.resolve(null),
+            ]),
+          );
+        const settled = <T>(result: PromiseSettledResult<T>): T => {
+          if (result.status === "rejected") throw result.reason;
+          return result.value;
+        };
+        settled(templateCheck);
+        if (settled(nonceRead) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({
           chainId: reader.chainId,
@@ -402,7 +448,7 @@ export function createHooksLaunchSubmissionService(input: {
           configVersion: request.configVersion,
           configHash: request.configHash,
         });
-        const token = await reader.tokenDeployment(request);
+        const token = settled(tokenRead);
         memeAddress = getCreate2Address({
           from: token.deployer as Hex,
           salt: keccak256(concatHex([launchId, request.memeSalt as Hex])),
@@ -410,7 +456,7 @@ export function createHooksLaunchSubmissionService(input: {
         });
         if (!memeAddress.toLowerCase().endsWith("6666"))
           throw new HooksLaunchSubmissionError("invalid");
-        const hook = await reader.hookDeployment(request);
+        const hook = settled(hookRead);
         hookAddress = getCreate2Address({
           from: hook.deployer as Hex,
           salt: body.hookSalt as Hex,
@@ -418,11 +464,13 @@ export function createHooksLaunchSubmissionService(input: {
         });
         // Decision 0152: a LoopDynamic Factory's bits follow its template
         // (0x10CC for S209, 0x10C4 before).
-        const requiredBits = loopDynamic
-          ? hooksLaunchLoopDynamicHookPermissionBits(
-              (await readHooksLaunchFactoryTemplate(reader)).loopDynamic ?? {},
-            )
-          : hooksLaunchHookPermissionBits.officialTax;
+        const template = settled(templateRead);
+        const requiredBits =
+          template !== null
+            ? hooksLaunchLoopDynamicHookPermissionBits(
+                template.loopDynamic ?? {},
+              )
+            : hooksLaunchHookPermissionBits.officialTax;
         if (
           (BigInt(hookAddress) & 0x3fffn) !== requiredBits ||
           (loopDynamic && /^0x0{64}$/iu.test(body.hookSalt))

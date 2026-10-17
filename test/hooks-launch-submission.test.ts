@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { custom, encodeAbiParameters, keccak256 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import {
   createHooksLaunchDeploymentService,
   type HooksLaunchFactoryReader,
 } from "../src/features/launch/hooks-launch-deployment.js";
 import {
   createHooksLaunchSubmissionService,
+  hooksLaunchSubmissionChainBudgetMs,
   type HooksLaunchSubmissionRepository,
   type AcceptHooksLaunchSubmission,
   type HooksLaunchDeploymentJob,
@@ -272,5 +275,92 @@ describe("Hooks signed deployment submission", { timeout: 60_000 }, () => {
       service.submit({ ...command, body: await payload() }),
     ).rejects.toMatchObject({ kind: "template_mismatch" });
     expect(save).not.toHaveBeenCalled();
+  });
+  it("ends a submission on a hanging chain read within the budget and records nothing (Decision 0155)", async () => {
+    const body = await payload();
+    const hanging = new Promise<never>(() => undefined);
+    const { service, save } = fixture({
+      chainBudgetMs: 200,
+      reader: { ...reader, nonce: () => hanging },
+    });
+    const started = Date.now();
+    await expect(service.submit({ ...command, body })).rejects.toMatchObject({
+      kind: "unavailable",
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(save).not.toHaveBeenCalled();
+    // The default budget stays well inside the 15 s handlerTimeout.
+    expect(hooksLaunchSubmissionChainBudgetMs).toBeLessThanOrEqual(10_000);
+  });
+  it("runs the independent Factory reads concurrently, so slow reads do not add up (Decision 0155)", async () => {
+    const body = await payload();
+    const slow = <T>(value: T) =>
+      new Promise<T>((resolve) => setTimeout(() => resolve(value), 300));
+    const { service, save } = fixture({
+      chainBudgetMs: 800,
+      reader: {
+        ...reader,
+        nftSaleDuration: () => slow({ seconds: 604_800, legacy: false }),
+        nonce: () => slow(7n),
+        tokenDeployment: async (request) =>
+          slow(await reader.tokenDeployment(request)),
+        hookDeployment: async (request) =>
+          slow(await reader.hookDeployment(request)),
+      },
+    });
+    const started = Date.now();
+    const job = await service.submit({ ...command, body });
+    expect(job.status).toBe("awaiting_executor");
+    // Sequential reads would take >= 1,200 ms and blow the 800 ms budget.
+    expect(Date.now() - started).toBeLessThan(800);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+  it("still reports a stale nonce as conflict when other reads are concurrent", async () => {
+    const body = await payload();
+    const { service, save } = fixture({
+      reader: { ...reader, nonce: () => Promise.resolve(8n) },
+    });
+    await expect(service.submit({ ...command, body })).rejects.toMatchObject({
+      kind: "conflict",
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("shares one in-flight network and code check between concurrent reads (Decision 0155)", async () => {
+    const code = `0x${"60".repeat(64)}` as const;
+    const counts = { chainId: 0, getCode: 0 };
+    const transport = custom({
+      request: async ({ method }: { method: string }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        if (method === "eth_chainId") {
+          counts.chainId += 1;
+          return "0x61";
+        }
+        if (method === "eth_getCode") {
+          counts.getCode += 1;
+          return code;
+        }
+        if (method === "eth_call")
+          return encodeAbiParameters([{ type: "uint256" }], [7n]);
+        throw new Error(`unexpected ${method}`);
+      },
+    });
+    const chainReader = createHooksLaunchFactoryReader({
+      factoryAddress: "0x1111111111111111111111111111111111111111",
+      expectedRuntimeCodeHash: keccak256(code),
+      rpcUrls: [],
+      transport,
+    });
+    const owner = "0x2222222222222222222222222222222222222222";
+    expect(
+      await Promise.all([
+        chainReader.nonce(owner),
+        chainReader.nonce(owner),
+        chainReader.nonce(owner),
+      ]),
+    ).toEqual([7n, 7n, 7n]);
+    expect(counts).toEqual({ chainId: 1, getCode: 1 });
+    // A later call verifies afresh.
+    await chainReader.nonce(owner);
+    expect(counts).toEqual({ chainId: 2, getCode: 2 });
   });
 });
