@@ -69,12 +69,31 @@ export function createLaunch2DynamicPokeChain(input: {
           functionName,
           blockNumber: block.number,
         }) as Promise<T>;
-      const [armed, initialized, candleId] = await Promise.all([
+      const [
+        armed,
+        initialized,
+        candleId,
+        candleOpenSqrtPriceX96,
+        lastSqrtPriceX96,
+        memeIsCurrency0,
+      ] = await Promise.all([
         read<boolean>("armed"),
         read<boolean>("initialized"),
         read<bigint>("candleId"),
+        // Decision 0158: what an unarmed roll arms on.
+        read<bigint>("candleOpenSqrtPriceX96"),
+        read<bigint>("lastSqrtPriceX96"),
+        read<boolean>("memeIsCurrency0"),
       ]);
-      return { armed, initialized, candleId, blockTimestamp: block.timestamp };
+      return {
+        armed,
+        initialized,
+        candleId,
+        blockTimestamp: block.timestamp,
+        candleOpenSqrtPriceX96,
+        lastSqrtPriceX96,
+        memeIsCurrency0,
+      };
     },
     async simulatePoke(hook) {
       try {

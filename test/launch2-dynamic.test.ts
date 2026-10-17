@@ -137,6 +137,30 @@ describe("LoopDynamic arithmetic (Decision 0131)", () => {
     expect(
       launch2DynamicPokeDue({ ...base, armed: true }, 100n * 300n + 299n),
     ).toBe(false);
+    // Decision 0158: an idle candle (no trade, open == last) or one that
+    // fell by 10 % or less cannot arm the Hook, so it is not poked; the
+    // armed path is unchanged; missing prices fail safe.
+    const idle = { ...base, lastSqrtPriceX96: base.candleOpenSqrtPriceX96 };
+    expect(launch2DynamicPokeDue(idle, 105n * 300n, { graduated: true })).toBe(
+      false,
+    );
+    expect(launch2DynamicPokeDue({ ...idle, armed: true }, 105n * 300n)).toBe(
+      true,
+    );
+    expect(
+      launch2DynamicPokeDue(
+        { ...base, lastSqrtPriceX96: 960n * q96 },
+        101n * 300n,
+        { graduated: true },
+      ),
+    ).toBe(false);
+    expect(
+      launch2DynamicPokeDue(
+        { armed: false, initialized: true, candleId: 100n },
+        101n * 300n,
+        { graduated: true },
+      ),
+    ).toBe(false);
   });
 
   it("closes an armed round on a candle that no longer falls (Decision 0144)", () => {
@@ -705,6 +729,7 @@ describe("LoopDynamic Factory list and poke lane (Decision 0131)", () => {
     const running = `0x${"b".repeat(40)}`;
     const ungraduated = `0x${"c".repeat(40)}`;
     const armedStale = `0x${"d".repeat(40)}`;
+    const idle = `0x${"e".repeat(40)}`;
     const instance = (id: string, hook: string, graduated: boolean) =>
       ({
         instanceId: id,
@@ -721,6 +746,7 @@ describe("LoopDynamic Factory list and poke lane (Decision 0131)", () => {
             instance("running", running, true),
             instance("ungraduated", ungraduated, false),
             instance("armed", armedStale, false),
+            instance("idle", idle, true),
           ]),
       },
       chain: {
@@ -733,6 +759,12 @@ describe("LoopDynamic Factory list and poke lane (Decision 0131)", () => {
             candleId: 100n,
             // The S221 case: the crash candle (100) ended minutes ago.
             blockTimestamp: hook === running ? 100n * 300n + 120n : 102n * 300n,
+            // Decision 0158: a -19 % (price) crash candle, except the idle
+            // Hook's empty candle (open == last) and the armed one's.
+            candleOpenSqrtPriceX96: 1_000n * q96,
+            lastSqrtPriceX96:
+              hook === idle || hook === armedStale ? 1_000n * q96 : 900n * q96,
+            memeIsCurrency0: true,
           }),
         simulatePoke: () => Promise.resolve(null),
         sendPoke: (hook) => {
@@ -748,11 +780,11 @@ describe("LoopDynamic Factory list and poke lane (Decision 0131)", () => {
     });
     expect(await lane.runOnce()).toEqual({
       kind: "advanced",
-      checked: 4,
+      checked: 5,
       poked: 2,
     });
-    // Unarmed + ended candle → poked; unarmed + running candle → not;
-    // the armed path is unchanged.
+    // Unarmed + ended crash candle → poked; unarmed + running candle → not;
+    // an idle empty candle → not (Decision 0158); the armed path unchanged.
     expect(sent).toEqual([stale, armedStale]);
   });
 });

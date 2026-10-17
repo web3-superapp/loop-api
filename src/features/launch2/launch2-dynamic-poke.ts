@@ -1,7 +1,10 @@
 import { waitFor, type PeriodicLane } from "../../bsc-meme-indexer-worker.js";
 import { launchSlotReasonCodes } from "../chain/chain-contract.js";
 import type { ChainGuardHoldCheck } from "../chain-guard/chain-guard-hold.js";
-import { launch2DynamicCandleSeconds } from "./launch2-dynamic.js";
+import {
+  launch2DynamicCandleSeconds,
+  launch2DynamicCrashOverTenPercent,
+} from "./launch2-dynamic.js";
 import type { Launch2Repository } from "./launch2-ports.js";
 
 /**
@@ -16,7 +19,11 @@ import type { Launch2Repository } from "./launch2-ports.js";
  * instance's initialized Hook is also poked while unarmed once its candle
  * has ended, so a crash candle closes (and opens the round) on time even
  * when nobody trades afterwards ("the backend advances every 60 s",
- * docs/38 §3.3). It sends at most one transaction per Hook per tick, after
+ * docs/38 §3.3). Decision 0158: only when that ended candle can arm the
+ * Hook — `_rollCandle` arms on `crashOverTenPercent(candleOpen, last)` and
+ * otherwise only moves `candleId` to the current bucket with open = last —
+ * so an idle Hook (no trade, open == last) is never poked again; without
+ * this every graduated Hook took one poke per 5-minute bucket forever. It sends at most one transaction per Hook per tick, after
  * a passing simulation. The lane
  * writes no database row; the Hook's logs reach the read model through the
  * `launch2_event` lane.
@@ -36,6 +43,14 @@ export interface Launch2DynamicPokeChain {
     readonly initialized: boolean;
     readonly candleId: bigint;
     readonly blockTimestamp: bigint;
+    /**
+     * Decision 0158: the current candle's open / last price and the pair
+     * orientation (immutable) — what `_rollCandle` arms an unarmed Hook on.
+     * Absent = an unarmed Hook is never poked (fail-safe).
+     */
+    readonly candleOpenSqrtPriceX96?: bigint;
+    readonly lastSqrtPriceX96?: bigint;
+    readonly memeIsCurrency0?: boolean;
   }>;
   /** eth_call of `poke()` from the poker: null = passes, else the error. */
   simulatePoke(hook: string): Promise<string | null>;
@@ -59,15 +74,31 @@ export function launch2DynamicPokeDue(
     readonly armed: boolean;
     readonly initialized: boolean;
     readonly candleId: bigint;
+    readonly candleOpenSqrtPriceX96?: bigint;
+    readonly lastSqrtPriceX96?: bigint;
+    readonly memeIsCurrency0?: boolean;
   },
   blockTimestamp: bigint,
   instance: { readonly graduated?: boolean } = {},
 ): boolean {
+  if (
+    !state.initialized ||
+    blockTimestamp / launch2DynamicCandleSeconds <= state.candleId
+  )
+    return false;
+  if (state.armed) return true;
+  // Decision 0156 / 0158: an unarmed Hook of a graduated instance, only when
+  // the ended candle crashed > 10 % (the roll arms it and opens a round).
   return (
-    state.initialized &&
-    // Decision 0156: unarmed too, once the instance graduated.
-    (state.armed || instance.graduated === true) &&
-    blockTimestamp / launch2DynamicCandleSeconds > state.candleId
+    instance.graduated === true &&
+    state.candleOpenSqrtPriceX96 !== undefined &&
+    state.lastSqrtPriceX96 !== undefined &&
+    state.memeIsCurrency0 !== undefined &&
+    launch2DynamicCrashOverTenPercent(
+      state.candleOpenSqrtPriceX96,
+      state.lastSqrtPriceX96,
+      state.memeIsCurrency0,
+    )
   );
 }
 
