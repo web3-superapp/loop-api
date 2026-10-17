@@ -12,9 +12,12 @@ import type { Launch2Repository } from "./launch2-ports.js";
  * candleId`), calls the permissionless `poke()` once so the candle closes
  * on time (Decision 0144: on an S193 Hook a candle that no longer fell —
  * close ≥ open, flat included — ends the round and makes it claimable; a
- * pre-S193 Hook needs a rising close). It never
- * pokes an unarmed Hook (nothing to finalise) and sends at most one
- * transaction per Hook per tick, after a passing simulation. The lane
+ * pre-S193 Hook needs a rising close). Decision 0156: a graduated
+ * instance's initialized Hook is also poked while unarmed once its candle
+ * has ended, so a crash candle closes (and opens the round) on time even
+ * when nobody trades afterwards ("the backend advances every 60 s",
+ * docs/38 §3.3). It sends at most one transaction per Hook per tick, after
+ * a passing simulation. The lane
  * writes no database row; the Hook's logs reach the read model through the
  * `launch2_event` lane.
  */
@@ -58,10 +61,12 @@ export function launch2DynamicPokeDue(
     readonly candleId: bigint;
   },
   blockTimestamp: bigint,
+  instance: { readonly graduated?: boolean } = {},
 ): boolean {
   return (
     state.initialized &&
-    state.armed &&
+    // Decision 0156: unarmed too, once the instance graduated.
+    (state.armed || instance.graduated === true) &&
     blockTimestamp / launch2DynamicCandleSeconds > state.candleId
   );
 }
@@ -115,7 +120,8 @@ export function createLaunch2DynamicPokeLane(options: {
       if (hook === null || instance.holdReason !== null) continue;
       checked += 1;
       const state = await options.chain.readPokeState(hook);
-      if (!launch2DynamicPokeDue(state, state.blockTimestamp)) continue;
+      if (!launch2DynamicPokeDue(state, state.blockTimestamp, instance))
+        continue;
       const refusal = await options.chain.simulatePoke(hook);
       if (refusal !== null) {
         options.onStep?.({

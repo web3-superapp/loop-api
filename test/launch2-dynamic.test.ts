@@ -121,6 +121,22 @@ describe("LoopDynamic arithmetic (Decision 0131)", () => {
       true,
     );
     expect(launch2DynamicPokeDue(base, 101n * 300n)).toBe(false);
+    // Decision 0156: a graduated instance's unarmed Hook is poked once its
+    // candle ended, never while the candle is still running.
+    expect(launch2DynamicPokeDue(base, 101n * 300n, { graduated: true })).toBe(
+      true,
+    );
+    expect(
+      launch2DynamicPokeDue(base, 100n * 300n + 299n, { graduated: true }),
+    ).toBe(false);
+    expect(
+      launch2DynamicPokeDue({ ...base, initialized: false }, 101n * 300n, {
+        graduated: true,
+      }),
+    ).toBe(false);
+    expect(
+      launch2DynamicPokeDue({ ...base, armed: true }, 100n * 300n + 299n),
+    ).toBe(false);
   });
 
   it("closes an armed round on a candle that no longer falls (Decision 0144)", () => {
@@ -683,5 +699,60 @@ describe("LoopDynamic Factory list and poke lane (Decision 0131)", () => {
     expect(await wrongChain.runOnce()).toMatchObject({
       reasonCode: "LAUNCH2_CHAIN_MISMATCH",
     });
+  });
+  it("pokes a graduated instance's unarmed Hook once its candle ended (Decision 0156)", async () => {
+    const stale = `0x${"a".repeat(40)}`;
+    const running = `0x${"b".repeat(40)}`;
+    const ungraduated = `0x${"c".repeat(40)}`;
+    const armedStale = `0x${"d".repeat(40)}`;
+    const instance = (id: string, hook: string, graduated: boolean) =>
+      ({
+        instanceId: id,
+        holdReason: null,
+        graduated,
+        dynamicHook: hook,
+      }) as unknown as Launch2LaneInstance;
+    const sent: string[] = [];
+    const lane = createLaunch2DynamicPokeLane({
+      repository: {
+        listLaneInstances: () =>
+          Promise.resolve([
+            instance("stale", stale, true),
+            instance("running", running, true),
+            instance("ungraduated", ungraduated, false),
+            instance("armed", armedStale, false),
+          ]),
+      },
+      chain: {
+        pokerAddress: `0x${"9".repeat(40)}`,
+        chainId: () => Promise.resolve(97),
+        readPokeState: (hook) =>
+          Promise.resolve({
+            armed: hook === armedStale,
+            initialized: true,
+            candleId: 100n,
+            // The S221 case: the crash candle (100) ended minutes ago.
+            blockTimestamp: hook === running ? 100n * 300n + 120n : 102n * 300n,
+          }),
+        simulatePoke: () => Promise.resolve(null),
+        sendPoke: (hook) => {
+          sent.push(hook);
+          return Promise.resolve({
+            transactionHash: `0x${"1".repeat(64)}`,
+            status: "success",
+          });
+        },
+      },
+      chainId: "eip155:97",
+      intervalSeconds: 60,
+    });
+    expect(await lane.runOnce()).toEqual({
+      kind: "advanced",
+      checked: 4,
+      poked: 2,
+    });
+    // Unarmed + ended candle → poked; unarmed + running candle → not;
+    // the armed path is unchanged.
+    expect(sent).toEqual([stale, armedStale]);
   });
 });
