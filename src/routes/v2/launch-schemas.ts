@@ -45,6 +45,14 @@ import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
  * documents that no contract baseline exists.
  */
 
+// Decision 0154: no language or script rule on the token's text.
+const launchTokenNameDescription =
+  "Decision 0154: any language or script (Chinese, English, mixed, emoji); NFC-normalised and trimmed; at most 64 characters and 64 UTF-8 bytes (the launch factory's on-chain bound: 64 ASCII letters, 21 CJK characters, 16 emoji); control, bidi-override and other format characters refused except the emoji zero-width joiner and tag characters.";
+const launchTokenTextDescription =
+  "Decision 0154: any language or script; NFC-normalised, CRLF folded to LF, trimmed; at most 2000 characters; line feeds and tabs kept, other control and format characters refused except the emoji zero-width joiner and tag characters.";
+const launchTickerDescription =
+  "Decision 0154: bound by the deployed launch factories' on-chain `_validTicker` (2–12 of A–Z, 0–9), not by a language policy of LOOP's; lower case is accepted where the pattern allows it and stored upper-cased.";
+
 const reasonCodeSchema = {
   type: "string",
   pattern: "^[A-Z][A-Z0-9_]{0,63}$",
@@ -154,12 +162,18 @@ const projectValuesRequestSchema = {
   required: ["name", "ticker", "narrative"],
   properties: {
     name: {
+      description: launchTokenNameDescription,
       type: "string",
       minLength: 1,
       maxLength: maximumLaunchRawTextLength,
     },
-    ticker: { type: "string", pattern: launchTickerPatternSource },
+    ticker: {
+      description: launchTickerDescription,
+      type: "string",
+      pattern: launchTickerPatternSource,
+    },
     narrative: {
+      description: launchTokenTextDescription,
       anyOf: [
         { type: "string", minLength: 1, maxLength: maximumLaunchRawTextLength },
         { type: "null" },
@@ -1770,10 +1784,23 @@ const hooksLaunchDraftBodySchema = {
     "buybackRecipient",
   ],
   properties: {
-    name: { type: "string", minLength: 1, maxLength: 64 },
-    ticker: { type: "string", pattern: "^[A-Za-z0-9]{2,12}$" },
+    name: {
+      description: launchTokenNameDescription,
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+    },
+    ticker: {
+      description: launchTickerDescription,
+      type: "string",
+      pattern: "^[A-Za-z0-9]{2,12}$",
+    },
     logoAssetUrl: { type: "string", format: "uri", maxLength: 2_048 },
-    description: { type: "string", maxLength: 2_000 },
+    description: {
+      description: launchTokenTextDescription,
+      type: "string",
+      maxLength: 2_000,
+    },
     links: {
       type: "array",
       maxItems: 8,

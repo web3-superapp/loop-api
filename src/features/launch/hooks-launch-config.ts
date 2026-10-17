@@ -1,5 +1,10 @@
 import { encodeAbiParameters, keccak256, parseAbiParameters } from "viem";
 
+import {
+  normalizeLaunchTokenDescription,
+  normalizeLaunchTokenName,
+} from "./launch-token-text.js";
+
 /** Immutable economics for the user-approved LOOP Hooks launch template. */
 export const hooksLaunchTemplateVersion = "hooks_launch_v1" as const;
 export const hooksLaunchTemplateHash = keccak256(
@@ -265,6 +270,7 @@ export function hooksLaunchLoopDynamicFixedEconomics(
 
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const unsignedDecimalPattern = /^(0|[1-9][0-9]{0,19})$/;
+// Upper-cased below to the factories' `^[A-Z0-9]{2,12}$` (decision 0154).
 const tickerPattern = /^[A-Za-z0-9]{2,12}$/;
 const UINT64_MAX = (1n << 64n) - 1n;
 const allowedDraftKeys = new Set([
@@ -276,26 +282,6 @@ const allowedDraftKeys = new Set([
   "nftSaleStartAt",
   "buybackRecipient",
 ]);
-
-function hasForbiddenControlCharacters(
-  value: string,
-  allowWhitespace: boolean,
-): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (codePoint === 0x7f) return true;
-    if (codePoint < 0x20) {
-      if (
-        allowWhitespace &&
-        (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d)
-      ) {
-        continue;
-      }
-      return true;
-    }
-  }
-  return false;
-}
 
 export interface HooksLaunchDraftInput {
   readonly name: string;
@@ -384,12 +370,7 @@ export function parseHooksLaunchDraft(
     input.links.some((value) => typeof value !== "string") ||
     typeof input.nftSaleStartAt !== "string" ||
     typeof input.buybackRecipient !== "string" ||
-    input.name.trim().length === 0 ||
-    input.name.trim().length > 64 ||
-    hasForbiddenControlCharacters(input.name, false) ||
     !tickerPattern.test(input.ticker) ||
-    input.description.length > 2_000 ||
-    hasForbiddenControlCharacters(input.description, true) ||
     !Number.isSafeInteger(policy.minimumLeadSeconds) ||
     policy.minimumLeadSeconds < 0 ||
     !unsignedDecimalPattern.test(policy.nowUnixSeconds) ||
@@ -397,6 +378,13 @@ export function parseHooksLaunchDraft(
     !addressPattern.test(input.buybackRecipient) ||
     /^0x0{40}$/i.test(input.buybackRecipient)
   ) {
+    throw new InvalidHooksLaunchDraftError();
+  }
+
+  // Decision 0154: any script; the name fits the factory's 64 UTF-8 bytes.
+  const name = normalizeLaunchTokenName(input.name);
+  const description = normalizeLaunchTokenDescription(input.description);
+  if (name === null || description === null) {
     throw new InvalidHooksLaunchDraftError();
   }
 
@@ -439,10 +427,10 @@ export function parseHooksLaunchDraft(
     ...(policy.loopDynamic === undefined
       ? {}
       : { poolHookKind: "loopDynamic" as const }),
-    name: input.name.trim(),
+    name,
     ticker: input.ticker.toUpperCase(),
     logoAssetUrl: logoUrl.toString(),
-    description: input.description.trim(),
+    description,
     links: [...new Set(links)].sort(),
     nftSaleStartAt: startAt.toString(),
     buybackRecipient: input.buybackRecipient.toLowerCase(),

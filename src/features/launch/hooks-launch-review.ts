@@ -10,6 +10,7 @@ import {
   hooksLaunchRejectionReasons,
   type HooksLaunchTemplateFactory,
 } from "./hooks-launch-project-config.js";
+import { launchTokenDescriptionMaxCodePoints } from "./launch-token-text.js";
 
 /**
  * Decision 0108: platform-side Hooks launch review (ported from the requirer
@@ -89,7 +90,13 @@ const hooksLaunchOperatorConfigSchema = z
     name: z.string().trim().min(1).max(64),
     ticker: z.string().regex(/^[A-Za-z0-9]{2,12}$/),
     logoAssetUrl: z.url().startsWith("https://"),
-    description: z.string().max(2000),
+    // Decision 0154: characters, not UTF-16 units (an emoji is two).
+    description: z
+      .string()
+      .refine(
+        (value) =>
+          Array.from(value).length <= launchTokenDescriptionMaxCodePoints,
+      ),
     links: z.array(z.url().startsWith("https://")).max(8),
     nftSaleStartAt: z.string().regex(/^(0|[1-9][0-9]{0,19})$/),
     buybackRecipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/),

@@ -4,6 +4,12 @@ import { z } from "zod";
 
 import type { LaunchChainId } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
+import {
+  launchTokenDescriptionMaxCodePoints,
+  launchTokenNameMaxCodePoints,
+  normalizeLaunchTokenDescription,
+  normalizeLaunchTokenName,
+} from "./launch-token-text.js";
 
 /**
  * V2 Launch wire contract (Decision 0036). The 02 contract document has not
@@ -236,10 +242,14 @@ export const launchOfficialLinkKeys = [
 ] as const;
 export type LaunchOfficialLinkKey = (typeof launchOfficialLinkKeys)[number];
 
-export const maximumLaunchNameCodePoints = 80;
-export const maximumLaunchNarrativeCodePoints = 2_000;
+/** Decision 0154: also at most 64 UTF-8 bytes (the factory's bound). */
+export const maximumLaunchNameCodePoints = launchTokenNameMaxCodePoints;
+export const maximumLaunchNarrativeCodePoints =
+  launchTokenDescriptionMaxCodePoints;
 export const maximumLaunchLinkLength = 512;
 export const maximumLaunchRawTextLength = 4_096;
+// Decision 0154: the deployed factories' `_validTicker`; not a language rule
+// of ours, so it changes only with a redeployed factory.
 export const launchTickerPatternSource = "^[A-Z0-9]{2,12}$";
 export const opaqueIdPatternSource =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
@@ -264,23 +274,30 @@ function invalid(): never {
   throw new InvalidLaunchRequestError();
 }
 
-function boundedText(maximumCodePoints: number) {
-  return z
-    .string()
-    .max(maximumLaunchRawTextLength)
-    .superRefine((value, context) => {
-      const trimmed = value.trim();
-      const codePoints = Array.from(trimmed).length;
-      if (
-        codePoints < 1 ||
-        codePoints > maximumCodePoints ||
-        forbiddenTextCharacters.test(value)
-      ) {
-        context.addIssue({ code: "custom" });
-      }
-    })
-    .transform((value) => value.trim());
-}
+// Decision 0154: name and narrative take any script; see launch-token-text.
+const projectNameSchema = z
+  .string()
+  .max(maximumLaunchRawTextLength)
+  .transform((value, context) => {
+    const name = normalizeLaunchTokenName(value);
+    if (name === null) {
+      context.addIssue({ code: "custom" });
+      return z.NEVER;
+    }
+    return name;
+  });
+
+const projectNarrativeSchema = z
+  .string()
+  .max(maximumLaunchRawTextLength)
+  .transform((value, context) => {
+    const narrative = normalizeLaunchTokenDescription(value);
+    if (narrative === null || narrative.length === 0) {
+      context.addIssue({ code: "custom" });
+      return z.NEVER;
+    }
+    return narrative;
+  });
 
 const httpsLinkSchema = z
   .string()
@@ -314,9 +331,9 @@ const officialLinksSchema = z
 
 const projectValuesSchema = z
   .object({
-    name: boundedText(maximumLaunchNameCodePoints),
+    name: projectNameSchema,
     ticker: z.string().regex(tickerPattern),
-    narrative: boundedText(maximumLaunchNarrativeCodePoints).nullable(),
+    narrative: projectNarrativeSchema.nullable(),
     // Omitting the object is the same as omitting every key (all null).
     officialLinks: officialLinksSchema.optional(),
     // Decision 0125: the community the MEME binds to (owner only); absent
