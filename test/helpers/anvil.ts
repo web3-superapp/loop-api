@@ -92,6 +92,50 @@ async function freePort(): Promise<number> {
   });
 }
 
+/** Every anvil this worker started and has not stopped yet. */
+const liveAnvils = new Set<ChildProcess>();
+
+/** Bound for one JSON-RPC round trip to the local anvil. */
+const anvilRequestTimeoutMs = 30_000;
+
+// Last resort when the worker exits without `afterAll` (crash, runner
+// watchdog): never leave an orphaned anvil behind.
+process.once("exit", () => {
+  for (const child of liveAnvils) child.kill("SIGKILL");
+});
+
+function exited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (exited(child)) {
+    liveAnvils.delete(child);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve();
+    }, 3_000);
+    timer.unref();
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
+  liveAnvils.delete(child);
+}
+
+/**
+ * Stops every anvil this worker started. Safe to call from `afterAll` even
+ * when `beforeAll` failed before (or while) starting the chain.
+ */
+export async function stopAnvilChains(): Promise<void> {
+  await Promise.all([...liveAnvils].map((child) => stopChild(child)));
+}
+
 export interface AnvilChain {
   readonly rpcUrl: string;
   request<T = unknown>(method: string, params?: readonly unknown[]): Promise<T>;
@@ -116,6 +160,8 @@ export async function startAnvil(tools: FoundryTools): Promise<AnvilChain> {
     ],
     { stdio: "ignore" },
   );
+  liveAnvils.add(child);
+  child.once("exit", () => liveAnvils.delete(child));
   const rpcUrl = `http://127.0.0.1:${port}`;
   let nextId = 1;
   async function request<T>(
@@ -126,6 +172,7 @@ export async function startAnvil(tools: FoundryTools): Promise<AnvilChain> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
+      signal: AbortSignal.timeout(anvilRequestTimeoutMs),
     });
     const body = (await response.json()) as {
       readonly result?: T;
@@ -140,8 +187,8 @@ export async function startAnvil(tools: FoundryTools): Promise<AnvilChain> {
       await request("eth_chainId");
       break;
     } catch (error) {
-      if (Date.now() > deadline) {
-        child.kill("SIGKILL");
+      if (Date.now() > deadline || exited(child)) {
+        await stopChild(child);
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -154,15 +201,7 @@ export async function startAnvil(tools: FoundryTools): Promise<AnvilChain> {
       await request("anvil_mine", [toHex(blocks)]);
     },
     async stop() {
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolve) => {
-        child.once("exit", () => resolve());
-        child.kill("SIGTERM");
-        setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 3_000).unref();
-      });
+      await stopChild(child);
     },
   };
 }

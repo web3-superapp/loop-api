@@ -8,6 +8,7 @@ import {
   deployLoopDynamicProtocol,
   locateFoundry,
   startAnvil,
+  stopAnvilChains,
   type AnvilChain,
   type DeployedLoopDynamicProtocol,
 } from "./helpers/anvil.js";
@@ -56,7 +57,7 @@ describe.skipIf(skipReason !== null)(
     }, 600_000);
 
     afterAll(async () => {
-      if (typeof foundry !== "string") await chain.stop();
+      if (typeof foundry !== "string") await stopAnvilChains();
     });
 
     it("reads each Factory's own LoopRouter / registry / Hook deployment factory", async () => {

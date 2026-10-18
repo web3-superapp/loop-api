@@ -58,6 +58,7 @@ import {
   deployProtocol,
   locateFoundry,
   startAnvil,
+  stopAnvilChains,
   type AnvilChain,
   type DeployedProtocol,
 } from "./helpers/anvil.js";
@@ -266,11 +267,16 @@ describe.skipIf(skipReason !== null)(
 
     afterAll(async () => {
       if (typeof foundry === "string") return;
-      await pool.end();
-      await chain.stop();
-      await admin((client) =>
-        client.query(`drop database if exists "${databaseName}" with (force)`),
-      );
+      try {
+        await pool.end();
+      } finally {
+        await stopAnvilChains();
+        await admin((client) =>
+          client.query(
+            `drop database if exists "${databaseName}" with (force)`,
+          ),
+        );
+      }
     });
 
     const publicClient = () =>

@@ -28,6 +28,14 @@ pnpm test:integration
 names a database without `test` in it, and the shared helper in
 `test/helpers/integration-database.ts` applies the same guard inside each suite.
 
+The runner (Decision 0159) starts one vitest process per suite, one suite at a
+time, and prints `▶`/`✔`/`✖` lines plus a heartbeat naming the running suite
+every minute. A suite that exceeds `INTEGRATION_SUITE_TIMEOUT_MS` (default
+20 minutes) is reported as `TIMED OUT`, its process group (vitest worker,
+anvil, forge) is killed, and the run continues; the last line is
+`test:integration summary: …`. Arguments starting with `-` (for example
+`--maxWorkers=2`) are passed to vitest; other arguments select suite files.
+
 Migration `000012_alias_discovery_and_group_personas` deliberately refuses to
 run if an existing Profile alias contains a Unicode control, formatting,
 surrogate, line-separator, or paragraph-separator code point. Replace or clear
