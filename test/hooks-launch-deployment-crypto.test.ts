@@ -13,6 +13,7 @@ import {
 } from "../src/features/launch/hooks-launch-deployment-crypto.js";
 import {
   createHooksLaunchDeploymentService,
+  hooksLaunchSigningRequestChainBudgetMs,
   type HooksLaunchFactoryReader,
 } from "../src/features/launch/hooks-launch-deployment.js";
 import { hooksLaunchFixedEconomics } from "../src/features/launch/hooks-launch-config.js";
@@ -386,3 +387,203 @@ describe("deployment preparation admission control", () => {
     );
   });
 });
+
+describe(
+  "signing-request chain-read budget (Decision 0160)",
+  { timeout: 60_000 },
+  () => {
+    const config: HooksLaunchProjectConfigRecord = {
+      projectId: "00000000-0000-4000-8000-000000000001",
+      ownerUserId: "user-1",
+      version: 4,
+      templateVersion: "hooks_launch_v1",
+      config: {
+        templateVersion: "hooks_launch_v1",
+        templateHash: `0x${"01".repeat(32)}`,
+        name: "Project",
+        ticker: "MEME",
+        logoAssetUrl: "https://example.com/logo.png",
+        description: "description",
+        links: [],
+        nftSaleStartAt: "1800000000",
+        buybackRecipient: "0x3333333333333333333333333333333333333333",
+        fixedEconomics: hooksLaunchFixedEconomics,
+        configHash: `0x${"cd".repeat(32)}`,
+      },
+      updatedAt: "2026-10-09T00:00:00.000Z",
+    };
+    const baseReader: HooksLaunchFactoryReader = {
+      factoryAddress: "0x1111111111111111111111111111111111111111",
+      chainId: 97,
+      nonce: () => Promise.resolve(7n),
+      ownerVersionLaunchId: () => Promise.resolve(`0x${"0".repeat(64)}`),
+      nftSaleDuration: () =>
+        Promise.resolve({ seconds: 604_800, legacy: false }),
+      tokenDeployment: () =>
+        Promise.resolve({
+          deployer: "0x5555555555555555555555555555555555555555",
+          initCodeHash: `0x${"ef".repeat(32)}`,
+        }),
+      hookDeployment: () =>
+        Promise.resolve({
+          deployer: "0x4444444444444444444444444444444444444444",
+          initCodeHash: `0x${"ab".repeat(32)}`,
+        }),
+    };
+    const request = {
+      ownerUserId: "user-1",
+      projectId: config.projectId,
+      walletId: "wallet-1",
+    };
+    function fixture(options: {
+      readonly reader: HooksLaunchFactoryReader;
+      readonly chainBudgetMs?: number;
+    }) {
+      const writes: string[] = [];
+      const configs = {
+        getOwnedDraft: () => Promise.resolve(config),
+        saveOwnedDraft: () => {
+          writes.push("saveOwnedDraft");
+          return Promise.resolve(config);
+        },
+        getOwnedProgress: () => Promise.reject(new Error("unused")),
+      } as HooksLaunchProjectConfigRepository;
+      const wallets = {
+        get: () =>
+          Promise.resolve({
+            walletId: "wallet-1",
+            providerWalletId: "privy-wallet-1",
+            address: "0x2222222222222222222222222222222222222222",
+            kind: "embedded",
+            status: "active",
+            isActive: true,
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            lastSeenAt: "2026-10-09T00:00:00.000Z",
+          }),
+      } as unknown as AccountWalletRepository;
+      const service = createHooksLaunchDeploymentService({
+        fixedBuybackRecipient: "0x3333333333333333333333333333333333333333",
+        configs,
+        wallets,
+        reader: options.reader,
+        now: () => 1_800_000_000,
+        signatureLifetimeSeconds: 900,
+        maxSaltAttempts: 1_000_000,
+        ...(options.chainBudgetMs === undefined
+          ? {}
+          : { chainBudgetMs: options.chainBudgetMs }),
+      });
+      return { service, writes };
+    }
+
+    it("ends a preparation on a hanging Factory read within the budget, unavailable and without writes", async () => {
+      const hanging = new Promise<never>(() => undefined);
+      const { service, writes } = fixture({
+        chainBudgetMs: 200,
+        reader: { ...baseReader, nonce: () => hanging },
+      });
+      const started = Date.now();
+      await expect(
+        service.prepareSigningRequest(request),
+      ).rejects.toMatchObject({
+        kind: "unavailable",
+      });
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(writes).toEqual([]);
+      // The default budget stays well inside the 15 s handlerTimeout.
+      expect(hooksLaunchSigningRequestChainBudgetMs).toBe(8_000);
+      // The admission slot is released after a timeout.
+      const ok = fixture({ reader: baseReader });
+      expect(
+        (await ok.service.prepareSigningRequest(request)).request.nonce,
+      ).toBe("7");
+    });
+
+    it("also bounds the Hook deployer read that follows the MEME salt search", async () => {
+      const hanging = new Promise<never>(() => undefined);
+      const { service, writes } = fixture({
+        chainBudgetMs: 1_500,
+        reader: { ...baseReader, hookDeployment: () => hanging },
+      });
+      const started = Date.now();
+      await expect(
+        service.prepareSigningRequest(request),
+      ).rejects.toMatchObject({
+        kind: "unavailable",
+      });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(writes).toEqual([]);
+    });
+
+    it("runs the independent Factory reads concurrently, so slow reads do not add up", async () => {
+      const events: string[] = [];
+      const slow =
+        <T>(name: string, value: () => Promise<T>) =>
+        async (): Promise<T> => {
+          events.push(`start:${name}`);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          events.push(`end:${name}`);
+          return value();
+        };
+      const { service } = fixture({
+        chainBudgetMs: 1_150,
+        reader: {
+          ...baseReader,
+          nftSaleDuration: slow("template", () => baseReader.nftSaleDuration()),
+          ownerVersionLaunchId: slow("ownerVersion", () =>
+            Promise.resolve(`0x${"0".repeat(64)}`),
+          ),
+          nonce: slow("nonce", () => Promise.resolve(7n)),
+          tokenDeployment: (input) =>
+            slow("token", () => baseReader.tokenDeployment(input))(),
+        },
+      });
+      const prepared = await service.prepareSigningRequest(request);
+      expect(prepared.request.nonce).toBe("7");
+      expect(prepared.memeAddress.endsWith("6666")).toBe(true);
+      expect(BigInt(prepared.hookAddress) & 0x3fffn).toBe(0x20ccn);
+      // Every independent read starts before any of them finishes; run one
+      // after another they would need >= 1,200 ms and blow the 1,150 ms budget.
+      expect(
+        events.slice(0, 4).every((event) => event.startsWith("start:")),
+      ).toBe(true);
+      expect(events).toHaveLength(8);
+    });
+
+    it("keeps the original check order when reads run concurrently", async () => {
+      const mismatch = fixture({
+        reader: {
+          ...baseReader,
+          nftSaleDuration: () => Promise.resolve({ seconds: 1, legacy: false }),
+          ownerVersionLaunchId: () => Promise.resolve(`0x${"ab".repeat(32)}`),
+          nonce: () => Promise.reject(new Error("rpc down")),
+        },
+      });
+      await expect(
+        mismatch.service.prepareSigningRequest(request),
+      ).rejects.toMatchObject({ kind: "template_mismatch" });
+
+      const used = fixture({
+        reader: {
+          ...baseReader,
+          ownerVersionLaunchId: () => Promise.resolve(`0x${"ab".repeat(32)}`),
+          nonce: () => Promise.reject(new Error("rpc down")),
+        },
+      });
+      await expect(
+        used.service.prepareSigningRequest(request),
+      ).rejects.toMatchObject({ kind: "version_used" });
+
+      const nonceDown = fixture({
+        reader: {
+          ...baseReader,
+          nonce: () => Promise.reject(new Error("rpc down")),
+          tokenDeployment: () => Promise.reject(new Error("rpc down")),
+        },
+      });
+      await expect(
+        nonceDown.service.prepareSigningRequest(request),
+      ).rejects.toMatchObject({ kind: "unavailable" });
+    });
+  },
+);

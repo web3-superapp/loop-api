@@ -191,6 +191,10 @@
 实现都由 domain 推出同一个类型）。用 viem / ethers 本地签名时，`EIP712Domain` 里 `chainId` 是
 `uint256`，domain 的 `chainId` 需要传 bigint（或删掉 `EIP712Domain` 交给库自己推导）。可能需要数秒（服务端挖盐）；忙时 `503` + `Retry-After: 5`。
 
+决策 0160（S229）：本接口的 Factory 链上读共用 8 秒预算（在 15 秒请求超时之内）；RPC 慢或失败时返回
+`503 CAPABILITY_UNAVAILABLE`（`detailsSafe.reasonCode = HOOKS_LAUNCH_FACTORY_UNAVAILABLE`），不会再出现客户端超时、
+服务端仍在跑的情况。本接口只读，不写库、不占 nonce，前端按既有 503 提示稍后重试即可，无需清理状态。
+
 ## 5. `POST /v2/launch/projects/{projectId}/hooks-deployments`（`submitV2HooksLaunchDeployment`）
 
 请求（`request` 原样回传 §4 的 `request`）：

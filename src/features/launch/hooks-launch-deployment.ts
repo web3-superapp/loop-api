@@ -215,6 +215,16 @@ export interface HooksLaunchDeploymentService {
   }>;
 }
 
+/**
+ * Decision 0160: the wall-clock budget for every chain read of one
+ * signing-request preparation (same 8 s as the submission, Decision 0155),
+ * well inside the 15 s `handlerTimeout`. A slow or hanging RPC ends the
+ * request with 503 HOOKS_LAUNCH_FACTORY_UNAVAILABLE instead of the handler
+ * timing out while it keeps running. The preparation never writes, so a
+ * timeout leaves nothing behind.
+ */
+export const hooksLaunchSigningRequestChainBudgetMs = 8_000;
+
 export function createHooksLaunchDeploymentService(input: {
   readonly configs: HooksLaunchProjectConfigRepository | null;
   readonly wallets: AccountWalletRepository | null;
@@ -229,8 +239,12 @@ export function createHooksLaunchDeploymentService(input: {
    * reader must be on it, and chain 56 needs `LAUNCH_MAINNET_ACK`.
    */
   readonly launchSlot?: LaunchSlotPolicy;
+  /** Decision 0160: chain-read budget per preparation (test seam). */
+  readonly chainBudgetMs?: number;
 }): HooksLaunchDeploymentService {
   const now = input.now ?? (() => Math.floor(Date.now() / 1_000));
+  const chainBudgetMs =
+    input.chainBudgetMs ?? hooksLaunchSigningRequestChainBudgetMs;
   let activePreparations = 0;
   const prepareSigningRequest: HooksLaunchDeploymentService["prepareSigningRequest"] =
     async (request) => {
@@ -261,6 +275,24 @@ export function createHooksLaunchDeploymentService(input: {
           "Hooks launch deployment policy invalid",
         );
       }
+      // Decision 0160: one deadline for all chain reads of this request.
+      const chainDeadline = Date.now() + chainBudgetMs;
+      const withinChainBudget = <T>(work: Promise<T>): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        const expired = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new HooksLaunchDeploymentError(
+                  "unavailable",
+                  "Hooks launch factory read timed out",
+                ),
+              ),
+            Math.max(0, chainDeadline - Date.now()),
+          );
+        });
+        return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+      };
       const wallet = await wallets.get(request.ownerUserId, request.walletId);
       if (wallet === null || wallet.status !== "active" || !wallet.isActive) {
         throw new HooksLaunchDeploymentError(
@@ -322,21 +354,41 @@ export function createHooksLaunchDeploymentService(input: {
           "Hooks launch buyback recipient is fixed by the platform",
         );
       }
-      await assertHooksLaunchFactoryTemplate(
-        reader,
-        draft.config,
-        () =>
-          new HooksLaunchDeploymentError(
-            "template_mismatch",
-            "Hooks launch config template differs from the Factory",
-          ),
-      );
+      // Decision 0160: the independent Factory reads run concurrently under
+      // the request's chain budget; results are still checked in the
+      // original order (template, owner version, nonce, MEME deployer).
+      const loopDynamic = reader.hookKind === "loopDynamic";
+      const [templateCheck, usedByRead, nonceRead, tokenRead, templateRead] =
+        await withinChainBudget(
+          Promise.allSettled([
+            assertHooksLaunchFactoryTemplate(
+              reader,
+              draft.config,
+              () =>
+                new HooksLaunchDeploymentError(
+                  "template_mismatch",
+                  "Hooks launch config template differs from the Factory",
+                ),
+            ),
+            reader.ownerVersionLaunchId(projectOwner, draft.version),
+            reader.nonce(projectOwner),
+            reader.tokenDeployment({
+              name: requestFields.name,
+              ticker: requestFields.ticker,
+            }),
+            loopDynamic
+              ? readHooksLaunchFactoryTemplate(reader)
+              : Promise.resolve(null),
+          ]),
+        );
+      const settled = <T>(result: PromiseSettledResult<T>): T => {
+        if (result.status === "rejected") throw result.reason;
+        return result.value;
+      };
+      settled(templateCheck);
       // Decision 0127: never hand out a signature the Factory would reject
       // with VersionAlreadyUsed.
-      const usedBy = await reader.ownerVersionLaunchId(
-        projectOwner,
-        draft.version,
-      );
+      const usedBy = settled(usedByRead);
       if (!/^0x[0-9a-f]{64}$/.test(usedBy.toLowerCase())) {
         throw new HooksLaunchDeploymentError(
           "unavailable",
@@ -349,7 +401,7 @@ export function createHooksLaunchDeploymentService(input: {
           "Hooks launch config version already deployed by this wallet",
         );
       }
-      const nonce = await reader.nonce(projectOwner);
+      const nonce = settled(nonceRead);
       if (nonce < 0n || nonce >= 1n << 256n) {
         throw new HooksLaunchDeploymentError(
           "unavailable",
@@ -363,10 +415,7 @@ export function createHooksLaunchDeploymentService(input: {
         configVersion: draft.version,
         configHash: requestFields.configHash,
       });
-      const tokenDeployment = await reader.tokenDeployment({
-        name: requestFields.name,
-        ticker: requestFields.ticker,
-      });
+      const tokenDeployment = settled(tokenRead);
       const meme = await mineMemeAddressSaltAsync({
         deployer: tokenDeployment.deployer,
         launchId,
@@ -377,13 +426,14 @@ export function createHooksLaunchDeploymentService(input: {
         ...requestFields,
         memeSalt: meme.salt,
       };
-      const hook = await reader.hookDeployment(requestWithMemeSalt);
+      // The Hook init code binds the mined MEME salt, so this read follows
+      // the search; it still counts against the same wall-clock deadline.
+      const hook = await withinChainBudget(
+        reader.hookDeployment(requestWithMemeSalt),
+      );
       // Decision 0132: LoopDynamic Hooks carry their Factory's bits (salt
       // ≠ 0) — Decision 0152: 0x10CC for an S209 Factory, 0x10C4 before.
-      const loopDynamic = reader.hookKind === "loopDynamic";
-      const template = loopDynamic
-        ? await readHooksLaunchFactoryTemplate(reader)
-        : null;
+      const template = settled(templateRead);
       const hookSalt = await mineHooksLaunchSaltAsync({
         deployer: hook.deployer,
         initCodeHash: hook.initCodeHash,
