@@ -94,7 +94,7 @@
 **代际怎么判**：manifest 与模板哈希都判不出来——manifest 只在部署检查与测试里用、运行时不读（0152）；OfficialTax 的 `TEMPLATE_HASH` 恒为 `keccak256("hooks_launch_v1")`，LoopDynamic 的模板哈希只随参数（`maxDynamicFeeWad`）变；运行时 code hash 含 immutables，每次部署都不同。主代理因此让 S242 在两个工厂上加 `launchTextRulesVersion() external pure returns (uint8)`（selector `0x231cd5bd`，返回 2；loop-contracts `a1c4906`），后端 `createHooksLaunchFactoryReader().tickerTextRule()` 在已通过网络 / code hash 校验的工厂上 `eth_call` 它：
 
 - 返回 ≥ 2 → `utf8`（S242+）；
-- revert 且无返回数据（无 reason，或只有节点通用的 `execution reverted`）、或调用返回空数据 → `ascii`（旧工厂没有该函数）；
+- revert 且无返回数据、或调用返回 `0x` → `ascii`（旧工厂没有该函数）。认作「无此函数」的节点形态（`isHooksLaunchMissingFunctionRevert`，单测逐一覆盖）：publicnode `{code: 3, message: "execution reverted", data: "0x"}`；BNB Chain 官方 seed `{code: 3, message: "execution reverted: 0x", data: "0x"}`；geth 系（NodeReal）`{code: -32000, message: "execution reverted"}`（无 `data` 或 `data: "0x"`）；`result: "0x"`。reason 只接受 `/^execution reverted(: 0x)?$/`，且整条错误链上不得有非空 `data`
 - RPC / 传输错误、超时、带数据或带其它 reason 的 revert、返回 0 / 1 等非预期值 → 判不出，**fail closed**（503 `CAPABILITY_UNAVAILABLE` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，运营端 `OPS_UNAVAILABLE`）。
 - 只读 `eth_call`；结果按工厂（reader 实例 = 一个固定 code hash 的工厂地址）缓存，判不出不缓存。
 - reader 没有该方法（测试替身）按 `ascii` 处理。合法的旧格式代码（`^[A-Z0-9]{2,12}$`）任何代际都放行，**不读链**，现有流程零额外 RPC。

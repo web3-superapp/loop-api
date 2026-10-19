@@ -292,13 +292,57 @@ export function hooksLaunchTextRulesFromVersion(
     : null;
 }
 
+/** The node's generic message for a revert without data (bnbchain seed nodes append ": 0x"). */
+const emptyRevertReason = /^execution reverted(: 0x)?$/u;
+
+function isEmptyRevertData(value: unknown): boolean {
+  return value === undefined || value === null || value === "0x";
+}
+
+/** Every link of an error's cause chain (bounded). */
+function causeChain(error: unknown): readonly unknown[] {
+  const links: unknown[] = [];
+  let current: unknown = error;
+  while (current !== undefined && current !== null && links.length < 16) {
+    links.push(current);
+    current =
+      typeof current === "object"
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return links;
+}
+
 /**
- * True only for "no such function" on a contract: an `eth_call` revert
- * with no return data and no reason beyond the node's generic
- * "execution reverted", or a call that returned no data at all.
+ * Decision 0164 §10: true only for "no such function" on a contract — an
+ * `eth_call` revert that carries no return data and no reason beyond the
+ * node's generic message, or a call that returned `0x`. Node shapes:
+ *
+ * - publicnode: `{code: 3, message: "execution reverted", data: "0x"}`;
+ * - bnbchain seed: `{code: 3, message: "execution reverted: 0x", data: "0x"}`;
+ * - geth-style (NodeReal): `{code: -32000, message: "execution reverted"}`
+ *   with no `data` or `data: "0x"`;
+ * - `result: "0x"` (`ContractFunctionZeroDataError`).
+ *
+ * A revert carrying error data, any other reason, rate limits, transport
+ * errors and timeouts are not (→ unreadable, fail closed).
  */
 export function isHooksLaunchMissingFunctionRevert(error: unknown): boolean {
   if (!(error instanceof BaseError)) return false;
+  const links = causeChain(error);
+  // Any link carrying revert data means a real (custom) revert.
+  if (
+    links.some(
+      (link) =>
+        typeof link === "object" &&
+        link !== null &&
+        "data" in link &&
+        typeof (link as { data?: unknown }).data === "string" &&
+        !isEmptyRevertData((link as { data?: unknown }).data),
+    )
+  ) {
+    return false;
+  }
   if (
     error.walk((cause) => cause instanceof ContractFunctionZeroDataError) !==
     null
@@ -308,14 +352,31 @@ export function isHooksLaunchMissingFunctionRevert(error: unknown): boolean {
   const reverted = error.walk(
     (cause) => cause instanceof ContractFunctionRevertedError,
   );
-  if (!(reverted instanceof ContractFunctionRevertedError)) return false;
-  const raw = reverted.raw;
-  const reason = reverted.reason?.trim().toLowerCase();
+  if (reverted instanceof ContractFunctionRevertedError) {
+    const reason = reverted.reason?.trim().toLowerCase();
+    return (
+      isEmptyRevertData(reverted.raw) &&
+      reverted.data === undefined &&
+      reverted.signature === undefined &&
+      (reason === undefined || emptyRevertReason.test(reason))
+    );
+  }
+  // geth-style -32000 (or code 3) mapped to ExecutionRevertedError.
+  const execution = error.walk(
+    (cause) => cause instanceof ExecutionRevertedError,
+  );
+  if (!(execution instanceof ExecutionRevertedError)) return false;
+  const codes = links
+    .map((link) =>
+      typeof link === "object" && link !== null
+        ? (link as { code?: unknown }).code
+        : undefined,
+    )
+    .filter((code) => typeof code === "number");
+  const details = execution.details.trim().toLowerCase();
   return (
-    (raw === undefined || raw === "0x") &&
-    reverted.data === undefined &&
-    reverted.signature === undefined &&
-    (reason === undefined || reason === "execution reverted")
+    (codes.includes(-32000) || codes.includes(3)) &&
+    emptyRevertReason.test(details)
   );
 }
 

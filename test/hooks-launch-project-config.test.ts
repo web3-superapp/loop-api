@@ -15,11 +15,15 @@ import {
   ContractFunctionExecutionError,
   ContractFunctionRevertedError,
   ContractFunctionZeroDataError,
+  custom,
+  encodeAbiParameters,
   HttpRequestError,
+  keccak256,
   TimeoutError,
 } from "viem";
 
 import {
+  createHooksLaunchFactoryReader,
   hooksLaunchTextRulesFromVersion,
   hooksLaunchTextRulesVersionAbi,
   isHooksLaunchMissingFunctionRevert,
@@ -300,6 +304,107 @@ describe("Decision 0164: the ticker transition gate", () => {
     await expect(hooksLaunchFactorySupportsTicker(null, "DOGE")).resolves.toBe(
       true,
     );
+  });
+
+  describe("real node answers to launchTextRulesVersion() through the reader", () => {
+    const code = "0x6001600055";
+    /** A reader whose eth_call answers `call` (throw = JSON-RPC error). */
+    function readerAnswering(call: () => unknown) {
+      let calls = 0;
+      const reader = createHooksLaunchFactoryReader({
+        factoryAddress: "0x1111111111111111111111111111111111111111",
+        expectedRuntimeCodeHash: keccak256(code),
+        rpcUrls: [],
+        transport: custom(
+          {
+            // A thrown JSON-RPC error object becomes the rejection.
+            // eslint-disable-next-line @typescript-eslint/require-await
+            async request({ method }: { method: string }) {
+              if (method === "eth_chainId") return "0x61";
+              if (method === "eth_getCode") return code;
+              if (method === "eth_call") {
+                calls += 1;
+                return call();
+              }
+              throw new Error(`unexpected ${method}`);
+            },
+          },
+          { retryCount: 0 },
+        ),
+      });
+      return { reader, calls: () => calls };
+    }
+    const rpcError = (shape: Record<string, unknown>) => () => {
+      throw Object.assign(new Error(String(shape["message"])), shape);
+    };
+
+    it.each([
+      ["publicnode", { code: 3, message: "execution reverted", data: "0x" }],
+      [
+        "bnbchain seed",
+        { code: 3, message: "execution reverted: 0x", data: "0x" },
+      ],
+      [
+        "geth -32000 without data",
+        { code: -32000, message: "execution reverted" },
+      ],
+      [
+        "geth -32000 with data 0x",
+        { code: -32000, message: "execution reverted", data: "0x" },
+      ],
+    ] as const)("%s empty revert → ascii (cached)", async (_name, shape) => {
+      const { reader, calls } = readerAnswering(rpcError(shape));
+      await expect(reader.tickerTextRule?.()).resolves.toBe("ascii");
+      await expect(reader.tickerTextRule?.()).resolves.toBe("ascii");
+      expect(calls()).toBe(1);
+    });
+
+    it("result 0x → ascii", async () => {
+      const { reader } = readerAnswering(() => "0x");
+      await expect(reader.tickerTextRule?.()).resolves.toBe("ascii");
+    });
+
+    it("2 → utf8", async () => {
+      const { reader } = readerAnswering(() =>
+        encodeAbiParameters([{ type: "uint8" }], [2]),
+      );
+      await expect(reader.tickerTextRule?.()).resolves.toBe("utf8");
+    });
+
+    it.each([
+      [
+        "a revert with custom error data",
+        rpcError({
+          code: 3,
+          message: "execution reverted",
+          data: "0x82b42900",
+        }),
+      ],
+      [
+        "a geth revert with custom error data",
+        rpcError({
+          code: -32000,
+          message: "execution reverted",
+          data: "0x82b42900",
+        }),
+      ],
+      [
+        "a revert reason",
+        rpcError({ code: 3, message: "execution reverted: nope", data: "0x" }),
+      ],
+      ["a rate limit", rpcError({ code: -32005, message: "limit exceeded" })],
+      ["an HTTP 429", rpcError({ code: 429, message: "Too Many Requests" })],
+      [
+        "another -32000",
+        rpcError({ code: -32000, message: "header not found" }),
+      ],
+      ["version 1", () => encodeAbiParameters([{ type: "uint8" }], [1])],
+    ] as const)("%s → unreadable, not cached", async (_name, call) => {
+      const { reader, calls } = readerAnswering(call);
+      await expect(reader.tickerTextRule?.()).rejects.toThrow();
+      await expect(reader.tickerTextRule?.()).rejects.toThrow();
+      expect(calls()).toBe(2);
+    });
   });
 
   it("reads launchTextRulesVersion(): >= 2 utf8, a missing function ascii, else unreadable", () => {
