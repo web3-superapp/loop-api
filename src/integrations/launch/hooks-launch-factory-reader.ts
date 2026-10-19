@@ -27,6 +27,7 @@ import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
 import {
   loopDynamicLaunchFactoryAbi,
+  loopLaunchFactoryAbi,
   loopHookDeploymentFactoryAbi,
   loopRouterRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
@@ -260,6 +261,48 @@ export function isHooksLaunchContractRevert(error: unknown): boolean {
   );
 }
 
+/**
+ * Decision 0164: the ticker-rule probe. `deployLaunch` (both factory kinds
+ * share the request struct and the check order chain → `_validateRequest`
+ * → deadline) is simulated from `deploymentExecutor()` with every other
+ * field valid, ticker `"a"` (refused by the pre-S242 `_validTicker`,
+ * accepted by the S242 `LaunchText` floor) and an expired deadline (1):
+ * `ExpiredSignature` = the request passed validation (`utf8`),
+ * `InvalidConfiguration` = the ticker was refused (`ascii`). Any other
+ * outcome — another revert, a success, a network failure — is unreadable
+ * and fails closed. An `eth_call`: nothing is signed, sent or stored.
+ */
+export function hooksLaunchTickerProbeOutcome(
+  revertName: string | null,
+): "utf8" | "ascii" | null {
+  if (revertName === "ExpiredSignature") return "utf8";
+  if (revertName === "InvalidConfiguration") return "ascii";
+  return null;
+}
+
+const tickerProbeRequest = Object.freeze({
+  projectOwner: "0x0000000000000000000000000000000000000001",
+  configVersion: 1,
+  configHash: `0x${"0".repeat(63)}1` as `0x${string}`,
+  name: "a",
+  ticker: "a",
+  // Far beyond any activation buffer; uint64.
+  nftSaleStart: 1n << 62n,
+  buybackRecipient: "0x0000000000000000000000000000000000000001",
+  deadline: 1n,
+  memeSalt: `0x${"0".repeat(64)}`,
+});
+
+function contractRevertName(error: unknown): string | null {
+  if (!(error instanceof BaseError)) return null;
+  const reverted = error.walk(
+    (cause) => cause instanceof ContractFunctionRevertedError,
+  );
+  return reverted instanceof ContractFunctionRevertedError
+    ? (reverted.data?.errorName ?? null)
+    : null;
+}
+
 export function createHooksLaunchFactoryReader(input: {
   readonly factoryAddress: string;
   readonly expectedRuntimeCodeHash: string;
@@ -352,9 +395,46 @@ export function createHooksLaunchFactoryReader(input: {
     return template;
   }
 
+  // Decision 0164: immutable for a code-hash-pinned Factory; a failed probe
+  // is not cached (the next call probes again).
+  let tickerRule: "utf8" | "ascii" | null = null;
+  async function tickerTextRule(): Promise<"utf8" | "ascii"> {
+    if (tickerRule !== null) return tickerRule;
+    await verifyNetworkAndCode();
+    let executor: Address;
+    try {
+      executor = await client.readContract({
+        address: factoryAddress,
+        abi: loopLaunchFactoryAbi,
+        functionName: "deploymentExecutor",
+      });
+    } catch {
+      throw new Error("Hooks launch factory read unavailable");
+    }
+    let revertName: string | null = null;
+    try {
+      await client.simulateContract({
+        address: factoryAddress,
+        abi: loopLaunchFactoryAbi,
+        functionName: "deployLaunch",
+        args: [tickerProbeRequest, `0x${"0".repeat(64)}`, "0x"],
+        account: executor,
+      });
+    } catch (error) {
+      revertName = contractRevertName(error);
+    }
+    const outcome = hooksLaunchTickerProbeOutcome(revertName);
+    if (outcome === null) {
+      throw new Error("Hooks launch factory ticker rule unreadable");
+    }
+    tickerRule = outcome;
+    return outcome;
+  }
+
   return Object.freeze({
     factoryAddress,
     chainId: chainReference,
+    tickerTextRule,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
     ...(loopDynamic
       ? {

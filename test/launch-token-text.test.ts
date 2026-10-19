@@ -35,7 +35,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
       "Loop Doge",
       "狗狗 Doge 2026",
       "🐸 Pepe 青蛙",
-      "👨‍👩‍👧 家族",
+      "👨\u200d👩\u200d👧 家族",
       "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scot",
       "Ünïcödé · ñame",
       "ミーム코인",
@@ -44,7 +44,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
       "doge",
       "1inch",
       "フリーダム.オブ.マネー",
-      "币安　人生",
+      "币安\u3000人生",
     ]) {
       expect(normalizeLaunchTokenText(text)).toBe(text);
     }
@@ -56,7 +56,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
   });
 
   it("trims and NFC-normalises", () => {
-    expect(normalizeLaunchTokenText("  éclair　")).toBe("éclair");
+    expect(normalizeLaunchTokenText("  éclair\u3000")).toBe("éclair");
     expect(normalizeLaunchTokenText(" DOGE ")).toBe("DOGE");
   });
 
@@ -86,33 +86,34 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
     for (const text of [
       "",
       "   ",
-      "　",
+      "\u3000",
       "a\nb",
       "a\tb",
       "a\u0000b",
       "a\u007fb",
       "a\u0085b",
-      "abc‮gpj",
-      "a⁦b",
-      "a​b",
-      "a‌b",
-      "a b",
-      "a b",
+      "abc\u202egpj",
+      "a\u2066b",
+      "a\u200bb",
+      "a\u200cb",
+      "a\u2028b",
+      "a\u2029b",
+      "a\u2065b",
       "a\ud800b",
-      "a b",
-      "a b",
-      "a b",
-      "a­b",
-      "a͏b",
-      "a᠎b",
-      "aㅤb",
-      "a⠀b",
-      "a﻿b",
-      "a﷐b",
-      "a￿b",
-      "‍",
-      "‍a",
-      "a‍",
+      "a\u00a0b",
+      "a\u2003b",
+      "a\u202fb",
+      "a\u00adb",
+      "a\u034fb",
+      "a\u180eb",
+      "a\u3164b",
+      "a\u2800b",
+      "a\ufeffb",
+      "a\ufdd0b",
+      "a\uffffb",
+      "\u200d",
+      "\u200da",
+      "a\u200d",
     ]) {
       expect(normalizeLaunchTokenText(text)).toBeNull();
     }
@@ -134,7 +135,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
     );
     expect(normalizeLaunchTokenDescription("")).toBe("");
     expect(normalizeLaunchTokenDescription("a\u0007b")).toBeNull();
-    expect(normalizeLaunchTokenDescription("a‮b")).toBeNull();
+    expect(normalizeLaunchTokenDescription("a\u202eb")).toBeNull();
   });
 
   it("counts description characters, not UTF-16 units", () => {
@@ -160,7 +161,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
     for (const bad of [
       { name: "中".repeat(21), ticker: "DOGE" },
       { name: "狗", ticker: "a".repeat(21) },
-      { name: "狗", ticker: "a‮b" },
+      { name: "狗", ticker: "a\u202eb" },
       { name: "狗", ticker: "" },
     ]) {
       expect(() =>
@@ -202,7 +203,7 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
       { name: "中".repeat(21) },
       { name: "a\u0001" },
       { ticker: "a".repeat(21) },
-      { ticker: "‍A" },
+      { ticker: "\u200dA" },
       { ticker: "  " },
     ]) {
       expect(() =>

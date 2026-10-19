@@ -17,6 +17,7 @@ import {
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactorySupportsTicker,
   type HooksLaunchProjectConfigRepository,
 } from "./hooks-launch-project-config.js";
 import {
@@ -203,6 +204,8 @@ export class HooksLaunchSubmissionError extends Error {
       | "recipient_fixed"
       /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
       | "recipient_unavailable"
+      /** Decision 0164: a non-legacy ticker for a pre-S242 Factory. */
+      | "ticker_unsupported"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
@@ -421,27 +424,39 @@ export function createHooksLaunchSubmissionService(input: {
         // Decision 0155: the independent Factory reads run concurrently
         // under the command's chain budget; results are still checked in
         // the original order (template, nonce, MEME, Hook).
-        const [templateCheck, nonceRead, tokenRead, hookRead, templateRead] =
-          await withinChainBudget(
-            Promise.allSettled([
-              assertHooksLaunchFactoryTemplate(
-                reader,
-                draft.config,
-                () => new HooksLaunchSubmissionError("template_mismatch"),
-              ),
-              reader.nonce(wallet.address),
-              reader.tokenDeployment(request),
-              reader.hookDeployment(request),
-              loopDynamic
-                ? readHooksLaunchFactoryTemplate(reader)
-                : Promise.resolve(null),
-            ]),
-          );
+        const [
+          templateCheck,
+          nonceRead,
+          tokenRead,
+          hookRead,
+          templateRead,
+          tickerRead,
+        ] = await withinChainBudget(
+          Promise.allSettled([
+            assertHooksLaunchFactoryTemplate(
+              reader,
+              draft.config,
+              () => new HooksLaunchSubmissionError("template_mismatch"),
+            ),
+            reader.nonce(wallet.address),
+            reader.tokenDeployment(request),
+            reader.hookDeployment(request),
+            loopDynamic
+              ? readHooksLaunchFactoryTemplate(reader)
+              : Promise.resolve(null),
+            // Decision 0164: the transition gate.
+            hooksLaunchFactorySupportsTicker(reader, request.ticker),
+          ]),
+        );
         const settled = <T>(result: PromiseSettledResult<T>): T => {
           if (result.status === "rejected") throw result.reason;
           return result.value;
         };
         settled(templateCheck);
+        if (tickerRead.status === "rejected")
+          throw new HooksLaunchSubmissionError("unavailable");
+        if (!tickerRead.value)
+          throw new HooksLaunchSubmissionError("ticker_unsupported");
         if (settled(nonceRead) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({

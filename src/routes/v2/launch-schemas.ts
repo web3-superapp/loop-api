@@ -1924,7 +1924,7 @@ const hooksLaunchFixedEconomicsSchema = {
         maxDynamicFeeWad: {
           ...uintStringSchema,
           description:
-            "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer read from the Factory, never hard-coded: 500000000000000000 = 50 % (S242 ruling; the sell side totals at most 51 % with the base sell fee), 200000000000000000 = 20 % on S193 Factories; 0 = uncapped). Absent on templates of pre-S193 Factories.",
+            "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer read from the Factory, never hard-coded: 500000000000000000 = 50 % (S242 ruling; the sell side totals at most 51 % with the base sell fee), 200000000000000000 = 20 % on S193 Factories; 0 = uncapped. Absent on templates of pre-S193 Factories.",
         },
         // Decision 0152 (S209 generation). The service already emitted both; the response schema
         // lagged behind and fast-json-stringify answered 500 for every S209 draft (S215 finding).

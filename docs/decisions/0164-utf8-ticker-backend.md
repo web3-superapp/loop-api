@@ -12,14 +12,14 @@
 
 共享模块 `src/features/launch/launch-token-text.ts`（0154 已有，扩展而非新建）：
 
-| 项            | 规则                                                                                                                                                                                                                                                                                                                                   |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 函数          | `normalizeLaunchTokenText(raw)`；`normalizeLaunchTokenName` 与 `normalizeLaunchTokenTicker` 是**同一个函数**的别名                                                                                                                                                                                                                     |
-| 规范化        | NFC → `trim()`（含全角空格等 JS 空白）；结果原样存储与签名，**不转大写**，不要求唯一                                                                                                                                                                                                                                                   |
-| 长度          | trim 后 **1–20 个 UTF-16 单元**（JS `string.length`，与 four.meme 一致：汉字 / 假名 / 谚文各 1，BMP 外 emoji 各 2）；另检 UTF-8 ≤ 80 字节（20 单元最多 60 字节，永远不会触到合约 80 字节底线）                                                                                                                                         |
-| 允许          | 任何文字：中 / 日 / 韩 / 带重音拉丁 / emoji（含肤色、国旗、ZWJ 序列、标签序列）/ 中间空格（U+0020、U+3000）/ `$` / 小写 / 数字开头 / 标点                                                                                                                                                                                              |
-| 拒绝          | `\p{Cc}`；`\p{Cf}`（放行 U+200D 与 U+E0020–E007F）；`\p{Cs}`、`\p{Zl}`、`\p{Zp}`；除 U+0020 / U+3000 以外的 `\p{Zs}`（NBSP、U+2000–200A、U+202F、U+205F、U+1680）；合约 `_rejected` 表中不属上述类别的：U+034F、U+115F/1160、U+17B4/17B5、U+180B–180F、U+2800、U+3164、U+FFA0、非字符 U+FDD0–FDEF 与各平面 U+xFFFE/xFFFF；ZWJ 在首或尾 |
-| 已存 / 已签值 | `isOnChainLaunchTokenText(value)`：同一字符规则 + 已是 NFC 且无首尾空白 + 1–80 字节，**不套 20 单元**。用于签名请求、提交体、EIP-712 预检，使 0154 规则下保存的旧草稿（名称 ≤ 64 字）仍可审批、签名、提交（新工厂接受 ≤ 80 字节）                                                                                                      |
+| 项            | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 函数          | `normalizeLaunchTokenText(raw)`；`normalizeLaunchTokenName` 与 `normalizeLaunchTokenTicker` 是**同一个函数**的别名                                                                                                                                                                                                                                                                                                                                    |
+| 规范化        | NFC → `trim()`（含全角空格等 JS 空白）；结果原样存储与签名，**不转大写**，不要求唯一                                                                                                                                                                                                                                                                                                                                                                  |
+| 长度          | trim 后 **1–20 个 UTF-16 单元**（JS `string.length`，与 four.meme 一致：汉字 / 假名 / 谚文各 1，BMP 外 emoji 各 2）；另检 UTF-8 ≤ 80 字节（20 单元最多 60 字节，永远不会触到合约 80 字节底线）                                                                                                                                                                                                                                                        |
+| 允许          | 任何文字：中 / 日 / 韩 / 带重音拉丁 / emoji（含肤色、国旗、ZWJ 序列、标签序列）/ 中间空格（U+0020、U+3000）/ `$` / 小写 / 数字开头 / 标点                                                                                                                                                                                                                                                                                                             |
+| 拒绝          | `\p{Cc}`；`\p{Cf}`（放行 U+200D 与 U+E0020–E007F）；`\p{Cs}`、`\p{Zl}`、`\p{Zp}`；除 U+0020 / U+3000 以外的 `\p{Zs}`（NBSP、U+2000–200A、U+202F、U+205F、U+1680）；合约 `_rejected` 表中不属上述类别的：U+034F、U+115F/1160、U+17B4/17B5、U+180B–180F、U+2800、U+3164、U+FFA0、非字符 U+FDD0–FDEF 与各平面 U+xFFFE/xFFFF、U+2065（合约整段拒 U+205F–206F 中唯一的未分配码点；不整体拒 `\p{Cn}`，以免运行时 ICU 版本较旧时误拒新 emoji）；ZWJ 在首或尾 |
+| 已存 / 已签值 | `isOnChainLaunchTokenText(value)`：同一字符规则 + 已是 NFC 且无首尾空白 + 1–80 字节，**不套 20 单元**。用于签名请求、提交体、EIP-712 预检，使 0154 规则下保存的旧草稿（名称 ≤ 64 字）仍可审批、签名、提交（新工厂接受 ≤ 80 字节）                                                                                                                                                                                                                     |
 
 结论：后端放行的任何值都满足合约 `LaunchText` 底线（后端严格包含合约规则）；合约是兜底。
 
@@ -87,9 +87,39 @@
 - `test/hooks-launch-protocol-abi.test.ts`：选择器与解码。
 - 既有用例改写：小写 ticker / symbol 现在合法（`launch-contract`、`meme-curve-math`、`v2-launch-routes`、`v2-meme-routes`）。
 
-## 10. 未做 / 待主代理定
+## 10. 过渡门控（主代理 2026-10-19 裁决，追加提交）
 
-1. 迁移号按主代理 2026-10-19 调整为 `000094`（S238 用 `000092`、S245-api 用 `000093`）；本分支不含这两个迁移，`schema.ts latestMigrationName` 已设为 `000094_launch_token_text_utf8`。合并时须让 `000092`、`000093` 先于 `000094` 在任何库上执行（node-pg-migrate 默认检查顺序），否则已跑过 `000094` 的库会拒绝补跑前两个。
-2. 过渡期：dev / staging 仍指向旧工厂时，后端已放行非 ASCII 代码，签名后会在部署预执行得到 `InvalidConfiguration`（旧工厂无 `InvalidTicker`）→ `HOOKS_DEPLOY_SIMULATION_REVERTED`。若要在换工厂之前按工厂代际拦截（例如 `LAUNCH2_LEGACY_FACTORIES` / code hash 判定），需另定。
-3. `test/hooks-launch-protocol-abi.test.ts` 构建对比在 S242 合并进 `loop-contracts` 之前对本机旧构建是跳过的；合并后应在主仓重跑 `pnpm hooks:abi-sync --check`。
-4. MEME v1 名称上限由 32 码位收紧到 20 单元（同一规则）；如 v1 需保留 32，需另定。
+**目的**：配置的发射工厂仍是 S242 之前的代际时，非 `^[A-Z0-9]{2,12}$` 的代码（中文、小写、`$1`、单字符……）在保存 / 签名 / 提交阶段就以字段级错误拒绝，不再走到部署模拟才失败；换成 S242 工厂后自动放开，不改 env。
+
+**代际怎么判**：manifest 与模板哈希都判不出来——manifest 只在部署检查与测试里用、运行时不读（0152）；S242 没有新增 getter；OfficialTax 的 `TEMPLATE_HASH` 恒为 `keccak256("hooks_launch_v1")`，LoopDynamic 的模板哈希只随参数（`maxDynamicFeeWad`）变，不代表代码代际；运行时 code hash 含 immutables，每次部署都不同，也不是代际标识。因此改为**按链上行为探测**（`createHooksLaunchFactoryReader().tickerTextRule()`）：
+
+- 在已通过网络 / code hash 校验的工厂上，以 `deploymentExecutor()` 为 `from` 做 `eth_call deployLaunch`：其余字段全部合法、`ticker = "a"`、`deadline = 1`。两代工厂的检查顺序都是 chain → `_validateRequest` → deadline：
+  - `ExpiredSignature` = 请求通过了文本校验 → `utf8`（S242+）；
+  - `InvalidConfiguration` = 旧 `_validTicker` 拒了 `"a"` → `ascii`；
+  - 其它 revert、调用成功、网络失败 → 判不出，**fail closed**（503 `CAPABILITY_UNAVAILABLE` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，运营端 `OPS_UNAVAILABLE`）。
+- 只读 `eth_call`，不签名、不广播、不写库；结果按工厂缓存（code hash 固定，工厂不可升级），失败不缓存。
+- reader 没有探测方法（测试替身）按 `ascii` 处理。合法的旧格式代码（`^[A-Z0-9]{2,12}$`）任何代际都放行，**不触发探测**，现有流程零额外 RPC。
+- 已在 anvil 上对两代真实工厂验证：S242 构建 → `utf8`，`狗狗币` 走完签名 → 部署 → 核验 → 激活，链上 `symbol()` 原样为 `狗狗币`；本机 `loop-contracts`（S242 前）→ `ascii`，签名请求被拒、无任务。
+
+**门控位置**（都在任何写入之前）：
+
+| 入口                                                                                                                           | 拒绝                                                                                                                     | 探测失败                               |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `PUT /v2/launch/projects/{projectId}/hooks-config`（`hooks-launch-project-config.ts saveDraft`，`parseHooksLaunchDraft` 之后） | 422 `VALIDATION_FAILED`，`detailsSafe {reasonCode: "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY", field: "ticker"}`       | 503 `HOOKS_LAUNCH_FACTORY_UNAVAILABLE` |
+| `GET …/hooks-config/signing-request`（`hooks-launch-deployment.ts`，与其它工厂读并发、计入 8 s 预算）                          | 同上                                                                                                                     | 同上                                   |
+| `POST …/hooks-deployments`（`hooks-launch-submission.ts`，同上）                                                               | 同上，不建任务                                                                                                           | 同上                                   |
+| 运营保存 `launch.config.save`（`hooks-launch-review.ts`）                                                                      | `OPS_TICKER_UNSUPPORTED_BY_FACTORY` → 后台 `VALIDATION_FAILED` / reasonCode `HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY` | `OPS_UNAVAILABLE`                      |
+
+建议文案（客户端按 reasonCode 显示）：「当前发射工厂暂不支持该代码格式，请使用 2–12 位大写字母或数字」。
+
+**项目目录（`POST/PUT /v2/launch/projects`，`launch-contract.ts`）不加门控**：项目不绑定工厂，项目 `ticker` 也不上链；上链与签名的是 hooks-config 的 `config.ticker`，它在保存 / 签名 / 提交三处都已门控。审查意见里「签名请求（`launch-contract.ts:292` 附近）」那一行是项目目录的 ticker 解析；签名请求的实际入口是 `hooks-launch-deployment.ts prepareSigningRequest`，已门控。
+
+## 11. 合并清单
+
+1. 迁移：`000092`（S238）、`000093`（S245-api）、`000094`（本分支）**必须在同一次合并里一起上**，按 92 → 93 → 94 在每个库（dev、staging、测试库）上执行；`schema.ts latestMigrationName` 合并后统一为最大号，各分支硬编码「最新迁移」的测试一并改。node-pg-migrate 默认检查顺序：已跑过 `000094` 的库不能再补跑 `000092` / `000093`。
+2. S242 合并进 `loop-contracts` 后，在 loop-api 主仓跑 `pnpm hooks:abi-sync --check`（应输出 `ABI matches the Foundry build`）；`test/hooks-launch-protocol-abi.test.ts` 的构建对比此时不再跳过。
+3. 0016 §10 第 5 步：本迁移须先于测试网第一个非 ASCII 代码上线到 dev 与 staging。过渡门控保证在换工厂之前不会签出这种代码。
+
+## 12. 未做 / 待主代理定
+
+1. MEME v1 名称上限由 32 码位收紧到 20 单元（主代理 2026-10-19 已接受：创建默认 410）。

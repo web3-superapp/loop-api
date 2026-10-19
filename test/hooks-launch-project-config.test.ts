@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   createHooksLaunchProjectConfigService,
+  hooksLaunchFactorySupportsTicker,
   HooksLaunchProjectConfigUnavailableError,
+  HooksLaunchTickerUnsupportedByFactoryError,
   HooksLaunchProjectNotFoundError,
   HooksLaunchProjectVersionConflictError,
   type HooksLaunchProjectConfigRecord,
   type HooksLaunchProjectConfigRepository,
 } from "../src/features/launch/hooks-launch-project-config.js";
+import { hooksLaunchTickerProbeOutcome } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 
 const body = {
   name: "LOOP 项目示例",
@@ -193,5 +196,104 @@ describe("Hooks project config service", () => {
         save({ nftSaleDuration: () => Promise.reject(new Error("rpc down")) }),
       ).rejects.toBeInstanceOf(HooksLaunchProjectConfigUnavailableError);
     });
+  });
+});
+
+describe("Decision 0164: the ticker transition gate", () => {
+  const recipient = "0x1234567890123456789012345678901234567890";
+  function serviceFor(tickerTextRule?: () => Promise<"utf8" | "ascii">) {
+    const harness = makeHarness();
+    let probes = 0;
+    const service = createHooksLaunchProjectConfigService({
+      fixedBuybackRecipient: recipient,
+      repository: harness.repository,
+      factory: {
+        nftSaleDuration: () =>
+          Promise.resolve({ seconds: 604_800, legacy: false }),
+        ...(tickerTextRule === undefined
+          ? {}
+          : {
+              tickerTextRule: () => {
+                probes += 1;
+                return tickerTextRule();
+              },
+            }),
+      },
+      minimumLeadSeconds: 86_400,
+      now: () => 1_790_000_000,
+    });
+    return { service, harness, probes: () => probes };
+  }
+  const save = (
+    service: ReturnType<typeof serviceFor>["service"],
+    ticker: string,
+  ) =>
+    service.saveDraft({
+      ownerUserId: "user-1",
+      projectId,
+      expectedVersion: 0,
+      body: { ...body, ticker },
+    });
+
+  it("passes a legacy ticker on any Factory without probing", async () => {
+    const ascii = serviceFor(() => Promise.resolve("ascii"));
+    await expect(save(ascii.service, "DOGE")).resolves.toMatchObject({
+      config: { ticker: "DOGE" },
+    });
+    expect(ascii.probes()).toBe(0);
+  });
+
+  it.each(["狗狗币", "doge", "$1", "D"])(
+    "refuses %s on a pre-S242 Factory and writes nothing",
+    async (ticker) => {
+      const ascii = serviceFor(() => Promise.resolve("ascii"));
+      await expect(save(ascii.service, ticker)).rejects.toBeInstanceOf(
+        HooksLaunchTickerUnsupportedByFactoryError,
+      );
+      expect(ascii.harness.getRecord()).toBeNull();
+    },
+  );
+
+  it("fails closed on a reader without the probe", async () => {
+    const legacyReader = serviceFor();
+    await expect(save(legacyReader.service, "狗狗币")).rejects.toBeInstanceOf(
+      HooksLaunchTickerUnsupportedByFactoryError,
+    );
+  });
+
+  it("is unavailable when the probe cannot be read", async () => {
+    const broken = serviceFor(() => Promise.reject(new Error("rpc down")));
+    await expect(save(broken.service, "狗狗币")).rejects.toMatchObject({
+      name: "HooksLaunchProjectConfigUnavailableError",
+      source: "factory",
+    });
+    expect(broken.harness.getRecord()).toBeNull();
+  });
+
+  it("lifts the gate on an S242 Factory, case kept", async () => {
+    const utf8 = serviceFor(() => Promise.resolve("utf8"));
+    await expect(save(utf8.service, "狗狗币")).resolves.toMatchObject({
+      config: { ticker: "狗狗币" },
+    });
+    await expect(
+      hooksLaunchFactorySupportsTicker(
+        { tickerTextRule: () => Promise.resolve("utf8") },
+        "doge",
+      ),
+    ).resolves.toBe(true);
+    await expect(hooksLaunchFactorySupportsTicker(null, "doge")).resolves.toBe(
+      false,
+    );
+    await expect(hooksLaunchFactorySupportsTicker(null, "DOGE")).resolves.toBe(
+      true,
+    );
+  });
+
+  it("maps the on-chain probe outcome", () => {
+    expect(hooksLaunchTickerProbeOutcome("ExpiredSignature")).toBe("utf8");
+    expect(hooksLaunchTickerProbeOutcome("InvalidConfiguration")).toBe("ascii");
+    expect(hooksLaunchTickerProbeOutcome("InvalidTicker")).toBeNull();
+    expect(hooksLaunchTickerProbeOutcome("Unauthorized")).toBeNull();
+    expect(hooksLaunchTickerProbeOutcome(null)).toBeNull();
   });
 });

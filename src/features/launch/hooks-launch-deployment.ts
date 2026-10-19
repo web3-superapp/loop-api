@@ -8,6 +8,7 @@ import {
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactorySupportsTicker,
   type HooksLaunchProjectConfigRepository,
 } from "./hooks-launch-project-config.js";
 import {
@@ -41,6 +42,13 @@ export interface HooksLaunchFactoryReader {
     readonly templateHash: string;
   }>;
   nonce(projectOwner: string): Promise<bigint>;
+  /**
+   * Decision 0164: which ticker text rule the Factory enforces, probed on
+   * chain (immutable; cached): `utf8` = the S242 `LaunchText` floor (any
+   * script, case kept), `ascii` = the earlier `^[A-Z0-9]{2,12}$`. Rejects
+   * when unreadable. Absent = treated as `ascii` (fail closed).
+   */
+  tickerTextRule?(): Promise<"utf8" | "ascii">;
   /**
    * Decision 0127: the Factory's `launchIdByOwnerVersion(keccak(owner,
    * version))` — the zero bytes32 while that pair is unused.
@@ -94,6 +102,11 @@ export class HooksLaunchDeploymentError extends Error {
       | "recipient_fixed"
       /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
       | "recipient_unavailable"
+      /**
+       * Decision 0164: the ticker is not `^[A-Z0-9]{2,12}$` and the target
+       * Factory predates S242 (422 HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY).
+       */
+      | "ticker_unsupported"
       /**
        * Decision 0127: this wallet already deployed this config version
        * (another project of the owner, saved before versions were
@@ -359,34 +372,54 @@ export function createHooksLaunchDeploymentService(input: {
       // the request's chain budget; results are still checked in the
       // original order (template, owner version, nonce, MEME deployer).
       const loopDynamic = reader.hookKind === "loopDynamic";
-      const [templateCheck, usedByRead, nonceRead, tokenRead, templateRead] =
-        await withinChainBudget(
-          Promise.allSettled([
-            assertHooksLaunchFactoryTemplate(
-              reader,
-              draft.config,
-              () =>
-                new HooksLaunchDeploymentError(
-                  "template_mismatch",
-                  "Hooks launch config template differs from the Factory",
-                ),
-            ),
-            reader.ownerVersionLaunchId(projectOwner, draft.version),
-            reader.nonce(projectOwner),
-            reader.tokenDeployment({
-              name: requestFields.name,
-              ticker: requestFields.ticker,
-            }),
-            loopDynamic
-              ? readHooksLaunchFactoryTemplate(reader)
-              : Promise.resolve(null),
-          ]),
-        );
+      const [
+        templateCheck,
+        usedByRead,
+        nonceRead,
+        tokenRead,
+        templateRead,
+        tickerRead,
+      ] = await withinChainBudget(
+        Promise.allSettled([
+          assertHooksLaunchFactoryTemplate(
+            reader,
+            draft.config,
+            () =>
+              new HooksLaunchDeploymentError(
+                "template_mismatch",
+                "Hooks launch config template differs from the Factory",
+              ),
+          ),
+          reader.ownerVersionLaunchId(projectOwner, draft.version),
+          reader.nonce(projectOwner),
+          reader.tokenDeployment({
+            name: requestFields.name,
+            ticker: requestFields.ticker,
+          }),
+          loopDynamic
+            ? readHooksLaunchFactoryTemplate(reader)
+            : Promise.resolve(null),
+          // Decision 0164: the transition gate (no read for a legacy ticker).
+          hooksLaunchFactorySupportsTicker(reader, requestFields.ticker),
+        ]),
+      );
       const settled = <T>(result: PromiseSettledResult<T>): T => {
         if (result.status === "rejected") throw result.reason;
         return result.value;
       };
       settled(templateCheck);
+      if (tickerRead.status === "rejected") {
+        throw new HooksLaunchDeploymentError(
+          "unavailable",
+          "Hooks launch factory ticker rule unreadable",
+        );
+      }
+      if (!tickerRead.value) {
+        throw new HooksLaunchDeploymentError(
+          "ticker_unsupported",
+          "Hooks launch ticker not supported by the Factory",
+        );
+      }
       // Decision 0127: never hand out a signature the Factory would reject
       // with VersionAlreadyUsed.
       const usedBy = settled(usedByRead);

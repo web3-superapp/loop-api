@@ -49,6 +49,8 @@ const otherSpaces = /(?![ \u3000])\p{Zs}/u;
 const forbiddenIdentityCodePoints: ReadonlySet<number> = new Set([
   0x034f, 0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180c, 0x180d, 0x180e,
   0x180f, 0x2800, 0x3164, 0xffa0,
+  // Unassigned inside the factory's refused U+205F–U+206F block.
+  0x2065,
 ]);
 
 function hasForbiddenIdentityCharacter(value: string): boolean {

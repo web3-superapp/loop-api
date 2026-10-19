@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";
@@ -34,7 +35,10 @@ import { hooksLaunchReviewCommandSchema } from "../src/features/launch/hooks-lau
 import { createHooksLaunchSubmissionService } from "../src/features/launch/hooks-launch-submission.js";
 import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks-launch-executor-chain.js";
 import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
-import { launchPublicationGateAbi } from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
+import {
+  launchPublicationGateAbi,
+  memeTokenAbi,
+} from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
 import type { HooksLaunchOnChainFacts } from "../src/features/launch/hooks-launch-verification.js";
 import {
   anvilPrivateKey,
@@ -442,6 +446,39 @@ describe.skipIf(skipReason !== null)(
       expect(adminTask?.status).toBe("activated");
       expect(adminTask?.verifiedChecks.length).toBe(28);
       expect(adminTask?.activatedAt).not.toBeNull();
+    }, 300_000);
+
+    it("probes the Factory's ticker rule and carries a Chinese ticker end to end on S242 (Decision 0164)", async () => {
+      if (typeof foundry === "string") return;
+      const s242 = existsSync(
+        join(foundry.protocolDir, "src/libraries/LaunchText.sol"),
+      );
+      const factory = reader();
+      expect(await factory.tickerTextRule?.()).toBe(s242 ? "utf8" : "ascii");
+      if (!s242) {
+        // Pre-S242 build: refused at the signing request, nothing recorded.
+        await expect(submittedTask("狗狗币")).rejects.toMatchObject({
+          kind: "ticker_unsupported",
+        });
+        return;
+      }
+      const task = await submittedTask("狗狗币");
+      const read = () => job(task.ownerUserId, task.projectId, task.jobId);
+      await drive(executor(), read, "activated");
+      const current = await read();
+      expect(current.status).toBe("activated");
+      const client = createPublicClient({
+        chain: bscTestnet,
+        transport: http(chain.rpcUrl),
+      });
+      // symbol() returns the signed bytes unchanged (not upper-cased).
+      expect(
+        await client.readContract({
+          address: current.addresses.deployed!.meme as Address,
+          abi: memeTokenAbi,
+          functionName: "symbol",
+        }),
+      ).toBe("狗狗币");
     }, 300_000);
 
     it("re-sends the same transaction after its receipt block is reorged out", async () => {

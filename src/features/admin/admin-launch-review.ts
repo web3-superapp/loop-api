@@ -483,6 +483,10 @@ export function adminLaunchReviewErrorProjection(
     case "OPS_INVALID_LAUNCH_CONFIG":
     case "OPS_BUYBACK_RECIPIENT_FIXED":
       return new AdminApiError("VALIDATION_FAILED", { reasonCode: code });
+    case "OPS_TICKER_UNSUPPORTED_BY_FACTORY":
+      return new AdminApiError("VALIDATION_FAILED", {
+        reasonCode: "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY",
+      });
     case "OPS_LAUNCH_NOT_APPROVED":
     case "OPS_LAUNCH_CONFIG_NOT_APPROVED":
     case "OPS_LAUNCH_NOT_IN_REVIEW":

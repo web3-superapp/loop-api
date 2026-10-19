@@ -1,6 +1,7 @@
 import type { Pool, PoolClient, QueryResult } from "pg";
 import { describe, expect, it, vi } from "vitest";
 
+import { adminLaunchReviewErrorProjection } from "../src/features/admin/admin-launch-review.js";
 import { createPostgresHooksLaunchReviewRepository } from "../src/database/hooks-launch-review-repository.js";
 import {
   HooksLaunchReviewError,
@@ -265,6 +266,59 @@ describe("Decision 0122 review rejections and the fixed recipient", () => {
       ).rejects.toMatchObject({ code: "OPS_INVALID_COMMAND" });
     }
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("gates an operator save's ticker by the Factory rule (Decision 0164)", async () => {
+    const recipient = "0x3333333333333333333333333333333333333333";
+    const save = (ticker: string) => ({
+      operationId: "2c6f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c5",
+      action: "launch.config.save",
+      target: project,
+      reason: "Operator correction",
+      payload: {
+        expectedVersion: 1,
+        config: {
+          name: "Project",
+          ticker,
+          logoAssetUrl: "https://example.com/logo.png",
+          description: "Test",
+          links: [],
+          nftSaleStartAt: "1900000000",
+          buybackRecipient: recipient,
+        },
+      },
+    });
+    const execute = vi.fn(() => Promise.resolve({}));
+    const repository = { execute } as unknown as HooksLaunchReviewRepository;
+    const factoryWith = (rule: () => Promise<"utf8" | "ascii">) => ({
+      nftSaleDuration: () => Promise.resolve({ seconds: 3_600, legacy: false }),
+      tickerTextRule: rule,
+    });
+    const service = (rule: () => Promise<"utf8" | "ascii">) =>
+      createHooksLaunchReviewService({
+        fixedBuybackRecipient: recipient,
+        repository,
+        factory: factoryWith(rule),
+      });
+    await expect(
+      service(() => Promise.resolve("ascii")).execute(actor, save("狗狗币")),
+    ).rejects.toMatchObject({ code: "OPS_TICKER_UNSUPPORTED_BY_FACTORY" });
+    await expect(
+      service(() => Promise.reject(new Error("rpc"))).execute(
+        actor,
+        save("狗狗币"),
+      ),
+    ).rejects.toMatchObject({ code: "OPS_UNAVAILABLE" });
+    expect(execute).not.toHaveBeenCalled();
+    await service(() => Promise.resolve("ascii")).execute(actor, save("MEME"));
+    await service(() => Promise.resolve("utf8")).execute(actor, save("狗狗币"));
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      adminLaunchReviewErrorProjection("OPS_TICKER_UNSUPPORTED_BY_FACTORY"),
+    ).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY" },
+    });
   });
 
   it("refuses an operator save naming another recipient, and fails closed without one", async () => {

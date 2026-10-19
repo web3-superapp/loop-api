@@ -161,10 +161,31 @@
   `detailsSafe {reasonCode: "MEME_METADATA_INVALID", field: "name" | "symbol"}`。
 - 计数器建议「x/20」，按 `String.length` 计；前端只做提示，以服务端为准。
 - 旧规则（≤ 64 字）下保存的草稿仍可审批、签名、提交（签名请求按链上 80 字节底线校验）。
-- 过渡期 unavailable 行为：服务端配置的工厂若仍是 S242 之前的旧工厂，非 ASCII / 小写代码在部署
-  预执行就会失败，部署任务 `failure.code = HOOKS_DEPLOY_SIMULATION_REVERTED`（不可重试）；换到
-  S242 工厂后，名称 / 代码不合规的预执行失败分别为 `HOOKS_LAUNCH_NAME_INVALID` /
-  `HOOKS_LAUNCH_TICKER_INVALID`（§9.2）。
+- 过渡门控（决策 0164 §10）：服务端配置的发射工厂若仍是 S242 之前的旧代际（服务端链上探测，
+  无需前端判断），代码不是 2–12 位大写字母或数字（`^[A-Z0-9]{2,12}$`）时，**保存本接口、取签名请求、
+  提交部署**三处都返回：
+
+  ```json
+  {
+    "code": "VALIDATION_FAILED",
+    "category": "validation",
+    "retryable": false,
+    "userMessageKey": "errors.validation.failed",
+    "correlationId": "…",
+    "detailsSafe": {
+      "reasonCode": "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY",
+      "field": "ticker"
+    },
+    "providerReferenceSafe": null
+  }
+  ```
+
+  HTTP 422；文案「当前发射工厂暂不支持该代码格式，请使用 2–12 位大写字母或数字」，高亮代码输入框。
+  平台切到 S242 工厂后自动放开（同一请求直接成功），App 不需要发版或开关。合法的旧格式代码不受影响。
+  服务端探测不可读时为 503 `CAPABILITY_UNAVAILABLE`（`HOOKS_LAUNCH_FACTORY_UNAVAILABLE`），按既有 503 处理。
+
+- 换到 S242 工厂后，若链上仍拒（理论上不应发生），部署任务 `failure.code` 为
+  `HOOKS_LAUNCH_NAME_INVALID` / `HOOKS_LAUNCH_TICKER_INVALID`（§9.2）。
 
 ```json
 {
