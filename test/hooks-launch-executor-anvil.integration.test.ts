@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -450,9 +450,12 @@ describe.skipIf(skipReason !== null)(
 
     it("probes the Factory's ticker rule and carries a Chinese ticker end to end on S242 (Decision 0164)", async () => {
       if (typeof foundry === "string") return;
-      const s242 = existsSync(
-        join(foundry.protocolDir, "src/libraries/LaunchText.sol"),
-      );
+      // The S242 factories expose launchTextRulesVersion() = 2; an earlier
+      // build has no such function and reads as ascii.
+      const s242 = readFileSync(
+        join(foundry.protocolDir, "src/LoopLaunchFactory.sol"),
+        "utf8",
+      ).includes("function launchTextRulesVersion()");
       const factory = reader();
       expect(await factory.tickerTextRule?.()).toBe(s242 ? "utf8" : "ascii");
       if (!s242) {

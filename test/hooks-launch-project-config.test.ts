@@ -10,7 +10,20 @@ import {
   type HooksLaunchProjectConfigRecord,
   type HooksLaunchProjectConfigRepository,
 } from "../src/features/launch/hooks-launch-project-config.js";
-import { hooksLaunchTickerProbeOutcome } from "../src/integrations/launch/hooks-launch-factory-reader.js";
+import {
+  type BaseError,
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  HttpRequestError,
+  TimeoutError,
+} from "viem";
+
+import {
+  hooksLaunchTextRulesFromVersion,
+  hooksLaunchTextRulesVersionAbi,
+  isHooksLaunchMissingFunctionRevert,
+} from "../src/integrations/launch/hooks-launch-factory-reader.js";
 
 const body = {
   name: "LOOP 项目示例",
@@ -289,11 +302,62 @@ describe("Decision 0164: the ticker transition gate", () => {
     );
   });
 
-  it("maps the on-chain probe outcome", () => {
-    expect(hooksLaunchTickerProbeOutcome("ExpiredSignature")).toBe("utf8");
-    expect(hooksLaunchTickerProbeOutcome("InvalidConfiguration")).toBe("ascii");
-    expect(hooksLaunchTickerProbeOutcome("InvalidTicker")).toBeNull();
-    expect(hooksLaunchTickerProbeOutcome("Unauthorized")).toBeNull();
-    expect(hooksLaunchTickerProbeOutcome(null)).toBeNull();
+  it("reads launchTextRulesVersion(): >= 2 utf8, a missing function ascii, else unreadable", () => {
+    expect(hooksLaunchTextRulesFromVersion(2)).toBe("utf8");
+    expect(hooksLaunchTextRulesFromVersion(3)).toBe("utf8");
+    for (const value of [0, 1, 256, 2.5, "2", 2n, null, undefined]) {
+      expect(hooksLaunchTextRulesFromVersion(value)).toBeNull();
+    }
+    const wrap = (cause: BaseError) =>
+      new ContractFunctionExecutionError(cause, {
+        abi: hooksLaunchTextRulesVersionAbi,
+        functionName: "launchTextRulesVersion",
+      });
+    const reverted = (data?: `0x${string}`, message?: string) =>
+      wrap(
+        new ContractFunctionRevertedError({
+          abi: hooksLaunchTextRulesVersionAbi,
+          functionName: "launchTextRulesVersion",
+          ...(data === undefined ? {} : { data }),
+          ...(message === undefined ? {} : { message }),
+        }),
+      );
+    // Old factory: no selector → empty revert (or empty return data).
+    expect(isHooksLaunchMissingFunctionRevert(reverted())).toBe(true);
+    expect(isHooksLaunchMissingFunctionRevert(reverted("0x"))).toBe(true);
+    expect(
+      isHooksLaunchMissingFunctionRevert(
+        reverted(undefined, "execution reverted"),
+      ),
+    ).toBe(true);
+    expect(
+      isHooksLaunchMissingFunctionRevert(
+        wrap(
+          new ContractFunctionZeroDataError({
+            functionName: "launchTextRulesVersion",
+          }),
+        ),
+      ),
+    ).toBe(true);
+    // A revert with data or a reason, transport errors, timeouts: unreadable.
+    expect(isHooksLaunchMissingFunctionRevert(reverted("0x82b42900"))).toBe(
+      false,
+    );
+    expect(
+      isHooksLaunchMissingFunctionRevert(
+        reverted(undefined, "internal error: header not found"),
+      ),
+    ).toBe(false);
+    expect(
+      isHooksLaunchMissingFunctionRevert(
+        new HttpRequestError({ url: "https://rpc.invalid", status: 502 }),
+      ),
+    ).toBe(false);
+    expect(
+      isHooksLaunchMissingFunctionRevert(
+        new TimeoutError({ body: {}, url: "https://rpc.invalid" }),
+      ),
+    ).toBe(false);
+    expect(isHooksLaunchMissingFunctionRevert(new Error("x"))).toBe(false);
   });
 });

@@ -44,7 +44,7 @@
 
 ## 4. ABI
 
-`pnpm hooks:abi-sync --protocol <S242 worktree>/protocol`，源提交 `b1602a5`：`loopLaunchFactoryAbi` 与 `loopDynamicLaunchFactoryAbi` 各新增 `error InvalidName()`、`error InvalidTicker()`，其余无差异。`scripts/hooks-launch-abi-selection.ts` 把这两个错误列为两工厂的必选项：旧构建同步会报 missing；`test/hooks-launch-protocol-abi.test.ts` 的构建对比在本机 `loop-contracts`（尚未合并 S242）上按既有规则跳过，指向 S242 构建（`LOOP_PROTOCOL_DIR`）时通过。新增测试用 viem 复核选择器 `0x430f13b3` / `0x9ceb5e72` 并能从两个工厂 ABI 解码。
+`pnpm hooks:abi-sync --protocol <S242 worktree>/protocol`，源提交 `a1c4906`：`loopLaunchFactoryAbi` 与 `loopDynamicLaunchFactoryAbi` 各新增 `error InvalidName()`、`error InvalidTicker()` 与 `function launchTextRulesVersion()`（§10），其余无差异。`scripts/hooks-launch-abi-selection.ts` 把这两个错误列为两工厂的必选项：旧构建同步会报 missing；`test/hooks-launch-protocol-abi.test.ts` 的构建对比在本机 `loop-contracts`（尚未合并 S242）上按既有规则跳过，指向 S242 构建（`LOOP_PROTOCOL_DIR`）时通过。新增测试用 viem 复核选择器 `0x430f13b3` / `0x9ceb5e72` 并能从两个工厂 ABI 解码。
 
 ## 5. 迁移 `000094_launch_token_text_utf8`
 
@@ -91,15 +91,15 @@
 
 **目的**：配置的发射工厂仍是 S242 之前的代际时，非 `^[A-Z0-9]{2,12}$` 的代码（中文、小写、`$1`、单字符……）在保存 / 签名 / 提交阶段就以字段级错误拒绝，不再走到部署模拟才失败；换成 S242 工厂后自动放开，不改 env。
 
-**代际怎么判**：manifest 与模板哈希都判不出来——manifest 只在部署检查与测试里用、运行时不读（0152）；S242 没有新增 getter；OfficialTax 的 `TEMPLATE_HASH` 恒为 `keccak256("hooks_launch_v1")`，LoopDynamic 的模板哈希只随参数（`maxDynamicFeeWad`）变，不代表代码代际；运行时 code hash 含 immutables，每次部署都不同，也不是代际标识。因此改为**按链上行为探测**（`createHooksLaunchFactoryReader().tickerTextRule()`）：
+**代际怎么判**：manifest 与模板哈希都判不出来——manifest 只在部署检查与测试里用、运行时不读（0152）；OfficialTax 的 `TEMPLATE_HASH` 恒为 `keccak256("hooks_launch_v1")`，LoopDynamic 的模板哈希只随参数（`maxDynamicFeeWad`）变；运行时 code hash 含 immutables，每次部署都不同。主代理因此让 S242 在两个工厂上加 `launchTextRulesVersion() external pure returns (uint8)`（selector `0x231cd5bd`，返回 2；loop-contracts `a1c4906`），后端 `createHooksLaunchFactoryReader().tickerTextRule()` 在已通过网络 / code hash 校验的工厂上 `eth_call` 它：
 
-- 在已通过网络 / code hash 校验的工厂上，以 `deploymentExecutor()` 为 `from` 做 `eth_call deployLaunch`：其余字段全部合法、`ticker = "a"`、`deadline = 1`。两代工厂的检查顺序都是 chain → `_validateRequest` → deadline：
-  - `ExpiredSignature` = 请求通过了文本校验 → `utf8`（S242+）；
-  - `InvalidConfiguration` = 旧 `_validTicker` 拒了 `"a"` → `ascii`；
-  - 其它 revert、调用成功、网络失败 → 判不出，**fail closed**（503 `CAPABILITY_UNAVAILABLE` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，运营端 `OPS_UNAVAILABLE`）。
-- 只读 `eth_call`，不签名、不广播、不写库；结果按工厂缓存（code hash 固定，工厂不可升级），失败不缓存。
-- reader 没有探测方法（测试替身）按 `ascii` 处理。合法的旧格式代码（`^[A-Z0-9]{2,12}$`）任何代际都放行，**不触发探测**，现有流程零额外 RPC。
-- 已在 anvil 上对两代真实工厂验证：S242 构建 → `utf8`，`狗狗币` 走完签名 → 部署 → 核验 → 激活，链上 `symbol()` 原样为 `狗狗币`；本机 `loop-contracts`（S242 前）→ `ascii`，签名请求被拒、无任务。
+- 返回 ≥ 2 → `utf8`（S242+）；
+- revert 且无返回数据（无 reason，或只有节点通用的 `execution reverted`）、或调用返回空数据 → `ascii`（旧工厂没有该函数）；
+- RPC / 传输错误、超时、带数据或带其它 reason 的 revert、返回 0 / 1 等非预期值 → 判不出，**fail closed**（503 `CAPABILITY_UNAVAILABLE` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，运营端 `OPS_UNAVAILABLE`）。
+- 只读 `eth_call`；结果按工厂（reader 实例 = 一个固定 code hash 的工厂地址）缓存，判不出不缓存。
+- reader 没有该方法（测试替身）按 `ascii` 处理。合法的旧格式代码（`^[A-Z0-9]{2,12}$`）任何代际都放行，**不读链**，现有流程零额外 RPC。
+- 早期草稿曾用模拟 `deployLaunch` 的 revert 顺序推断代际，依赖工厂检查顺序，已删除。
+- anvil 实测：S242 构建（`a1c4906`）→ `utf8`，`狗狗币` 走完签名 → 部署 → 核验 → 激活，链上 `symbol()` 原样为 `狗狗币`；本机 `loop-contracts`（S242 前）→ `ascii`（函数不存在，revert 无数据），签名请求被拒、无任务。
 
 **门控位置**（都在任何写入之前）：
 
@@ -117,7 +117,7 @@
 ## 11. 合并清单
 
 1. 迁移：`000092`（S238）、`000093`（S245-api）、`000094`（本分支）**必须在同一次合并里一起上**，按 92 → 93 → 94 在每个库（dev、staging、测试库）上执行；`schema.ts latestMigrationName` 合并后统一为最大号，各分支硬编码「最新迁移」的测试一并改。node-pg-migrate 默认检查顺序：已跑过 `000094` 的库不能再补跑 `000092` / `000093`。
-2. S242 合并进 `loop-contracts` 后，在 loop-api 主仓跑 `pnpm hooks:abi-sync --check`（应输出 `ABI matches the Foundry build`）；`test/hooks-launch-protocol-abi.test.ts` 的构建对比此时不再跳过。
+2. S242（含 `a1c4906` 的 `launchTextRulesVersion`）合并进 `loop-contracts` 后，在 loop-api 主仓跑 `pnpm hooks:abi-sync --check`（应输出 `ABI matches the Foundry build`）；`test/hooks-launch-protocol-abi.test.ts` 的构建对比此时不再跳过。
 3. 0016 §10 第 5 步：本迁移须先于测试网第一个非 ASCII 代码上线到 dev 与 staging。过渡门控保证在换工厂之前不会签出这种代码。
 
 ## 12. 未做 / 待主代理定

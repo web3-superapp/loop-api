@@ -262,45 +262,61 @@ export function isHooksLaunchContractRevert(error: unknown): boolean {
 }
 
 /**
- * Decision 0164: the ticker-rule probe. `deployLaunch` (both factory kinds
- * share the request struct and the check order chain → `_validateRequest`
- * → deadline) is simulated from `deploymentExecutor()` with every other
- * field valid, ticker `"a"` (refused by the pre-S242 `_validTicker`,
- * accepted by the S242 `LaunchText` floor) and an expired deadline (1):
- * `ExpiredSignature` = the request passed validation (`utf8`),
- * `InvalidConfiguration` = the ticker was refused (`ascii`). Any other
- * outcome — another revert, a success, a network failure — is unreadable
- * and fails closed. An `eth_call`: nothing is signed, sent or stored.
+ * Decision 0164 (§10): the Factory's text-rule generation. S242 factories
+ * expose `launchTextRulesVersion() external pure returns (uint8)` (2);
+ * earlier factories have no such function, so the call reverts with no
+ * return data.
+ *
+ * - a value ≥ 2 → `utf8` (the S242 `LaunchText` floor);
+ * - a revert without return data, or empty return data → `ascii` (the
+ *   pre-S242 `^[A-Z0-9]{2,12}$` `_validTicker`);
+ * - anything else (RPC / transport error, timeout, a revert carrying data
+ *   or a reason, a value below 2) → `null`: unreadable, fail closed.
+ *
+ * (An earlier draft inferred the generation from the revert order of a
+ * simulated `deployLaunch`; replaced by this getter, which does not depend
+ * on the factories' check order.)
  */
-export function hooksLaunchTickerProbeOutcome(
-  revertName: string | null,
-): "utf8" | "ascii" | null {
-  if (revertName === "ExpiredSignature") return "utf8";
-  if (revertName === "InvalidConfiguration") return "ascii";
-  return null;
+export const hooksLaunchTextRulesVersionAbi = loopLaunchFactoryAbi.filter(
+  (item) => item.type === "function" && item.name === "launchTextRulesVersion",
+);
+
+export function hooksLaunchTextRulesFromVersion(
+  version: unknown,
+): "utf8" | null {
+  return typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 2 &&
+    version <= 255
+    ? "utf8"
+    : null;
 }
 
-const tickerProbeRequest = Object.freeze({
-  projectOwner: "0x0000000000000000000000000000000000000001",
-  configVersion: 1,
-  configHash: `0x${"0".repeat(63)}1` as `0x${string}`,
-  name: "a",
-  ticker: "a",
-  // Far beyond any activation buffer; uint64.
-  nftSaleStart: 1n << 62n,
-  buybackRecipient: "0x0000000000000000000000000000000000000001",
-  deadline: 1n,
-  memeSalt: `0x${"0".repeat(64)}`,
-});
-
-function contractRevertName(error: unknown): string | null {
-  if (!(error instanceof BaseError)) return null;
+/**
+ * True only for "no such function" on a contract: an `eth_call` revert
+ * with no return data and no reason beyond the node's generic
+ * "execution reverted", or a call that returned no data at all.
+ */
+export function isHooksLaunchMissingFunctionRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  if (
+    error.walk((cause) => cause instanceof ContractFunctionZeroDataError) !==
+    null
+  ) {
+    return true;
+  }
   const reverted = error.walk(
     (cause) => cause instanceof ContractFunctionRevertedError,
   );
-  return reverted instanceof ContractFunctionRevertedError
-    ? (reverted.data?.errorName ?? null)
-    : null;
+  if (!(reverted instanceof ContractFunctionRevertedError)) return false;
+  const raw = reverted.raw;
+  const reason = reverted.reason?.trim().toLowerCase();
+  return (
+    (raw === undefined || raw === "0x") &&
+    reverted.data === undefined &&
+    reverted.signature === undefined &&
+    (reason === undefined || reason === "execution reverted")
+  );
 }
 
 export function createHooksLaunchFactoryReader(input: {
@@ -395,37 +411,26 @@ export function createHooksLaunchFactoryReader(input: {
     return template;
   }
 
-  // Decision 0164: immutable for a code-hash-pinned Factory; a failed probe
-  // is not cached (the next call probes again).
+  // Decision 0164: immutable for a code-hash-pinned Factory; an unreadable
+  // answer is not cached (the next call reads again).
   let tickerRule: "utf8" | "ascii" | null = null;
   async function tickerTextRule(): Promise<"utf8" | "ascii"> {
     if (tickerRule !== null) return tickerRule;
     await verifyNetworkAndCode();
-    let executor: Address;
+    let outcome: "utf8" | "ascii" | null;
     try {
-      executor = await client.readContract({
-        address: factoryAddress,
-        abi: loopLaunchFactoryAbi,
-        functionName: "deploymentExecutor",
-      });
-    } catch {
-      throw new Error("Hooks launch factory read unavailable");
-    }
-    let revertName: string | null = null;
-    try {
-      await client.simulateContract({
-        address: factoryAddress,
-        abi: loopLaunchFactoryAbi,
-        functionName: "deployLaunch",
-        args: [tickerProbeRequest, `0x${"0".repeat(64)}`, "0x"],
-        account: executor,
-      });
+      outcome = hooksLaunchTextRulesFromVersion(
+        await client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchTextRulesVersionAbi,
+          functionName: "launchTextRulesVersion",
+        }),
+      );
     } catch (error) {
-      revertName = contractRevertName(error);
+      outcome = isHooksLaunchMissingFunctionRevert(error) ? "ascii" : null;
     }
-    const outcome = hooksLaunchTickerProbeOutcome(revertName);
     if (outcome === null) {
-      throw new Error("Hooks launch factory ticker rule unreadable");
+      throw new Error("Hooks launch factory text rules unreadable");
     }
     tickerRule = outcome;
     return outcome;
