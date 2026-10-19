@@ -503,7 +503,8 @@ function summaryOf(
       priceUsd1: formatLaunch2Amount(BigInt(record.priceE18)),
     }),
     graduatedAt: record.graduation?.graduatedAt ?? null,
-    listing: record.listing,
+    // Decision 0163: no `listing` on /v2 — the shipped App's strict codec
+    // refuses unknown keys; it ships later as an optional key with the App.
   });
 }
 

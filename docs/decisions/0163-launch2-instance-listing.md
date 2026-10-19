@@ -2,7 +2,7 @@
 
 ## 1. Status
 
-已实现（分支 `feat/S245-launch2-listing`，基线 `40921be`）。迁移 `000093_launch2_instance_listing`（合并顺序 S238 的 000092 在前；本迁移不依赖它）。新增两条后台路由，`/v2` 与 `/public/v1` 只在既有响应里加 `listing` 字段，无新 `/v2` 路由、无新 `/v2` 错误码。
+已实现（分支 `feat/S245-launch2-listing`，基线 `40921be`）。迁移 `000093_launch2_instance_listing`。**合并顺序固定：S238（000092）→ S245-api（000093）→ S243-api（000094）**；各分支按此顺序 rebase 时统一 `src/database/schema.ts` 的 `latestMigrationName` 与迁移测试里的最新迁移名（本分支写的是 000093）。新增两条后台路由；`/public/v1/meme/{id}` 加 `instance.listing`；**`/v2` 线上格式不变**（不下发 `listing`，见 §3.2），无新 `/v2` 路由、无新 `/v2` 错误码。
 
 ## 2. Context
 
@@ -38,11 +38,13 @@ check `launch2_instances_listing_hidden_check`：`hidden` 必须同时有 reason
 仍可读（持有人要能看自己的币）：
 
 - `GET /v2/launch2/instances/{instanceId}` 及其下 quote / pool / dynamic-pool / buybacks / trades、`GET /v2/launch2/me/positions`、`GET /public/v1/meme/{instanceId}`（含 candles）、`GET /v2/square/posts/{postId}`。
-- 详情响应带 `listing`（`/v2` 实例摘要 / 详情的 `listing`，必填；`/public/v1/meme/{id}` 的 `instance.listing`，必填）。列表行也带 `listing`，恒为 `visible`。
+- `/v2`（列表、详情、overview）**不下发 `listing`**：已发布 App 的 strict codec 遇到未知键会整页 `invalidPayload`（审查发现，主代理裁决方案 a）。以后 App 需要时，作为**可选键**随移动端版本一起下发。
+- `/public/v1/meme/{id}` 的 `instance.listing`（必填）与后台接口保留 `listing`。
 
 不过滤（有意）：
 
-- 用户发的 `opinion` 帖：是用户内容，不因运营隐藏代币而消失；卡片照常显示代币。
+- 用户发的 `opinion` 帖：是用户内容，不因运营隐藏代币而消失；卡片照常显示代币（主代理裁决）。
+- `GET /v2/launch2/me/positions`：持有人的持仓照常含隐藏实例。
 - 广场入库 lane（`listBuyCandidates / listGraduationCandidates`）照常生成事件帖，只在读时过滤，所以恢复 `visible` 后历史事件帖自动回来。
 - 全局搜索：`/v2/search` 目前不含 launch2（`assets` / `launch` 段为 `unavailable`），无需处理；以后接入时须带同一过滤。
 - 行情分类 `category=meme`：只读 `meme_tokens`（v1），不含 launch2。
@@ -56,10 +58,10 @@ check `launch2_instances_listing_hidden_check`：`hidden` 必须同时有 reason
 
 均在 `/admin/v1`，cookie 会话，与 MEME v1 listing 同一权限位：
 
-| 路由                                                   | 权限                              | 说明                                                                                                                                                                       |
-| ------------------------------------------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /admin/v1/launch2/instances?listing=&q=`          | `console.read`                    | 全部实例（两种 listing、所有链），按 `registered_at` 新→旧，最多 200；`q` 匹配名称 / ticker 子串、精确 instanceId、MEME 地址                                               |
-| `PUT /admin/v1/launch2/instances/{instanceId}/listing` | `console.write`（platform_admin） | body `{listing: "visible"\|"hidden", reason?}`；同事务写 `admin_audit_log`：action `launch2.listing.update`，target `launch2_instance`，before / after `{listing, reason}` |
+| 路由                                                   | 权限                              | 说明                                                                                                                                                                                              |
+| ------------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1/launch2/instances?listing=&q=`          | `console.read`                    | 全部实例（两种 listing、所有链），按 `registered_at` 新→旧，**仅返回最新 200 条、无游标 / 分页**（更早的用 `q` 精确查 instanceId / 地址）；`q` 匹配名称 / ticker 子串、精确 instanceId、MEME 地址 |
+| `PUT /admin/v1/launch2/instances/{instanceId}/listing` | `console.write`（platform_admin） | body `{listing: "visible"\|"hidden", reason?}`；同事务写 `admin_audit_log`：action `launch2.listing.update`，target `launch2_instance`，before / after `{listing, reason}`                        |
 
 响应 `{instance, changed, audit}`，`instance` = `{instanceId, projectId, chainId, name, ticker, memeAddress, stage, graduatedAt, registeredAt, listing, listingReason, listingUpdatedAt, listingUpdatedBy}`。`stage` 是库里存的阶段（可能落后于时钟推导值）。
 
@@ -84,27 +86,28 @@ GET 列表不在任务单里，是为后台页面能找到实例 / 看当前状�
 
 ### 3.7 与 MEME v1 listing 的差异（主代理 2026-10-19 裁决保留）
 
-|                  | MEME v1（0102）                     | launch2（本决策）                                 |
-| ---------------- | ----------------------------------- | ------------------------------------------------- |
-| 取值             | `listed \| hidden`                  | `visible \| hidden`                               |
-| 方法             | `POST …/meme/tokens/{id}/listing`   | `PUT …/launch2/instances/{id}/listing`            |
-| body             | `{listing, reasonCode, reasonText}` | `{listing, reason}`                               |
-| App 是否展示原因 | 是（`listingReasonText`）           | 否：`reason` 只进后台与审计，App 只拿到 `listing` |
+|                  | MEME v1（0102）                     | launch2（本决策）                                             |
+| ---------------- | ----------------------------------- | ------------------------------------------------------------- |
+| 取值             | `listed \| hidden`                  | `visible \| hidden`                                           |
+| 方法             | `POST …/meme/tokens/{id}/listing`   | `PUT …/launch2/instances/{id}/listing`                        |
+| body             | `{listing, reasonCode, reasonText}` | `{listing, reason}`                                           |
+| App 是否展示原因 | 是（`listingReasonText`）           | 否：`reason` 只进后台与审计；本批 `/v2` 连 `listing` 也不下发 |
 
 原因：
 
 1. **取值 `visible`**：launch2 实例没有「上架 / listed」流程（激活即出现在列表），`listed` 会被误读为交易所上币（03 §8.4 的 listing milestone 已用该词）；`visible` 只表达「是否出现在 App 列表」。
 2. **`PUT`**：写的是实例的一个幂等属性（目标状态整体替换，重复写结果相同），PUT 语义更准；MEME v1 的 POST 是早期写法，不回改（`/admin/v1` 既有路由冻结）。
-3. **单个 `reason`、不对用户展示**：本需求是下架测试项目，原因是给运营 / 审计看的内部备注，不需要 `reasonCode` 分类，也不该在 App 里出现「测试」字样；所以 App 只拿 `listing`。
+3. **单个 `reason`、不对用户展示**：本需求是下架测试项目，原因是给运营 / 审计看的内部备注，不需要 `reasonCode` 分类，也不该在 App 里出现「测试」字样；所以 App 拿不到原因。
 
 其他裁决：用户 `opinion` 帖保持可见（§3.2）；`GET /admin/v1/launch2/instances` 保留（§3.4）；迁移号 000093 保留，合并顺序 S238（000092）→ S245-api（000093）→ S243-api（000094）。
 
 ## 4. Consequences
 
 - 上线后运营在后台把 4 个「S137 Testnet」实例设为 `hidden` 即可（staging 需先跑迁移 000093）；不改链、不改名、可随时恢复。
-- 持有人从持仓 / 直达链接仍能进详情并交易；App 详情可按 `listing == hidden` 决定是否加提示（本批不要求）。
+- 持有人从持仓 / 直达链接仍能进详情并交易。App 暂不下发 `listing`；以后需要（如详情页提示）时作为可选键随移动端一起发。
+- 待办（另批）：隐藏实例绑定的社区名可能也带「Testnet」字样（社区列表 / 广场仍可见），本批不处理。
 - loop-admin 需要加的入口（不在本批）：
   1. 「MEME」菜单下新增「MEME v2 实例」列表页：调 `GET /admin/v1/launch2/instances`，筛选 `listing`、搜索框 `q`；列：名称、ticker、阶段、MEME 地址、listing、原因、最近修改人 / 时间。
   2. 行操作「隐藏」（弹窗必填原因，≤ 280 字）/「恢复」（原因可选）：调 `PUT …/listing`；仅 platform_admin 可见（`console.write`）。
   3. 可选：在发射项目详情（`GET /admin/v1/launch/projects/{projectId}`）的 MEME v2 区块加同一开关（用该项目最新实例的 `instanceId`）。
-- 测试：`test/launch2-listing.integration.test.ts`（真实 PostgreSQL：默认 visible、隐藏后列表 / 已毕业 / overview / 广场时间线都不含、详情与帖子直达仍可读、审计 before/after、indexer 重跑不覆盖、恢复、check 约束、未知 id）；`test/admin-routes.test.ts`（422 / 400 / 404、隐藏、列表筛选、恢复、`changed: false`、审计条数）；`test/v2-launch2-routes.test.ts`、`test/v2-launch2-overview.test.ts`、`test/public-meme-routes.test.ts`（列表排除、详情带 `listing: hidden`、计数不含）；`test/openapi.test.ts`（路由清单）。
+- 测试：`test/launch2-listing.integration.test.ts`（真实 PostgreSQL：默认 visible、隐藏后列表 / 已毕业 / overview / overview activity / 广场时间线 / 置顶都不含、持仓仍含、用户 opinion 帖仍在时间线、详情与帖子直达仍可读、审计 before/after、indexer 重跑不覆盖、恢复、check 约束、未知 id）；`test/admin-routes.test.ts`（422 / 400 / 404、隐藏、列表筛选、恢复、`changed: false`、审计条数）；`test/v2-launch2-routes.test.ts`、`test/v2-launch2-overview.test.ts`、`test/public-meme-routes.test.ts`（列表排除、`/v2` 列表与详情不带 `listing`、`/public/v1` 详情带 `listing: hidden`、计数不含）；`test/openapi.test.ts`（路由清单）。

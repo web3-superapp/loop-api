@@ -251,12 +251,6 @@ const summaryProperties = {
   nftSale: nftSaleSchema,
   curve: curveSchema,
   graduatedAt: nullableDateTimeSchema,
-  listing: {
-    type: "string",
-    enum: ["visible", "hidden"],
-    description:
-      "Decision 0163: `hidden` = an operator took the instance off every App list (instances, overview, public MEME list, Square event posts); lists only return `visible`, the detail by instanceId still reads a hidden one.",
-  },
 } as const;
 const summaryRequired = Object.keys(summaryProperties);
 

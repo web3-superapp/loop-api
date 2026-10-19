@@ -9194,7 +9194,7 @@
         "operationId": "listAdminLaunch2Instances",
         "summary": "List MEME v2 (launch2) instances with their listing",
         "tags": ["admin-meme"],
-        "description": "Decision 0163: every launch2 instance (both listings, all chains), newest registered first, at most 200. `listing` filters; `q` matches name / ticker (substring), the exact instanceId, or the MEME address. console.read.",
+        "description": "Decision 0163: every launch2 instance (both listings, all chains), newest registered first, only the newest 200 (no cursor; find older ones with `q` = instanceId / address). `listing` filters; `q` matches name / ticker (substring), the exact instanceId, or the MEME address. console.read.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["visible", "hidden"] },
@@ -9607,7 +9607,7 @@
         "operationId": "setAdminLaunch2Listing",
         "summary": "Hide or restore a MEME v2 (launch2) instance",
         "tags": ["admin-meme"],
-        "description": "Decision 0163: `hidden` removes the instance from GET /v2/launch2/instances (every stage filter), GET /v2/launch2/overview (stage counts and activity), GET /public/v1/meme and the Square pinned / timeline event posts about it, from the next read; GET /v2/launch2/instances/{id}, positions, quotes, trades and GET /public/v1/meme/{id} still read it (with `listing: hidden`). Chain facts and the indexer are untouched. `hidden` needs `reason` (1-280 characters; 422 VALIDATION_FAILED / ADMIN_REASON_TEXT_REQUIRED). Unknown id: 404 NOT_FOUND / ADMIN_LAUNCH2_INSTANCE_NOT_FOUND. Setting the current value again writes a new audit row with `changed: false`. Audit: `launch2.listing.update` (target launch2_instance) in the same transaction. console.write (the MEME listing permission).",
+        "description": "Decision 0163: `hidden` removes the instance from GET /v2/launch2/instances (every stage filter), GET /v2/launch2/overview (stage counts and activity), GET /public/v1/meme and the Square pinned / timeline event posts about it, from the next read; GET /v2/launch2/instances/{id}, positions, quotes, trades and GET /public/v1/meme/{id} still read it (only /public/v1 carries `listing`; /v2 does not send it). Chain facts and the indexer are untouched. `hidden` needs `reason` (1-280 characters; 422 VALIDATION_FAILED / ADMIN_REASON_TEXT_REQUIRED). Unknown id: 404 NOT_FOUND / ADMIN_LAUNCH2_INSTANCE_NOT_FOUND. Setting the current value again writes a new audit row with `changed: false`. Audit: `launch2.listing.update` (target launch2_instance) in the same transaction. console.write (the MEME listing permission).",
         "requestBody": {
           "required": true,
           "content": {

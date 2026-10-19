@@ -209,12 +209,92 @@ async function systemPost(instanceId: string): Promise<string> {
   return postId;
 }
 
+async function pinnedPost(instanceId: string): Promise<string> {
+  const postId = randomUUID();
+  await pool.query(
+    `insert into public.square_posts (post_id, kind, text, token_kind, token_id,
+       status, published_at, created_by_actor, pinned)
+     values ($1, 'system', 'Pinned note', 'launch2', $2, 'published',
+       now() + interval '100 years', 'operator-s245', true)`,
+    [postId, instanceId],
+  );
+  return postId;
+}
+
+/** A user opinion about the instance, by an active profile with a LOOP ID. */
+async function opinionPost(instanceId: string): Promise<string> {
+  const author = await user();
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase();
+  await pool.query(
+    "update public.loop_users set loop_id = coalesce(loop_id, $2) where id = $1",
+    [author, `LOOP-${suffix}`],
+  );
+  await pool.query(
+    `insert into public.user_profiles (owner_user_id, alias, profile_status,
+       created_at, activated_at)
+     values ($1, $2, 'active', clock_timestamp(), clock_timestamp())`,
+    [author, `s245${suffix.toLowerCase()}`],
+  );
+  const postId = randomUUID();
+  await pool.query(
+    `insert into public.square_posts (post_id, kind, author_user_id, text,
+       token_kind, token_id, status, published_at, create_idempotency_key,
+       create_request_sha256)
+     values ($1, 'opinion', $2, 'My take', 'launch2', $3, 'published',
+       now() + interval '100 years', $4, $5)`,
+    [postId, author, instanceId, randomUUID(), hex(32).slice(2)],
+  );
+  return postId;
+}
+
+/** A curve buy far in the future (tops the overview activity feed). */
+async function curveBuy(instanceId: string, holder: string): Promise<void> {
+  await pool.query(
+    `insert into public.launch2_trades (trade_id, chain_id, transaction_hash,
+       log_index, block_number, block_hash, instance_id, side, trader_address,
+       meme_amount, usd1_gross, usd1_net, tax_usd1, refund_usd1,
+       cumulative_bought, traded_at)
+     values ($1, $2, $3, 0, 9999999999, $4, $5, 'buy', $6, 1000, 22, 20, 2, 0,
+       1000, now() + interval '100 years')`,
+    [randomUUID(), chainId, hex(32), hex(32), instanceId, holder],
+  );
+  await pool.query(
+    `insert into public.launch2_positions (instance_id, holder_address,
+       curve_bought, cumulative_bought, usd1_spent, buy_count, last_activity_at)
+     values ($1, $2, 1000, 1000, 22, 1, now())`,
+    [instanceId, holder],
+  );
+}
+
 describe("Decision 0163: launch2 instance listing", () => {
   it("defaults to visible, hides from every list, keeps the detail, restores", async () => {
     const target = await instance();
     const { instanceId } = target;
     const viewer = randomUUID();
     const postId = await systemPost(instanceId);
+    const pinnedId = await pinnedPost(instanceId);
+    const opinionId = await opinionPost(instanceId);
+    const holder = hex(20);
+    await curveBuy(instanceId, holder);
+    const pinned = async () =>
+      (
+        await square.listPinned({
+          viewerUserId: viewer,
+          limit: 50,
+          now: new Date(),
+        })
+      ).map((row) => row.postId);
+    const activity = async () =>
+      (await launch2.listActivity({ chainId, limit: 30 })).map(
+        (row) => row.instanceId,
+      );
+    const positions = async () =>
+      (
+        await launch2.listPositions({
+          holderAddresses: [holder],
+          instanceId: null,
+        })
+      ).map((row) => row.instanceId);
     const timeline = async () =>
       (
         await square.listTimeline({
@@ -233,6 +313,10 @@ describe("Decision 0163: launch2 instance listing", () => {
       (await launch2.listOverviewFacts({ chainId })).map((f) => f.instanceId),
     ).toContain(instanceId);
     expect(await timeline()).toContain(postId);
+    expect(await timeline()).toContain(opinionId);
+    expect(await pinned()).toContain(pinnedId);
+    expect(await activity()).toContain(instanceId);
+    expect(await positions()).toEqual([instanceId]);
 
     const hidden = await consoleRepository.setLaunch2Listing({
       instanceId,
@@ -271,6 +355,11 @@ describe("Decision 0163: launch2 instance listing", () => {
       (await launch2.listOverviewFacts({ chainId })).map((f) => f.instanceId),
     ).not.toContain(instanceId);
     expect(await timeline()).not.toContain(postId);
+    expect(await pinned()).not.toContain(pinnedId);
+    expect(await activity()).not.toContain(instanceId);
+    // The holder still sees the position; user opinions stay on the timeline.
+    expect(await positions()).toEqual([instanceId]);
+    expect(await timeline()).toContain(opinionId);
     // Direct reads stay.
     expect((await launch2.getInstance(instanceId))?.listing).toBe("hidden");
     expect(
@@ -335,6 +424,8 @@ describe("Decision 0163: launch2 instance listing", () => {
     });
     expect(await listedIds(null)).toContain(instanceId);
     expect(await timeline()).toContain(postId);
+    expect(await pinned()).toContain(pinnedId);
+    expect(await activity()).toContain(instanceId);
   });
 
   it("refuses a hidden row without a reason and an unknown id", async () => {

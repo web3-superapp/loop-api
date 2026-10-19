@@ -2004,10 +2004,11 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         refuse("INVALID_REQUEST");
       }
       const listing = body.listing;
-      const reason = reasonText(body.reason, listing === "hidden");
+      // A malformed id is 404 before any body rule (422).
       if (!canonicalUuidPattern.test(instanceId)) {
         refuse("NOT_FOUND", adminReasonCodes.launch2InstanceNotFound);
       }
+      const reason = reasonText(body.reason, listing === "hidden");
       try {
         const updated = await repository.setLaunch2Listing({
           instanceId,

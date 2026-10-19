@@ -316,7 +316,7 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(orphanDetail.instance).toMatchObject({ summary: null, links: [] });
   });
 
-  it("drops a hidden instance from every list and keeps its detail (Decision 0163)", async () => {
+  it("drops a hidden instance from every list, keeps its detail, and never sends listing on /v2 (Decision 0163)", async () => {
     const repository = createInMemoryLaunch2Repository();
     const shown = instanceFixture();
     const hidden = instanceFixture({ listing: "hidden" });
@@ -334,16 +334,18 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         rows.map((row) => row["instanceId"]),
         url,
       ).toEqual([shown.instanceId]);
-      expect(rows[0]).toMatchObject({ listing: "visible" });
+      // Decision 0163: /v2 never carries `listing` (strict App codec).
+      expect(Object.hasOwn(rows[0] as object, "listing")).toBe(false);
     }
     const detail = await get(app, `/v2/launch2/instances/${hidden.instanceId}`);
     expect(detail.statusCode).toBe(200);
-    expect(
-      detail.json<{ instance: Record<string, unknown> }>().instance,
-    ).toMatchObject({ instanceId: hidden.instanceId, listing: "hidden" });
+    const instance = detail.json<{ instance: Record<string, unknown> }>()
+      .instance;
+    expect(instance).toMatchObject({ instanceId: hidden.instanceId });
+    expect(Object.hasOwn(instance, "listing")).toBe(false);
     expect(
       requiredOf(launch2InstanceDetailResourceSchema, ["instance"]),
-    ).toContain("listing");
+    ).not.toContain("listing");
   });
 
   it("ends the NFT sale at the instance's own saleEnd: 1 hour on the testnet Factory (Decision 0119)", async () => {
