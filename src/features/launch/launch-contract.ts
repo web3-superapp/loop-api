@@ -6,9 +6,10 @@ import type { LaunchChainId } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   launchTokenDescriptionMaxCodePoints,
-  launchTokenNameMaxCodePoints,
+  launchTokenTextMaxUtf16Units,
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
+  normalizeLaunchTokenTicker,
 } from "./launch-token-text.js";
 
 /**
@@ -242,15 +243,12 @@ export const launchOfficialLinkKeys = [
 ] as const;
 export type LaunchOfficialLinkKey = (typeof launchOfficialLinkKeys)[number];
 
-/** Decision 0154: also at most 64 UTF-8 bytes (the factory's bound). */
-export const maximumLaunchNameCodePoints = launchTokenNameMaxCodePoints;
+/** Decision 0164: name and ticker, 1–20 UTF-16 units after trimming. */
+export const maximumLaunchTokenTextUnits = launchTokenTextMaxUtf16Units;
 export const maximumLaunchNarrativeCodePoints =
   launchTokenDescriptionMaxCodePoints;
 export const maximumLaunchLinkLength = 512;
 export const maximumLaunchRawTextLength = 4_096;
-// Decision 0154: the deployed factories' `_validTicker`; not a language rule
-// of ours, so it changes only with a redeployed factory.
-export const launchTickerPatternSource = "^[A-Z0-9]{2,12}$";
 export const opaqueIdPatternSource =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 export const launchConfigVersionPatternSource =
@@ -258,7 +256,6 @@ export const launchConfigVersionPatternSource =
 export const sha256PatternSource = "^[0-9a-f]{64}$";
 
 const forbiddenTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
-const tickerPattern = new RegExp(launchTickerPatternSource);
 const opaqueIdPattern = new RegExp(opaqueIdPatternSource);
 
 export class InvalidLaunchRequestError extends Error {
@@ -274,7 +271,8 @@ function invalid(): never {
   throw new InvalidLaunchRequestError();
 }
 
-// Decision 0154: name and narrative take any script; see launch-token-text.
+// Decision 0154 / 0164: name, ticker and narrative take any script; name
+// and ticker share one rule (see launch-token-text).
 const projectNameSchema = z
   .string()
   .max(maximumLaunchRawTextLength)
@@ -285,6 +283,18 @@ const projectNameSchema = z
       return z.NEVER;
     }
     return name;
+  });
+
+const projectTickerSchema = z
+  .string()
+  .max(maximumLaunchRawTextLength)
+  .transform((value, context) => {
+    const ticker = normalizeLaunchTokenTicker(value);
+    if (ticker === null) {
+      context.addIssue({ code: "custom" });
+      return z.NEVER;
+    }
+    return ticker;
   });
 
 const projectNarrativeSchema = z
@@ -332,7 +342,7 @@ const officialLinksSchema = z
 const projectValuesSchema = z
   .object({
     name: projectNameSchema,
-    ticker: z.string().regex(tickerPattern),
+    ticker: projectTickerSchema,
     narrative: projectNarrativeSchema.nullable(),
     // Omitting the object is the same as omitting every key (all null).
     officialLinks: officialLinksSchema.optional(),

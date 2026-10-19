@@ -25,6 +25,7 @@ import {
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
 import { hooksLaunchLoopDynamicHookPermissionBits } from "./hooks-launch-config.js";
+import { isOnChainLaunchTokenText } from "./launch-token-text.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
@@ -47,8 +48,10 @@ export const hooksLaunchSubmissionSchema = z
         configHash: hex32,
         projectOwner: address,
         configVersion: z.number().int().min(1).max(0xffff_ffff),
-        name: z.string().min(1).max(64),
-        ticker: z.string().regex(/^[A-Z0-9]{2,12}$/),
+        // Decision 0164: the signed bytes as stored (canonical, ≤ 80 UTF-8
+        // bytes); equality with the draft is checked below, never cased.
+        name: z.string().refine(isOnChainLaunchTokenText),
+        ticker: z.string().refine(isOnChainLaunchTokenText),
         nftSaleStart: uint,
         buybackRecipient: address,
         deadline: uint,
@@ -378,7 +381,7 @@ export function createHooksLaunchSubmissionService(input: {
         draft.config.configHash.toLowerCase() !==
           request.configHash.toLowerCase() ||
         draft.config.name !== request.name ||
-        draft.config.ticker.toUpperCase() !== request.ticker ||
+        draft.config.ticker !== request.ticker ||
         draft.config.nftSaleStartAt !== request.nftSaleStart ||
         draft.config.buybackRecipient.toLowerCase() !==
           request.buybackRecipient.toLowerCase()

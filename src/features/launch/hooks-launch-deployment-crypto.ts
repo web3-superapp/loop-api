@@ -9,6 +9,7 @@ import {
 } from "viem";
 
 import { hooksLaunchTemplateHash } from "./hooks-launch-config.js";
+import { isOnChainLaunchTokenText } from "./launch-token-text.js";
 
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const bytes32Pattern = /^0x[0-9a-fA-F]{64}$/;
@@ -128,9 +129,9 @@ export function createHooksLaunchDeploymentTypedData(input: {
     !Number.isSafeInteger(request.configVersion) ||
     request.configVersion < 1 ||
     request.configVersion > 0xffff_ffff ||
-    request.name.length === 0 ||
-    request.name.length > 64 ||
-    !/^[A-Z0-9]{2,12}$/.test(request.ticker) ||
+    // Decision 0164: canonical text within the factory's 80-byte floor.
+    !isOnChainLaunchTokenText(request.name) ||
+    !isOnChainLaunchTokenText(request.ticker) ||
     !addressPattern.test(request.buybackRecipient) ||
     !/^(0|[1-9][0-9]*)$/.test(request.nftSaleStart) ||
     !/^(0|[1-9][0-9]*)$/.test(request.deadline) ||

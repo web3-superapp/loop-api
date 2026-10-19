@@ -124,9 +124,16 @@ describe("launch request parsing", () => {
     });
   });
 
-  it("rejects a lowercase ticker, a non-https link, credentials in a link, control characters, and unknown keys", () => {
+  it("keeps a lowercase ticker as typed (Decision 0164)", () => {
+    expect(parseLaunchProjectValues({ ...valid, ticker: "mcat" }).ticker).toBe(
+      "mcat",
+    );
+  });
+
+  it("rejects a 21-unit or bidi ticker, a non-https link, credentials in a link, control characters, and unknown keys", () => {
     for (const body of [
-      { ...valid, ticker: "mcat" },
+      { ...valid, ticker: "M".repeat(21) },
+      { ...valid, ticker: "M\u202eCAT" },
       { ...valid, officialLinks: { website: "http://mooncat.example" } },
       {
         ...valid,

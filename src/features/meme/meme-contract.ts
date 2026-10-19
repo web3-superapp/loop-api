@@ -1,6 +1,10 @@
 import { keccak256, toHex } from "viem";
 
 import { canonicalJson } from "../../core/json/canonical-json.js";
+import {
+  normalizeLaunchTokenName,
+  normalizeLaunchTokenTicker,
+} from "../launch/launch-token-text.js";
 
 /**
  * MEME curve launchpad contract (Decision 0101): entity states, list tabs,
@@ -145,8 +149,6 @@ export const memeReasonCodes = Object.freeze({
   viewerWalletMissing: "MEME_VIEWER_WALLET_MISSING",
 } as const);
 
-const controlCharacters = /\p{C}/u;
-const symbolPattern = /^[A-Z0-9]{2,10}$/u;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const linkKeys = ["twitter", "telegram", "website"] as const;
@@ -198,8 +200,9 @@ function httpsLink(value: unknown, field: string): string | null {
 }
 
 /**
- * Validates `POST /v2/meme/tokens` material: name 1–32 printable
- * characters, symbol 2–10 of A–Z/0–9, description ≤ 500 characters, an
+ * Validates `POST /v2/meme/tokens` material: name and symbol under the
+ * shared Decision 0164 rule (any script, NFC + trim, 1–20 UTF-16 units,
+ * never upper-cased; `launch-token-text.ts`), description ≤ 500 characters, an
  * optional media id, and optional https links. Unknown keys are refused by
  * the route schema before this runs.
  */
@@ -212,13 +215,16 @@ export function parseMemeTokenMetadata(body: unknown): MemeTokenMetadata {
   if (typeof rawName !== "string") {
     throw new MemeMetadataInvalidError("name");
   }
-  const name = rawName.normalize("NFC").trim();
-  const nameLength = [...name].length;
-  if (nameLength < 1 || nameLength > 32 || controlCharacters.test(name)) {
+  const name = normalizeLaunchTokenName(rawName);
+  if (name === null) {
     throw new MemeMetadataInvalidError("name");
   }
-  const symbol = value["symbol"];
-  if (typeof symbol !== "string" || !symbolPattern.test(symbol)) {
+  const rawSymbol = value["symbol"];
+  const symbol =
+    typeof rawSymbol === "string"
+      ? normalizeLaunchTokenTicker(rawSymbol)
+      : null;
+  if (symbol === null) {
     throw new MemeMetadataInvalidError("symbol");
   }
   const rawDescription = value["description"] ?? "";

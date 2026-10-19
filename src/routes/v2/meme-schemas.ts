@@ -243,7 +243,13 @@ export const memeCreateRequestSchema = {
   required: ["name", "symbol"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 64 },
-    symbol: { type: "string", pattern: "^[A-Z0-9]{2,10}$" },
+    symbol: {
+      description:
+        "Decision 0164: same rule as the name — any script, NFC + trim, 1–20 UTF-16 units, never upper-cased.",
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+    },
     description: { type: "string", maxLength: 2_000 },
     imageMediaId: {
       ...opaqueIdSchema,

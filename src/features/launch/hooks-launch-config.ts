@@ -3,6 +3,7 @@ import { encodeAbiParameters, keccak256, parseAbiParameters } from "viem";
 import {
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
+  normalizeLaunchTokenTicker,
 } from "./launch-token-text.js";
 
 /** Immutable economics for the user-approved LOOP Hooks launch template. */
@@ -98,8 +99,10 @@ export interface HooksLaunchLoopDynamicParams {
   readonly buyFeePpm: number;
   /**
    * Decision 0144 (loop-contracts Decision 0012, S193): the dynamic sell
-   * rate cap, a raw 18-decimal integer string (`"200000000000000000"` =
-   * 20 %; `"0"` = uncapped). Absent = a pre-S193 (S165) Factory, which has
+   * rate cap, a raw 18-decimal integer string, read from the Factory /
+   * manifest, never hard-coded (`"500000000000000000"` = 50 %, the S242
+   * ruling; S193 Factories carry `"200000000000000000"` = 20 %; `"0"` =
+   * uncapped). Absent = a pre-S193 (S165) Factory, which has
    * no such parameter: its `TEMPLATE_HASH` has no trailing word and its
    * Hooks are uncapped.
    */
@@ -270,8 +273,6 @@ export function hooksLaunchLoopDynamicFixedEconomics(
 
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const unsignedDecimalPattern = /^(0|[1-9][0-9]{0,19})$/;
-// Upper-cased below to the factories' `^[A-Z0-9]{2,12}$` (decision 0154).
-const tickerPattern = /^[A-Za-z0-9]{2,12}$/;
 const UINT64_MAX = (1n << 64n) - 1n;
 const allowedDraftKeys = new Set([
   "name",
@@ -370,7 +371,6 @@ export function parseHooksLaunchDraft(
     input.links.some((value) => typeof value !== "string") ||
     typeof input.nftSaleStartAt !== "string" ||
     typeof input.buybackRecipient !== "string" ||
-    !tickerPattern.test(input.ticker) ||
     !Number.isSafeInteger(policy.minimumLeadSeconds) ||
     policy.minimumLeadSeconds < 0 ||
     !unsignedDecimalPattern.test(policy.nowUnixSeconds) ||
@@ -381,10 +381,13 @@ export function parseHooksLaunchDraft(
     throw new InvalidHooksLaunchDraftError();
   }
 
-  // Decision 0154: any script; the name fits the factory's 64 UTF-8 bytes.
+  // Decision 0164: name and ticker share the four.meme rule (any script,
+  // 1–20 UTF-16 units after NFC + trim); the ticker is kept as typed — never
+  // upper-cased — because the factory's `symbol()` returns the signed bytes.
   const name = normalizeLaunchTokenName(input.name);
+  const ticker = normalizeLaunchTokenTicker(input.ticker);
   const description = normalizeLaunchTokenDescription(input.description);
-  if (name === null || description === null) {
+  if (name === null || ticker === null || description === null) {
     throw new InvalidHooksLaunchDraftError();
   }
 
@@ -428,7 +431,7 @@ export function parseHooksLaunchDraft(
       ? {}
       : { poolHookKind: "loopDynamic" as const }),
     name,
-    ticker: input.ticker.toUpperCase(),
+    ticker,
     logoAssetUrl: logoUrl.toString(),
     description,
     links: [...new Set(links)].sort(),

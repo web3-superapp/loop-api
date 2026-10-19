@@ -194,10 +194,11 @@ describe("MEME metadata and configuration (Decision 0101)", () => {
     });
     for (const [body, field] of [
       [{ name: "", symbol: "FROG" }, "name"],
-      [{ name: "x".repeat(33), symbol: "FROG" }, "name"],
+      [{ name: "x".repeat(21), symbol: "FROG" }, "name"],
       [{ name: "a\u0000b", symbol: "FROG" }, "name"],
-      [{ name: "Frog", symbol: "frog" }, "symbol"],
-      [{ name: "Frog", symbol: "F" }, "symbol"],
+      [{ name: "Frog", symbol: "F".repeat(21) }, "symbol"],
+      [{ name: "Frog", symbol: " " }, "symbol"],
+      [{ name: "Frog", symbol: "F\u200bROG" }, "symbol"],
       [
         { name: "Frog", symbol: "FROG", description: "x".repeat(501) },
         "description",

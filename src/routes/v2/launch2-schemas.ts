@@ -224,7 +224,8 @@ const summaryProperties = {
   launchId: bytes32Schema,
   chainId: { type: "string", enum: [...launchChainIds] },
   name: { type: "string", minLength: 1, maxLength: 64 },
-  ticker: { type: "string", pattern: "^[A-Z0-9]{2,12}$" },
+  // Decision 0164: any script, as returned by symbol(); ≤ 80 UTF-8 bytes.
+  ticker: { type: "string", minLength: 1, maxLength: 80 },
   logoUrl: { anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }] },
   summary: {
     description:
@@ -1795,7 +1796,7 @@ const dynamicPoolProperties = {
   maxDynamicFeeWad: {
     ...nullableDecimalSchema,
     description:
-      "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.2 (20 %).",
+      "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.5 (50 %, S242; the sell side totals at most 51 % with the base sell fee); S193 Factories carry 0.2 (20 %). Read from the chain, never hard-coded.",
   },
   maxDynamicFeeBps: nullableIntegerBpsSchema,
   currentDynamicTaxBps: {

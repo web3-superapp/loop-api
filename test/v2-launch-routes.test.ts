@@ -332,7 +332,7 @@ describe("LOOP API V2 launch module", () => {
       method: "POST",
       url: "/v2/launch/projects",
       headers: s7CommandHeaders(),
-      payload: { ...payload, ticker: "mcat" },
+      payload: { ...payload, ticker: "M".repeat(21) },
     });
     expect(badTicker.statusCode).toBe(400);
   });

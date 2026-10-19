@@ -37,6 +37,10 @@ export const hooksLaunchAbiSelection = {
     "TEMPLATE_HASH",
     "LaunchDeployed",
     "LaunchActivated",
+    // Decision 0164 (loop-contracts Decision 0016, S242): the field errors
+    // the executor maps; required so an older build cannot be synced.
+    "InvalidName",
+    "InvalidTicker",
   ],
   LaunchPublicationGate: [
     "launchId",
@@ -304,6 +308,9 @@ export const hooksLaunchAbiSelection = {
     "computeAddress",
   ],
   LoopDynamicLaunchFactory: [
+    // Decision 0164 (S242): see LoopLaunchFactory.
+    "InvalidName",
+    "InvalidTicker",
     "TEMPLATE_HASH",
     "hookKind",
     "loopRouter",

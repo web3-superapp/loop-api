@@ -83,7 +83,8 @@ Launch 合约先在 **BSC 测试网（`eip155:97`）** 停留一段时间。后�
 }
 ```
 
-- `name` 1–80 code points（去首尾空白）；`ticker` `^[A-Z0-9]{2,12}$`（前端先大写）；
+- `name` / `ticker`：决策 0164 同一规则——任何文字，NFC + 去首尾空白后 1–20 个 UTF-16 单元，
+  **不转大写**（详见 `frontend-v2-hooks-launch-api.md` §3.1）；
   `narrative` 1–2000 或 `null`（**键必填**）；`officialLinks` **整个对象可省略**，省略等价于
   四键全 `null`；给了对象时 `website|x|telegram|discord` 各为 `https://` URL（≤512，不含
   凭据）或 `null`，缺省的键视为 `null`。未知键 `400`。

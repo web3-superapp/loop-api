@@ -10,7 +10,10 @@ import {
   hooksLaunchRejectionReasons,
   type HooksLaunchTemplateFactory,
 } from "./hooks-launch-project-config.js";
-import { launchTokenDescriptionMaxCodePoints } from "./launch-token-text.js";
+import {
+  launchTokenDescriptionMaxCodePoints,
+  launchTokenTextMaxRawLength,
+} from "./launch-token-text.js";
 
 /**
  * Decision 0108: platform-side Hooks launch review (ported from the requirer
@@ -87,8 +90,10 @@ const hash32Schema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 
 const hooksLaunchOperatorConfigSchema = z
   .object({
-    name: z.string().trim().min(1).max(64),
-    ticker: z.string().regex(/^[A-Za-z0-9]{2,12}$/),
+    // Decision 0164: shape only; `parseHooksLaunchDraft` (repository)
+    // applies the shared name / ticker rule.
+    name: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
+    ticker: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
     logoAssetUrl: z.url().startsWith("https://"),
     // Decision 0154: characters, not UTF-16 units (an emoji is two).
     description: z

@@ -334,7 +334,8 @@ export function createHooksLaunchDeploymentService(input: {
         configVersion: draft.version,
         configHash: draft.config.configHash.toLowerCase(),
         name: draft.config.name,
-        ticker: draft.config.ticker.toUpperCase(),
+        // Decision 0164: signed exactly as stored (never upper-cased).
+        ticker: draft.config.ticker,
         nftSaleStart: draft.config.nftSaleStartAt,
         buybackRecipient: draft.config.buybackRecipient.toLowerCase(),
         deadline,
