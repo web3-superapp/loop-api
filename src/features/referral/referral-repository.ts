@@ -111,8 +111,13 @@ export interface ReferralRepository {
   getDirectEdge(inviteeUserId: string): Promise<ReferralEdgeRecord | null>;
   /** Writes the edges and audit atomically; a replay returns the direct edge. */
   claim(input: ClaimReferralInput): Promise<ReferralEdgeRecord>;
+  /**
+   * Decision 0162: `epochId` is the settled hour `valid` is read from (the
+   * one `getLatestSettledEpochId` returned for this response); null = none.
+   */
   countInvitees(
     inviterUserId: string,
+    epochId: string | null,
   ): Promise<readonly ReferralLevelCountRecord[]>;
   recordRejectedClaim(input: {
     readonly inviteeUserId: string;
@@ -126,9 +131,17 @@ export interface ReferralRepository {
     readonly after: ReferralInviteeKey | null;
     readonly limit: number;
   }): Promise<readonly ReferralInviteeRecord[]>;
-  getInviteeStats(inviterUserId: string): Promise<ReferralInviteeStatsRecord>;
-  /** Null before the first settled hour. */
-  getReferralBoost(userId: string): Promise<ReferralBoostRecord | null>;
+  /** Decision 0162: the newest settled mining hour, read once per response. */
+  getLatestSettledEpochId(): Promise<string | null>;
+  getInviteeStats(
+    inviterUserId: string,
+    epochId: string | null,
+  ): Promise<ReferralInviteeStatsRecord>;
+  /** Null when `epochId` is null (before the first settled hour). */
+  getReferralBoost(
+    userId: string,
+    epochId: string | null,
+  ): Promise<ReferralBoostRecord | null>;
 }
 
 export class ReferralRepositoryUnavailableError extends Error {
@@ -181,6 +194,7 @@ export function createUnavailableReferralRepository(): ReferralRepository {
     countInvitees: unavailable,
     recordRejectedClaim: unavailable,
     listDirectInvitees: unavailable,
+    getLatestSettledEpochId: unavailable,
     getInviteeStats: unavailable,
     getReferralBoost: unavailable,
   });

@@ -143,6 +143,23 @@ const latestSettledEpochSql = `
   )
 `;
 
+/**
+ * Decision 0162: one settled hour chosen by the caller (`$param`), so the
+ * reads of one `GET /v2/referral` response share it. Null = no settled hour
+ * yet (the CTE is empty).
+ */
+function pinnedEpochSql(param: string): string {
+  return `
+  latest as (
+    select epoch_id, hour_start, hour_end
+    from public.mining_epochs
+    where status = 'settled' and epoch_id = ${param}::uuid
+  )
+`;
+}
+
+const epochIdSchema = z.string().uuid().nullable();
+
 const edgeColumns = `
   referral_edge_id, inviter_user_id, invitee_user_id, depth, validation_status,
   locked_at, effective_from, effective_to, config_version
@@ -463,15 +480,16 @@ export function createPostgresReferralRepository(
       }
     },
 
-    async countInvitees(rawInviterUserId: string) {
+    async countInvitees(rawInviterUserId: string, rawEpochId: string | null) {
       try {
         const inviterUserId = userIdSchema.parse(rawInviterUserId);
+        const epochId = epochIdSchema.parse(rawEpochId);
         const result = await pool.query({
           // Decision 0162 §E: `valid` comes from the newest settled hour
           // (the invitee's own power > 0), the same source as
           // stats.validCount; every other edge keeps its stored status.
           text: `
-            with ${latestSettledEpochSql},
+            with ${pinnedEpochSql("$2")},
             classified as (
               select
                 e.depth,
@@ -494,7 +512,7 @@ export function createPostgresReferralRepository(
             group by depth, validation_status
             order by depth asc, validation_status asc
           `,
-          values: [inviterUserId],
+          values: [inviterUserId, epochId],
         });
         return Object.freeze(
           result.rows.map((raw): ReferralLevelCountRecord => {
@@ -594,12 +612,13 @@ export function createPostgresReferralRepository(
       }
     },
 
-    async getInviteeStats(rawInviterUserId: string) {
+    async getInviteeStats(rawInviterUserId: string, rawEpochId: string | null) {
       try {
         const inviterUserId = userIdSchema.parse(rawInviterUserId);
+        const epochId = epochIdSchema.parse(rawEpochId);
         const result = await pool.query({
           text: `
-            with ${latestSettledEpochSql}
+            with ${pinnedEpochSql("$2")}
             select
               count(*) filter (where e.depth = 1)::int as direct_count,
               count(*) filter (
@@ -615,7 +634,7 @@ export function createPostgresReferralRepository(
               on r.epoch_id = latest.epoch_id and r.owner_user_id = e.invitee_user_id
             where e.inviter_user_id = $1 and e.effective_to is null
           `,
-          values: [inviterUserId],
+          values: [inviterUserId, epochId],
         });
         const row = statsRowSchema.parse(result.rows[0]);
         return Object.freeze({
@@ -629,12 +648,34 @@ export function createPostgresReferralRepository(
       }
     },
 
-    async getReferralBoost(rawUserId: string) {
+    async getLatestSettledEpochId() {
+      try {
+        const result = await pool.query<{ epoch_id: string }>({
+          text: `
+            select epoch_id::text as epoch_id
+            from public.mining_epochs
+            where status = 'settled'
+            order by hour_start desc
+            limit 1
+          `,
+        });
+        const row = result.rows[0];
+        return row === undefined ? null : z.string().uuid().parse(row.epoch_id);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async getReferralBoost(rawUserId: string, rawEpochId: string | null) {
       try {
         const userId = userIdSchema.parse(rawUserId);
+        const epochId = epochIdSchema.parse(rawEpochId);
+        if (epochId === null) {
+          return null;
+        }
         const result = await pool.query({
           text: `
-            with ${latestSettledEpochSql}
+            with ${pinnedEpochSql("$2")}
             select
               latest.epoch_id::text as epoch_id,
               latest.hour_start,
@@ -656,7 +697,7 @@ export function createPostgresReferralRepository(
             left join public.mining_epoch_rewards as r
               on r.epoch_id = latest.epoch_id and r.owner_user_id = $1
           `,
-          values: [userId],
+          values: [userId, epochId],
         });
         const raw: unknown = result.rows[0];
         if (raw === undefined) {

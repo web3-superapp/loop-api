@@ -1798,7 +1798,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       });
       expect(edges.rows.map((row) => row.depth)).toEqual([1, 2, 3, 4, 5]);
       expect(edges.rows.map((row) => row.inviter_user_id)).not.toContain(root);
-      const rootCounts = await referral.countInvitees(root);
+      const rootCounts = await referral.countInvitees(root, null);
       expect(rootCounts.reduce((sum, row) => sum + row.count, 0)).toBe(5);
       expect(rootCounts.map((row) => row.depth)).toEqual([1, 2, 3, 4, 5]);
       const statuses = new Set(rootCounts.map((row) => row.validationStatus));

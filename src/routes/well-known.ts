@@ -263,7 +263,9 @@ export function registerWellKnownRoutes(
           type: "object",
           additionalProperties: false,
           required: ["loopId"],
-          properties: { loopId: { type: "string", maxLength: 64 } },
+          // Decision 0162: no maxLength — an overlong value gets the 404 page
+          // from the pattern check below, never a JSON 400.
+          properties: { loopId: { type: "string" } },
         },
       },
     },
@@ -292,7 +294,9 @@ export function registerWellKnownRoutes(
           type: "object",
           additionalProperties: false,
           required: ["code"],
-          properties: { code: { type: "string", maxLength: 64 } },
+          // Decision 0162: no maxLength — an overlong value gets the 404 page
+          // from the pattern check below, never a JSON 400.
+          properties: { code: { type: "string" } },
         },
       },
     },
@@ -328,7 +332,9 @@ export function registerWellKnownRoutes(
           type: "object",
           additionalProperties: false,
           required: ["communityId"],
-          properties: { communityId: { type: "string", maxLength: 64 } },
+          // Decision 0162: no maxLength — an overlong value gets the 404 page
+          // from the pattern check below, never a JSON 400.
+          properties: { communityId: { type: "string" } },
         },
       },
     },
@@ -356,7 +362,9 @@ export function registerWellKnownRoutes(
           type: "object",
           additionalProperties: false,
           required: ["communityId"],
-          properties: { communityId: { type: "string", maxLength: 64 } },
+          // Decision 0162: no maxLength — an overlong value gets the 404 page
+          // from the pattern check below, never a JSON 400.
+          properties: { communityId: { type: "string" } },
         },
       },
     },

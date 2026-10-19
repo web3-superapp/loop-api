@@ -304,6 +304,9 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
       "/u/%3Cscript%3E",
       "/u/LOOP-FE3EMCPE1",
       "/u/LOOP-ABCDE",
+      `/u/${"A".repeat(90)}`,
+      `/c/${"a".repeat(90)}`,
+      `/c/${"a".repeat(90)}/room`,
     ]) {
       const response = await app.inject({ method: "GET", url });
       expect(response.statusCode).toBe(404);
@@ -481,6 +484,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
       "/i/%3Cscript%3E",
       "/i/LOOP-7HJ",
       `/i/${inviteCode}1`,
+      `/i/${"A".repeat(90)}`,
     ]) {
       const response = await app.inject({ method: "GET", url });
       expect(response.statusCode, url).toBe(404);

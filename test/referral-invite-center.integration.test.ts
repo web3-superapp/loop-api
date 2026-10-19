@@ -138,9 +138,14 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
     );
   }
 
-  async function settle(hourStart: string, rewards: readonly RewardRow[]) {
+  async function settle(
+    hourStart: string,
+    rewards: readonly RewardRow[],
+  ): Promise<string> {
     const hourEnd = new Date(Date.parse(hourStart) + 3_600_000).toISOString();
-    await createPostgresMiningSettlementRepository(pool).commitEpoch({
+    const outcome = await createPostgresMiningSettlementRepository(
+      pool,
+    ).commitEpoch({
       hourStart,
       hourEnd,
       versionId,
@@ -157,6 +162,7 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
       inputSummary: {},
       rewards,
     });
+    return outcome.epoch.epochId;
   }
 
   async function wallet(
@@ -231,9 +237,14 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
     );
 
     // Before the first settled hour: no boost, nobody valid yet.
-    expect(await referral.getReferralBoost(inviter.id)).toBeNull();
     expect(
-      (await referral.countInvitees(inviter.id)).map((row) => [
+      await referral.getReferralBoost(
+        inviter.id,
+        await referral.getLatestSettledEpochId(),
+      ),
+    ).toBeNull();
+    expect(
+      (await referral.countInvitees(inviter.id, null)).map((row) => [
         row.depth,
         row.validationStatus,
         row.count,
@@ -242,7 +253,7 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
       [1, "pending_mining", 3],
       [2, "pending_mining", 1],
     ]);
-    expect(await referral.getInviteeStats(inviter.id)).toEqual({
+    expect(await referral.getInviteeStats(inviter.id, null)).toEqual({
       directCount: 3,
       validCount: 0,
       level2to5Count: 1,
@@ -261,10 +272,10 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
     ]);
 
     // An older hour where idle had power is never read.
-    await settle("2026-10-16T01:00:00.000Z", [
+    const olderEpoch = await settle("2026-10-16T01:00:00.000Z", [
       reward(idle.id, { nftSelfPower: "9", nftTotalPower: "9" }),
     ]);
-    await settle("2026-10-16T02:00:00.000Z", [
+    const boostEpoch = await settle("2026-10-16T02:00:00.000Z", [
       reward(active.id, { assetSelfPower: "2", assetTotalPower: "2" }),
       reward(inviter.id, {
         nftReferralPower: "0.5",
@@ -285,7 +296,13 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
       reward(idle.id),
     ]);
 
-    const boost = await referral.getReferralBoost(inviter.id);
+    const newest = await referral.getLatestSettledEpochId();
+    expect(newest).toBe(boostEpoch);
+    const boost = await referral.getReferralBoost(inviter.id, newest);
+    // A pinned older hour is read as asked, never the newest.
+    expect(
+      (await referral.getInviteeStats(inviter.id, olderEpoch)).validAsOf,
+    ).toBe("2026-10-16T02:00:00.000Z");
     expect(boost).toMatchObject({
       hourStart: "2026-10-16T02:00:00.000Z",
       hourEnd: "2026-10-16T03:00:00.000Z",
@@ -301,14 +318,16 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
       { level: 5, effectiveMembers: 0, nftPower: "0", assetPower: "0" },
     ]);
     // No row in the settled hour = no power.
-    expect(await referral.getReferralBoost(grandchild.id)).toMatchObject({
+    expect(
+      await referral.getReferralBoost(grandchild.id, newest),
+    ).toMatchObject({
       referralPower: "0",
       levels: expect.arrayContaining([
         { level: 1, effectiveMembers: 0, nftPower: "0", assetPower: "0" },
       ]) as unknown,
     });
     // Decision 0162 §E: level counts and stats share the source.
-    const counts = await referral.countInvitees(inviter.id);
+    const counts = await referral.countInvitees(inviter.id, newest);
     expect(
       counts
         .filter((row) => row.depth === 1)
@@ -322,7 +341,7 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
         .filter((row) => row.depth === 2)
         .map((row) => row.validationStatus),
     ).toEqual(["pending_mining"]);
-    expect(await referral.getInviteeStats(inviter.id)).toEqual({
+    expect(await referral.getInviteeStats(inviter.id, newest)).toEqual({
       directCount: 3,
       validCount: 1,
       level2to5Count: 1,

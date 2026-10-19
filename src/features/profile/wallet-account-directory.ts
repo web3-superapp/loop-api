@@ -93,6 +93,8 @@ export function createWalletAccountDirectory(dependencies: {
   >();
 
   function remember(address: string, record: WalletAccountRecord | null) {
+    // Re-insert so the entry moves to the end of the insertion order.
+    cache.delete(address);
     if (cache.size >= maxEntries) {
       // Insertion order: drop the oldest entry.
       const oldest = cache.keys().next();

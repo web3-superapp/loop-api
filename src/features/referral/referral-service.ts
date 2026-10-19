@@ -213,10 +213,11 @@ export function createReferralService(dependencies: {
 
   async function boostOf(
     userId: string,
+    epochId: string | null,
   ): Promise<ReferralBoostProjection | UnavailableProjection> {
     let record: ReferralBoostRecord | null;
     try {
-      record = await repository.getReferralBoost(userId);
+      record = await repository.getReferralBoost(userId, epochId);
     } catch {
       // The boost is a derived figure: a failed read never fails the page.
       return unavailable(referralReasonCodes.boostPending);
@@ -325,14 +326,16 @@ export function createReferralService(dependencies: {
     async getReferral(input: Parameters<ReferralService["getReferral"]>[0]) {
       try {
         const ownerUserId = input.principal.userId;
+        // Decision 0162: one settled hour for counts, stats, and boost.
+        const epochId = await repository.getLatestSettledEpochId();
         const [inviteCode, state, direct, counts, stats, boost] =
           await Promise.all([
             ensureInviteCode(ownerUserId, input.requestId),
             repository.getAccountState(ownerUserId),
             repository.getDirectEdge(ownerUserId),
-            repository.countInvitees(ownerUserId),
-            repository.getInviteeStats(ownerUserId),
-            boostOf(ownerUserId),
+            repository.countInvitees(ownerUserId, epochId),
+            repository.getInviteeStats(ownerUserId, epochId),
+            boostOf(ownerUserId, epochId),
           ]);
         const levels = referralRulesV1.levels.map((rule) => {
           const perStatus = Object.fromEntries(

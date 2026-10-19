@@ -57,6 +57,18 @@
 
 ## 4. Consequences
 
-- App 可直接用 `account.publicProfileId` 打开 `GET /v2/public-profiles/{id}`；`account` 为 null 时继续显示钱包地址。缓存 30 s 意味着改隐私 / 换头像后最长 30 s 才在成交里生效。
+- App 可直接用 `account.publicProfileId` 打开 `GET /v2/public-profiles/{id}`；`account` 为 null 时继续显示钱包地址。
+- 30 s 地址缓存的三种影响（审查补记）：
+  1. **解绑 / 停用钱包、改隐私、换头像或改名**后，最长 30 s 内成交里仍显示旧账户 / 旧资料（点进资料页以资料接口为准）；
+  2. **刚绑定钱包或刚激活资料**的地址，若 30 s 内被查过（负结果也缓存），这段时间里仍显示为匿名钱包；
+  3. **多实例部署**时每个进程各自缓存，不同实例在 30 s 窗口内可能给出不同结果；没有跨实例失效通知。
+     三者都只影响 launch2 的展示（MEME 成交每次直查库，不经此缓存），最终在 30 s 内收敛。
+- `GET /v2/referral` 每次响应先读一次最新已结算小时（`getLatestSettledEpochId`），再把同一个 `epochId` 传给 `countInvitees` / `getInviteeStats` / `getReferralBoost`，保证结算恰好在请求中途落库时三处口径一致。`GET /v2/referral/invitees` 是单条 SQL，自身一致。
+- 落地页参数不再在 schema 上限 64（`/u/`、`/c/`、`/i/` 一并去掉）：64–100 字符的非法值走 404 HTML 页，而不是 JSON 400；超过 Fastify `maxParamLength`（100）由路由器直接回 414，与原先一致。
 - `validCount` 与 `boost` 随小时结算推进；结算停摆时 `validAsOf` 停在最后一小时，客户端可据此标注「截至」。
 - 测试（§D/§E 另见 `test/v2-meme-routes.test.ts` 可见性用例、`test/meme-launchpad.integration.test.ts` 的可见性字段、集成测试里 `countInvitees` 结算前后的分组）：`test/v2-launch2-trader-accounts.test.ts`（目录单元：隐私 / 本人豁免 / 批量 / TTL / 负缓存 / 分批 / 失败降级；三条路由的 `account`、每响应一次查询、跨请求命中缓存）、`test/v2-referral-routes.test.ts`（`inviteLink`、`stats`、boost 两种形态与降级、名单分页 / 游标 / 参数错误 / 无游标密钥 503）、`test/well-known-app-links-routes.test.ts`（`/i/` 页、CSP 哈希、商店链接、无效码 404、AASA 含 `/i/*`、env 校验）、`test/referral-invite-center.integration.test.ts`（PostgreSQL：结算前后的状态与计数、只读最新结算小时、拉黑隐去资料、同刻并列的游标翻页、地址映射规则）。
+
+## 5. 上线前待办
+
+- **App 端**：Android `AndroidManifest.xml` 为 API 域名加 `pathPrefix="/i/"` 的 App Link intent-filter（`autoVerify`）；iOS 在 Universal Link 处理里识别 `/i/{code}`（取码 → 已登录且窗口开放则确认后 `POST /v2/referral/claim`，否则预填注册页）。
+- **Staging 真机验证**：上述 App 改动随包发出后，在 staging（`api-staging` 域名，AASA / assetlinks 由该源提供）用 iOS 与 Android 真机各验证一次：已安装时点 `inviteLink` 直接拉起 App 并带出邀请码；未安装时打开落地页、复制邀请码、跳商店（需先在 staging 配 `APP_STORE_URL_IOS` / `APP_STORE_URL_ANDROID`）。验证通过前，App 不应把「分享邀请链接」作为主要入口。

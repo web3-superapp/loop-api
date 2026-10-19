@@ -73,6 +73,9 @@ function repositoryFake(overrides: Partial<ReferralRepository> = {}) {
       }),
     ),
     getReferralBoost: vi.fn(() => Promise.resolve(null)),
+    getLatestSettledEpochId: vi.fn(() =>
+      Promise.resolve("0f1e2d3c-4b5a-4968-8776-655443322110"),
+    ),
     listDirectInvitees: vi.fn(() => Promise.resolve([])),
     ...overrides,
   };
@@ -354,7 +357,7 @@ describe("LOOP API V2 referral module", () => {
         assetPower: level === 1 ? "2.5" : "0",
       })),
     };
-    const { app } = await createApp(
+    const { app, repository } = await createApp(
       repositoryFake({
         getReferralBoost: vi.fn(() => Promise.resolve(boost)),
       }),
@@ -369,6 +372,18 @@ describe("LOOP API V2 referral module", () => {
       status: "available",
       ...boost,
     });
+    // One settled hour for the whole response.
+    for (const method of [
+      "countInvitees",
+      "getInviteeStats",
+      "getReferralBoost",
+    ] as const) {
+      expect(calls(repository, method)).toHaveBeenCalledWith(
+        s7AccountId,
+        boost.epochId,
+      );
+    }
+    expect(calls(repository, "getLatestSettledEpochId")).toHaveBeenCalledOnce();
     // A failed boost read never fails the page.
     const failing = await createApp(
       repositoryFake({
