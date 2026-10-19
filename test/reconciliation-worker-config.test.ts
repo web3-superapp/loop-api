@@ -104,6 +104,8 @@ describe("loadReconciliationWorkerConfig", () => {
       },
       alertEvaluator: null,
       sparklineWarm: { intervalMs: 4_000 },
+      // Decision 0161: default on, every 6 h, hot list of 200.
+      tokenLogoPrewarm: { intervalMs: 21_600_000, hotLimit: 200 },
       // Decision 0094: default on; the Stream pair is the lane's own.
       voiceRoomReaper: {
         intervalMs: 60_000,
@@ -337,6 +339,38 @@ describe("loadReconciliationWorkerConfig", () => {
     expect(() => loadReconciliationWorkerConfig(environment)).toThrowError(
       ConfigurationError,
     );
+  });
+
+  it("parses the token logo pre-warm lane switch, interval and hot limit (Decision 0161)", () => {
+    expect(
+      loadReconciliationWorkerConfig({
+        ...validEnvironment(),
+        TOKEN_LOGO_PREWARM_ENABLED: "false",
+      }).tokenLogoPrewarm,
+    ).toBeNull();
+    expect(
+      loadReconciliationWorkerConfig({
+        ...validEnvironment(),
+        TOKEN_LOGO_PREWARM_INTERVAL_MS: "3600000",
+        TOKEN_LOGO_PREWARM_HOT_LIMIT: "0",
+      }).tokenLogoPrewarm,
+    ).toEqual({ intervalMs: 3_600_000, hotLimit: 0 });
+    for (const [key, value] of [
+      ["TOKEN_LOGO_PREWARM_ENABLED", "yes"],
+      ["TOKEN_LOGO_PREWARM_INTERVAL_MS", "59999"],
+      ["TOKEN_LOGO_PREWARM_INTERVAL_MS", "86400001"],
+      ["TOKEN_LOGO_PREWARM_HOT_LIMIT", "201"],
+      ["TOKEN_LOGO_PREWARM_HOT_LIMIT", "-1"],
+    ] as const) {
+      expect(
+        () =>
+          loadReconciliationWorkerConfig({
+            ...validEnvironment(),
+            [key]: value,
+          }),
+        `${key}=${value}`,
+      ).toThrow(ConfigurationError);
+    }
   });
 
   it("allows the database-only Agent lifecycle maintenance to be disabled", () => {

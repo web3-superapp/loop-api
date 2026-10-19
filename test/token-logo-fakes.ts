@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { vi, type Mock } from "vitest";
 
 import type {
@@ -25,20 +26,87 @@ export function png(size = 64, fill = 1): Buffer {
   return bytes;
 }
 
+/**
+ * Decision 0161 test normaliser: a recognisable stand-in for the sharp
+ * re-encode (the real one is covered by `token-logo-normalize.test.ts`).
+ * Empty input and the literal `UNDECODABLE` body are "cannot decode".
+ */
+export function fakeNormalize(input: Buffer): Promise<Buffer | null> {
+  if (input.length === 0 || input.includes(Buffer.from("UNDECODABLE"))) {
+    return Promise.resolve(null);
+  }
+  return Promise.resolve(Buffer.concat([Buffer.from("WEBP:"), input]));
+}
+
+/** What `fakeNormalize` stores for `input`. */
+export function normalized(input: Buffer): Buffer {
+  return Buffer.concat([Buffer.from("WEBP:"), input]);
+}
+
+/**
+ * A real, decodable PNG (Decision 0161: the proxy re-encodes what it
+ * fetches, so route and integration tests need actual pictures).
+ */
+export function logoPng(
+  options: {
+    readonly width?: number;
+    readonly height?: number;
+    readonly red?: number;
+    readonly alpha?: number;
+  } = {},
+): Promise<Buffer> {
+  return sharp({
+    create: {
+      width: options.width ?? 64,
+      height: options.height ?? 64,
+      channels: 4,
+      background: {
+        r: options.red ?? 240,
+        g: 185,
+        b: 11,
+        alpha: options.alpha ?? 1,
+      },
+    },
+  })
+    .png()
+    .toBuffer();
+}
+
 export function memoryLogoCache(): {
   readonly rows: Map<string, TokenLogoCacheRecord>;
   readonly get: Mock<TokenLogoCacheRepository["get"]>;
   readonly put: Mock<TokenLogoCacheRepository["put"]>;
+  readonly listStates: Mock<
+    NonNullable<TokenLogoCacheRepository["listStates"]>
+  >;
 } {
   const rows = new Map<string, TokenLogoCacheRecord>();
   const get = vi.fn<TokenLogoCacheRepository["get"]>((chainId, address) =>
     Promise.resolve(rows.get(`${chainId}/${address}`) ?? null),
   );
+  // Mirrors the repository's guard: an automatic write never replaces a
+  // manual row (Decision 0161).
   const put = vi.fn<TokenLogoCacheRepository["put"]>((record) => {
-    rows.set(`${record.chainId}/${record.address}`, record);
+    const key = `${record.chainId}/${record.address}`;
+    if (rows.get(key)?.source !== "manual") {
+      rows.set(key, record);
+    }
     return Promise.resolve();
   });
-  return { rows, get, put };
+  const listStates = vi.fn<NonNullable<TokenLogoCacheRepository["listStates"]>>(
+    (chainId, addresses) =>
+      Promise.resolve(
+        new Map(
+          addresses.flatMap((address) => {
+            const row = rows.get(`${chainId}/${address}`);
+            return row === undefined
+              ? []
+              : [[address, { ...row, bytes: null }] as const];
+          }),
+        ),
+      ),
+  );
+  return { rows, get, put, listStates };
 }
 
 /** A pair-fact cache holding one `token_pairs` row whose base pair has `imageUrl`. */

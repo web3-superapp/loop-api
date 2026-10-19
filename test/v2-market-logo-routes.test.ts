@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,8 +17,11 @@ import { createUnavailableWatchlistRepository } from "../src/database/watchlist-
 import { tokenLogoEtag } from "../src/features/market/token-logo-proxy.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import { createUnavailablePrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import sharp from "sharp";
+
 import {
   dexscreenerWbnb,
+  logoPng,
   memoryLogoCache,
   pairFactsWithImage,
   png,
@@ -105,31 +110,48 @@ describe("GET /v2/market/logos/{chainId}/{file} (Decision 0089)", () => {
     return app;
   }
 
-  it("serves the bytes with CDN caching, a strong ETag, and nosniff, without any auth or LOOP header", async () => {
-    const bytes = png(200);
+  it("serves the normalised 128 x 128 WebP under the .png name with CDN caching, a strong ETag, and nosniff, without any auth or LOOP header", async () => {
+    const bytes = await logoPng({ width: 256, height: 256, alpha: 0.5 });
+    const cache = memoryLogoCache();
     const app = await createApp({
       fetch: upstreamFetch({
         [trustWalletWbnb]: { kind: "body", body: bytes },
       }),
+      database: database(cache),
     });
     const response = await app.inject({ method: "GET", url: path });
     expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toBe("image/png");
+    expect(response.headers["content-type"]).toBe("image/webp");
     expect(response.headers["cache-control"]).toBe(
       "public, max-age=86400, stale-while-revalidate=604800",
     );
-    expect(response.headers["etag"]).toBe(tokenLogoEtag(bytes));
+    expect(response.headers["etag"]).toBe(tokenLogoEtag(response.rawPayload));
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
-    expect(response.rawPayload.equals(bytes)).toBe(true);
+    const metadata = await sharp(response.rawPayload).metadata();
+    expect(metadata).toMatchObject({
+      format: "webp",
+      width: 128,
+      height: 128,
+      hasAlpha: true,
+    });
+    expect(cache.rows.get(`eip155:56/${wbnb}`)?.contentType).toBe("image/webp");
+    // `.webp` names the same resource.
+    const webp = await app.inject({
+      method: "GET",
+      url: `/v2/market/logos/eip155:56/${wbnb}.webp`,
+    });
+    expect(webp.statusCode).toBe(200);
+    expect(webp.headers["etag"]).toBe(response.headers["etag"]);
   });
 
   it("answers 304 to a matching If-None-Match and 200 to a stale one", async () => {
-    const bytes = png(200);
+    const bytes = await logoPng();
     const fetch = upstreamFetch({
       [trustWalletWbnb]: { kind: "body", body: bytes },
     });
     const app = await createApp({ fetch });
-    const etag = tokenLogoEtag(bytes);
+    const first = await app.inject({ method: "GET", url: path });
+    const etag = String(first.headers["etag"]);
     const notModified = await app.inject({
       method: "GET",
       url: path,
@@ -153,8 +175,8 @@ describe("GET /v2/market/logos/{chainId}/{file} (Decision 0089)", () => {
 
   it("normalises a checksummed address to the same cached picture, and serves native.png", async () => {
     const fetch = upstreamFetch({
-      [trustWalletWbnb]: { kind: "body", body: png() },
-      [trustWalletNative]: { kind: "body", body: png(32, 9) },
+      [trustWalletWbnb]: { kind: "body", body: await logoPng() },
+      [trustWalletNative]: { kind: "body", body: await logoPng({ red: 9 }) },
     });
     const cache = memoryLogoCache();
     const app = await createApp({ fetch, database: database(cache) });
@@ -209,23 +231,61 @@ describe("GET /v2/market/logos/{chainId}/{file} (Decision 0089)", () => {
     expect(cache.put).not.toHaveBeenCalled();
   });
 
-  it("redirects a picture over 256 KiB to its allow-listed upstream", async () => {
+  it("serves a large upstream picture itself instead of redirecting (no 302 since Decision 0161)", async () => {
+    // Random pixels do not compress: the PNG stays far above 256 KiB.
+    const noise = randomBytes(1024 * 1024 * 3);
+    const large = await sharp(noise, {
+      raw: { width: 1024, height: 1024, channels: 3 },
+    })
+      .png()
+      .toBuffer();
+    expect(large.length).toBeGreaterThan(256 * 1024);
     const app = await createApp({
       fetch: upstreamFetch({
-        [trustWalletWbnb]: { kind: "body", body: png(256 * 1024 + 1) },
+        [trustWalletWbnb]: { kind: "body", body: large },
       }),
     });
     const response = await app.inject({ method: "GET", url: path });
-    expect(response.statusCode).toBe(302);
-    expect(response.headers["location"]).toBe(trustWalletWbnb);
-    expect(response.body).toBe("");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["location"]).toBeUndefined();
+    expect(response.headers["content-type"]).toBe("image/webp");
+    expect(response.rawPayload.length).toBeLessThan(64 * 1024);
+  });
+
+  it("answers 404 for an upstream picture that cannot be decoded", async () => {
+    const app = await createApp({
+      fetch: upstreamFetch({
+        [trustWalletWbnb]: { kind: "body", body: png(200) },
+      }),
+    });
+    const response = await app.inject({ method: "GET", url: path });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("reads Ethereum and Base logos from their own Trust Wallet folder", async () => {
+    const fetch = upstreamFetch({
+      "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png":
+        { kind: "body", body: await logoPng() },
+      [`https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/base/assets/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c/logo.png`]:
+        { kind: "body", body: await logoPng() },
+    });
+    const app = await createApp({ fetch });
+    for (const url of [
+      "/v2/market/logos/eip155:1/native.png",
+      `/v2/market/logos/eip155:8453/${wbnb}.png`,
+    ]) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode, url).toBe(200);
+      expect(response.headers["content-type"], url).toBe("image/webp");
+    }
   });
 
   it("lets a CDN keep a picture from a lower origin for five minutes only when a higher one failed", async () => {
     const app = await createApp({
       fetch: upstreamFetch({
         [dexscreenerWbnb]: { kind: "hang" },
-        [trustWalletWbnb]: { kind: "body", body: png() },
+        [trustWalletWbnb]: { kind: "body", body: await logoPng() },
       }),
       database: database(
         memoryLogoCache(),
@@ -247,8 +307,9 @@ describe("GET /v2/market/logos/{chainId}/{file} (Decision 0089)", () => {
       `/v2/market/logos/eip155:56/${wbnb}zz.png`,
       "/v2/market/logos/eip155:56/..%2F..%2Fetc%2Fpasswd.png",
       "/v2/market/logos/eip155:56/https%3A%2F%2Fevil.example%2Fx.png",
-      `/v2/market/logos/eip155:1/${wbnb}.png`,
+      `/v2/market/logos/eip155:10/${wbnb}.png`,
       `/v2/market/logos/eip155:97/${wbnb}.png`,
+      `/v2/market/logos/eip155:56/${wbnb}.gif`,
       `/v2/market/logos/56/${wbnb}.png`,
       `${path}?url=https://evil.example/x.png`,
     ]) {

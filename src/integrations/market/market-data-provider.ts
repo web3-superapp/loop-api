@@ -275,6 +275,19 @@ export interface OhlcvReadOptions extends ProviderReadOptions {
   readonly tokenAddress?: string;
 }
 
+/**
+ * The Provider's pools of the chain ranked by 24 h volume, one page of
+ * at most 20 (Decision 0161 §2: the hot-token list of the logo pre-warm).
+ * GeckoTerminal's free tier serves pages 1–10 only.
+ */
+export interface TopPoolsProvider {
+  readonly source: MarketSource;
+  readTopPools(
+    page: number,
+    options?: ProviderReadOptions,
+  ): Promise<ProviderObservation<NewPoolsSnapshot>>;
+}
+
 export interface CandlesProvider {
   readonly source: MarketSource;
   readPoolOhlcv(

@@ -54,6 +54,8 @@ const indexerLanes = new Set([
   "chain_guard",
   // Decision 0149: the fiat FX reference rate.
   "fiat_fx_rate",
+  // Decision 0161: the token logo pre-warm.
+  "token_logo_prewarm",
 ]);
 const chainGuardKindSet: ReadonlySet<string> = new Set(chainGuardIncidentKinds);
 const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
@@ -140,6 +142,8 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP push delivery was not confirmed"
   | "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled"
   | "LOOP market sparkline warm lane could not refresh an asset"
+  | "LOOP token logo prewarm pass finished"
+  | "LOOP token logo upstream or cache warning"
   | "LOOP voice room reaper ended a room"
   | "LOOP voice room reaper could not confirm the Stream call end"
   | "LOOP voice room reaper could not end a room"
@@ -308,6 +312,17 @@ export interface ReconciliationWorkerLogFields {
    */
   readonly unvaluedCount?: number;
   readonly failedCount?: number;
+  /**
+   * Decision 0161 token_logo_prewarm lane: per-pass outcome counts (the
+   * targets go in `count`, failures in `failedCount`). Counts only.
+   */
+  readonly storedCount?: number;
+  readonly freshCount?: number;
+  readonly missingCount?: number;
+  readonly keptCount?: number;
+  readonly manualCount?: number;
+  readonly degradedCount?: number;
+  readonly hotCount?: number;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -480,6 +495,13 @@ function sanitizeFields(
         "confirmations",
         "unvaluedCount",
         "failedCount",
+        "storedCount",
+        "freshCount",
+        "missingCount",
+        "keptCount",
+        "manualCount",
+        "degradedCount",
+        "hotCount",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];

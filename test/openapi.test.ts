@@ -1243,9 +1243,9 @@ describe("committed OpenAPI artifact", () => {
       "chainId",
       "file",
     ]);
+    // Decision 0161: no 302 any more; the bytes are a normalised WebP.
     expect(Object.keys(operation?.responses ?? {}).sort()).toEqual([
       "200",
-      "302",
       "304",
       "400",
       "404",
@@ -1321,6 +1321,7 @@ describe("committed OpenAPI artifact", () => {
         })),
       );
     expect(operations.map((entry) => entry.key).sort()).toEqual([
+      "DELETE /admin/v1/market/logos/{chainId}/{address}",
       "DELETE /admin/v1/session",
       "GET /admin/v1/accounts",
       "GET /admin/v1/audit",
@@ -1331,6 +1332,7 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/launch/projects/{projectId}",
       "GET /admin/v1/launch2/campaigns",
       "GET /admin/v1/launch2/campaigns/{campaignId}",
+      "GET /admin/v1/market/logos/{chainId}/{address}",
       "GET /admin/v1/meme/tokens",
       "GET /admin/v1/mining/epochs",
       "GET /admin/v1/mining/epochs/{epochId}",
@@ -1362,6 +1364,7 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/launch2/campaigns/cover",
       "POST /admin/v1/launch2/campaigns/{campaignId}/archive",
       "POST /admin/v1/launch2/campaigns/{campaignId}/publish",
+      "POST /admin/v1/market/logos/{chainId}/{address}",
       "POST /admin/v1/meme/tokens/{memeTokenId}/listing",
       "POST /admin/v1/meme/tokens/{memeTokenId}/pause",
       "POST /admin/v1/meme/tokens/{memeTokenId}/unpause",

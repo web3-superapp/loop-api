@@ -385,6 +385,7 @@ import {
 import { MemeGraduationSenderRefusedError } from "./integrations/meme/meme-graduation-sender.js";
 import { createTokenLogoProjector } from "./features/market/token-logo.js";
 import { createTokenLogoProxyService } from "./features/market/token-logo-proxy.js";
+import { createAdminTokenLogoService } from "./features/admin/admin-token-logos.js";
 import {
   createLaunchService,
   createUnavailableLaunchService,
@@ -2908,6 +2909,12 @@ export async function buildApp(
     const adminRepository =
       database.admin ?? createUnavailableAdminRepository();
     registerAdminRoutes(app, {
+      // Decision 0161: manual token logo overrides.
+      tokenLogos: createAdminTokenLogoService({
+        repository: database.tokenLogoCache ?? null,
+        publicBaseUrl: config.publicBaseUrl,
+        ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
+      }),
       // Decision 0143: square timeline posts (console-written system posts).
       squarePosts: createAdminSquarePostService({
         repository: database.squareFeed ?? null,

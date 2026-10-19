@@ -24,6 +24,7 @@ import {
   type ProviderReadOptions,
   type TokenLookupPoolSnapshot,
   type TokenLookupProvider,
+  type TopPoolsProvider,
   type TokenLookupSnapshot,
 } from "./market-data-provider.js";
 import {
@@ -48,6 +49,8 @@ import {
 export const geckoterminalBaseUrl = "https://api.geckoterminal.com/api/v2";
 export const geckoterminalDocumentedRateLimitPerMinute = 30;
 export const geckoterminalNetwork = "bsc";
+/** The free tier refuses `page` above 10 on the pool lists (401). */
+export const geckoterminalMaximumTopPoolsPage = 10;
 const acceptHeader = "application/json;version=20230302";
 
 const numeric = z.union([z.string(), z.number()]);
@@ -609,7 +612,7 @@ export interface CreateGeckoterminalAdapterInput {
 
 export function createGeckoterminalAdapter(
   input: CreateGeckoterminalAdapterInput = {},
-): CandlesProvider & TokenLookupProvider {
+): CandlesProvider & TokenLookupProvider & TopPoolsProvider {
   const rateLimitPerMinute = Math.min(
     input.rateLimitPerMinute ?? geckoterminalDocumentedRateLimitPerMinute,
     geckoterminalDocumentedRateLimitPerMinute,
@@ -665,6 +668,30 @@ export function createGeckoterminalAdapter(
     ): Promise<ProviderObservation<NewPoolsSnapshot>> {
       const result = await kernel.requestJson({
         url: `${baseUrl}/networks/${geckoterminalNetwork}/new_pools?page=1`,
+        headers,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      return Object.freeze({
+        value: normalizeGeckoterminalNewPools(result.json),
+        source: "geckoterminal" as const,
+        fetchedAt: now().toISOString(),
+        rawDigest: result.rawDigest,
+      });
+    },
+
+    async readTopPools(
+      page: number,
+      options: ProviderReadOptions = {},
+    ): Promise<ProviderObservation<NewPoolsSnapshot>> {
+      if (
+        !Number.isInteger(page) ||
+        page < 1 ||
+        page > geckoterminalMaximumTopPoolsPage
+      ) {
+        throw new RangeError("GeckoTerminal top pools page out of range");
+      }
+      const result = await kernel.requestJson({
+        url: `${baseUrl}/networks/${geckoterminalNetwork}/pools?page=${String(page)}&sort=h24_volume_usd_desc`,
         headers,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });

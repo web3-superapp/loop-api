@@ -64,6 +64,19 @@ export const tokenLogoReasonCodes = Object.freeze({
 export const trustWalletAssetsBaseUrl =
   "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/smartchain";
 
+/**
+ * Trust Wallet assets-repository folder of every chain the logo proxy
+ * *reads* (Decision 0161 §4). The projection still publishes BSC only
+ * (`trustWalletLogoUrl`); the other chains are served by the proxy route
+ * for clients and pre-warming that ask for them explicitly.
+ */
+export const trustWalletChainFolders: Readonly<Record<string, string>> =
+  Object.freeze({
+    "eip155:56": "smartchain",
+    "eip155:1": "ethereum",
+    "eip155:8453": "base",
+  });
+
 export type TokenLogoProjection =
   | Readonly<{
       status: "available";
@@ -210,18 +223,56 @@ export function resolveTokenLogoOrigin(
   });
 }
 
+/**
+ * The Trust Wallet file the logo proxy fetches for a chain it reads
+ * (Decision 0161 §4), or `null` for any other chain. Unlike
+ * `trustWalletLogoUrl` this is the proxy's upstream only; it is never
+ * published to a client.
+ */
+export function trustWalletUpstreamLogoUrl(
+  chainId: string,
+  address: string | null,
+): string | null {
+  const folder = trustWalletChainFolders[chainId];
+  if (folder === undefined) {
+    return null;
+  }
+  const base = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${folder}`;
+  if (address === null) {
+    return `${base}/info/logo.png`;
+  }
+  return `${base}/assets/${toEip55Address(address)}/logo.png`;
+}
+
 /** Path prefix of the logo proxy route (Decision 0089). */
 export const tokenLogoProxyPathPrefix = "/v2/market/logos";
 
-/** Chains the logo proxy serves; the Trust Wallet rule covers BSC mainnet only. */
+/**
+ * Chains a published `logo.url` names. Only BSC mainnet: the shipped
+ * clients (`loop_v2_chain_codec.dart` `logoProxyPathPattern`) admit
+ * `eip155:56` only, so the projection does not widen (Decision 0161 §4).
+ */
 export const tokenLogoProxyChainIds = Object.freeze([bscChainId] as const);
+
+/**
+ * Chains the logo proxy route *reads* (Decision 0161 §4): BSC, Ethereum,
+ * Base. Only BSC has a Provider (DexScreener) origin; the others use the
+ * Trust Wallet file of their own folder.
+ */
+export const tokenLogoProxyReadChainIds = Object.freeze([
+  bscChainId,
+  "eip155:1",
+  "eip155:8453",
+] as const);
 
 /** File name of the native asset's logo on the proxy route. */
 export const tokenLogoProxyNativeFile = "native.png";
 
 /**
  * `/v2/market/logos/<chainId>/<lowercase address>.png`, or `native.png` for
- * the chain's native asset. The address is the canonical lowercase form, so
+ * the chain's native asset. The `.png` suffix is kept although the bytes
+ * are a normalised WebP since Decision 0161: shipped clients match the
+ * suffix, and image decoders go by the bytes, not the name. The address is the canonical lowercase form, so
  * every surface publishes one URL per asset and a CDN caches it once.
  */
 export function tokenLogoProxyPath(

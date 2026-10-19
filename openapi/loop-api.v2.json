@@ -55292,24 +55292,27 @@
         "operationId": "getV2MarketTokenLogo",
         "summary": "Get a token logo through the LOOP logo proxy",
         "tags": ["market"],
-        "description": "Public image resource (Decision 0089); no authentication and no LOOP headers. The server picks the picture by the Decision 0072 origin rules (the DexScreener image of the token's own base pair when the pair fact has one, else the Trust Wallet assets-repository file), fetches it once with a 5 s timeout, and keeps it for 7 days. 200: PNG/JPEG/GIF/WebP bytes (<= 256 KiB) with a strong `ETag`; `If-None-Match` answers 304. 302: the picture is larger than 256 KiB and is not proxied; `Location` is the allow-listed upstream. 404 `NOT_FOUND`: no origin has a picture (remembered for 24 h). 502 `PROVIDER_UNREACHABLE`: the upstream timed out or failed; nothing is cached. On any non-200 the client draws its monogram and does not retry in a loop.",
+        "description": "Public image resource (Decisions 0089, 0161); no authentication and no LOOP headers. The server picks the picture by the Decision 0072 origin rules (on BSC the DexScreener image of the token's own base pair when the pair fact has one, else the Trust Wallet assets-repository file of the chain), fetches it once with a 5 s timeout, re-encodes it into a 128 x 128 WebP (transparency kept), and keeps it for 7 days; the worker pre-warms the mainstream, registry, watchlisted and hot BSC tokens. An operator picture (`source = manual`) is served until cleared. 200: `image/webp` bytes (rows stored before Decision 0161 may still answer PNG/JPEG/GIF until their refresh) with a strong `ETag`; `If-None-Match` answers 304. 404 `NOT_FOUND`: no origin has a picture, the upstream picture is larger than 4 MiB or cannot be decoded (remembered for 24 h). 502 `PROVIDER_UNREACHABLE`: the upstream timed out or failed and nothing is stored. On any non-200 the client draws its monogram and does not retry in a loop.",
         "parameters": [
           {
-            "schema": { "type": "string", "enum": ["eip155:56"] },
+            "schema": {
+              "type": "string",
+              "enum": ["eip155:56", "eip155:1", "eip155:8453"]
+            },
             "in": "path",
             "name": "chainId",
             "required": true,
-            "description": "CAIP-2 chain. Only BSC mainnet is served."
+            "description": "CAIP-2 chain: BSC mainnet (the only chain published in `logo.url`), Ethereum mainnet, or Base."
           },
           {
             "schema": {
               "type": "string",
-              "pattern": "^(0x[0-9a-fA-F]{40}|native)\\.png$"
+              "pattern": "^(0x[0-9a-fA-F]{40}|native)\\.(png|webp)$"
             },
             "in": "path",
             "name": "file",
             "required": true,
-            "description": "`<0x + 40 hex token address>.png` (any case; published URLs are lowercase) or `native.png` for the chain's native coin."
+            "description": "`<0x + 40 hex token address>.png` (any case; published URLs are lowercase) or `native.png` for the chain's native coin. `.webp` is the same resource; the bytes are WebP under either name."
           }
         ],
         "security": [],
@@ -55330,9 +55333,6 @@
                 "schema": { "type": "string", "format": "binary" }
               }
             }
-          },
-          "302": {
-            "description": "The picture exceeds 256 KiB; `Location` is its allow-listed upstream URL."
           },
           "304": {
             "description": "`If-None-Match` matched the current `ETag`."

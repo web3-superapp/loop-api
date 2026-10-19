@@ -32,6 +32,11 @@ import { registerAdminMiningSettlementRoutes } from "./mining-settlement-routes.
 import { registerAdminChainGuardRoutes } from "./chain-guard-routes.js";
 import { registerAdminLaunch2CampaignRoutes } from "./launch2-campaign-routes.js";
 import { registerAdminSquarePostRoutes } from "./square-post-routes.js";
+import { registerAdminTokenLogoRoutes } from "./token-logo-routes.js";
+import {
+  createAdminTokenLogoService,
+  type AdminTokenLogoService,
+} from "../../features/admin/admin-token-logos.js";
 import {
   createAdminSquarePostService,
   type AdminSquarePostService,
@@ -109,6 +114,8 @@ export interface AdminRouteDependencies {
   readonly launch2Campaigns?: AdminLaunch2CampaignService;
   /** Decision 0143: square timeline posts; absent = 503 CAPABILITY_UNAVAILABLE. */
   readonly squarePosts?: AdminSquarePostService;
+  /** Decision 0161: manual token logos; absent = 503 CAPABILITY_UNAVAILABLE. */
+  readonly tokenLogos?: AdminTokenLogoService;
 }
 
 /** Decision 0109: `onRequest` hooks of a protected route. */
@@ -915,6 +922,17 @@ export function registerAdminRoutes(
     service:
       dependencies.squarePosts ??
       createAdminSquarePostService({ repository: null }),
+    guard,
+    context,
+  });
+
+  registerAdminTokenLogoRoutes(app, {
+    service:
+      dependencies.tokenLogos ??
+      createAdminTokenLogoService({
+        repository: null,
+        publicBaseUrl: "http://localhost",
+      }),
     guard,
     context,
   });
