@@ -41,6 +41,12 @@ export interface HooksLaunchFactoryReader {
     readonly params: HooksLaunchLoopDynamicParams;
     readonly templateHash: string;
   }>;
+  /**
+   * Decision 0165: the Factory's immutable `usd1()` (lowercase, non-zero),
+   * the USD1 MEME v2 trades in; cached after the first valid read. Optional
+   * so test doubles that never price USD1 need not answer it.
+   */
+  usd1?(): Promise<string>;
   nonce(projectOwner: string): Promise<bigint>;
   /**
    * Decision 0164: which ticker text rule the Factory enforces, probed on

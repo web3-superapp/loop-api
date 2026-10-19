@@ -387,6 +387,11 @@ CAPABILITY_UNAVAILABLE`，此时 `detailsSafe` 为
   各自取最新块，约 3% 的读因相差一个块而缺席；现在授权额固定在余额读到的区块上读取，
   同块成为常态。仍会缺席的情况只剩：端点已无法提供该区块（极少）、任一读失败或 3s 总期限到。
   响应形状不变。
+- 决策 0165（S246）：`launchChain.usd1` / 根 `launchUsd1` 的代币改为 Hooks 工厂的
+  `usd1()`（即 MEME v2、水龙头、买入面板用的那枚 USD1）；只有未配置工厂时才回退到
+  env `LAUNCH_USD1_ADDRESS`。工厂 `usd1()` 读失败时该块缺省（不会改读 env 代币）。
+  `allowance` 的授权目标仍是 `LAUNCH_CONTRACT_ADDRESS`（旧 IDO 合约，IDO 已隐藏）；
+  MEME v2 买入的授权以 launch2 意图里的 `approval` 为准。响应形状不变。
 
 ### 6.1 `launchChain`：Launch 链槽位上的 tBNB 余额（S9 / 决策 0038）
 

@@ -403,6 +403,13 @@ export interface CreateWalletReadServiceInput {
   readonly launchChainReadClient: BscReadClient | null;
   /** Decision 0077: USD1 balance/allowance on the launch slot; absent = none. */
   readonly launchUsd1?: LaunchChainUsd1Target | null;
+  /**
+   * Decision 0165: the Hooks Factory's `usd1()` when a Factory is composed.
+   * When present it is the USD1 token of `launchUsd1` (the env address is
+   * only the fallback without a Factory); a failed read leaves the USD1 pair
+   * absent, never the env token. The spender stays `launchUsd1.spender`.
+   */
+  readonly launchUsd1Token?: (() => Promise<string>) | null;
   /** Absent means the segment timings are not logged (tests, scripts). */
   readonly logger?: WalletReadServiceLogger;
   /** Overrides `primaryReadHedgeDelayMs`; zero disables the hedge timer. */
@@ -1044,6 +1051,26 @@ async function readUsd1AtHead(
 }
 
 /**
+ * Decision 0165: the USD1 target of the launch slot. With a Hooks Factory
+ * composed the token is its `usd1()`; the env address is the fallback only
+ * without one. The spender is unchanged (LAUNCH_CONTRACT_ADDRESS).
+ */
+async function resolveLaunchUsd1Target(
+  configured: LaunchChainUsd1Target | null,
+  factoryUsd1: (() => Promise<string>) | null,
+): Promise<LaunchChainUsd1Target | null> {
+  if (configured === null) return null;
+  if (factoryUsd1 === null) return configured;
+  const usd1Address = (
+    await withDeadline(factoryUsd1(), launchChainReadDeadlineMs)
+  ).toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/u.test(usd1Address)) {
+    throw new Error("Hooks launch factory usd1 unavailable");
+  }
+  return Object.freeze({ usd1Address, spender: configured.spender });
+}
+
+/**
  * The shared-slot USD1 pair (Decision 0081) on the primary client: one head,
  * then the balance and the pinned allowance together, under one deadline.
  */
@@ -1577,14 +1604,24 @@ export function createWalletReadService(
       // unavailable with an existing reason code and logged; it never
       // rejects the page.
       const launchChainClient = input.launchChainReadClient;
+      // Decision 0165: the USD1 token is the Hooks Factory's `usd1()` when a
+      // Factory is composed (cached by the reader); a failed read drops the
+      // USD1 pair only, never substitutes the env token.
+      const usd1TargetPending = resolveLaunchUsd1Target(
+        input.launchUsd1 ?? null,
+        input.launchUsd1Token ?? null,
+      ).catch((error: unknown): null => {
+        noteDegradedLeg("launchUsd1Token", error);
+        return null;
+      });
       const launchChainPending = timings
-        .measure("launchChain", () =>
+        .measure("launchChain", async () =>
           projectLaunchChainBalance(
             launchChainClient,
             wallet.address,
             input.gasReserveRawWei,
             input.tokenLogos,
-            input.launchUsd1 ?? null,
+            launchChainClient === null ? null : await usd1TargetPending,
           ),
         )
         .catch((error: unknown): LaunchChainBalanceProjection | null => {
@@ -1601,22 +1638,22 @@ export function createWalletReadService(
       // Decision 0081: a shared launch slot has no `launchChain` block, so
       // the USD1 balance/allowance pair is read on the primary client and
       // published at the root. Nothing is read while the slot is separate.
-      const sharedUsd1Target =
-        input.launchChainReadClient === null
-          ? (input.launchUsd1 ?? null)
-          : null;
       const launchUsd1Pending =
-        sharedUsd1Target === null
+        input.launchChainReadClient !== null ||
+        (input.launchUsd1 ?? null) === null
           ? Promise.resolve(null)
           : timings
-              .measure("launchUsd1", () =>
-                readLaunchChainUsd1(
-                  input.readClient,
-                  wallet.address,
-                  sharedUsd1Target,
-                  launchChainReadDeadlineMs,
-                ),
-              )
+              .measure("launchUsd1", async () => {
+                const sharedUsd1Target = await usd1TargetPending;
+                return sharedUsd1Target === null
+                  ? null
+                  : readLaunchChainUsd1(
+                      input.readClient,
+                      wallet.address,
+                      sharedUsd1Target,
+                      launchChainReadDeadlineMs,
+                    );
+              })
               .catch((error: unknown): null => {
                 noteDegradedLeg("launchUsd1", error);
                 return null;

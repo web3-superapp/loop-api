@@ -172,6 +172,13 @@ export async function readHooksLaunchLoopDynamicTemplate(
 const hooksLaunchFactoryAbi = [
   {
     type: "function",
+    name: "usd1",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
     name: "tokenDeployer",
     stateMutability: "view",
     inputs: [],
@@ -497,10 +504,36 @@ export function createHooksLaunchFactoryReader(input: {
     return outcome;
   }
 
+  // Decision 0165: the Factory's immutable `usd1()` (the token MEME v2
+  // trades in); the first valid read is kept for the reader's life.
+  let usd1Address: string | null = null;
+  async function usd1(): Promise<string> {
+    if (usd1Address !== null) return usd1Address;
+    await verifyNetworkAndCode();
+    let read: string;
+    try {
+      read = (
+        await client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchFactoryAbi,
+          functionName: "usd1",
+        })
+      ).toLowerCase();
+    } catch {
+      throw new Error("Hooks launch factory read unavailable");
+    }
+    if (!/^0x[0-9a-f]{40}$/u.test(read) || read === zeroAddress) {
+      throw new Error("Hooks launch factory usd1 unavailable");
+    }
+    usd1Address = read;
+    return read;
+  }
+
   return Object.freeze({
     factoryAddress,
     chainId: chainReference,
     tickerTextRule,
+    usd1,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
     ...(loopDynamic
       ? {

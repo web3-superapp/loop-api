@@ -436,7 +436,7 @@ const launchUsd1BalanceSchema = {
       type: "string",
       pattern: "^(0|[1-9][0-9]{0,77})$",
       description:
-        "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals).",
+        "USD1 balanceOf(wallet) on the launch slot, base units (18 decimals). Decision 0165: the token is the Hooks Factory's usd1() when a Factory is composed (the USD1 MEME v2 trades in); LAUNCH_USD1_ADDRESS only without one.",
     },
     allowance: {
       type: "string",
@@ -463,7 +463,7 @@ const launchChainBalanceSchema = {
     usd1: {
       ...launchUsd1BalanceSchema,
       description:
-        "Optional (Decision 0077, shape frozen by 0088): present only when LAUNCH_USD1_ADDRESS is configured AND both values were read at the same block; absent otherwise (never null, never a guess).",
+        "Optional (Decision 0077, shape frozen by 0088): present only when the Launch contract keys (LAUNCH_USD1_ADDRESS included) are configured AND both values were read at the same block; absent otherwise (never null, never a guess). Decision 0165: the token is the Hooks Factory's usd1() when a Factory is composed; a failed Factory read leaves it absent.",
     },
     nativeBalance: {
       anyOf: [

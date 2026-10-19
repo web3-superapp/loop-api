@@ -709,7 +709,11 @@ Field meaning by mode:
 | `minOut`      | expectedOut × (1 − slippage), down    | = amount                                                        |
 | `taxAmount`   | 2 % of the gross output (≤ 1 wei off) | exact hook tax                                                  |
 
-- Show 「外盘交易税 2 %（{taxAmount} {taxToken}）」; `taxUsd1` is only non-zero on a sell.
+- Show 「外盘交易税 2 %（{taxAmount} {taxToken}）」; `taxUsd1` is non-zero on a sell and, for a
+  LoopDynamic S209 Hook (`taxToken = "usd1"` on a buy, Decision 0152), on a buy as well.
+- Decision 0165: the `pool/trade/prepare` intent's `taxUsd1` equals the quote's `taxUsd1`
+  (same figure, same precision) for every side: a USD1-taxed buy carries the USD1 fee (e.g.
+  10 USD1 at 2 % → `"0.2"`), a MEME-taxed buy `"0"`, a sell the base + dynamic USD1 fee.
 - `exceedsBalance: true` → disable the confirm button, offer the balance as MAX (`balance`).
 - Re-quote when `expiresAt` passes (TTL 60 s); the prepare re-quotes itself anyway.
 - Decision 0126: the quote's `deadline` / `expiresAt` are only its freshness. The prepare

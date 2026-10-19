@@ -130,6 +130,7 @@ import {
   launch2DynamicRoutingPolicy,
   launch2DynamicSellSplit,
   launch2HookKindOf,
+  type Launch2DynamicBuyFeeToken,
   type Launch2PoolHookKind,
 } from "./launch2-dynamic.js";
 import {
@@ -2184,6 +2185,8 @@ export function createLaunch2Service(
     readonly zeroForOne: boolean;
     readonly router: string;
     readonly numbers: PoolNumbers;
+    /** Decision 0152: the token a buy is taxed in (by the Hook address). */
+    readonly buyFeeToken: Launch2DynamicBuyFeeToken;
     readonly chain: Launch2DynamicChain;
   }> {
     if (request.mode !== "exactIn") {
@@ -2385,6 +2388,7 @@ export function createLaunch2Service(
       zeroForOne,
       router,
       numbers,
+      buyFeeToken,
       chain: reader,
     };
   }
@@ -2431,6 +2435,7 @@ export function createLaunch2Service(
           key,
           zeroForOne,
           router,
+          buyFeeToken,
           chain: reader,
         } = priced;
         const inputBalance =
@@ -2486,7 +2491,11 @@ export function createLaunch2Service(
           amountIn: numbers.maxIn,
           expectedOut: numbers.expectedOut,
           minOut: numbers.minOut,
-          tax: body.side === "sell" ? numbers.tax : 0n,
+          // Decision 0165: a USD1-taxed buy (buyFeeToken = usd1, loop-
+          // contracts Decision 0015 §3) carries the quote's USD1 fee, the
+          // same figure as the quote's `taxUsd1`; a MEME-taxed buy has none.
+          tax:
+            body.side === "sell" || buyFeeToken === "usd1" ? numbers.tax : 0n,
           refund: 0n,
           valueUsd: body.side === "buy" ? numbers.maxIn : numbers.expectedOut,
           deadline: numbers.deadline,
