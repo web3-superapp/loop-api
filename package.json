@@ -62,6 +62,7 @@
     "stream:users-backfill": "node --env-file-if-exists=.env.local --import tsx scripts/stream-users-backfill.ts",
     "stream:verify": "node --env-file-if-exists=.env.local --import tsx scripts/verify-stream-credentials.ts",
     "support:answer": "node --env-file-if-exists=.env.local --import tsx scripts/support-answer.ts",
+    "token-logo:prewarm": "node --env-file-if-exists=.env.local --import tsx scripts/token-logo-prewarm.ts",
     "voice-room:open": "node --env-file-if-exists=.env.local --import tsx scripts/voice-room-open.ts",
     "test": "vitest run --exclude 'test/**/*.integration.test.ts'",
     "test:contract": "vitest run test/*contract.test.ts test/*routes.test.ts test/app.test.ts test/bootstrap.test.ts test/database-schema.test.ts test/openapi.test.ts",

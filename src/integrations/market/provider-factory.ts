@@ -7,6 +7,7 @@ import type {
   MarketPairsProvider,
   SecurityFactsProvider,
   TokenLookupProvider,
+  TopPoolsProvider,
 } from "./market-data-provider.js";
 import type { ProviderFetch } from "./provider-http.js";
 
@@ -25,6 +26,11 @@ export interface MarketProviders {
    * is disabled; the DexScreener pairs Provider is then the only lookup path.
    */
   readonly tokenLookup: TokenLookupProvider | null;
+  /**
+   * Volume-ranked pools (Decision 0161 §2, logo pre-warm hot list): the
+   * same GeckoTerminal adapter and throttle; `null` when it is disabled.
+   */
+  readonly topPools: TopPoolsProvider | null;
 }
 
 /**
@@ -72,5 +78,6 @@ export function createMarketProviders(
           }),
     candles: geckoterminal,
     tokenLookup: geckoterminal,
+    topPools: geckoterminal,
   });
 }

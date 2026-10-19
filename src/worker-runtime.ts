@@ -159,6 +159,15 @@ import {
   type CreateMarketSparklineWarmWorkerOptions,
   type MarketSparklineWarmWorker,
 } from "./market-sparkline-warm-worker.js";
+import {
+  createTokenLogoPrewarmWorker,
+  type CreateTokenLogoPrewarmWorkerOptions,
+  type TokenLogoPrewarmWorker,
+} from "./token-logo-prewarm-worker.js";
+import { createTokenLogoProxyService } from "./features/market/token-logo-proxy.js";
+import type { TokenLogoCacheRepository } from "./database/token-logo-cache-repository.js";
+import { runTokenLogoPrewarmPass } from "./features/market/token-logo-prewarm.js";
+import { bscMainstreamTokenLogos } from "./features/market/token-logo-mainstream.js";
 import type { WatchlistV2Repository } from "./database/watchlist-v2-repository.js";
 import type { ReconciliationWorkerConfig } from "./config.js";
 import type {
@@ -323,6 +332,8 @@ export interface ReconciliationWorkerDatabase {
   readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
   /** Decision 0149 `fiat_fx_rate` lane; absent keeps it off. */
   readonly fiatFxRates?: FiatFxRateRepository;
+  /** Decision 0161 `token_logo_prewarm` lane; absent keeps it off. */
+  readonly tokenLogoCache?: TokenLogoCacheRepository;
   readonly ping: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -434,6 +445,12 @@ export interface RunReconciliationWorkerOptions {
   readonly createWalletIntentReconcileWorker?: WalletIntentReconcileWorkerFactory;
   readonly createMiningSnapshotWorker?: MiningSnapshotWorkerFactory;
   readonly createMarketSparklineWarmWorker?: MarketSparklineWarmWorkerFactory;
+  /** Decision 0161 test seam: the token logo pre-warm lane. */
+  readonly createTokenLogoPrewarmWorker?: (
+    options: CreateTokenLogoPrewarmWorkerOptions,
+  ) => TokenLogoPrewarmWorker;
+  /** Decision 0161 test seam: the logo proxy's upstream `fetch`. */
+  readonly tokenLogoFetch?: typeof fetch;
   readonly createBscReadClient?: BscReadClientFactory;
   readonly createCommunityChannelSyncWorker?: CommunityChannelSyncWorkerFactory;
   readonly createVoiceRoomReaperWorker?: VoiceRoomReaperWorkerFactory;
@@ -502,6 +519,8 @@ export async function runReconciliationWorker(
     options.createMiningSnapshotWorker ?? createMiningSnapshotWorker;
   const sparklineWarmWorkerFactory =
     options.createMarketSparklineWarmWorker ?? createMarketSparklineWarmWorker;
+  const tokenLogoPrewarmWorkerFactory =
+    options.createTokenLogoPrewarmWorker ?? createTokenLogoPrewarmWorker;
   // Decision 0079: a read that ran out of budget resets the client's learned
   // log-query limits; the reset is one warn line with the numbers only.
   const onLogQueryLimitsReset = (event: BscLogQueryLimitsResetEvent): void => {
@@ -2433,6 +2452,87 @@ export async function runReconciliationWorker(
         });
       }
     }
+    // The `token_logo_prewarm` lane (Decision 0161) is default-on and needs
+    // the logo cache; the hot list and the DexScreener seeding are optional
+    // (their Providers may be disabled) and reported per pass.
+    const tokenLogoPrewarmConfig = options.config.tokenLogoPrewarm ?? null;
+    let tokenLogoPrewarmWorker: TokenLogoPrewarmWorker | null = null;
+    if (
+      tokenLogoPrewarmConfig !== null &&
+      database.tokenLogoCache !== undefined
+    ) {
+      const logoCache = database.tokenLogoCache;
+      const logoRegistry = database.chainRegistry ?? null;
+      const logoWatchlist = database.watchlistsV2 ?? null;
+      const logoProviders = createMarketProviders(
+        options.config.market,
+        "worker",
+      );
+      const logoProxy = createTokenLogoProxyService({
+        cache: logoCache,
+        facts: database.marketFacts ?? null,
+        ...(options.tokenLogoFetch === undefined
+          ? {}
+          : { fetch: options.tokenLogoFetch }),
+      });
+      const logoPairs =
+        database.marketFacts === undefined || logoProviders.pairs === null
+          ? null
+          : createMarketFactService({
+              config: options.config.market,
+              cache: database.marketFacts,
+              pairsProvider: logoProviders.pairs,
+              securityProvider: null,
+              candlesProvider: null,
+              tokenLookupProvider: null,
+            });
+      tokenLogoPrewarmWorker = tokenLogoPrewarmWorkerFactory({
+        intervalMs: tokenLogoPrewarmConfig.intervalMs,
+        pass: (signal) =>
+          runTokenLogoPrewarmPass({
+            chainId: bscChainId,
+            proxy: logoProxy,
+            cache: logoCache,
+            mainstream: bscMainstreamTokenLogos,
+            registry: logoRegistry,
+            watchlist: logoWatchlist,
+            topPools: logoProviders.topPools,
+            hotLimit: tokenLogoPrewarmConfig.hotLimit,
+            pairs: logoPairs,
+            ...(signal === undefined ? {} : { signal }),
+          }),
+        onRunResult: (summary) => {
+          options.logger.info(
+            {
+              ...logFields(),
+              lane: "token_logo_prewarm",
+              count: summary.targetCount,
+              storedCount: summary.outcomes.stored,
+              freshCount: summary.outcomes.fresh,
+              missingCount: summary.outcomes.missing,
+              keptCount: summary.outcomes.kept,
+              manualCount: summary.outcomes.manual,
+              degradedCount: summary.outcomes.degraded,
+              failedCount: summary.outcomes.failed,
+              hotCount: summary.hotListed,
+              ...(summary.hotReasonCode === null
+                ? {}
+                : { reasonCode: summary.hotReasonCode }),
+              ...(summary.pairSeedReasonCode === null
+                ? {}
+                : { detailReasonCode: summary.pairSeedReasonCode }),
+            },
+            "LOOP token logo prewarm pass finished",
+          );
+        },
+        onInfrastructureBackoff: (event) => {
+          options.logger.warn(
+            { ...logFields(), lane: "token_logo_prewarm", ...event },
+            "LOOP reconciliation worker infrastructure retry scheduled",
+          );
+        },
+      });
+    }
     // The `community-channel-sync` lane is default-off and only constructed
     // when the complete Stream credential pair is configured (Decision 0032).
     const communityChannelGateway =
@@ -2764,6 +2864,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               sparklineWarmWorker.run(controller.signal),
+            ),
+          ]),
+      ...(tokenLogoPrewarmWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              tokenLogoPrewarmWorker.run(controller.signal),
             ),
           ]),
       ...(voiceRoomReaperWorker === null

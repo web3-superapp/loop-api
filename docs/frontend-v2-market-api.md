@@ -26,7 +26,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 
 - 全部读接口；**没有** `Idempotency-Key`（带了返回 `400 INVALID_REQUEST`）。
 - 所有响应 `Cache-Control: no-store`，**唯一例外**是图片代理 `GET /v2/market/logos/…`
-  的 200/302/304（公开、可被 CDN 缓存，见 §2b）。
+  的 200/304（公开、可被 CDN 缓存，见 §2b；决策 0161 起不再有 302）。
 
 ## 2. 事实（fact）的固定形状
 
@@ -131,32 +131,83 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 | `TOKEN_LOGO_CHAIN_UNSUPPORTED` | 非 BSC 主网（Launch 槽 `eip155:97` 的 tBNB 余额行）                            |
 | `TOKEN_LOGO_PROXY_UNAVAILABLE` | 后端未启用 `market` 模块，图片代理路由不存在（已部署的栈都启用，正常不会出现） |
 
-### 2b. `GET /v2/market/logos/{chainId}/{file}` —— 图片代理（决策 0089）
+### 2b. `GET /v2/market/logos/{chainId}/{file}` —— 图片代理（决策 0089、0161）
 
 客户端**不需要自己拼这个 URL**，直接用 `logo.url`；这里写清它的行为，便于图片组件与排障。
 
+- **Base URL**：与 API 同源（`PUBLIC_BASE_URL`，如 `https://api-staging.quant-dinger.cc`）。
 - **公开资源**：不需要 `Authorization`、不需要 `X-Loop-Contract-Version` 或任何 LOOP 头；
   普通图片加载器（`Image.network` / `CachedNetworkImage`）直接 GET 即可。带 query 参数 → 400。
-- `chainId` 只接受 `eip155:56`；`file` 只接受 `0x`+40 位十六进制（大小写均可，下发的都是小写）
-  - `.png`，或 `native.png`。
+- `chainId`：`eip155:56`（`logo.url` 只会是它）；决策 0161 起路由也能读 `eip155:1`、`eip155:8453`
+  （Trust Wallet 对应链目录），但**不会出现在任何 `logo.url` 里**，客户端无需改正则。
+- `file`：`0x`+40 位十六进制（大小写均可，下发的都是小写）+ `.png`，或 `native.png`；
+  `.webp` 后缀是同一资源（同 ETag），留给以后，当前客户端照旧用 `.png`。
+- **字节恒为 128 × 128 WebP**（决策 0161：服务端把任何来源、任何尺寸的图统一转成 128 × 128、
+  保留透明、不裁剪、透明底补边），`Content-Type: image/webp`，平均约 3–4 KiB。**扩展名恒 `.png`
+  而内容是 WebP**——按字节 / `Content-Type` 解码（Flutter 的图片解码器按字节识别，iOS / Android 都支持 WebP）。
+  决策 0161 上线前缓存的极少数旧行在刷新前可能仍返回 PNG / JPEG / GIF。
+- 服务端 **预热**：主流币（BNB、WBNB、BTCB、ETH、USDT、USDC、USD1、FDUSD、CAKE、DOGE…34 个）、
+  资产注册表、被自选的资产、BSC 成交额前 200 个池子的代币（去重后约 90–100 个），每 6 h 一轮、到期前 1 天刷新，所以这些图
+  几乎总是直接命中缓存；运营可在后台给任意代币上传手工图标（会立刻取代上游图，客户端在缓存
+  1 天后看到新图）。
 
-| HTTP | 何时 / 响应                                                                                                                                                                                                                    |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 200  | 图片字节（PNG / JPEG / GIF / WebP，按实际内容给 `Content-Type`，**扩展名恒 `.png` 但内容可能是 JPEG/WebP**，按 `Content-Type` 解码），≤ 256 KiB；`ETag`；`Cache-Control: public, max-age=86400, stale-while-revalidate=604800` |
-| 200  | 同上但 `Cache-Control: public, max-age=300`：优先上游暂时失败，先给了次选来源的图，稍后会换成更好的                                                                                                                            |
-| 304  | 带了 `If-None-Match` 且与当前 `ETag` 相同（空 body）                                                                                                                                                                           |
-| 302  | 原图超过 256 KiB，服务端不代理，`Location` 指向上游（DexScreener / GitHub）。大陆网络下这张图可能仍加载失败 → monogram                                                                                                         |
-| 400  | `INVALID_REQUEST`：链不对、地址不合法、扩展名不对、带 query                                                                                                                                                                    |
-| 404  | `NOT_FOUND`：所有上游都没有这张图（服务端记住 24 h）。新币多半没有，属正常                                                                                                                                                     |
-| 502  | `PROVIDER_UNREACHABLE`（新增错误码，`retryable: true`）：上游 5 s 超时 / 网络错误 / 5xx，服务端没缓存任何东西                                                                                                                  |
-| 500  | `INTERNAL_ERROR`                                                                                                                                                                                                               |
-| 503  | `REQUEST_TIMEOUT`（整请求超时）                                                                                                                                                                                                |
+| HTTP | 何时 / 响应                                                                                                                                                       |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | 128 × 128 WebP 字节，`Content-Type: image/webp`；`ETag`；`Cache-Control: public, max-age=86400, stale-while-revalidate=604800`；`X-Content-Type-Options: nosniff` |
+| 200  | 同上但 `Cache-Control: public, max-age=300`：优先上游暂时失败，先给了次选来源的图，稍后会换成更好的                                                               |
+| 304  | 带了 `If-None-Match` 且与当前 `ETag` 相同（空 body）                                                                                                              |
+| 400  | `INVALID_REQUEST`：链不对、地址不合法、扩展名不对、带 query                                                                                                       |
+| 404  | `NOT_FOUND`：所有上游都没有这张图、上游图超过 4 MiB 或无法解码（服务端记住 24 h）。新币多半没有，属正常                                                           |
+| 502  | `PROVIDER_UNREACHABLE`（`retryable: true`）：上游 5 s 超时 / 网络错误 / 5xx，且服务端没有任何旧图                                                                 |
+| 500  | `INTERNAL_ERROR`                                                                                                                                                  |
+| 503  | `REQUEST_TIMEOUT`（整请求超时）                                                                                                                                   |
 
-错误体是标准七字段、`Cache-Control: no-store`；图片组件不需要解析它。
+**不再有 302**（决策 0161）：以前 > 256 KiB 的图会 302 到上游，大陆打不开；现在服务端自己缩图后下发。
 
-**客户端回退规则（不变）**：直接加载 `url`；**任何非 200**（404 / 502 / 302 后加载失败 /
-断网 / 解码失败）→ 该行回退到首字母 monogram，**每行每屏只尝试一次，不要循环重试**。
-`unavailable` 一开始就画 monogram。可以依赖 HTTP 缓存（`ETag` + `max-age`），不需要自建缓存。
+错误体是标准七字段（`code / category / retryable / userMessageKey / correlationId / detailsSafe /
+providerReferenceSafe`）、`Cache-Control: no-store`；图片组件不需要解析它。
+
+**unavailable 行为**：`logo.status = unavailable` 时一开始就画 monogram，不请求图片；代理路由本身没有
+「能力关闭」状态，后端未启用 `market` 模块时路由不存在（404），投影已经是 `TOKEN_LOGO_PROXY_UNAVAILABLE`。
+
+**客户端回退规则（不变）**：直接加载 `url`；**任何非 200**（404 / 502 / 断网 / 解码失败）→ 该行回退到
+首字母 monogram，**每行每屏只尝试一次，不要循环重试**。可以依赖 HTTP 缓存（`ETag` + `max-age`），
+不需要自建缓存。
+
+### 2c. 后台：手工图标（决策 0161 §3，仅 loop-admin）
+
+`/admin/v1/market/logos/{chainId}/{address}`（`address` = `0x`+40 hex 或 `native`，大小写均可）；
+签名会话 cookie，无 Privy Bearer、无 `X-Loop-Contract-Version`。`Idempotency-Key` 可选（小写 UUIDv4），不去重。
+
+| 方法     | 权限            | 请求                                                                      | 响应                                                                                                                                                                                                         |
+| -------- | --------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `console.read`  | —                                                                         | `200 {logo}`；无缓存行 `404 NOT_FOUND`（`TOKEN_LOGO_NOT_CACHED`）                                                                                                                                            |
+| `POST`   | `console.write` | `multipart/form-data`，一个 part `file`：PNG / JPEG / WebP / GIF，≤ 2 MiB | `200 {logo, audit}`；`422 VALIDATION_FAILED`（`reasonCode = TOKEN_LOGO_UPLOAD_INVALID`、`field = file`、`logoReasonCode = TOKEN_LOGO_TYPE_UNSUPPORTED \| TOKEN_LOGO_TOO_LARGE \| TOKEN_LOGO_DECODE_FAILED`） |
+| `DELETE` | `console.write` | —                                                                         | `200 {audit}`；没有手工图 `404 NOT_FOUND`（`TOKEN_LOGO_OVERRIDE_NOT_FOUND`）                                                                                                                                 |
+
+共通：未登录 401 `ADMIN_SESSION_REQUIRED`；无权限 403 `PERMISSION_DENIED`；链 / 地址不合法或非 multipart 400 `INVALID_REQUEST`；
+无数据库 503 `CAPABILITY_UNAVAILABLE`（`TOKEN_LOGO_CACHE_UNAVAILABLE`）。
+
+```json
+{
+  "logo": {
+    "chainId": "eip155:56",
+    "address": "0x25d887ce7a35172c62febfd67a1856f20faebb00",
+    "status": "found",
+    "source": "manual",
+    "contentType": "image/webp",
+    "etag": "\"q1Yz…\"",
+    "byteLength": 3712,
+    "fetchedAt": "2026-10-19T08:00:00.000Z",
+    "expiresAt": null,
+    "url": "https://api-staging.quant-dinger.cc/v2/market/logos/eip155:56/0x25d887ce7a35172c62febfd67a1856f20faebb00.png"
+  },
+  "audit": { "auditId": "6f1c…", "seq": 812, "at": "2026-10-19T08:00:00.000Z" }
+}
+```
+
+`source`：`dexscreener` / `trustwallet` / `manual` / `null`（missing 行）；`status`：`found` / `missing` / `oversize`；
+手工图 `expiresAt = null`，永不过期、预热与按需刷新都不会覆盖，直到 `DELETE`。
 
 ## 3. `GET /v2/market/overview` → `market` 页
 

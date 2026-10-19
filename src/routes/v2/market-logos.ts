@@ -8,9 +8,9 @@ import {
   type TokenLogoProxyService,
 } from "../../features/market/token-logo-proxy.js";
 import {
-  tokenLogoProxyChainIds,
   tokenLogoProxyNativeFile,
   tokenLogoProxyPathPrefix,
+  tokenLogoProxyReadChainIds,
 } from "../../features/market/token-logo.js";
 import { tokenLogoContentTypes } from "../../database/token-logo-cache-repository.js";
 
@@ -24,6 +24,11 @@ import { tokenLogoContentTypes } from "../../database/token-logo-cache-repositor
  * picture of a public token contract — and only its two path segments are
  * input: a chain from the fixed list and `0x` + 40 hex (or `native`). The
  * upstream URL is never taken from the request.
+ *
+ * Decision 0161: the bytes are the stored 128 x 128 WebP whatever the
+ * suffix; `.png` stays the published name (shipped clients match it) and
+ * `.webp` names the same resource. Ethereum and Base are readable too; only
+ * BSC is published in `logo.url`. No `302` any more.
  */
 
 /** Browsers and CDNs may keep a picture for a day and revalidate for a week. */
@@ -33,7 +38,8 @@ export const tokenLogoCacheControl =
 /** A picture served from a lower origin because a higher one failed. */
 export const tokenLogoDegradedCacheControl = "public, max-age=300";
 
-const filePatternSource = `^(0x[0-9a-fA-F]{40}|${tokenLogoProxyNativeFile.replace(".png", "")})\\.png$`;
+const nativeStem = tokenLogoProxyNativeFile.replace(".png", "");
+const filePatternSource = `^(0x[0-9a-fA-F]{40}|${nativeStem})\\.(png|webp)$`;
 const filePattern = new RegExp(filePatternSource);
 
 const paramsSchema = {
@@ -43,14 +49,15 @@ const paramsSchema = {
   properties: {
     chainId: {
       type: "string",
-      enum: [...tokenLogoProxyChainIds],
-      description: "CAIP-2 chain. Only BSC mainnet is served.",
+      enum: [...tokenLogoProxyReadChainIds],
+      description:
+        "CAIP-2 chain: BSC mainnet (the only chain published in `logo.url`), Ethereum mainnet, or Base.",
     },
     file: {
       type: "string",
       pattern: filePatternSource,
       description:
-        "`<0x + 40 hex token address>.png` (any case; published URLs are lowercase) or `native.png` for the chain's native coin.",
+        "`<0x + 40 hex token address>.png` (any case; published URLs are lowercase) or `native.png` for the chain's native coin. `.webp` is the same resource; the bytes are WebP under either name.",
     },
   },
 } as const;
@@ -76,7 +83,7 @@ export function registerV2MarketLogoRoute(
         operationId: "getV2MarketTokenLogo",
         summary: "Get a token logo through the LOOP logo proxy",
         description:
-          "Public image resource (Decision 0089); no authentication and no LOOP headers. The server picks the picture by the Decision 0072 origin rules (the DexScreener image of the token's own base pair when the pair fact has one, else the Trust Wallet assets-repository file), fetches it once with a 5 s timeout, and keeps it for 7 days. 200: PNG/JPEG/GIF/WebP bytes (<= 256 KiB) with a strong `ETag`; `If-None-Match` answers 304. 302: the picture is larger than 256 KiB and is not proxied; `Location` is the allow-listed upstream. 404 `NOT_FOUND`: no origin has a picture (remembered for 24 h). 502 `PROVIDER_UNREACHABLE`: the upstream timed out or failed; nothing is cached. On any non-200 the client draws its monogram and does not retry in a loop.",
+          "Public image resource (Decisions 0089, 0161); no authentication and no LOOP headers. The server picks the picture by the Decision 0072 origin rules (on BSC the DexScreener image of the token's own base pair when the pair fact has one, else the Trust Wallet assets-repository file of the chain), fetches it once with a 5 s timeout, re-encodes it into a 128 x 128 WebP (transparency kept), and keeps it for 7 days; the worker pre-warms the mainstream, registry, watchlisted and hot BSC tokens. An operator picture (`source = manual`) is served until cleared. 200: `image/webp` bytes (rows stored before Decision 0161 may still answer PNG/JPEG/GIF until their refresh) with a strong `ETag`; `If-None-Match` answers 304. 404 `NOT_FOUND`: no origin has a picture, the upstream picture is larger than 4 MiB or cannot be decoded (remembered for 24 h). 502 `PROVIDER_UNREACHABLE`: the upstream timed out or failed and nothing is stored. On any non-200 the client draws its monogram and does not retry in a loop.",
         tags: ["market"],
         security: [],
         params: paramsSchema,
@@ -91,11 +98,6 @@ export function registerV2MarketLogoRoute(
                 { schema: imageBodySchema },
               ]),
             ),
-          },
-          302: {
-            description:
-              "The picture exceeds 256 KiB; `Location` is its allow-listed upstream URL.",
-            type: "null",
           },
           304: {
             description: "`If-None-Match` matched the current `ETag`.",
@@ -116,10 +118,7 @@ export function registerV2MarketLogoRoute(
         throw V2ApiError.invalidRequest();
       }
       const stem = match[1] ?? "";
-      const address =
-        stem === tokenLogoProxyNativeFile.replace(".png", "")
-          ? null
-          : stem.toLowerCase();
+      const address = stem === nativeStem ? null : stem.toLowerCase();
       const result = await service.resolve({
         chainId: params.chainId,
         address,
@@ -142,10 +141,6 @@ export function registerV2MarketLogoRoute(
           reply.header("content-type", result.contentType);
           return reply.code(200).send(result.bytes);
         }
-        case "redirect":
-          reply.header("cache-control", tokenLogoCacheControl);
-          reply.header("location", result.location);
-          return reply.code(302).send();
         case "missing":
           throw V2ApiError.notFound();
         case "unreachable":

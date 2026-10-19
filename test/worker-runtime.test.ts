@@ -39,6 +39,8 @@ import type {
 import type { BscPoolIndexerWorker } from "../src/bsc-pool-indexer-worker.js";
 import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-client.js";
 import type { MarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
+import type { TokenLogoCacheRepository } from "../src/database/token-logo-cache-repository.js";
+import type { CreateTokenLogoPrewarmWorkerOptions } from "../src/token-logo-prewarm-worker.js";
 import type { WatchlistV2Repository } from "../src/database/watchlist-v2-repository.js";
 import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-sparkline-warm-worker.js";
 import type { CreateVoiceRoomReaperWorkerOptions } from "../src/voice-room-reaper-worker.js";
@@ -975,6 +977,60 @@ describe("market sparkline warm lane composition (Decision 0074)", () => {
       "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled",
     );
     expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("runs the token logo pre-warm lane with the logo cache, and leaves it out when switched off or without the cache (Decision 0161)", async () => {
+    const events: string[] = [];
+    const { database } = laneDatabase(events);
+    const tokenLogoCache = {
+      get: vi.fn(),
+      put: vi.fn(),
+    } as unknown as TokenLogoCacheRepository;
+    const createTokenLogoPrewarmWorker = vi.fn(
+      (options: CreateTokenLogoPrewarmWorkerOptions) => {
+        expect(options.intervalMs).toBe(21_600_000);
+        return {
+          workerId,
+          lane: "token_logo_prewarm" as const,
+          runOnce: vi.fn(),
+          run: () => {
+            events.push("run-token-logo-prewarm");
+            return Promise.resolve();
+          },
+        };
+      },
+    );
+    await runReconciliationWorker({
+      config: laneConfig(),
+      logger: fakeLogger(),
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({ ...database, tokenLogoCache }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createMarketSparklineWarmWorker: vi.fn(),
+      createTokenLogoPrewarmWorker,
+    });
+    expect(createTokenLogoPrewarmWorker).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["ping", "run-token-logo-prewarm", "close"]);
+
+    for (const [config, db] of [
+      [
+        laneConfig({ TOKEN_LOGO_PREWARM_ENABLED: "false" }),
+        { ...database, tokenLogoCache },
+      ],
+      [laneConfig(), database],
+    ] as const) {
+      const off = vi.fn();
+      await runReconciliationWorker({
+        config,
+        logger: fakeLogger(),
+        signalSource: fakeSignalSource(),
+        createDatabase: () => db,
+        createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+        createMarketSparklineWarmWorker: vi.fn(),
+        createTokenLogoPrewarmWorker: off,
+      });
+      expect(off).not.toHaveBeenCalled();
+    }
   });
 
   it("does not construct the lane when its switch is off", async () => {

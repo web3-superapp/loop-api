@@ -552,6 +552,27 @@ describe("GeckoTerminal adapter", () => {
   const weth = "0x2170ed0880ac9a755fd29b2688956bd959f933f8";
   const tokenBody = `{"data":{"id":"bsc_${weth}","type":"token","attributes":{"address":"0x2170Ed0880ac9A755fd29B2688956BD959F933F8","name":"Ethereum Token","symbol":"ETH","decimals":18,"image_url":"https://x.example/eth.png","coingecko_coin_id":"binance-peg-weth","total_supply":"504999999958700045164475.0","price_usd":"2575.1402462078","fdv_usd":"1300404347.01321","total_reserve_in_usd":"29281935.667098612665647265409115608503254172423118557289924121920059313257176624834394510957662128478898061490845044","volume_usd":{"h24":"25016115.5564862"},"market_cap_usd":"1300514252.30807"},"relationships":{"top_pools":{"data":[{"id":"bsc_0xd0e226f674bbf064f54ab47f42473ff80db98cba","type":"pool"},{"id":"bsc_0x${"ab".repeat(32)}","type":"pool"}]}}},"included":[{"id":"bsc_0xd0e226f674bbf064f54ab47f42473ff80db98cba","type":"pool","attributes":{"address":"0xd0e226f674bbf064f54ab47f42473ff80db98cba","name":"ETH / WBNB 0.05%","pool_created_at":"2025-11-14T06:46:14Z","reserve_in_usd":"16714230.2158","price_change_percentage":{"h24":"-2.52"},"volume_usd":{"h24":"8336698.90737144"},"transactions":{"h24":{"buys":1822,"sells":2358}}},"relationships":{"base_token":{"data":{"id":"bsc_${weth}","type":"token"}},"quote_token":{"data":{"id":"bsc_${wbnb}","type":"token"}},"dex":{"data":{"id":"pancakeswap-v3-bsc","type":"dex"}}}},{"id":"bsc_0x${"ab".repeat(32)}","type":"pool","attributes":{"address":"0x${"ab".repeat(32)}","name":"ETH / USDT","reserve_in_usd":"1"},"relationships":{"dex":{"data":{"id":"uniswap-v4-bsc","type":"dex"}}}}]}`;
 
+  it("reads one page of BSC pools ranked by 24 h volume for the logo pre-warm hot list (Decision 0161)", async () => {
+    const body = `{"data":[{"id":"bsc_0x172fcd41e0913e95784454622d1c3724f546f849","type":"pool","attributes":{"address":"0x172fcD41E0913e95784454622d1c3724f546f849","name":"WBNB / USDT 0.01%","reserve_in_usd":"15408348.1","volume_usd":{"h24":"812345678.9"}},"relationships":{"base_token":{"data":{"id":"bsc_${wbnb}","type":"token"}},"quote_token":{"data":{"id":"bsc_${usdt}","type":"token"}},"dex":{"data":{"id":"pancakeswap-v3-bsc","type":"dex"}}}}]}`;
+    const stub = fetchStub(() => ({ body }));
+    const adapter = createGeckoterminalAdapter({ fetch: stub.fetch });
+    const observation = await adapter.readTopPools(3);
+    expect(stub.calls).toEqual([
+      "https://api.geckoterminal.com/api/v2/networks/bsc/pools?page=3&sort=h24_volume_usd_desc",
+    ]);
+    expect(observation.value.pools).toEqual([
+      expect.objectContaining({
+        baseTokenAddress: wbnb,
+        quoteTokenAddress: usdt,
+        volumeH24Usd: "812345678.9",
+      }),
+    ]);
+    // The free tier refuses pages above 10; no request is made for them.
+    await expect(adapter.readTopPools(11)).rejects.toThrow(RangeError);
+    await expect(adapter.readTopPools(0)).rejects.toThrow(RangeError);
+    expect(stub.calls).toHaveLength(1);
+  });
+
   it("normalises a token lookup with identity, token-level facts, and address-keyed top pools (Decision 0058)", () => {
     const snapshot = normalizeGeckoterminalToken(
       parseJsonLossless(tokenBody),

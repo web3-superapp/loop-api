@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { logoPng } from "./token-logo-fakes.js";
 import { loadConfig } from "../src/config.js";
 import { createUnavailableAgentAuthorizationRepository } from "../src/database/agent-authorization-repository.js";
 import { createUnavailableAlertRepository } from "../src/database/alert-repository.js";
@@ -1150,10 +1151,7 @@ describe("LOOP API V2 market module", () => {
     });
 
     it("serves the published URL through the proxy from the DexScreener image cached with the pair fact", async () => {
-      const picture = Buffer.alloc(96, 7);
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(
-        picture,
-      );
+      const picture = await logoPng();
       const upstream: string[] = [];
       const tokenLogoFetch = ((input: string | URL | Request) => {
         const url =
@@ -1187,8 +1185,9 @@ describe("LOOP API V2 market module", () => {
         url: new URL(logo.url).pathname,
       });
       expect(image.statusCode).toBe(200);
-      expect(image.headers["content-type"]).toBe("image/png");
-      expect(image.rawPayload.equals(picture)).toBe(true);
+      // Decision 0161: re-encoded into the 128 x 128 WebP.
+      expect(image.headers["content-type"]).toBe("image/webp");
+      expect(image.rawPayload.subarray(8, 12).toString("latin1")).toBe("WEBP");
       expect(upstream).toEqual([dexscreenerImage]);
     });
 

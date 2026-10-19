@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { MarketFactCacheRepository } from "../../database/market-fact-cache-repository.js";
 import type {
+  TokenLogoCacheAutomaticRecord,
   TokenLogoCacheRecord,
   TokenLogoCacheRepository,
   TokenLogoContentType,
@@ -13,35 +14,49 @@ import {
   tokenPairsBatchSubjectPrefix,
 } from "./market-fact-service.js";
 import {
+  normalizeTokenLogo,
+  tokenLogoNormalizedContentType,
+  type TokenLogoNormalizer,
+} from "./token-logo-normalize.js";
+import {
   acceptTokenLogoUrl,
   providerImageUrlFromPairs,
-  trustWalletLogoUrl,
+  trustWalletUpstreamLogoUrl,
   type TokenLogoSource,
 } from "./token-logo.js";
+import { bscChainId } from "../chain/chain-contract.js";
 
 /**
- * The token logo proxy (Decision 0089).
+ * The token logo proxy (Decisions 0089, 0161).
  *
  * Mainland-China clients cannot reach raw.githubusercontent.com (tester
  * network check, 2026-09-28), so every logo URL a client is given points at
  * this API. The proxy picks the picture by the Decision 0072 origin rules —
- * the DexScreener image already cached with the token's pair fact first,
- * then the Trust Wallet rule URL — fetches it once, and keeps it in
+ * the DexScreener image already cached with the token's pair fact first
+ * (BSC only), then the Trust Wallet rule URL of the chain — fetches it once,
+ * re-encodes it into a 128 x 128 WebP (Decision 0161 §1) and keeps it in
  * `token_logo_cache`:
  *
- * | upstream answer                          | row                         | route        |
- * | ---------------------------------------- | --------------------------- | ------------ |
- * | a raster image of at most 256 KiB        | `found`, 7 days             | 200 + ETag   |
- * | larger than 256 KiB                      | `oversize`, 24 h, no bytes  | 302 upstream |
- * | every origin "no such file" (4xx)        | `missing`, 24 h             | 404          |
- * | timeout / network / 5xx / 408 / 429      | nothing written             | 502          |
+ * | upstream answer                            | row                        | route |
+ * | ------------------------------------------ | -------------------------- | ----- |
+ * | a raster image (<= 4 MiB) that decodes     | `found` (WebP), 7 days     | 200   |
+ * | larger than 4 MiB                          | `oversize`, 24 h, no bytes | 404   |
+ * | every origin "no such file" / undecodable  | `missing`, 24 h            | 404   |
+ * | timeout / network / 5xx / 408 / 429        | nothing written            | 502   |
  *
  * A `found` row past its 7 days is refetched; if that refetch fails the old
  * bytes are still served. A row is also refetched early when the
  * highest-priority origin changed (a Provider image appeared after the Trust
- * Wallet file was cached). A picture served from a lower origin because a
- * higher one failed is served but not stored, and the CDN may keep it for
- * five minutes only.
+ * Wallet file was cached), and when it predates normalisation (any type but
+ * WebP). A picture served from a lower origin because a higher one failed is
+ * served but not stored, and the CDN may keep it for five minutes only.
+ *
+ * Decision 0161 §3: a `manual` row (an operator's upload) is always served
+ * and never refetched or overwritten by the proxy.
+ *
+ * `warm` is the pre-warm entry (Decision 0161 §2): the same fetch and store
+ * rules, refreshing a row a day before it expires, reporting what it did
+ * instead of returning the bytes.
  *
  * Upstream requests: only allow-listed hosts (0072 gate), redirects followed
  * by hand and re-gated at every hop (at most three), 5 s per origin, the
@@ -50,11 +65,14 @@ import {
  * most eight resolutions fetching at once.
  */
 
-export const tokenLogoMaximumBytes = 256 * 1024;
+/** Largest upstream body read; a larger picture is not decoded (0161 §1). */
+export const tokenLogoMaximumUpstreamBytes = 4 * 1024 * 1024;
 export const tokenLogoUpstreamTimeoutMs = 5_000;
 export const tokenLogoFoundTtlMs = 7 * 24 * 60 * 60 * 1_000;
 export const tokenLogoMissingTtlMs = 24 * 60 * 60 * 1_000;
 export const tokenLogoOversizeTtlMs = 24 * 60 * 60 * 1_000;
+/** Pre-warm refreshes a row this long before it expires (0161 §2). */
+export const tokenLogoWarmRefreshAheadMs = 24 * 60 * 60 * 1_000;
 export const tokenLogoUpstreamConcurrency = 8;
 export const tokenLogoMaximumRedirects = 3;
 
@@ -67,9 +85,27 @@ export type TokenLogoProxyResult =
       /** `false` when a higher-priority origin failed: short CDN lifetime. */
       durable: boolean;
     }>
-  | Readonly<{ kind: "redirect"; location: string }>
   | Readonly<{ kind: "missing" }>
   | Readonly<{ kind: "unreachable" }>;
+
+/**
+ * What one pre-warm of a token did (Decision 0161 §2):
+ * `fresh` nothing to do; `manual` an operator picture, never refetched;
+ * `stored` a picture fetched and stored; `missing` no origin has one (24 h
+ * marker); `kept` the refetch failed and the stored picture stays;
+ * `failed` the refetch failed and nothing is stored; `degraded` only a
+ * lower origin answered (served on demand, not stored);
+ * `unsupported` the chain has no origin.
+ */
+export type TokenLogoWarmOutcome =
+  | "fresh"
+  | "manual"
+  | "stored"
+  | "missing"
+  | "kept"
+  | "failed"
+  | "degraded"
+  | "unsupported";
 
 export interface TokenLogoProxyService {
   /** `address` is a lowercase `0x` address, or `null` for the native coin. */
@@ -77,6 +113,16 @@ export interface TokenLogoProxyService {
     readonly chainId: string;
     readonly address: string | null;
   }): Promise<TokenLogoProxyResult>;
+  /**
+   * Fetches and stores the token's picture when its row is absent, due
+   * within a day, stale by origin or format; `state` is the row already
+   * read by the caller (bytes not needed), `undefined` to read it here.
+   */
+  warm(input: {
+    readonly chainId: string;
+    readonly address: string | null;
+    readonly state?: TokenLogoCacheRecord | null;
+  }): Promise<TokenLogoWarmOutcome>;
 }
 
 export interface TokenLogoProxyLogger {
@@ -91,6 +137,8 @@ export interface CreateTokenLogoProxyServiceInput {
   readonly fetch?: typeof fetch;
   readonly now?: () => Date;
   readonly upstreamTimeoutMs?: number;
+  /** Test seam; defaults to the sharp 128 x 128 WebP normaliser. */
+  readonly normalize?: TokenLogoNormalizer;
   readonly logger?: TokenLogoProxyLogger;
 }
 
@@ -103,7 +151,6 @@ type UpstreamOutcome =
   | Readonly<{
       kind: "image";
       bytes: Buffer;
-      contentType: TokenLogoContentType;
       url: string;
     }>
   | Readonly<{ kind: "oversize"; url: string }>
@@ -114,7 +161,6 @@ type OriginsOutcome =
   | Readonly<{
       kind: "image";
       bytes: Buffer;
-      contentType: TokenLogoContentType;
       url: string;
       source: TokenLogoSource;
       degraded: boolean;
@@ -253,8 +299,9 @@ export function createTokenLogoProxyService(
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const now = input.now ?? ((): Date => new Date());
   const timeoutMs = input.upstreamTimeoutMs ?? tokenLogoUpstreamTimeoutMs;
+  const normalize = input.normalize ?? normalizeTokenLogo;
   const limit = createLimiter(tokenLogoUpstreamConcurrency);
-  const inFlight = new Map<string, Promise<TokenLogoProxyResult>>();
+  const inFlight = new Map<string, Promise<unknown>>();
 
   function warn(fields: Record<string, unknown>, message: string): void {
     input.logger?.warn(fields, message);
@@ -306,13 +353,15 @@ export function createTokenLogoProxyService(
     address: string | null,
   ): Promise<readonly Candidate[]> {
     const list: Candidate[] = [];
-    if (address !== null) {
+    // The pair facts are DexScreener BSC facts keyed by address alone: they
+    // describe nothing on another chain.
+    if (address !== null && chainId === bscChainId) {
       const provider = await providerImageUrl(address);
       if (provider !== null) {
         list.push({ source: "dexscreener", url: provider });
       }
     }
-    const rule = trustWalletLogoUrl(chainId, address);
+    const rule = trustWalletUpstreamLogoUrl(chainId, address);
     const gated = acceptTokenLogoUrl(rule);
     if (gated !== null) {
       list.push({ source: "trustwallet", url: gated });
@@ -353,19 +402,25 @@ export function createTokenLogoProxyService(
         }
         if (response.status === 200) {
           const declared = Number(response.headers.get("content-length"));
-          if (Number.isFinite(declared) && declared > tokenLogoMaximumBytes) {
+          if (
+            Number.isFinite(declared) &&
+            declared > tokenLogoMaximumUpstreamBytes
+          ) {
             await discard(response);
             return { kind: "oversize", url: current };
           }
-          const bytes = await readLimited(response, tokenLogoMaximumBytes);
+          const bytes = await readLimited(
+            response,
+            tokenLogoMaximumUpstreamBytes,
+          );
           if (bytes === null) {
             return { kind: "oversize", url: current };
           }
-          const contentType = sniffTokenLogoContentType(bytes);
-          if (contentType === null) {
+          // Only a sniffed raster type reaches the decoder (never SVG).
+          if (sniffTokenLogoContentType(bytes) === null) {
             return { kind: "missing" };
           }
-          return { kind: "image", bytes, contentType, url: current };
+          return { kind: "image", bytes, url: current };
         }
         await discard(response);
         if (
@@ -392,7 +447,28 @@ export function createTokenLogoProxyService(
     let degraded = false;
     for (const candidate of list) {
       const outcome = await fetchOne(candidate.url);
-      if (outcome.kind === "image" || outcome.kind === "oversize") {
+      if (outcome.kind === "image") {
+        const normalized = await normalize(outcome.bytes);
+        if (normalized === null) {
+          // Undecodable bytes are "no picture" at this origin.
+          warn(
+            {
+              source: candidate.source,
+              reasonCode: "TOKEN_LOGO_DECODE_FAILED",
+            },
+            "Token logo upstream picture could not be decoded",
+          );
+          continue;
+        }
+        return {
+          kind: "image",
+          bytes: normalized,
+          url: outcome.url,
+          source: candidate.source,
+          degraded,
+        };
+      }
+      if (outcome.kind === "oversize") {
         return { ...outcome, source: candidate.source, degraded };
       }
       if (outcome.kind === "failed") {
@@ -409,7 +485,7 @@ export function createTokenLogoProxyService(
     return degraded ? { kind: "failed" } : { kind: "missing" };
   }
 
-  async function store(record: TokenLogoCacheRecord): Promise<void> {
+  async function store(record: TokenLogoCacheAutomaticRecord): Promise<void> {
     if (input.cache === null) {
       return;
     }
@@ -420,6 +496,24 @@ export function createTokenLogoProxyService(
         { reasonCode: "TOKEN_LOGO_CACHE_WRITE_FAILED" },
         "Token logo cache write failed",
       );
+    }
+  }
+
+  async function readRow(
+    chainId: string,
+    key: string,
+  ): Promise<TokenLogoCacheRecord | null> {
+    if (input.cache === null) {
+      return null;
+    }
+    try {
+      return await input.cache.get(chainId, key);
+    } catch {
+      warn(
+        { reasonCode: "TOKEN_LOGO_CACHE_READ_FAILED" },
+        "Token logo cache read failed",
+      );
+      return null;
     }
   }
 
@@ -438,51 +532,63 @@ export function createTokenLogoProxyService(
         durable: true,
       };
     }
-    if (row.status === "oversize" && row.sourceUrl !== null) {
-      const location = acceptTokenLogoUrl(row.sourceUrl);
-      if (location !== null) {
-        return { kind: "redirect", location };
-      }
-    }
+    // `missing`, and `oversize` (no 302 since Decision 0161).
     return { kind: "missing" };
   }
 
-  async function resolveUncached(
+  function isManual(row: TokenLogoCacheRecord | null): boolean {
+    return row !== null && row.source === "manual" && row.status === "found";
+  }
+
+  /** Whether `row` may be served without asking the upstreams. */
+  function isCurrent(
+    row: TokenLogoCacheRecord | null,
+    top: Candidate,
+    nowMs: number,
+    aheadMs: number,
+  ): boolean {
+    if (row === null || row.candidateUrl !== top.url) {
+      return false;
+    }
+    // A picture stored before normalisation is refetched (Decision 0161).
+    if (
+      row.status === "found" &&
+      row.contentType !== tokenLogoNormalizedContentType
+    ) {
+      return false;
+    }
+    return Date.parse(row.expiresAt) - aheadMs > nowMs;
+  }
+
+  type Refreshed = Readonly<{
+    result: TokenLogoProxyResult;
+    warm: TokenLogoWarmOutcome;
+  }>;
+
+  async function refresh(
     chainId: string,
-    address: string | null,
-  ): Promise<TokenLogoProxyResult> {
-    const key = address ?? "native";
-    const list = await candidates(chainId, address);
+    key: string,
+    list: readonly Candidate[],
+    row: TokenLogoCacheRecord | null,
+  ): Promise<Refreshed> {
     const top = list[0];
     if (top === undefined) {
-      return { kind: "missing" };
-    }
-    let row: TokenLogoCacheRecord | null = null;
-    if (input.cache !== null) {
-      try {
-        row = await input.cache.get(chainId, key);
-      } catch {
-        warn(
-          { reasonCode: "TOKEN_LOGO_CACHE_READ_FAILED" },
-          "Token logo cache read failed",
-        );
-      }
-    }
-    const nowMs = now().getTime();
-    if (
-      row !== null &&
-      row.candidateUrl === top.url &&
-      Date.parse(row.expiresAt) > nowMs
-    ) {
-      return fromRow(row);
+      return { result: { kind: "missing" }, warm: "unsupported" };
     }
     const outcome = await limit(() => fetchOrigins(list));
+    const nowMs = now().getTime();
     const fetchedAt = new Date(nowMs).toISOString();
     const expires = (ttl: number) => new Date(nowMs + ttl).toISOString();
     switch (outcome.kind) {
       case "failed":
         // Never cached; an older picture is better than none.
-        return row?.status === "found" ? fromRow(row) : { kind: "unreachable" };
+        if (row?.status === "found" && row.bytes !== null) {
+          return { result: fromRow(row), warm: "kept" };
+        }
+        return {
+          result: { kind: "unreachable" },
+          warm: row?.status === "found" ? "kept" : "failed",
+        };
       case "missing":
         await store({
           chainId,
@@ -497,7 +603,7 @@ export function createTokenLogoProxyService(
           fetchedAt,
           expiresAt: expires(tokenLogoMissingTtlMs),
         });
-        return { kind: "missing" };
+        return { result: { kind: "missing" }, warm: "missing" };
       case "oversize":
         if (!outcome.degraded) {
           await store({
@@ -514,7 +620,17 @@ export function createTokenLogoProxyService(
             expiresAt: expires(tokenLogoOversizeTtlMs),
           });
         }
-        return { kind: "redirect", location: outcome.url };
+        warn(
+          {
+            source: outcome.source,
+            reasonCode: "TOKEN_LOGO_UPSTREAM_TOO_LARGE",
+          },
+          "Token logo upstream picture exceeds the read limit",
+        );
+        return {
+          result: { kind: "missing" },
+          warm: outcome.degraded ? "degraded" : "missing",
+        };
       case "image": {
         const etag = tokenLogoEtag(outcome.bytes);
         if (!outcome.degraded) {
@@ -523,7 +639,7 @@ export function createTokenLogoProxyService(
             address: key,
             status: "found",
             bytes: outcome.bytes,
-            contentType: outcome.contentType,
+            contentType: tokenLogoNormalizedContentType,
             etag,
             source: outcome.source,
             sourceUrl: outcome.url,
@@ -533,14 +649,74 @@ export function createTokenLogoProxyService(
           });
         }
         return {
-          kind: "image",
-          bytes: outcome.bytes,
-          contentType: outcome.contentType,
-          etag,
-          durable: !outcome.degraded,
+          result: {
+            kind: "image",
+            bytes: outcome.bytes,
+            contentType: tokenLogoNormalizedContentType,
+            etag,
+            durable: !outcome.degraded,
+          },
+          warm: outcome.degraded ? "degraded" : "stored",
         };
       }
     }
+  }
+
+  async function resolveUncached(
+    chainId: string,
+    address: string | null,
+  ): Promise<TokenLogoProxyResult> {
+    const key = address ?? "native";
+    const row = await readRow(chainId, key);
+    if (isManual(row) && row !== null) {
+      return fromRow(row);
+    }
+    const list = await candidates(chainId, address);
+    const top = list[0];
+    if (top === undefined) {
+      return { kind: "missing" };
+    }
+    if (isCurrent(row, top, now().getTime(), 0) && row !== null) {
+      return fromRow(row);
+    }
+    return (await refresh(chainId, key, list, row)).result;
+  }
+
+  async function warmUncached(
+    chainId: string,
+    address: string | null,
+    state: TokenLogoCacheRecord | null | undefined,
+  ): Promise<TokenLogoWarmOutcome> {
+    const key = address ?? "native";
+    const known = state === undefined ? await readRow(chainId, key) : state;
+    if (isManual(known)) {
+      return "manual";
+    }
+    const list = await candidates(chainId, address);
+    const top = list[0];
+    if (top === undefined) {
+      return "unsupported";
+    }
+    if (isCurrent(known, top, now().getTime(), tokenLogoWarmRefreshAheadMs)) {
+      return "fresh";
+    }
+    // Due: the bytes of the stored row are needed only to keep serving them
+    // when the refetch fails, which `refresh` reports as `kept` either way.
+    return (await refresh(chainId, key, list, known)).warm;
+  }
+
+  function shared<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const pending = inFlight.get(key);
+    if (pending !== undefined) {
+      return pending as Promise<T>;
+    }
+    const tracked = task().finally(() => {
+      if (inFlight.get(key) === tracked) {
+        inFlight.delete(key);
+      }
+    });
+    inFlight.set(key, tracked);
+    return tracked;
   }
 
   return Object.freeze({
@@ -551,18 +727,22 @@ export function createTokenLogoProxyService(
       readonly chainId: string;
       readonly address: string | null;
     }): Promise<TokenLogoProxyResult> {
-      const key = `${chainId}/${address ?? "native"}`;
-      const pending = inFlight.get(key);
-      if (pending !== undefined) {
-        return pending;
-      }
-      const tracked = resolveUncached(chainId, address).finally(() => {
-        if (inFlight.get(key) === tracked) {
-          inFlight.delete(key);
-        }
-      });
-      inFlight.set(key, tracked);
-      return tracked;
+      return shared(`resolve:${chainId}/${address ?? "native"}`, () =>
+        resolveUncached(chainId, address),
+      );
+    },
+    warm({
+      chainId,
+      address,
+      state,
+    }: {
+      readonly chainId: string;
+      readonly address: string | null;
+      readonly state?: TokenLogoCacheRecord | null;
+    }): Promise<TokenLogoWarmOutcome> {
+      return shared(`warm:${chainId}/${address ?? "native"}`, () =>
+        warmUncached(chainId, address, state),
+      );
     },
   });
 }

@@ -54,9 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe(
-      "000091_launch2_pool_user_trades_buyback_tx",
-    );
+    expect(latestMigrationName).toBe("000092_token_logo_normalized_manual");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

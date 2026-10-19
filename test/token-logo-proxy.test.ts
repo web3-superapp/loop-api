@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
 
+import type { TokenLogoCacheRecord } from "../src/database/token-logo-cache-repository.js";
 import {
   createTokenLogoProxyService,
   ifNoneMatchSatisfied,
   sniffTokenLogoContentType,
   tokenLogoEtag,
-  tokenLogoMaximumBytes,
+  tokenLogoMaximumUpstreamBytes,
   tokenLogoUpstreamConcurrency,
 } from "../src/features/market/token-logo-proxy.js";
 import {
   dexscreenerWbnb,
+  fakeNormalize,
   memoryLogoCache,
+  normalized,
   pairFactsWithImage,
   png,
   trustWalletNative,
   trustWalletWbnb,
   upstreamFetch,
   wbnb,
+  wbnbChecksum,
 } from "./token-logo-fakes.js";
 
 /**
@@ -40,6 +44,7 @@ function service(options: {
     fetch: options.fetch,
     now: options.now ?? (() => start),
     upstreamTimeoutMs: options.upstreamTimeoutMs ?? 50,
+    normalize: fakeNormalize,
   });
 }
 
@@ -53,11 +58,12 @@ describe("token logo proxy service (Decision 0089)", () => {
     const proxy = service({ fetch, cache });
 
     const first = await proxy.resolve({ chainId, address: wbnb });
+    const stored = normalized(bytes);
     expect(first).toEqual({
       kind: "image",
-      bytes,
-      contentType: "image/png",
-      etag: tokenLogoEtag(bytes),
+      bytes: stored,
+      contentType: "image/webp",
+      etag: tokenLogoEtag(stored),
       durable: true,
     });
     expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
@@ -65,13 +71,16 @@ describe("token logo proxy service (Decision 0089)", () => {
       source: "trustwallet",
       sourceUrl: trustWalletWbnb,
       candidateUrl: trustWalletWbnb,
-      contentType: "image/png",
+      contentType: "image/webp",
       fetchedAt: start.toISOString(),
       expiresAt: "2026-10-05T08:00:00.000Z",
     });
 
     const second = await proxy.resolve({ chainId, address: wbnb });
-    expect(second).toMatchObject({ kind: "image", etag: tokenLogoEtag(bytes) });
+    expect(second).toMatchObject({
+      kind: "image",
+      etag: tokenLogoEtag(stored),
+    });
     expect(fetch.calls).toEqual([trustWalletWbnb]);
   });
 
@@ -88,7 +97,7 @@ describe("token logo proxy service (Decision 0089)", () => {
     });
     expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
       kind: "image",
-      bytes: provider,
+      bytes: normalized(provider),
     });
     expect(fetch.calls).toEqual([dexscreenerWbnb]);
     expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
@@ -107,7 +116,7 @@ describe("token logo proxy service (Decision 0089)", () => {
     });
     expect(await other.resolve({ chainId, address: wbnb })).toMatchObject({
       kind: "image",
-      bytes: rule,
+      bytes: normalized(rule),
       durable: true,
     });
     expect(fallback.calls).toEqual([dexscreenerWbnb, trustWalletWbnb]);
@@ -246,49 +255,199 @@ describe("token logo proxy service (Decision 0089)", () => {
     });
     expect(await later.resolve({ chainId, address: wbnb })).toMatchObject({
       kind: "image",
-      bytes,
+      bytes: normalized(bytes),
     });
   });
 
-  it("redirects a picture over 256 KiB instead of storing it, by Content-Length or by the bytes read", async () => {
-    const big = png(tokenLogoMaximumBytes + 1);
+  it("stores a large upstream picture normalised (no 302 any more), and refuses one over 4 MiB as 'no picture' remembered 24 h", async () => {
+    // Decision 0161: anything up to the read limit is decoded and stored.
+    const large = png(512 * 1024);
+    const cache = memoryLogoCache();
+    const fetch = upstreamFetch({
+      [trustWalletWbnb]: { kind: "body", body: large },
+    });
+    expect(
+      await service({ fetch, cache }).resolve({ chainId, address: wbnb }),
+    ).toMatchObject({ kind: "image", contentType: "image/webp" });
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
+      status: "found",
+      bytes: normalized(large),
+    });
+
+    const big = png(tokenLogoMaximumUpstreamBytes + 1);
     for (const headers of [
       { "content-type": "image/png" },
       {
         "content-type": "image/png",
-        "content-length": String(tokenLogoMaximumBytes + 1),
+        "content-length": String(tokenLogoMaximumUpstreamBytes + 1),
       },
     ]) {
-      const cache = memoryLogoCache();
-      const fetch = upstreamFetch({
+      const bigCache = memoryLogoCache();
+      const bigFetch = upstreamFetch({
         [trustWalletWbnb]: { kind: "body", body: big, headers },
       });
-      const proxy = service({ fetch, cache });
+      const proxy = service({ fetch: bigFetch, cache: bigCache });
       expect(await proxy.resolve({ chainId, address: wbnb })).toEqual({
-        kind: "redirect",
-        location: trustWalletWbnb,
+        kind: "missing",
       });
-      expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
+      expect(bigCache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
         status: "oversize",
         bytes: null,
         sourceUrl: trustWalletWbnb,
+        expiresAt: "2026-09-29T08:00:00.000Z",
       });
-      // The marker answers without another download for 24 h.
+      // The marker answers 404 (never a redirect) without another
+      // download for 24 h.
       expect(await proxy.resolve({ chainId, address: wbnb })).toEqual({
-        kind: "redirect",
-        location: trustWalletWbnb,
+        kind: "missing",
       });
-      expect(fetch.calls).toHaveLength(1);
+      expect(bigFetch.calls).toHaveLength(1);
     }
-    // Exactly 256 KiB is still proxied.
-    const edge = png(tokenLogoMaximumBytes);
+  });
+
+  it("treats a picture that cannot be decoded as 'no picture' at that origin and tries the next one", async () => {
+    const cache = memoryLogoCache();
+    const corrupt = Buffer.concat([png(16), Buffer.from("UNDECODABLE")]);
+    const rule = png(64, 4);
+    const fetch = upstreamFetch({
+      [dexscreenerWbnb]: { kind: "body", body: corrupt },
+      [trustWalletWbnb]: { kind: "body", body: rule },
+    });
+    const proxy = service({
+      fetch,
+      cache,
+      facts: pairFactsWithImage(dexscreenerWbnb),
+    });
+    expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
+      kind: "image",
+      bytes: normalized(rule),
+      durable: true,
+    });
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
+      source: "trustwallet",
+      candidateUrl: dexscreenerWbnb,
+    });
+
+    const alone = memoryLogoCache();
     expect(
       await service({
         fetch: upstreamFetch({
-          [trustWalletWbnb]: { kind: "body", body: edge },
+          [trustWalletWbnb]: { kind: "body", body: corrupt },
         }),
+        cache: alone,
       }).resolve({ chainId, address: wbnb }),
-    ).toMatchObject({ kind: "image" });
+    ).toEqual({ kind: "missing" });
+    expect(alone.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
+      status: "missing",
+    });
+  });
+
+  it("refetches a row stored before normalisation (not WebP) even inside its 7 days", async () => {
+    const cache = memoryLogoCache();
+    const legacy = png(32, 9);
+    cache.rows.set(`${chainId}/${wbnb}`, {
+      chainId,
+      address: wbnb,
+      status: "found",
+      bytes: legacy,
+      contentType: "image/png",
+      etag: tokenLogoEtag(legacy),
+      source: "trustwallet",
+      sourceUrl: trustWalletWbnb,
+      candidateUrl: trustWalletWbnb,
+      fetchedAt: start.toISOString(),
+      expiresAt: "2026-10-05T08:00:00.000Z",
+    });
+    const fresh = png(64, 5);
+    const fetch = upstreamFetch({
+      [trustWalletWbnb]: { kind: "body", body: fresh },
+    });
+    expect(
+      await service({ fetch, cache }).resolve({ chainId, address: wbnb }),
+    ).toMatchObject({ kind: "image", contentType: "image/webp" });
+    expect(fetch.calls).toEqual([trustWalletWbnb]);
+  });
+
+  it("serves a manual picture without asking any upstream, and neither resolve nor warm overwrites it", async () => {
+    const cache = memoryLogoCache();
+    const manual: TokenLogoCacheRecord = {
+      chainId,
+      address: wbnb,
+      status: "found",
+      bytes: Buffer.from("MANUAL"),
+      contentType: "image/webp",
+      etag: tokenLogoEtag(Buffer.from("MANUAL")),
+      source: "manual",
+      sourceUrl: null,
+      candidateUrl: null,
+      fetchedAt: start.toISOString(),
+      // Even a past expiry does not make a manual row due.
+      expiresAt: "2026-09-28T08:00:01.000Z",
+    };
+    cache.rows.set(`${chainId}/${wbnb}`, manual);
+    const fetch = upstreamFetch({
+      [dexscreenerWbnb]: { kind: "body", body: png() },
+      [trustWalletWbnb]: { kind: "body", body: png() },
+    });
+    const proxy = service({
+      fetch,
+      cache,
+      facts: pairFactsWithImage(dexscreenerWbnb),
+      now: () => new Date("2027-01-01T00:00:00.000Z"),
+    });
+    expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
+      kind: "image",
+      bytes: Buffer.from("MANUAL"),
+      durable: true,
+    });
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("manual");
+    expect(await proxy.warm({ chainId, address: wbnb, state: manual })).toBe(
+      "manual",
+    );
+    expect(fetch.calls).toEqual([]);
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toBe(manual);
+  });
+
+  it("reads Ethereum and Base from their own Trust Wallet folder and never consults the BSC pair facts there", async () => {
+    const facts = pairFactsWithImage(dexscreenerWbnb);
+    for (const [chain, folder] of [
+      ["eip155:1", "ethereum"],
+      ["eip155:8453", "base"],
+    ] as const) {
+      const url = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${folder}/assets/${wbnbChecksum}/logo.png`;
+      const native = `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${folder}/info/logo.png`;
+      const cache = memoryLogoCache();
+      const fetch = upstreamFetch({
+        [url]: { kind: "body", body: png() },
+        [native]: { kind: "body", body: png() },
+      });
+      const proxy = service({ fetch, cache, facts });
+      expect(
+        await proxy.resolve({ chainId: chain, address: wbnb }),
+      ).toMatchObject({ kind: "image" });
+      expect(
+        await proxy.resolve({ chainId: chain, address: null }),
+      ).toMatchObject({ kind: "image" });
+      expect(fetch.calls).toEqual([url, native]);
+      expect(cache.rows.has(`${chain}/${wbnb}`)).toBe(true);
+    }
+    expect(facts.getMany).not.toHaveBeenCalled();
+    // A chain without a folder has no origin at all.
+    const none = upstreamFetch({});
+    expect(
+      await service({ fetch: none }).resolve({
+        chainId: "eip155:10",
+        address: wbnb,
+      }),
+    ).toEqual({ kind: "missing" });
+    expect(
+      await service({ fetch: none }).warm({
+        chainId: "eip155:10",
+        address: wbnb,
+      }),
+    ).toBe("unsupported");
+    expect(none.calls).toEqual([]);
   });
 
   it("shares one upstream fetch between concurrent requests for the same token", async () => {
@@ -388,6 +547,91 @@ describe("token logo proxy service (Decision 0089)", () => {
     expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
       kind: "image",
     });
+  });
+});
+
+describe("token logo proxy warm (Decision 0161 §2)", () => {
+  it("stores on a miss, is fresh until a day before expiry, then refreshes", async () => {
+    const cache = memoryLogoCache();
+    let now = start;
+    const fetch = upstreamFetch({
+      [trustWalletWbnb]: { kind: "body", body: png() },
+    });
+    const proxy = service({ fetch, cache, now: () => now });
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("stored");
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("fresh");
+    // Expires 2026-10-05T08:00Z; a day ahead it is due again.
+    now = new Date("2026-10-04T07:59:00.000Z");
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("fresh");
+    now = new Date("2026-10-04T08:00:01.000Z");
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("stored");
+    expect(fetch.calls).toHaveLength(2);
+    // An on-demand request inside the last day is still served from cache.
+    expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
+      kind: "image",
+    });
+    expect(fetch.calls).toHaveLength(2);
+  });
+
+  it("keeps the stored picture when a refresh fails (state given without bytes)", async () => {
+    const cache = memoryLogoCache();
+    await service({
+      fetch: upstreamFetch({
+        [trustWalletWbnb]: { kind: "body", body: png() },
+      }),
+      cache,
+    }).warm({ chainId, address: wbnb });
+    const stored = cache.rows.get(`${chainId}/${wbnb}`);
+    const later = service({
+      fetch: upstreamFetch({
+        [trustWalletWbnb]: { kind: "status", status: 503 },
+      }),
+      cache,
+      now: () => new Date("2026-10-06T00:00:00.000Z"),
+    });
+    const states = await cache.listStates(chainId, [wbnb]);
+    expect(states.get(wbnb)?.bytes).toBeNull();
+    expect(
+      await later.warm({
+        chainId,
+        address: wbnb,
+        state: states.get(wbnb) ?? null,
+      }),
+    ).toBe("kept");
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toBe(stored);
+  });
+
+  it("reports missing, failed and degraded without storing a failure", async () => {
+    const missingCache = memoryLogoCache();
+    expect(
+      await service({ fetch: upstreamFetch({}), cache: missingCache }).warm({
+        chainId,
+        address: wbnb,
+      }),
+    ).toBe("missing");
+    expect(missingCache.rows.get(`${chainId}/${wbnb}`)?.status).toBe("missing");
+
+    const failedCache = memoryLogoCache();
+    expect(
+      await service({
+        fetch: upstreamFetch({ [trustWalletWbnb]: { kind: "error" } }),
+        cache: failedCache,
+      }).warm({ chainId, address: wbnb }),
+    ).toBe("failed");
+    expect(failedCache.put).not.toHaveBeenCalled();
+
+    const degradedCache = memoryLogoCache();
+    expect(
+      await service({
+        fetch: upstreamFetch({
+          [dexscreenerWbnb]: { kind: "status", status: 500 },
+          [trustWalletWbnb]: { kind: "body", body: png() },
+        }),
+        cache: degradedCache,
+        facts: pairFactsWithImage(dexscreenerWbnb),
+      }).warm({ chainId, address: wbnb }),
+    ).toBe("degraded");
+    expect(degradedCache.put).not.toHaveBeenCalled();
   });
 });
 

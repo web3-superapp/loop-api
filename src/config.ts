@@ -1300,6 +1300,9 @@ const reconciliationWorkerEnvironmentSchema = z
     ALERT_NOTIFICATION_DEDUPE_SECONDS: positiveIntegerString(60, 86_400),
     MARKET_SPARKLINE_WARM_ENABLED: booleanString,
     MARKET_SPARKLINE_WARM_INTERVAL_MS: positiveIntegerString(1_000, 60_000),
+    TOKEN_LOGO_PREWARM_ENABLED: booleanString,
+    TOKEN_LOGO_PREWARM_INTERVAL_MS: positiveIntegerString(60_000, 86_400_000),
+    TOKEN_LOGO_PREWARM_HOT_LIMIT: z.coerce.number().int().min(0).max(200),
     VOICE_ROOM_REAPER_ENABLED: booleanString,
     COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
     PUBLIC_BASE_URL: z.string().url(),
@@ -2147,6 +2150,17 @@ export interface ReconciliationWorkerConfig {
    * checks against `market.geckoterminal.enabled`.
    */
   readonly sparklineWarm: { readonly intervalMs: number } | null;
+  /**
+   * `token_logo_prewarm` lane (Decision 0161 §2); default on
+   * (`TOKEN_LOGO_PREWARM_ENABLED`). One pass every `intervalMs`
+   * (`TOKEN_LOGO_PREWARM_INTERVAL_MS`, default 6 h, 1 min – 24 h);
+   * `hotLimit` (`TOKEN_LOGO_PREWARM_HOT_LIMIT`, default 200, 0–200) caps the
+   * GeckoTerminal volume-ranked hot list (0 skips it).
+   */
+  readonly tokenLogoPrewarm?: {
+    readonly intervalMs: number;
+    readonly hotLimit: number;
+  } | null;
   /**
    * `voice_room_reaper` lane (Decision 0094); default on. It ends live
    * voice rooms nobody is in (`VOICE_ROOM_IDLE_END_MINUTES`, default 10) and
@@ -4464,6 +4478,12 @@ export function loadReconciliationWorkerConfig(
       environment["MARKET_SPARKLINE_WARM_ENABLED"] ?? "true",
     MARKET_SPARKLINE_WARM_INTERVAL_MS:
       environment["MARKET_SPARKLINE_WARM_INTERVAL_MS"] ?? "4000",
+    TOKEN_LOGO_PREWARM_ENABLED:
+      environment["TOKEN_LOGO_PREWARM_ENABLED"] ?? "true",
+    TOKEN_LOGO_PREWARM_INTERVAL_MS:
+      environment["TOKEN_LOGO_PREWARM_INTERVAL_MS"] ?? "21600000",
+    TOKEN_LOGO_PREWARM_HOT_LIMIT:
+      environment["TOKEN_LOGO_PREWARM_HOT_LIMIT"] ?? "200",
     VOICE_ROOM_REAPER_ENABLED:
       environment["VOICE_ROOM_REAPER_ENABLED"] ?? "true",
     COMMUNITY_CHAT_REAL_IDENTITY:
@@ -4687,6 +4707,12 @@ export function loadReconciliationWorkerConfig(
     sparklineWarm: parsed.data.MARKET_SPARKLINE_WARM_ENABLED
       ? Object.freeze({
           intervalMs: parsed.data.MARKET_SPARKLINE_WARM_INTERVAL_MS,
+        })
+      : null,
+    tokenLogoPrewarm: parsed.data.TOKEN_LOGO_PREWARM_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.TOKEN_LOGO_PREWARM_INTERVAL_MS,
+          hotLimit: parsed.data.TOKEN_LOGO_PREWARM_HOT_LIMIT,
         })
       : null,
     voiceRoomReaper: parsed.data.VOICE_ROOM_REAPER_ENABLED

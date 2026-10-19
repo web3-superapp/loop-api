@@ -2,14 +2,19 @@ import pg from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createPostgresMarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
+import { randomUUID } from "node:crypto";
+
 import {
   createPostgresTokenLogoCacheRepository,
-  type TokenLogoCacheRecord,
+  tokenLogoNeverExpires,
+  type TokenLogoCacheAutomaticRecord,
 } from "../src/database/token-logo-cache-repository.js";
+import { tokenLogoEtag } from "../src/features/market/token-logo-proxy.js";
 import { createTokenLogoProxyService } from "../src/features/market/token-logo-proxy.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
 import {
   dexscreenerWbnb,
+  logoPng,
   png,
   trustWalletWbnb,
   upstreamFetch,
@@ -29,8 +34,8 @@ const chainId = "eip155:56";
 const other = "0x00000000000000000000000000000000000000ff";
 
 function found(
-  overrides: Partial<TokenLogoCacheRecord> = {},
-): TokenLogoCacheRecord {
+  overrides: Partial<TokenLogoCacheAutomaticRecord> = {},
+): TokenLogoCacheAutomaticRecord {
   const bytes = png(300);
   return {
     chainId,
@@ -58,6 +63,12 @@ async function clean(): Promise<void> {
     [`token:${wbnb}`, `tokenbatch:${wbnb}`],
   );
 }
+
+const audit = () => ({
+  actor: "platform-admin-s238",
+  actorAccountId: null,
+  requestId: randomUUID(),
+});
 
 describe("token_logo_cache (Decision 0089, migration 000045)", () => {
   beforeEach(clean);
@@ -139,7 +150,7 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
         /token_logo_cache/,
       );
     }
-    const oversize: TokenLogoCacheRecord = {
+    const oversize: TokenLogoCacheAutomaticRecord = {
       ...found(),
       status: "oversize",
       bytes: null,
@@ -172,7 +183,7 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
       fetchedAt: "2026-09-28T08:00:00.000Z",
       ttlSeconds: 30,
     });
-    const bytes = png(512, 4);
+    const bytes = await logoPng({ width: 300, height: 300 });
     const fetch = upstreamFetch({
       [dexscreenerWbnb]: { kind: "body", body: bytes },
     });
@@ -191,6 +202,7 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
     expect(await repository.get(chainId, wbnb)).toMatchObject({
       status: "found",
       source: "dexscreener",
+      contentType: "image/webp",
       sourceUrl: dexscreenerWbnb,
       candidateUrl: dexscreenerWbnb,
       expiresAt: "2026-10-05T09:00:00.000Z",
@@ -222,5 +234,162 @@ describe("token_logo_cache (Decision 0089, migration 000045)", () => {
       kind: "unreachable",
     });
     expect(await repository.get(chainId, wbnb)).toBeNull();
+  });
+
+  it("is migrated by 000092: manual source allowed, candidate_url nullable only for manual rows", async () => {
+    const migration = await pool.query<{ name: string }>(
+      "select name from public.pgmigrations where name = '000092_token_logo_normalized_manual'",
+    );
+    expect(migration.rows[0]?.name).toBe("000092_token_logo_normalized_manual");
+    const bytes = await logoPng();
+    const insert = (values: {
+      source: string | null;
+      candidate: string | null;
+      sourceUrl: string | null;
+      status?: string;
+    }) =>
+      pool.query(
+        `insert into public.token_logo_cache (
+           chain_id, address, status, bytes, content_type, etag, source,
+           source_url, candidate_url, fetched_at, expires_at
+         ) values ('eip155:56', $1, $2, $3, 'image/webp', $4, $5, $6, $7,
+           '2026-10-19T00:00:00Z', '9999-12-31T23:59:59.999Z')`,
+        [
+          other,
+          values.status ?? "found",
+          bytes,
+          tokenLogoEtag(bytes),
+          values.source,
+          values.sourceUrl,
+          values.candidate,
+        ],
+      );
+    await expect(
+      insert({
+        source: "trustwallet",
+        candidate: null,
+        sourceUrl: trustWalletWbnb,
+      }),
+    ).rejects.toThrow(/token_logo_cache_candidate_check/);
+    await expect(
+      insert({ source: "manual", candidate: trustWalletWbnb, sourceUrl: null }),
+    ).rejects.toThrow(/token_logo_cache_candidate_check/);
+    await expect(
+      insert({
+        source: "other",
+        candidate: trustWalletWbnb,
+        sourceUrl: trustWalletWbnb,
+      }),
+    ).rejects.toThrow(/token_logo_cache_source_check/);
+    await insert({ source: "manual", candidate: null, sourceUrl: null });
+    expect(await repository.get(chainId, other)).toMatchObject({
+      source: "manual",
+      candidateUrl: null,
+      sourceUrl: null,
+      expiresAt: tokenLogoNeverExpires,
+    });
+  });
+
+  it("stores a manual picture with its audit row, keeps it against automatic writes, and clears it", async () => {
+    await repository.put(found({ address: wbnb }));
+    const bytes = await logoPng({ red: 30 });
+    const requestAudit = audit();
+    const written = await repository.putManual?.(
+      {
+        chainId,
+        address: wbnb,
+        bytes,
+        contentType: "image/webp",
+        etag: tokenLogoEtag(bytes),
+        at: "2026-10-19T08:00:00.000Z",
+      },
+      requestAudit,
+    );
+    expect(written?.before).toMatchObject({ source: "trustwallet" });
+    expect(written?.record).toMatchObject({
+      status: "found",
+      source: "manual",
+      sourceUrl: null,
+      candidateUrl: null,
+      fetchedAt: "2026-10-19T08:00:00.000Z",
+      expiresAt: tokenLogoNeverExpires,
+    });
+    const auditRow = await pool.query<{
+      action: string;
+      target_type: string;
+      target_id: string;
+      before: { source: string; byteLength: number };
+      after: { source: string; etag: string; byteLength: number };
+    }>(
+      `select action, target_type, target_id, before, after
+       from public.admin_audit_log where audit_id = $1`,
+      [written?.audit.auditId],
+    );
+    expect(auditRow.rows[0]).toMatchObject({
+      action: "market.logo.override",
+      target_type: "token_logo",
+      target_id: `${chainId}/${wbnb}`,
+      before: { source: "trustwallet", byteLength: 300 },
+      after: {
+        source: "manual",
+        etag: tokenLogoEtag(bytes),
+        byteLength: bytes.length,
+      },
+    });
+
+    // An automatic refetch racing the upload never replaces it.
+    await repository.put(
+      found({
+        address: wbnb,
+        fetchedAt: "2026-10-20T00:00:00.000Z",
+        expiresAt: "2026-10-27T00:00:00.000Z",
+      }),
+    );
+    await repository.put({
+      ...found({ address: wbnb }),
+      status: "missing",
+      bytes: null,
+      contentType: null,
+      etag: null,
+      source: null,
+      sourceUrl: null,
+    });
+    const kept = await repository.get(chainId, wbnb);
+    expect(kept?.source).toBe("manual");
+    expect(kept?.bytes?.equals(bytes)).toBe(true);
+
+    // The proxy serves it and never asks an upstream, even years later.
+    const fetch = upstreamFetch({
+      [trustWalletWbnb]: { kind: "body", body: await logoPng() },
+    });
+    const proxy = createTokenLogoProxyService({
+      cache: repository,
+      facts,
+      fetch,
+      now: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+    expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
+      kind: "image",
+      etag: tokenLogoEtag(bytes),
+    });
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("manual");
+    expect(fetch.calls).toEqual([]);
+
+    const states = await repository.listStates?.(chainId, [wbnb, other]);
+    expect(states?.get(wbnb)).toMatchObject({ source: "manual", bytes: null });
+    expect(states?.has(other)).toBe(false);
+
+    const cleared = await repository.clearManual?.(chainId, wbnb, audit());
+    expect(cleared?.before.source).toBe("manual");
+    expect(await repository.get(chainId, wbnb)).toBeNull();
+    expect(await repository.clearManual?.(chainId, wbnb, audit())).toBeNull();
+    const clearAudit = await pool.query<{ action: string; after: unknown }>(
+      `select action, after from public.admin_audit_log where audit_id = $1`,
+      [cleared?.audit.auditId],
+    );
+    expect(clearAudit.rows[0]).toEqual({
+      action: "market.logo.override_clear",
+      after: null,
+    });
   });
 });
