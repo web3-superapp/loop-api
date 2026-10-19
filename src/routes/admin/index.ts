@@ -69,6 +69,11 @@ import {
   intelPromotionsAdminResourceSchema,
   intelPromotionsAdminWriteResourceSchema,
   intelPromotionsRequestSchema,
+  launch2InstanceIdParamsSchema,
+  launch2InstanceListResourceSchema,
+  launch2InstancesQuerySchema,
+  launch2ListingRequestSchema,
+  launch2ListingResourceSchema,
   memeListingRequestSchema,
   memeListingResourceSchema,
   memePauseRequestSchema,
@@ -799,6 +804,81 @@ export function registerAdminRoutes(
       const resource = await service.setMemeListing(
         context(request),
         memeTokenId,
+        body,
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    `${adminApiPrefix}/launch2/instances`,
+    {
+      schema: {
+        operationId: "listAdminLaunch2Instances",
+        summary: "List MEME v2 (launch2) instances with their listing",
+        description:
+          "Decision 0163: every launch2 instance (both listings, all chains), newest registered first, at most 200. `listing` filters; `q` matches name / ticker (substring), the exact instanceId, or the MEME address. console.read.",
+        tags: ["admin-meme"],
+        security: adminSecurity,
+        querystring: launch2InstancesQuerySchema,
+        response: {
+          200: launch2InstanceListResourceSchema,
+          ...adminErrors(
+            ...guardedSessionErrors,
+            "INVALID_REQUEST",
+            "CAPABILITY_UNAVAILABLE",
+          ),
+        },
+      },
+      ...guard("console.read"),
+    },
+    async (request, reply) => {
+      const resource = await service.listLaunch2Instances(
+        request.query as Record<string, unknown>,
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.put(
+    `${adminApiPrefix}/launch2/instances/:instanceId/listing`,
+    {
+      schema: {
+        operationId: "setAdminLaunch2Listing",
+        summary: "Hide or restore a MEME v2 (launch2) instance",
+        description:
+          "Decision 0163: `hidden` removes the instance from GET /v2/launch2/instances (every stage filter), GET /v2/launch2/overview (stage counts and activity), GET /public/v1/meme and the Square pinned / timeline event posts about it, from the next read; GET /v2/launch2/instances/{id}, positions, quotes, trades and GET /public/v1/meme/{id} still read it (with `listing: hidden`). Chain facts and the indexer are untouched. `hidden` needs `reason` (1-280 characters; 422 VALIDATION_FAILED / ADMIN_REASON_TEXT_REQUIRED). Unknown id: 404 NOT_FOUND / ADMIN_LAUNCH2_INSTANCE_NOT_FOUND. Setting the current value again writes a new audit row with `changed: false`. Audit: `launch2.listing.update` (target launch2_instance) in the same transaction. console.write (the MEME listing permission).",
+        tags: ["admin-meme"],
+        security: adminSecurity,
+        params: launch2InstanceIdParamsSchema,
+        querystring: emptyQuerySchema,
+        body: launch2ListingRequestSchema,
+        response: {
+          200: launch2ListingResourceSchema,
+          ...adminErrors(
+            ...guardedSessionErrors,
+            "INVALID_REQUEST",
+            "NOT_FOUND",
+            "VALIDATION_FAILED",
+            "CAPABILITY_UNAVAILABLE",
+          ),
+        },
+      },
+      ...guard("console.write"),
+    },
+    async (request, reply) => {
+      const { instanceId } = request.params as {
+        readonly instanceId: string;
+      };
+      const body = request.body as {
+        readonly listing: unknown;
+        readonly reason?: unknown;
+      };
+      const resource = await service.setLaunch2Listing(
+        context(request),
+        instanceId,
         body,
       );
       noStore(reply);

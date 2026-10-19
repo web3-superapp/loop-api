@@ -596,6 +596,13 @@ export interface Launch2SnapshotRecord {
   readonly signers: readonly string[] | null;
 }
 
+/** Decision 0163: operator list visibility of an instance. */
+export const launch2InstanceListings = Object.freeze([
+  "visible",
+  "hidden",
+] as const);
+export type Launch2InstanceListing = (typeof launch2InstanceListings)[number];
+
 export interface Launch2InstanceRecord {
   readonly instanceId: string;
   readonly jobId: string;
@@ -612,6 +619,11 @@ export interface Launch2InstanceRecord {
   readonly name: string;
   readonly ticker: string;
   readonly logoUrl: string | null;
+  /**
+   * Decision 0163: `hidden` keeps the instance out of every App list; the
+   * detail by id still reads it.
+   */
+  readonly listing: Launch2InstanceListing;
   /**
    * Decision 0138: the instance's Hooks launch config `description` /
    * `links` (project_id + config_version); null when no config row joins.

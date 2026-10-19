@@ -231,7 +231,7 @@ const instanceColumns = `
   meme_transfers_coverage_failures,
   pool_router_target_block::text,
   pool_hook_kind, dynamic_hook_address, dynamic_pool_id,
-  dynamic_hook_bound_block::text,
+  dynamic_hook_bound_block::text, listing,
   (select jsonb_build_object(
       'status', p.status, 'txHash', p.tx_hash,
       'cutoffBlock', p.cutoff_block::text, 'memberCount', p.member_count)
@@ -398,6 +398,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     name: text(row, "name"),
     ticker: text(row, "ticker"),
     logoUrl: nullableText(row, "logo_url"),
+    listing: row["listing"] === "hidden" ? "hidden" : "visible",
     projectProfile: projectProfileOf(row["project_profile"]),
     addresses: Object.freeze({
       meme: text(row, "meme_address"),
@@ -1505,6 +1506,7 @@ const activitySql = `
       buyback_adapter_address, buyback_executor_address
     from public.launch2_instances
     where chain_id = $1 and (activated_at is not null or hold_reason is not null)
+      and listing = 'visible'
   ),
   feed as (
     (select case t.side when 'buy' then 'curve_buy' else 'curve_sell' end as kind,
@@ -1617,6 +1619,7 @@ const overviewFactsSql = `
     ${nftSaleEndColumn}
   from public.launch2_instances
   where chain_id = $1 and (activated_at is not null or hold_reason is not null)
+    and listing = 'visible'
 `;
 
 function mapOverviewFacts(row: Row): Launch2OverviewInstanceFacts {
@@ -2506,6 +2509,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           select ${instanceColumns} from public.launch2_instances
           where chain_id = $1
             and (activated_at is not null or hold_reason is not null)
+            and listing = 'visible'
             and ($2::text is null or stage = $2)
             and ($6::text is null or stage <> $6)
             and ($3::timestamptz is null

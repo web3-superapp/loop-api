@@ -94,6 +94,7 @@ export function instanceFixture(
     name: "Frog Launch",
     ticker: "FROG",
     logoUrl: "https://example.com/frog.png",
+    listing: "visible",
     projectProfile: {
       description: "A frog launch.",
       links: ["https://example.com/frog"],
@@ -366,7 +367,8 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
           .filter(
             (row) =>
               row.chainId === input.chainId &&
-              (row.activatedAt !== null || row.holdReason !== null),
+              (row.activatedAt !== null || row.holdReason !== null) &&
+              row.listing === "visible",
           )
           .map((row) => ({
             instanceId: row.instanceId,
@@ -404,6 +406,7 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
           (row) =>
             row.chainId === input.chainId &&
             (row.activatedAt !== null || row.holdReason !== null) &&
+            row.listing === "visible" &&
             (input.stage === null || row.stage === input.stage) &&
             (input.notStage === undefined ||
               input.notStage === null ||

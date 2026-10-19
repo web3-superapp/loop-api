@@ -13,6 +13,7 @@ import {
   type AdminAuditRecord,
   type AdminCommunityRecord,
   type AdminFormulaVersionRecord,
+  type AdminLaunch2InstanceListingRecord,
   type AdminMemeTokenRecord,
   type AdminRepository,
   type AdminSettingKey,
@@ -295,6 +296,50 @@ const memeFrom = `
   left join public.loop_users as u on u.id = t.creator_user_id
 `;
 
+const launch2ListingRowSchema = z
+  .object({
+    instance_id: uuidSchema,
+    project_id: uuidSchema,
+    chain_id: z.string(),
+    name: z.string(),
+    ticker: z.string(),
+    meme_address: z.string(),
+    stage: z.string(),
+    graduated_at: dateSchema.nullable(),
+    registered_at: dateSchema,
+    listing: z.enum(["visible", "hidden"]),
+    listing_reason: z.string().nullable(),
+    listing_updated_at: dateSchema.nullable(),
+    listing_updated_by: z.string().nullable(),
+  })
+  .strict();
+
+const launch2ListingColumns = `
+  i.instance_id::text as instance_id, i.project_id::text as project_id,
+  i.chain_id, i.name, i.ticker, i.meme_address, i.stage, i.graduated_at,
+  i.registered_at, i.listing, i.listing_reason, i.listing_updated_at,
+  i.listing_updated_by
+`;
+
+function mapLaunch2Listing(raw: unknown): AdminLaunch2InstanceListingRecord {
+  const row = launch2ListingRowSchema.parse(raw);
+  return Object.freeze({
+    instanceId: row.instance_id,
+    projectId: row.project_id,
+    chainId: row.chain_id,
+    name: row.name,
+    ticker: row.ticker,
+    memeAddress: row.meme_address,
+    stage: row.stage,
+    graduatedAt: iso(row.graduated_at),
+    registeredAt: row.registered_at.toISOString(),
+    listing: row.listing,
+    listingReason: row.listing_reason,
+    listingUpdatedAt: iso(row.listing_updated_at),
+    listingUpdatedBy: row.listing_updated_by,
+  });
+}
+
 function mapMeme(raw: unknown): AdminMemeTokenRecord {
   const row = memeRowSchema.parse(raw);
   return Object.freeze({
@@ -491,6 +536,25 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
       values: [uuidSchema.parse(memeTokenId)],
     });
     return result.rows[0] === undefined ? null : mapMeme(result.rows[0]);
+  }
+
+  async function readLaunch2Listing(
+    client: Queryable,
+    instanceId: string,
+    lock: boolean,
+  ): Promise<AdminLaunch2InstanceListingRecord | null> {
+    const result = await client.query({
+      text: `
+        select ${launch2ListingColumns}
+        from public.launch2_instances as i
+        where i.instance_id = $1
+        ${lock ? "for update of i" : ""}
+      `,
+      values: [uuidSchema.parse(instanceId)],
+    });
+    return result.rows[0] === undefined
+      ? null
+      : mapLaunch2Listing(result.rows[0]);
   }
 
   async function readFormula(
@@ -927,6 +991,92 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
       }
     },
 
+    async listLaunch2Instances(input) {
+      try {
+        const result = await pool.query({
+          text: `
+            select ${launch2ListingColumns}
+            from public.launch2_instances as i
+            where ($1::text is null or i.listing = $1)
+              and ($2::text is null
+                or i.name ilike $3 escape '\\'
+                or i.ticker ilike $3 escape '\\'
+                or i.instance_id::text = lower($2)
+                or i.meme_address = lower($2))
+            order by i.registered_at desc, i.instance_id desc
+            limit $4
+          `,
+          values: [
+            input.listing,
+            input.query,
+            input.query === null ? null : likePattern(input.query),
+            input.limit,
+          ],
+        });
+        return Object.freeze(result.rows.map(mapLaunch2Listing));
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async setLaunch2Listing(input) {
+      try {
+        return await withV2Transaction(pool, unavailable, async (client) => {
+          const current = await readLaunch2Listing(
+            client,
+            input.instanceId,
+            true,
+          );
+          if (current === null) {
+            throw new AdminTargetNotFoundError(
+              adminReasonCodes.launch2InstanceNotFound,
+            );
+          }
+          const changed = current.listing !== input.listing;
+          // Decision 0163: only the listing columns; chain facts untouched.
+          await client.query({
+            text: `
+              update public.launch2_instances
+              set
+                listing = $2,
+                listing_reason = coalesce($3, listing_reason),
+                listing_updated_at = clock_timestamp(),
+                listing_updated_by = $4
+              where instance_id = $1
+            `,
+            values: [
+              current.instanceId,
+              input.listing,
+              input.reason,
+              input.audit.actor,
+            ],
+          });
+          const instance = await readLaunch2Listing(
+            client,
+            input.instanceId,
+            false,
+          );
+          if (instance === null) {
+            throw unavailable();
+          }
+          const audit = await insertAudit(client, {
+            ...input.audit,
+            before: {
+              listing: current.listing,
+              reason: current.listingReason,
+            },
+            after: {
+              listing: instance.listing,
+              reason: instance.listingReason,
+            },
+          });
+          return Object.freeze({ instance, changed, audit });
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async listFormulaVersions() {
       try {
         const result = await pool.query({
@@ -1256,6 +1406,8 @@ export function createUnavailableAdminRepository(): AdminRepository {
     listMemeTokens: fail,
     getMemeToken: fail,
     setMemeListing: fail,
+    listLaunch2Instances: fail,
+    setLaunch2Listing: fail,
     listFormulaVersions: fail,
     getFormulaVersion: fail,
     listApprovedCommunityWeights: fail,

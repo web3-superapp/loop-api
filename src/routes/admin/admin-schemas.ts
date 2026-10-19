@@ -1105,3 +1105,111 @@ export const auditListResourceSchema = {
 } as const;
 
 export { reasonCodeSchema };
+
+/** Decision 0163: launch2 (MEME v2) instance list visibility. */
+const launch2ListingSchema = {
+  type: "string",
+  enum: ["visible", "hidden"],
+} as const;
+
+const launch2InstanceListingRecordSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "instanceId",
+    "projectId",
+    "chainId",
+    "name",
+    "ticker",
+    "memeAddress",
+    "stage",
+    "graduatedAt",
+    "registeredAt",
+    "listing",
+    "listingReason",
+    "listingUpdatedAt",
+    "listingUpdatedBy",
+  ],
+  properties: {
+    instanceId: uuidSchema,
+    projectId: uuidSchema,
+    chainId: { type: "string" },
+    name: { type: "string" },
+    ticker: { type: "string" },
+    memeAddress: { type: "string" },
+    stage: {
+      type: "string",
+      description:
+        "The stored (indexer-projected) stage; it can lag the clock-derived stage the App shows.",
+    },
+    graduatedAt: nullableDateTimeSchema,
+    registeredAt: dateTimeSchema,
+    listing: launch2ListingSchema,
+    listingReason: {
+      type: ["string", "null"],
+      description:
+        "The operator's last reason (kept when restored to visible unless a new one is sent); null when never hidden.",
+    },
+    listingUpdatedAt: nullableDateTimeSchema,
+    listingUpdatedBy: {
+      type: ["string", "null"],
+      description: "Console actor of the last change; null when never changed.",
+    },
+  },
+} as const;
+
+export const launch2InstanceIdParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["instanceId"],
+  properties: { instanceId: { type: "string", maxLength: 64 } },
+} as const;
+
+export const launch2InstancesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    listing: launch2ListingSchema,
+    q: { type: "string", maxLength: 64 },
+  },
+} as const;
+
+export const launch2InstanceListResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: 200,
+      items: launch2InstanceListingRecordSchema,
+    },
+  },
+} as const;
+
+export const launch2ListingRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["listing"],
+  properties: {
+    listing: launch2ListingSchema,
+    reason: {
+      ...reasonTextSchema,
+      description:
+        "Required for `hidden` (operator note, kept in the audit row; not shown in the App). Optional for `visible`: omitted keeps the previous reason.",
+    },
+  },
+} as const;
+
+export const launch2ListingResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["instance", "changed", "audit"],
+  properties: {
+    instance: launch2InstanceListingRecordSchema,
+    changed: { type: "boolean" },
+    audit: auditReferenceSchema,
+  },
+} as const;

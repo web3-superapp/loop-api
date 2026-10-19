@@ -133,6 +133,17 @@ const feedJoins = `
   ) as pool_ago on true`;
 
 /**
+ * Decision 0163: an event post (every kind but `opinion`) about a launch2
+ * instance an operator hid stays out of the pinned / timeline lists; the
+ * post itself is unchanged and still readable by id.
+ */
+const notHiddenLaunch2Event = `
+  not (p.kind <> 'opinion' and p.token_kind = 'launch2' and exists (
+    select 1 from public.launch2_instances as hidden_instance
+    where hidden_instance.instance_id = p.token_id
+      and hidden_instance.listing = 'hidden'))`;
+
+/**
  * Visibility of a published post `p` to viewer `$1`: system posts always;
  * a user post only while its author has an active profile, and never
  * across a block in either direction.
@@ -349,7 +360,7 @@ export function createPostgresSquareRepository(pool: Pool): SquareRepository {
   const repository: SquareRepository = {
     listPinned(input) {
       return feedRows(
-        `p.status = 'published' and p.pinned`,
+        `p.status = 'published' and p.pinned and ${notHiddenLaunch2Event}`,
         [input.viewerUserId, input.now],
         `p.published_at desc, p.post_id desc`,
         input.limit,
@@ -359,6 +370,7 @@ export function createPostgresSquareRepository(pool: Pool): SquareRepository {
     listTimeline(input) {
       return feedRows(
         `p.status = 'published' and not p.pinned
+         and ${notHiddenLaunch2Event}
          and ($3::text <> 'following' or p.author_user_id in (
            select edge.followee_user_id from public.follow_edges as edge
            where edge.follower_user_id = $1))

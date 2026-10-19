@@ -516,7 +516,8 @@
                         "perAddressCurveCapMeme",
                         "chainId",
                         "explorerBaseUrl",
-                        "socials"
+                        "socials",
+                        "listing"
                       ],
                       "properties": {
                         "instanceId": {
@@ -641,6 +642,11 @@
                               ]
                             }
                           }
+                        },
+                        "listing": {
+                          "type": "string",
+                          "enum": ["visible", "hidden"],
+                          "description": "Decision 0163: `hidden` = taken off the public list (GET /public/v1/meme) by an operator; this detail still reads it."
                         }
                       }
                     },

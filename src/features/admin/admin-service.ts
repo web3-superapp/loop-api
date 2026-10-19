@@ -283,6 +283,9 @@ function parseLimit(value: unknown): number {
   return parsed;
 }
 
+/** Decision 0163: the console list of launch2 instances (no cursor). */
+export const adminLaunch2ListingListLimit = 200;
+
 function optionalQuery(value: unknown): string | null {
   if (value === undefined) {
     return null;
@@ -437,6 +440,16 @@ export interface AdminService {
       readonly reasonCode: unknown;
       readonly reasonText?: unknown;
     },
+  ): Promise<Record<string, unknown>>;
+  /** Decision 0163: launch2 instances with their list visibility. */
+  listLaunch2Instances(query: {
+    readonly listing?: unknown;
+    readonly q?: unknown;
+  }): Promise<Record<string, unknown>>;
+  setLaunch2Listing(
+    context: AdminWriteContext,
+    instanceId: string,
+    body: { readonly listing: unknown; readonly reason?: unknown },
   ): Promise<Record<string, unknown>>;
   pauseMeme(
     context: AdminWriteContext,
@@ -1956,6 +1969,61 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
         });
         return Object.freeze({
           memeToken: projectMeme(updated.token),
+          changed: updated.changed,
+          audit: auditReference(updated.audit),
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async listLaunch2Instances(query) {
+      const listing = query.listing;
+      if (
+        listing !== undefined &&
+        listing !== "visible" &&
+        listing !== "hidden"
+      ) {
+        refuse("INVALID_REQUEST");
+      }
+      const q = optionalQuery(query.q);
+      try {
+        const rows = await repository.listLaunch2Instances({
+          listing: listing ?? null,
+          query: q,
+          limit: adminLaunch2ListingListLimit,
+        });
+        return Object.freeze({ items: rows });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async setLaunch2Listing(context, instanceId, body) {
+      if (body.listing !== "visible" && body.listing !== "hidden") {
+        refuse("INVALID_REQUEST");
+      }
+      const listing = body.listing;
+      const reason = reasonText(body.reason, listing === "hidden");
+      if (!canonicalUuidPattern.test(instanceId)) {
+        refuse("NOT_FOUND", adminReasonCodes.launch2InstanceNotFound);
+      }
+      try {
+        const updated = await repository.setLaunch2Listing({
+          instanceId,
+          listing,
+          reason,
+          audit: {
+            actor: context.session.actor,
+            actorAccountId: context.session.accountId,
+            action: "launch2.listing.update",
+            targetType: "launch2_instance",
+            targetId: instanceId,
+            requestId: context.requestId,
+          },
+        });
+        return Object.freeze({
+          instance: updated.instance,
           changed: updated.changed,
           audit: auditReference(updated.audit),
         });

@@ -1154,6 +1154,30 @@ not held back, and the worker lane indexes the LoopDynamic Factory (+ `LAUNCH2_L
 `LAUNCH2_FACTORY_NOT_CONFIGURED` now means **neither** the OfficialTax nor the LoopDynamic pair
 is configured. Nothing in the wire format changes.
 
+### 3.14 `listing`（Decision 0163，S245）
+
+运营可在后台把实例设为「列表隐藏」（链上事实不变、不改名）。线上字段：
+
+- `GET /v2/launch2/instances` 每行、`GET /v2/launch2/instances/{instanceId}` 的 `instance` 新增必填 `listing`：`"visible" | "hidden"`。
+- 列表（任何 `stage`，含已毕业）、`GET /v2/launch2/overview` 的计数与动态、`GET /public/v1/meme`、广场时间线 / 置顶里关于该实例的事件帖（buy / claim / graduation / system），都**不再出现** `hidden` 实例；列表行的 `listing` 恒为 `visible`。
+- 按 id 直达仍可读：详情、quote、pool、dynamic-pool、buybacks、`/v2/launch2/me/positions`、`GET /public/v1/meme/{id}`（`instance.listing`）、`GET /v2/square/posts/{postId}`。持有人从持仓 / 分享链接进入照常可看、可交易。
+- App 不需要新错误处理；`listing == "hidden"` 时可选择在详情页不展示「推荐 / 热门」类入口。原因文本只在后台，App 拿不到。
+
+示例（详情片段）：
+
+```json
+{
+  "instance": {
+    "instanceId": "8a3c…",
+    "name": "…",
+    "ticker": "…",
+    "stage": "public",
+    "listing": "hidden",
+    "…": "…"
+  }
+}
+```
+
 ### 3.13 `GET /v2/launch2/overview`（Decision 0139，S181）
 
 发射台整页（docs/32 §7.1 实时流、§7.5 战绩条）。鉴权与 headers 同 §3.1；无 query（带任何 query → `400`）；

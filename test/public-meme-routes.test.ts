@@ -515,7 +515,12 @@ describe("public MEME routes (Decision 0147)", () => {
       activatedAt: "2027-01-15T02:00:00.000Z",
     });
     const curve = priorityInstance({ activatedAt: "2027-01-15T01:00:00.000Z" });
-    const repository = seeded(dynamic, official, curve);
+    // Decision 0163: hidden by an operator — on no list, detail still reads.
+    const hidden = graduatedInstance({
+      activatedAt: "2027-01-15T04:00:00.000Z",
+      listing: "hidden",
+    });
+    const repository = seeded(dynamic, official, curve, hidden);
     repository.publicFacts.set(official.instanceId, {
       community: {
         communityId: randomUUID(),
@@ -572,6 +577,11 @@ describe("public MEME routes (Decision 0147)", () => {
       expect(refused.headers["access-control-allow-origin"]).toBe("*");
       expect(refused.json()).toEqual({ code: "INVALID_REQUEST", reasonCode });
     }
+    const hiddenDetail = await get(app, `/public/v1/meme/${hidden.instanceId}`);
+    expect(hiddenDetail.statusCode).toBe(200);
+    expect(
+      hiddenDetail.json<{ instance: Record<string, unknown> }>().instance,
+    ).toMatchObject({ instanceId: hidden.instanceId, listing: "hidden" });
   });
 
   it("keeps a list row whose Hook read is unavailable as dynamic null with the reason", async () => {

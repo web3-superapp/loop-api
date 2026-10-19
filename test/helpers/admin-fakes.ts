@@ -8,6 +8,7 @@ import {
   type AdminAuditRecord,
   type AdminCommunityRecord,
   type AdminFormulaVersionRecord,
+  type AdminLaunch2InstanceListingRecord,
   type AdminMemeTokenRecord,
   type AdminRepository,
   type AdminSettingKey,
@@ -33,6 +34,7 @@ export interface InMemoryAdminRepository extends AdminRepository {
   readonly communities: Map<string, AdminCommunityRecord>;
   readonly notes: CommunityReviewNoteRecord[];
   readonly memeTokens: Map<string, AdminMemeTokenRecord>;
+  readonly launch2Instances: Map<string, AdminLaunch2InstanceListingRecord>;
   readonly formulas: Map<string, AdminFormulaVersionRecord>;
 }
 
@@ -56,6 +58,27 @@ export function adminCommunityFixture(
     rejectedReason: null,
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function adminLaunch2InstanceFixture(
+  overrides: Partial<AdminLaunch2InstanceListingRecord> = {},
+): AdminLaunch2InstanceListingRecord {
+  return {
+    instanceId: randomUUID(),
+    projectId: randomUUID(),
+    chainId: "eip155:97",
+    name: "S137 Testnet S13001",
+    ticker: "S13001",
+    memeAddress: "0x00000000000000000000000000000000000000e3",
+    stage: "public",
+    graduatedAt: null,
+    registeredAt: "2026-10-01T00:00:00.000Z",
+    listing: "visible",
+    listingReason: null,
+    listingUpdatedAt: null,
+    listingUpdatedBy: null,
     ...overrides,
   };
 }
@@ -137,6 +160,7 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
   const communities = new Map<string, AdminCommunityRecord>();
   const notes: CommunityReviewNoteRecord[] = [];
   const memeTokens = new Map<string, AdminMemeTokenRecord>();
+  const launch2Instances = new Map<string, AdminLaunch2InstanceListingRecord>();
   const formulas = new Map<string, AdminFormulaVersionRecord>();
   let clock = Date.parse("2026-10-08T00:00:00.000Z");
 
@@ -182,6 +206,7 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
     communities,
     notes,
     memeTokens,
+    launch2Instances,
     formulas,
     getSetting: (key) => Promise.resolve(settings.get(key) ?? null),
     writeSetting: (input) => {
@@ -314,6 +339,47 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
       return Promise.resolve({
         token,
         changed: current.listing !== token.listing,
+        audit: record,
+      });
+    },
+    listLaunch2Instances: (input) =>
+      Promise.resolve(
+        [...launch2Instances.values()]
+          .filter(
+            (row) =>
+              (input.listing === null || row.listing === input.listing) &&
+              (input.query === null ||
+                row.name.includes(input.query) ||
+                row.ticker.includes(input.query) ||
+                row.instanceId === input.query.toLowerCase()),
+          )
+          .slice(0, input.limit),
+      ),
+    setLaunch2Listing: (input) => {
+      const current = launch2Instances.get(input.instanceId);
+      if (current === undefined) {
+        return Promise.reject(
+          new AdminTargetNotFoundError(
+            adminReasonCodes.launch2InstanceNotFound,
+          ),
+        );
+      }
+      const instance: AdminLaunch2InstanceListingRecord = {
+        ...current,
+        listing: input.listing,
+        listingReason: input.reason ?? current.listingReason,
+        listingUpdatedAt: tick(),
+        listingUpdatedBy: input.audit.actor,
+      };
+      launch2Instances.set(instance.instanceId, instance);
+      const record = append({
+        ...input.audit,
+        before: { listing: current.listing, reason: current.listingReason },
+        after: { listing: instance.listing, reason: instance.listingReason },
+      });
+      return Promise.resolve({
+        instance,
+        changed: current.listing !== instance.listing,
         audit: record,
       });
     },

@@ -277,6 +277,8 @@ export const adminReasonCodes = Object.freeze({
   /** Decision 0110: the approver saved this draft. */
   formulaSelfApproval: "ADMIN_FORMULA_SELF_APPROVAL",
   memeTokenNotFound: "ADMIN_MEME_TOKEN_NOT_FOUND",
+  /** Decision 0163: no launch2 instance has this id. */
+  launch2InstanceNotFound: "ADMIN_LAUNCH2_INSTANCE_NOT_FOUND",
   memeExecutorDisabled: "MEME_EXECUTOR_DISABLED",
   memeContractNotConfigured: "MEME_CONTRACT_NOT_CONFIGURED",
   memeTokenNotOnChain: "MEME_TOKEN_NOT_ON_CHAIN",

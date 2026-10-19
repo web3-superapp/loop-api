@@ -503,6 +503,7 @@ function summaryOf(
       priceUsd1: formatLaunch2Amount(BigInt(record.priceE18)),
     }),
     graduatedAt: record.graduation?.graduatedAt ?? null,
+    listing: record.listing,
   });
 }
 
@@ -2874,6 +2875,7 @@ export function createLaunch2Service(
         socials: launch2PublicSocials(
           launch2ProjectProfileProjection(profile).links,
         ),
+        listing: record.listing,
       }),
       community:
         community === null

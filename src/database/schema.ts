@@ -1,4 +1,4 @@
-export const latestMigrationName = "000091_launch2_pool_user_trades_buyback_tx";
+export const latestMigrationName = "000093_launch2_instance_listing";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
