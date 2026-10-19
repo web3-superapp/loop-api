@@ -232,6 +232,16 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
 
     // Before the first settled hour: no boost, nobody valid yet.
     expect(await referral.getReferralBoost(inviter.id)).toBeNull();
+    expect(
+      (await referral.countInvitees(inviter.id)).map((row) => [
+        row.depth,
+        row.validationStatus,
+        row.count,
+      ]),
+    ).toEqual([
+      [1, "pending_mining", 3],
+      [2, "pending_mining", 1],
+    ]);
     expect(await referral.getInviteeStats(inviter.id)).toEqual({
       directCount: 3,
       validCount: 0,
@@ -297,6 +307,21 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
         { level: 1, effectiveMembers: 0, nftPower: "0", assetPower: "0" },
       ]) as unknown,
     });
+    // Decision 0162 §E: level counts and stats share the source.
+    const counts = await referral.countInvitees(inviter.id);
+    expect(
+      counts
+        .filter((row) => row.depth === 1)
+        .map((row) => [row.validationStatus, row.count]),
+    ).toEqual([
+      ["pending_mining", 2],
+      ["valid", 1],
+    ]);
+    expect(
+      counts
+        .filter((row) => row.depth === 2)
+        .map((row) => row.validationStatus),
+    ).toEqual(["pending_mining"]);
     expect(await referral.getInviteeStats(inviter.id)).toEqual({
       directCount: 3,
       validCount: 1,

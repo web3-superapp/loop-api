@@ -124942,7 +124942,7 @@
         "operationId": "getV2Referral",
         "summary": "Get the caller's invite code, link, binding, counts, and boost",
         "tags": ["referral"],
-        "description": "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). `levels[].counts` keep the stored edge statuses. The claim window is [activatedAt, activatedAt + 7 days).",
+        "description": "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. The claim window is [activatedAt, activatedAt + 7 days).",
         "parameters": [
           {
             "schema": {
@@ -145492,7 +145492,7 @@
                               },
                               { "type": "null" }
                             ],
-                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet)."
+                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner."
                           },
                           "status": {
                             "type": "string",
@@ -146334,7 +146334,7 @@
                             },
                             { "type": "null" }
                           ],
-                          "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet)."
+                          "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner."
                         },
                         "status": {
                           "type": "string",
@@ -147698,7 +147698,7 @@
                             },
                             { "type": "null" }
                           ],
-                          "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet)."
+                          "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner."
                         },
                         "status": {
                           "type": "string",
@@ -149513,7 +149513,7 @@
                               },
                               { "type": "null" }
                             ],
-                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet)."
+                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner."
                           },
                           "isBuy": { "type": "boolean" },
                           "usd1Amount": {
@@ -150905,7 +150905,7 @@
                               },
                               { "type": "null" }
                             ],
-                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet)."
+                            "description": "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner."
                           },
                           "balance": {
                             "type": "string",

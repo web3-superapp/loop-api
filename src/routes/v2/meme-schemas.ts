@@ -101,7 +101,7 @@ export const accountSchema = {
     { type: "null" },
   ],
   description:
-    "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet).",
+    "The LOOP public profile behind the wallet, when an active one exists; null otherwise (show the wallet). Decision 0162 §D: on trades also null when the owner keeps trade history to themselves (trade_history_visibility = self), except for the owner.",
 } as const;
 
 export const memeErrorDescription =

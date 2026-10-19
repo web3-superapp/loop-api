@@ -150,6 +150,74 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
     return token;
   }
 
+  it("applies trade-history visibility to each trade's account, the owner excepted (Decision 0162 §D)", async () => {
+    const { app, repository, chain } = await createApp();
+    const token = seedTrading(repository, chain);
+    const base = {
+      transactionHash: `0x${"02".repeat(32)}`,
+      blockNumber: "121",
+      isBuy: true,
+      usd1Amount: "5000000000000000000",
+      tokenAmount: "890000000000000000000000",
+      feeUsd1: "50000000000000000",
+      priceAfterE18: "5600000000000",
+      tradedAt: new Date().toISOString(),
+    };
+    const profile = (id: string) => ({
+      publicProfileId: id,
+      displayName: `n-${id.slice(0, 4)}`,
+      avatarRef: null,
+    });
+    const other = "0b7c2d1e-3f40-4a5b-8c6d-7e8f9a0b1c2d";
+    Object.assign(repository, {
+      listTrades: () =>
+        Promise.resolve([
+          {
+            ...base,
+            logIndex: 4,
+            wallet: `0x${"0a".repeat(20)}`,
+            account: profile("1111aaaa"),
+            accountOwnerUserId: other,
+            accountTradeVisibility: "everyone",
+          },
+          {
+            ...base,
+            logIndex: 3,
+            wallet: `0x${"0b".repeat(20)}`,
+            account: profile("2222bbbb"),
+            accountOwnerUserId: other,
+            accountTradeVisibility: "self",
+          },
+          {
+            ...base,
+            logIndex: 2,
+            wallet: `0x${"0c".repeat(20)}`,
+            account: profile("3333cccc"),
+            accountOwnerUserId: s7AccountId,
+            accountTradeVisibility: "self",
+          },
+          {
+            ...base,
+            logIndex: 1,
+            wallet: `0x${"0d".repeat(20)}`,
+            account: null,
+            accountOwnerUserId: other,
+            accountTradeVisibility: "everyone",
+          },
+        ]),
+    });
+    const response = await get(
+      app,
+      `/v2/meme/tokens/${token.memeTokenId}/trades`,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(
+      response
+        .json<{ items: { account: unknown }[] }>()
+        .items.map((item) => item.account),
+    ).toEqual([profile("1111aaaa"), null, profile("3333cccc"), null]);
+  });
+
   it("answers 503 with the reason and reports the capability while the contract is not configured", async () => {
     const { app } = await createApp({ unconfigured: true });
     for (const [method, url] of [

@@ -851,7 +851,7 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
   `{status: "unavailable", reasonCode: "PROFILE_ACTIVATION_REQUIRED"}`（未激活 LOOP ID）。
 - 绑定后 `binding.status = "bound"`，`inviter = {depth: 1, validationStatus, lockedAt, effectiveFrom, configVersion}`
   —— **不暴露邀请人身份**。
-- `levels[].counts` 按 `validationStatus` 分组；开发基线不验证边为 `valid`，`boost` 仍 unavailable，
+- `levels[].counts` 按 `validationStatus` 分组（决策 0162 §E 起 `valid` = 被邀请人本人算力在最新已结算小时 > 0，与 `stats.validCount` 同源）；开发基线不验证边为 `valid`，`boost` 仍 unavailable，
   码是 `MINING_REFERRAL_BOOST_PENDING`（与摘要页 `referralBoost` 同一槽位同一码；S22a 前误用 `MINING_FORMULA_BASELINE_PENDING`）。
 - 一切表述为 "Mining Power 加成"，禁止"返佣/分红/下线收入"。
 

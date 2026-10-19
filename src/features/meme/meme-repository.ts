@@ -103,7 +103,11 @@ export interface MemeTradeRecord {
   readonly feeUsd1: string;
   readonly priceAfterE18: string;
   readonly tradedAt: string;
+  /** Unfiltered profile behind the wallet; the service applies 0162 §D. */
   readonly account: MemeCreatorProjection | null;
+  /** Decision 0162 §D: the wallet's owner and their trade-history visibility. */
+  readonly accountOwnerUserId: string | null;
+  readonly accountTradeVisibility: "self" | "everyone";
 }
 
 /**

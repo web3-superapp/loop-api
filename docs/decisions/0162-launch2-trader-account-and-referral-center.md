@@ -32,21 +32,31 @@
    - `inviteLink`：`{PUBLIC_BASE_URL}/i/{code}`（去掉尾部 `/`）。
    - `stats {directCount, validCount, level2to5Count, validAsOf}`：`directCount` = 生效中的 depth 1；`validCount` = 其中 `valid` 的人数（同上规则）；`level2to5Count` = 生效中的 depth 2..5；`validAsOf` = 读取所用结算小时的 `hourEnd`，尚无结算时 null（`validCount` 为 0）。
    - `boost`：有已结算小时 → `{status:"available", referralPower, nftReferralPower, assetReferralPower, levels[5]{level, effectiveMembers, nftPower, assetPower}, epochId, hourStart, hourEnd}`，`referralPower = trim_scale(nft + asset)`，单位是挖矿算力（不是钱）。该小时没有本人那一行 = 0（决策 0116：无行即无算力）。尚无结算小时或读取失败 → 保持 `unavailable` / `MINING_REFERRAL_BOOST_PENDING`（读取失败不拖垮整页）。
-   - `levels[].counts` 仍是存储的边状态计数，未改语义。
+   - `levels[].counts`：见 §E。
 3. **`GET /i/{code}`**（`src/routes/well-known.ts`，`hide: true`，不进 OpenAPI，无鉴权、不读库）：
    - 路径参数按 `parseInviteCode` 规范化（大小写、省略 `LOOP-`、Crockford `I/L→1, O→0`）并校验校验位；无效 → 404 `no-store` 的「链接无效」页；有效 → 200、`public, max-age=3600`。页面不说明该码是否真的发放过（与 `/u/` 一样不可枚举）。
    - 页面：黑底、LOOP 字样、「邀请码」+ 规范化的码、「复制邀请码并下载 LOOP」按钮、App Store / Google Play 链接（各自 env 有值才显示）、注册后 7 天内补绑的提示。`<meta property="og:title|og:description">` 与 `<meta name="loop-invite-code">`。
    - 唯一的内联脚本是固定文本（码和链接放在 `data-*` 属性里），CSP 用 `script-src 'sha256-…'` 只放行它；点按钮：写剪贴板（失败退回 `execCommand('copy')`）→ 按 UA 跳 iOS / Android 商店链接，都没有时跳 `APP_DOWNLOAD_URL`，再没有就只复制。
    - App 已安装：AASA `applinks.components` 增加 `{"/": "/i/*"}`；Android `assetlinks.json` 是域级声明，无需改动，**App 端 manifest 需加 `/i/` 的 intent-filter path**、iOS 端按 Universal Link 收到 `/i/{code}` 后取码并走 `POST /v2/referral/claim`（或预填注册页）。
-   - env：`APP_STORE_URL_IOS`、`APP_STORE_URL_ANDROID`（https、无凭据，否则启动失败；未设 = 不显示该按钮）。
+   - env（主代理 2026-10-19 确认）：`APP_STORE_URL_IOS` = App Store（或 TestFlight）链接，`APP_STORE_URL_ANDROID` = Google Play（或 APK 下载）链接；只接受 https、不得含凭据，否则启动失败；留空 = 不显示该商店链接；两者都空时按钮跳 `APP_DOWNLOAD_URL`，三者都空则只复制邀请码。`.env.example` 同步写明。
 4. **`POST /v2/referral/claim`**：语义不改。已核对窗口与错误码齐全：窗口 `[activatedAt, activatedAt + 7 天)`（服务器时钟，边界取开区间，`referral-contract.test.ts` 覆盖）；400 `INVALID_REQUEST`（格式 / 校验位错）、401、403 `POLICY_BLOCKED`（窗口已关）、404 `NOT_FOUND`（未知码，不可枚举）、409 `PROFILE_ACTIVATION_REQUIRED` / `DATA_STALE`（已绑定）/ `IDEMPOTENCY_CONFLICT`、422 `VALIDATION_FAILED`（自邀 / 成环）、503。
 
 ### C. 邀请码格式
 
 保持 `LOOP-XXXXC`；docs/09 的「8 位」是旧设想，以本决策与决策 0036 为准。自定义邀请码不做。
 
+### D. MEME 成交同样应用交易可见性（主代理 2026-10-19 裁决）
+
+- `GET /v2/meme/tokens/{id}/trades` 的 `items[].account` 改用与 §A **同一个投影函数** `projectTraderAccount`：对方 `trade_history_visibility = self` 时对别人为 null，本人仍可见；无隐私行 = `everyone`。
+- 实现：`meme-repository` 的 `accountJoin` 多读 `trade_visibility`，`MemeTradeRecord` 带 `accountOwnerUserId` / `accountTradeVisibility`（`account` 仍是未过滤的资料），由 `meme-service` 按调用者投影。持有人列表（`/holders`）与创建者不变。
+- 形状不变（`{publicProfileId, displayName, avatarRef} | null`），只是多了 null 的情形。
+
+### E. `levels[].counts.valid` 与 `stats.validCount` 同源（主代理 2026-10-19 裁决）
+
+- 改动在 1 小时内完成，未标 deprecated。`countInvitees` 现在按最新已结算小时重新归类：生效中的边若被邀请人本人算力 > 0 → 计入 `valid`；其余保持存储状态（存储里若有旧的 `valid` 但本小时无算力，计入 `pending_mining`）。于是 `levels[0].counts.valid == stats.validCount`，第 2–5 级同一规则。尚无结算小时时 `valid` 恒为 0。存储的 `referral_edges.validation_status` 不改写。
+
 ## 4. Consequences
 
 - App 可直接用 `account.publicProfileId` 打开 `GET /v2/public-profiles/{id}`；`account` 为 null 时继续显示钱包地址。缓存 30 s 意味着改隐私 / 换头像后最长 30 s 才在成交里生效。
 - `validCount` 与 `boost` 随小时结算推进；结算停摆时 `validAsOf` 停在最后一小时，客户端可据此标注「截至」。
-- 测试：`test/v2-launch2-trader-accounts.test.ts`（目录单元：隐私 / 本人豁免 / 批量 / TTL / 负缓存 / 分批 / 失败降级；三条路由的 `account`、每响应一次查询、跨请求命中缓存）、`test/v2-referral-routes.test.ts`（`inviteLink`、`stats`、boost 两种形态与降级、名单分页 / 游标 / 参数错误 / 无游标密钥 503）、`test/well-known-app-links-routes.test.ts`（`/i/` 页、CSP 哈希、商店链接、无效码 404、AASA 含 `/i/*`、env 校验）、`test/referral-invite-center.integration.test.ts`（PostgreSQL：结算前后的状态与计数、只读最新结算小时、拉黑隐去资料、同刻并列的游标翻页、地址映射规则）。
+- 测试（§D/§E 另见 `test/v2-meme-routes.test.ts` 可见性用例、`test/meme-launchpad.integration.test.ts` 的可见性字段、集成测试里 `countInvitees` 结算前后的分组）：`test/v2-launch2-trader-accounts.test.ts`（目录单元：隐私 / 本人豁免 / 批量 / TTL / 负缓存 / 分批 / 失败降级；三条路由的 `account`、每响应一次查询、跨请求命中缓存）、`test/v2-referral-routes.test.ts`（`inviteLink`、`stats`、boost 两种形态与降级、名单分页 / 游标 / 参数错误 / 无游标密钥 503）、`test/well-known-app-links-routes.test.ts`（`/i/` 页、CSP 哈希、商店链接、无效码 404、AASA 含 `/i/*`、env 校验）、`test/referral-invite-center.integration.test.ts`（PostgreSQL：结算前后的状态与计数、只读最新结算小时、拉黑隐去资料、同刻并列的游标翻页、地址映射规则）。

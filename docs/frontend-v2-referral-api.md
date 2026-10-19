@@ -95,7 +95,8 @@
     该小时我没有记录 = 全 0（真实的 0，不是读不到）。
   - `unavailable` + `MINING_REFERRAL_BOOST_PENDING`：还没有任何结算小时（或暂时读不到）。显示「加成待结算」，
     不要显示 0。
-- `binding`、`levels`、`rules` 语义不变（见 mining 文档 §5.1）。禁止「返佣 / 分红 / 下线收入」表述。
+- `levels[].counts.valid`（决策 0162 §E）与 `stats.validCount` 同源：被邀请人本人算力在最新已结算小时 > 0；其余状态仍是存储值。展示有效人数请用 `stats`。
+- `binding`、`rules` 语义不变（见 mining 文档 §5.1）。禁止「返佣 / 分红 / 下线收入」表述。
 
 ## 3. `GET /v2/referral/invitees?limit=&cursor=`（我的直推列表）
 

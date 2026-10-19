@@ -403,17 +403,21 @@ const accountColumns = `
   acct.owner_user_id::text as account_owner_user_id,
   acct.public_profile_id::text as account_public_profile_id,
   acct.alias as account_alias,
-  acct.avatar_ref as account_avatar_ref
+  acct.avatar_ref as account_avatar_ref,
+  acct.trade_visibility as account_trade_visibility
 `;
 
 /** The account (if any) whose active-status wallet is `${column}`. */
 function accountJoin(column: string): string {
   return `
     left join lateral (
-      select w.owner_user_id, p.public_profile_id, p.alias, p.avatar_ref
+      select w.owner_user_id, p.public_profile_id, p.alias, p.avatar_ref,
+        coalesce(pv.trade_history_visibility, 'everyone') as trade_visibility
       from public.account_wallets as w
       left join public.user_profiles as p
         on p.owner_user_id = w.owner_user_id and p.profile_status = 'active'
+      left join public.privacy_preferences_v2 as pv
+        on pv.owner_user_id = w.owner_user_id
       where w.address = ${column} and w.status = 'active'
       order by w.first_seen_at asc, w.wallet_id asc
       limit 1
@@ -426,15 +430,19 @@ const accountRowSchema = z.object({
   account_public_profile_id: z.string().nullable(),
   account_alias: z.string().nullable(),
   account_avatar_ref: z.string().nullable(),
+  account_trade_visibility: z.enum(["self", "everyone"]).nullable(),
 });
 
 function accountOf(raw: unknown): {
   readonly ownerUserId: string | null;
+  readonly tradeVisibility: "self" | "everyone";
   readonly account: MemeCreatorProjection | null;
 } {
   const row = accountRowSchema.parse(raw);
   return {
     ownerUserId: row.account_owner_user_id,
+    // Decision 0162 §D: no privacy row reads as `everyone`.
+    tradeVisibility: row.account_trade_visibility ?? "everyone",
     // Only an active public profile is shown; a wallet alone is never one.
     account:
       row.account_public_profile_id === null
@@ -1075,7 +1083,14 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
               feeUsd1: row.fee_usd1,
               priceAfterE18: row.price_after_e18,
               tradedAt: toIsoString(row.traded_at),
-              account: accountOf(raw).account,
+              ...(() => {
+                const owner = accountOf(raw);
+                return {
+                  account: owner.account,
+                  accountOwnerUserId: owner.ownerUserId,
+                  accountTradeVisibility: owner.tradeVisibility,
+                };
+              })(),
             });
           }),
         );

@@ -430,7 +430,7 @@ export function registerV2ReferralRoutes(
         summary:
           "Get the caller's invite code, link, binding, counts, and boost",
         description:
-          "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). `levels[].counts` keep the stored edge statuses. The claim window is [activatedAt, activatedAt + 7 days).",
+          "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. The claim window is [activatedAt, activatedAt + 7 days).",
         tags: ["referral"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

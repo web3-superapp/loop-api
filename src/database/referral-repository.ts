@@ -467,10 +467,30 @@ export function createPostgresReferralRepository(
       try {
         const inviterUserId = userIdSchema.parse(rawInviterUserId);
         const result = await pool.query({
+          // Decision 0162 §E: `valid` comes from the newest settled hour
+          // (the invitee's own power > 0), the same source as
+          // stats.validCount; every other edge keeps its stored status.
           text: `
+            with ${latestSettledEpochSql},
+            classified as (
+              select
+                e.depth,
+                case
+                  when e.validation_status <> 'invalidated'
+                    and r.owner_user_id is not null
+                    and r.nft_self_power::numeric + r.asset_self_power::numeric > 0
+                    then 'valid'
+                  when e.validation_status = 'valid' then 'pending_mining'
+                  else e.validation_status
+                end as validation_status
+              from public.referral_edges as e
+              left join latest on true
+              left join public.mining_epoch_rewards as r
+                on r.epoch_id = latest.epoch_id and r.owner_user_id = e.invitee_user_id
+              where e.inviter_user_id = $1 and e.effective_to is null
+            )
             select depth, validation_status, count(*)::int as count
-            from public.referral_edges
-            where inviter_user_id = $1 and effective_to is null
+            from classified
             group by depth, validation_status
             order by depth asc, validation_status asc
           `,

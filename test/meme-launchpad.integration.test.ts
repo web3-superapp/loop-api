@@ -515,6 +515,35 @@ describe("Decision 0101 MEME launchpad on PostgreSQL", () => {
       },
     });
     expect(rest.map((trade) => trade.blockNumber)).toEqual(["100"]);
+    // Decision 0162 §D: the trade carries the owner and their visibility;
+    // no privacy row reads as `everyone`.
+    const byBuyer = [...firstPage, ...rest].find(
+      (trade) => trade.wallet === buyerA,
+    );
+    expect(byBuyer).toMatchObject({
+      accountOwnerUserId: creatorId,
+      accountTradeVisibility: "everyone",
+      account: { publicProfileId: creatorProfileId },
+    });
+    await pool.query({
+      text: `insert into public.privacy_preferences_v2 (owner_user_id, trade_history_visibility)
+        values ($1, 'self')
+        on conflict (owner_user_id) do update set trade_history_visibility = 'self'`,
+      values: [creatorId],
+    });
+    const hiddenPage = await repository.listTrades({
+      memeTokenId: frog.memeTokenId,
+      limit: 10,
+      after: null,
+    });
+    expect(
+      hiddenPage.find((trade) => trade.wallet === buyerA)
+        ?.accountTradeVisibility,
+    ).toBe("self");
+    await pool.query({
+      text: `update public.privacy_preferences_v2 set trade_history_visibility = 'everyone' where owner_user_id = $1`,
+      values: [creatorId],
+    });
     expect(firstPage[0]?.priceAfterE18).toBe(memePriceE18(curve).toString());
 
     const candles = await repository.listCandles({
