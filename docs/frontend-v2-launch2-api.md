@@ -19,6 +19,13 @@
 > 「外盘成交 N 笔 / 外盘买入 / 卖出量」请改用 `user*`；`tradeCount - userTradeCount` = 已索引的回购成交笔数。
 > **部署顺序**：严格解码器会拒绝未知键的旧包，须先发能接受这三个键的包，再上这一版 API。
 
+> **S239 / 决策 0162 变化（给 App）**：`instance.recentTrades[]`（§3.2）、`…/pool/trades` 的 `trades[]`
+> （§3.11）与 `GET /v2/launch2/overview` 的 `activity[]`（§3.13）每条新增 `account`，形状与 MEME 成交**完全相同**：
+> `{ "publicProfileId": "…", "displayName": "alias 或 null", "avatarRef": "avatar:… 或 null" }` 或 `null`。
+> 有值 → 显示头像 / 名字，点按打开 `GET /v2/public-profiles/{publicProfileId}`；`null` → 继续显示缩短的钱包地址
+> （没有绑定账户、资料未激活、或对方把「交易记录」设为仅自己可见；本人永远看得到自己）。服务端最长缓存 30 s。
+> 新增键在 schema 里是可选的；严格解码的客户端须先接受 `account` 再上这一版 API。
+
 > **S150 / 决策 0126 变化（给 App）**：① **签名有效期**：报价（`…/quote`、`…/pool/quote`）的 `deadline` /
 > `expiresAt` 仍是 60 s 新鲜度；prepare 返回的意图 `deadline` / `expiresAt`（以及编码进合约调用的 deadline）
 > 改为 **prepare 时刻 + 180 s**（服务端 `LAUNCH2_POOL_TRADE_DEADLINE_SECONDS`，默认 180），外盘 prepare 在该
@@ -234,6 +241,11 @@ List row: 内盘进度 = `curve.soldBps` (已售 / 8 亿), 毕业进度 = `curve
         "tradeId": "…",
         "side": "buy",
         "traderAddress": "0x…",
+        "account": {
+          "publicProfileId": "3f0c…",
+          "displayName": "frog",
+          "avatarRef": "avatar:media/…"
+        },
         "memeAmount": "1125000.5",
         "usd1Gross": "50",
         "usd1Net": "45",
@@ -847,6 +859,11 @@ are never attributed to anyone.
   "trades": [
     {
       "poolTradeId": "5e0f0a8e-4c0a-4b8e-9a0c-2f7d1c3b4a50",
+      "account": {
+        "publicProfileId": "3f0c…",
+        "displayName": "me",
+        "avatarRef": null
+      },
       "side": "buy",
       "inputToken": "usd1",
       "outputToken": "meme",
@@ -1177,6 +1194,11 @@ is configured. Nothing in the wire format changes.
       "name": "Doge on LOOP",
       "logoUrl": "https://…/doge.png",
       "actor": "0x1d2f…9b",
+      "account": {
+        "publicProfileId": "3f0c…",
+        "displayName": "frog",
+        "avatarRef": null
+      },
       "amountUsd1": "20",
       "at": "2027-01-15T08:00:40.000Z",
       "transactionHash": "0xabab…"
@@ -1188,6 +1210,7 @@ is configured. Nothing in the wire format changes.
       "name": "Doge on LOOP",
       "logoUrl": null,
       "actor": null,
+      "account": null,
       "amountUsd1": null,
       "at": "2027-01-15T07:59:00.000Z",
       "transactionHash": "0xcdcd…"
@@ -1222,6 +1245,7 @@ is configured. Nothing in the wire format changes.
 | `reward_claimed`  | LoopDynamic 奖励领取                       | 领取地址                                            | 领取 USD1                  |
 
 - `actor` 是 0x 全地址，App 自己缩短；null 显示「有人」（交易）或不显示主语（平台动作）。
+- `account`（决策 0162）：`actor` 背后的 LOOP 账户，规则同 §3.2 `recentTrades[].account`；有值时显示头像 / 名字并可点开资料页，`actor` 为 null 时恒为 null。
 - 点一条 → `instanceId` 的项目页。`transactionHash` 可为 null（老数据未存哈希的毕业行）。
 
 `stats`：

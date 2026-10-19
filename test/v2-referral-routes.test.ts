@@ -7,7 +7,9 @@ import {
   ReferralAlreadyBoundError,
   ReferralIdempotencyConflictError,
   createUnavailableReferralRepository,
+  type ReferralBoostRecord,
   type ReferralEdgeRecord,
+  type ReferralInviteeRecord,
   type ReferralRepository,
 } from "../src/features/referral/referral-repository.js";
 import {
@@ -62,6 +64,19 @@ function repositoryFake(overrides: Partial<ReferralRepository> = {}) {
       ]),
     ),
     recordRejectedClaim: vi.fn(() => Promise.resolve()),
+    getInviteeStats: vi.fn(() =>
+      Promise.resolve({
+        directCount: 3,
+        validCount: 1,
+        level2to5Count: 4,
+        validAsOf: "2026-09-08T02:00:00.000Z",
+      }),
+    ),
+    getReferralBoost: vi.fn(() => Promise.resolve(null)),
+    getLatestSettledEpochId: vi.fn(() =>
+      Promise.resolve("0f1e2d3c-4b5a-4968-8776-655443322110"),
+    ),
+    listDirectInvitees: vi.fn(() => Promise.resolve([])),
     ...overrides,
   };
   return repository;
@@ -131,6 +146,15 @@ describe("LOOP API V2 referral module", () => {
       readonly rules: unknown;
     }>();
     expect(body.inviteCode.code).toMatch(/^LOOP-[0-9A-HJKMNP-TV-Z]{5}$/);
+    expect(response.json<{ inviteLink: string }>().inviteLink).toBe(
+      `http://127.0.0.1:3000/i/${body.inviteCode.code}`,
+    );
+    expect(response.json<{ stats: unknown }>().stats).toEqual({
+      directCount: 3,
+      validCount: 1,
+      level2to5Count: 4,
+      validAsOf: "2026-09-08T02:00:00.000Z",
+    });
     expect(calls(repository, "issueInviteCode")).toHaveBeenCalledOnce();
     expect(body.binding).toMatchObject({
       status: "unbound",
@@ -316,5 +340,189 @@ describe("LOOP API V2 referral module", () => {
     expect(malformed.statusCode).toBe(400);
     const missingKey = await claim(app, code, s7CommonHeaders());
     expect(missingKey.statusCode).toBe(400);
+  });
+
+  it("publishes the referral power of the newest settled hour as the boost (Decision 0162)", async () => {
+    const boost: ReferralBoostRecord = {
+      epochId: "0f1e2d3c-4b5a-4968-8776-655443322110",
+      hourStart: "2026-09-08T01:00:00.000Z",
+      hourEnd: "2026-09-08T02:00:00.000Z",
+      referralPower: "12.5",
+      nftReferralPower: "10",
+      assetReferralPower: "2.5",
+      levels: [1, 2, 3, 4, 5].map((level) => ({
+        level,
+        effectiveMembers: level === 1 ? 2 : 0,
+        nftPower: level === 1 ? "10" : "0",
+        assetPower: level === 1 ? "2.5" : "0",
+      })),
+    };
+    const { app, repository } = await createApp(
+      repositoryFake({
+        getReferralBoost: vi.fn(() => Promise.resolve(boost)),
+      }),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: "/v2/referral",
+      headers: s7CommonHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ boost: unknown }>().boost).toEqual({
+      status: "available",
+      ...boost,
+    });
+    // One settled hour for the whole response.
+    for (const method of [
+      "countInvitees",
+      "getInviteeStats",
+      "getReferralBoost",
+    ] as const) {
+      expect(calls(repository, method)).toHaveBeenCalledWith(
+        s7AccountId,
+        boost.epochId,
+      );
+    }
+    expect(calls(repository, "getLatestSettledEpochId")).toHaveBeenCalledOnce();
+    // A failed boost read never fails the page.
+    const failing = await createApp(
+      repositoryFake({
+        getReferralBoost: vi.fn(() => Promise.reject(new Error("down"))),
+      }),
+    );
+    const degraded = await failing.app.inject({
+      method: "GET",
+      url: "/v2/referral",
+      headers: s7CommonHeaders(),
+    });
+    expect(degraded.statusCode).toBe(200);
+    expect(degraded.json<{ boost: unknown }>().boost).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_REFERRAL_BOOST_PENDING",
+    });
+  });
+
+  function invitee(index: number): ReferralInviteeRecord {
+    const second = String(59 - index).padStart(2, "0");
+    return {
+      referralEdgeId: `7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5${String(index).padStart(2, "0")}`,
+      publicProfileId:
+        index === 2
+          ? null
+          : `5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e${String(index).padStart(2, "0")}`,
+      alias: index === 2 ? null : `friend ${String(index)}`,
+      avatarRef: null,
+      boundAt: `2026-09-08T01:00:${second}.123Z`,
+      boundAtKey: `2026-09-08T01:00:${second}.123456Z`,
+      validationStatus: index === 0 ? "valid" : "pending",
+    };
+  }
+
+  it("lists direct invitees newest first with an owner-bound cursor (Decision 0162)", async () => {
+    const rows = [0, 1, 2, 3].map(invitee);
+    const listDirectInvitees = vi.fn(
+      (input: {
+        readonly after: { readonly boundAtKey: string } | null;
+        readonly limit: number;
+      }) => {
+        const start =
+          input.after === null
+            ? 0
+            : rows.findIndex(
+                (row) => row.boundAtKey === input.after?.boundAtKey,
+              ) + 1;
+        return Promise.resolve(rows.slice(start, start + input.limit));
+      },
+    );
+    const { app } = await createApp(repositoryFake({ listDirectInvitees }));
+    const first = await app.inject({
+      method: "GET",
+      url: "/v2/referral/invitees?limit=2",
+      headers: s7CommonHeaders(),
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["cache-control"]).toBe("no-store");
+    const page = first.json<{
+      items: Record<string, unknown>[];
+      nextCursor: string | null;
+      contractVersion: string;
+    }>();
+    expect(page.items).toEqual([
+      {
+        publicProfileId: "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e00",
+        alias: "friend 0",
+        avatarRef: null,
+        boundAt: "2026-09-08T01:00:59.123Z",
+        validationStatus: "valid",
+      },
+      {
+        publicProfileId: "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e01",
+        alias: "friend 1",
+        avatarRef: null,
+        boundAt: "2026-09-08T01:00:58.123Z",
+        validationStatus: "pending",
+      },
+    ]);
+    expect(page.contractVersion).toBe("2.0");
+    expect(listDirectInvitees).toHaveBeenLastCalledWith({
+      inviterUserId: s7AccountId,
+      after: null,
+      limit: 3,
+    });
+    expect(page.nextCursor).not.toBeNull();
+    const second = await app.inject({
+      method: "GET",
+      url: `/v2/referral/invitees?cursor=${String(page.nextCursor)}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(second.statusCode).toBe(200);
+    expect(listDirectInvitees).toHaveBeenLastCalledWith({
+      inviterUserId: s7AccountId,
+      after: {
+        boundAtKey: "2026-09-08T01:00:58.123456Z",
+        referralEdgeId: rows[1]?.referralEdgeId,
+      },
+      limit: 3,
+    });
+    const tail = second.json<{
+      items: { publicProfileId: string | null }[];
+      nextCursor: string | null;
+    }>();
+    expect(tail.items.map((row) => row.publicProfileId)).toEqual([
+      null,
+      "5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e03",
+    ]);
+    expect(tail.nextCursor).toBeNull();
+  });
+
+  it("rejects cursor with limit, a forged cursor, and an out-of-range limit; 503 without the cursor secret", async () => {
+    const { app } = await createApp();
+    for (const url of [
+      "/v2/referral/invitees?limit=0",
+      "/v2/referral/invitees?limit=51",
+      "/v2/referral/invitees?cursor=abc.def",
+      "/v2/referral/invitees?cursor=abc.def&limit=2",
+      "/v2/referral/invitees?other=1",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: s7CommonHeaders(),
+      });
+      expect(response.statusCode, url).toBe(400);
+    }
+    const unconfigured = await createApp(repositoryFake(), {
+      V2_CURSOR_HMAC_SECRET: "",
+    });
+    const response = await unconfigured.app.inject({
+      method: "GET",
+      url: "/v2/referral/invitees",
+      headers: s7CommonHeaders(),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE",
+      detailsSafe: { reasonCode: "V2_CURSOR_NOT_CONFIGURED" },
+    });
   });
 });

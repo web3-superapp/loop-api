@@ -13,9 +13,18 @@ import {
   referralMaximumDepth,
   referralValidationStatuses,
 } from "../../features/referral/referral-contract.js";
-import type { ReferralService } from "../../features/referral/referral-service.js";
+import { referralInviteeStatuses } from "../../features/referral/referral-repository.js";
+import {
+  referralInviteePaging,
+  type ReferralService,
+} from "../../features/referral/referral-service.js";
+import {
+  opaqueIdPatternSource,
+  storedAvatarRefPatternSource,
+} from "../../features/community/community-contract.js";
 import {
   assertNoBodyOrQueryV2,
+  assertNoBodyV2,
   assertNoQuery,
   v2CommandHeadersSchema,
   v2CommonHeadersSchema,
@@ -89,14 +98,181 @@ const bindingSchema = {
   },
 } as const;
 
+const powerSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,18})?$",
+} as const;
+
+/** Decision 0162: the referral power of the newest settled hour. */
+const boostAvailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "referralPower",
+    "nftReferralPower",
+    "assetReferralPower",
+    "levels",
+    "epochId",
+    "hourStart",
+    "hourEnd",
+  ],
+  properties: {
+    status: { type: "string", const: "available" },
+    referralPower: {
+      ...powerSchema,
+      description:
+        "nftReferralPower + assetReferralPower of the newest settled hour (Mining Power, not money). 0 when the caller had no row in that hour.",
+    },
+    nftReferralPower: powerSchema,
+    assetReferralPower: powerSchema,
+    levels: {
+      type: "array",
+      minItems: referralMaximumDepth,
+      maxItems: referralMaximumDepth,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["level", "effectiveMembers", "nftPower", "assetPower"],
+        properties: {
+          level: { type: "integer", minimum: 1, maximum: referralMaximumDepth },
+          effectiveMembers: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Members of this level with self power > 0 in the hour.",
+          },
+          nftPower: powerSchema,
+          assetPower: powerSchema,
+        },
+      },
+    },
+    epochId: { type: "string", format: "uuid" },
+    hourStart: dateTimeSchema,
+    hourEnd: dateTimeSchema,
+  },
+} as const;
+
+const referralStatsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["directCount", "validCount", "level2to5Count", "validAsOf"],
+  properties: {
+    directCount: {
+      type: "integer",
+      minimum: 0,
+      description: "Direct invitees in force (depth 1, not invalidated).",
+    },
+    validCount: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Direct invitees in force whose own (self) power was > 0 in the newest settled hour (docs/38 §5.2 有效成员). 0 before the first settled hour.",
+    },
+    level2to5Count: {
+      type: "integer",
+      minimum: 0,
+      description: "In-force relationships of depth 2..5.",
+    },
+    validAsOf: {
+      anyOf: [dateTimeSchema, { type: "null" }],
+      description:
+        "hourEnd of the settled hour validCount was read from; null before the first one.",
+    },
+  },
+} as const;
+
+const inviteesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: {
+      type: "string",
+      minLength: 3,
+      maxLength: 1_536,
+      pattern: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: referralInviteePaging.maximumLimit,
+      description: `Default ${String(referralInviteePaging.defaultLimit)}. Not allowed together with cursor.`,
+    },
+  },
+} as const;
+
+const inviteeListResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["items", "nextCursor", "contractVersion"],
+  properties: {
+    items: {
+      type: "array",
+      maxItems: referralInviteePaging.maximumLimit,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "publicProfileId",
+          "alias",
+          "avatarRef",
+          "boundAt",
+          "validationStatus",
+        ],
+        properties: {
+          publicProfileId: {
+            anyOf: [
+              { type: "string", pattern: opaqueIdPatternSource },
+              { type: "null" },
+            ],
+            description:
+              "Opens GET /v2/public-profiles/{publicProfileId}. Null when the invitee has no active profile or has blocked the caller (the row is still listed).",
+          },
+          alias: {
+            anyOf: [
+              { type: "string", minLength: 1, maxLength: 1024 },
+              { type: "null" },
+            ],
+            description:
+              "Shown as is, never masked: `discoverable` only governs search (Decision 0096 / docs/09 B9), the same rule message requests follow.",
+          },
+          avatarRef: {
+            anyOf: [
+              { type: "string", pattern: storedAvatarRefPatternSource },
+              { type: "null" },
+            ],
+          },
+          boundAt: {
+            ...dateTimeSchema,
+            description: "When the invitee claimed the caller's code.",
+          },
+          validationStatus: {
+            type: "string",
+            enum: [...referralInviteeStatuses],
+            description:
+              "valid = own power > 0 in the newest settled hour; invalid = the relationship was invalidated; pending = anything else (no settled hour yet, or no own power).",
+          },
+        },
+      },
+    },
+    nextCursor: {
+      anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+    },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
 const referralResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
   required: [
     "inviteCode",
+    "inviteLink",
     "binding",
     "levels",
+    "stats",
     "boost",
     "rules",
     "contractVersion",
@@ -110,6 +286,12 @@ const referralResourceSchema = {
         code: { type: "string", pattern: inviteCodePatternSource },
         issuedAt: dateTimeSchema,
       },
+    },
+    inviteLink: {
+      type: "string",
+      format: "uri",
+      description:
+        "Decision 0162: {PUBLIC_BASE_URL}/i/{code}. With LOOP installed the system opens the app (Universal Link / App Link, path /i/*); otherwise a landing page offers copy-code-and-download.",
     },
     binding: bindingSchema,
     levels: {
@@ -141,7 +323,12 @@ const referralResourceSchema = {
         },
       },
     },
-    boost: unavailableSchema,
+    stats: referralStatsSchema,
+    boost: {
+      anyOf: [boostAvailableSchema, unavailableSchema],
+      description:
+        "Decision 0162: available from the newest settled mining hour; unavailable MINING_REFERRAL_BOOST_PENDING before the first one.",
+    },
     rules: {
       type: "object",
       additionalProperties: false,
@@ -240,9 +427,10 @@ export function registerV2ReferralRoutes(
     {
       schema: {
         operationId: "getV2Referral",
-        summary: "Get the caller's invite code, binding, and level counts",
+        summary:
+          "Get the caller's invite code, link, binding, counts, and boost",
         description:
-          "Issues the account's invite code on first read (one per account, random, unique). Counts per level are grouped by validationStatus; `valid` needs a Mining formula version that approves the boost (D19), so the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). The claim window is [activatedAt, activatedAt + 7 days).",
+          "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. The claim window is [activatedAt, activatedAt + 7 days).",
         tags: ["referral"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -257,6 +445,39 @@ export function registerV2ReferralRoutes(
       const resource = await service.getReferral({
         principal: requireAuthenticatedLoopPrincipal(request),
         requestId: request.id,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/referral/invitees",
+    {
+      schema: {
+        operationId: "listV2ReferralInvitees",
+        summary: "List the caller's direct invitees",
+        description:
+          "Decision 0162: depth-1 relationships of the caller (in force and invalidated), newest binding first, keyset paged with an owner-bound cursor (cursor and limit are exclusive). Profiles are shown as is (discoverable governs search only); a profile is null when the invitee blocked the caller. 503 CAPABILITY_UNAVAILABLE / V2_CURSOR_NOT_CONFIGURED without the cursor secret.",
+        tags: ["referral"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: inviteesQuerySchema,
+        response: { 200: inviteeListResourceSchema, ...readErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const query = request.query as {
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await service.listInvitees({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

@@ -293,7 +293,7 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 ```
 
 `usd1Amount` 是**钱包侧**金额：买 = 实付（含 1% 费、不含退款），卖 = 实收（已扣费）。`account` 有公开资料时给，
-否则客户端显示钱包缩写。行的唯一键 = `txHash + logIndex`。
+否则客户端显示钱包缩写。决策 0162 §D 起：对方把「交易记录」设为仅自己可见（`trade_history_visibility = self`）时，别人看到的 `account` 为 `null`（本人仍看得到自己）。行的唯一键 = `txHash + logIndex`。
 
 ### 5.2 `GET /v2/meme/tokens/{id}/candles?interval&limit`
 

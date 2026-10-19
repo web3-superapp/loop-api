@@ -453,6 +453,8 @@ export function createInMemoryMemeRepository(): InMemoryMemeRepository {
           priceAfterE18: "5600000000000",
           tradedAt: createdAt,
           account: null,
+          accountOwnerUserId: null,
+          accountTradeVisibility: "everyone" as const,
         },
       ]),
     listCandles: () =>

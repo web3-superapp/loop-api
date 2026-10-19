@@ -136,6 +136,11 @@ import {
   launch2OverviewActivityLimit,
   projectLaunch2Overview,
 } from "./launch2-overview.js";
+import {
+  createEmptyWalletAccountDirectory,
+  type TraderAccountProjection,
+  type WalletAccountDirectory,
+} from "../profile/wallet-account-directory.js";
 import { launch2ProjectProfileProjection } from "./launch2-project-profile.js";
 import {
   launch2PublicCandleIntervals,
@@ -234,6 +239,12 @@ export interface Launch2ServiceDependencies {
   readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly logger?: Launch2ServiceLogger;
+  /**
+   * Decision 0162: trader wallet → LOOP account for the curve trades, the
+   * pool trades, and the launchpad activity. Absent = every trader stays a
+   * bare wallet (`account: null`).
+   */
+  readonly accounts?: WalletAccountDirectory | null;
 }
 
 type Resource = Record<string, unknown>;
@@ -534,11 +545,15 @@ function buybackOf(record: Launch2BuybackRecord): Resource {
   });
 }
 
-function tradeOf(record: Launch2TradeRecord): Resource {
+function tradeOf(
+  record: Launch2TradeRecord,
+  accounts: ReadonlyMap<string, TraderAccountProjection | null>,
+): Resource {
   return Object.freeze({
     tradeId: record.tradeId,
     side: record.side,
     traderAddress: record.traderAddress,
+    account: accounts.get(record.traderAddress.toLowerCase()) ?? null,
     memeAmount: formatLaunch2Amount(BigInt(record.memeAmount)),
     usd1Gross: formatLaunch2Amount(BigInt(record.usd1Gross)),
     usd1Net: formatLaunch2Amount(BigInt(record.usd1Net)),
@@ -932,10 +947,14 @@ function poolTradeStatsOf(stats: Launch2PoolTradeStats | undefined): Resource {
   });
 }
 
-function poolTradeOf(record: Launch2PoolTradeRecord): Resource {
+function poolTradeOf(
+  record: Launch2PoolTradeRecord,
+  account: TraderAccountProjection | null,
+): Resource {
   const buy = record.side === "buy";
   return Object.freeze({
     poolTradeId: record.poolTradeId,
+    account,
     side: record.side,
     inputToken: buy ? "usd1" : "meme",
     outputToken: buy ? "meme" : "usd1",
@@ -991,6 +1010,7 @@ export function createLaunch2Service(
 ): Launch2Service {
   const now = deps.now ?? ((): Date => new Date());
   const createUuid = deps.createUuid ?? randomUUID;
+  const accounts = deps.accounts ?? createEmptyWalletAccountDirectory();
   const tradeDeadlineSeconds = BigInt(
     Math.min(
       Math.max(
@@ -3725,6 +3745,10 @@ export function createLaunch2Service(
       const wallet = await walletFor(input.principal, input.walletId, true);
       if (wallet === null) throw V2ApiError.notFound();
       const address = wallet.address.toLowerCase();
+      const own =
+        (await accounts.resolve([address], input.principal.userId)).get(
+          address,
+        ) ?? null;
       const [rows, stats] =
         record.graduation === null
           ? [[] as readonly Launch2PoolTradeRecord[], [] as const]
@@ -3747,12 +3771,12 @@ export function createLaunch2Service(
         instanceId: record.instanceId,
         walletId: wallet.walletId,
         ...poolTradeStatsOf(stats[0]),
-        trades: rows.map(poolTradeOf),
+        trades: rows.map((row) => poolTradeOf(row, own)),
         contractVersion: v2ContractVersion,
       });
     },
 
-    async getOverview() {
+    async getOverview(input) {
       const store = repository();
       const [activity, facts] = await Promise.all([
         store.listActivity({
@@ -3761,7 +3785,16 @@ export function createLaunch2Service(
         }),
         store.listOverviewFacts({ chainId: deps.chainId }),
       ]).catch(translate);
-      return projectLaunch2Overview({ activity, facts, now: now() });
+      const actorAccounts = await accounts.resolve(
+        activity.flatMap((row) => (row.actor === null ? [] : [row.actor])),
+        input.principal.userId,
+      );
+      return projectLaunch2Overview({
+        activity,
+        facts,
+        now: now(),
+        accounts: actorAccounts,
+      });
     },
 
     async listInstances(input) {
@@ -3887,6 +3920,11 @@ export function createLaunch2Service(
         tradingHoldForView(),
         dynamicRouterForView(record),
       ]);
+      // Decision 0162: one batched (cached) lookup for the 20 traders.
+      const traderAccounts = await accounts.resolve(
+        trades.map((trade) => trade.traderAddress),
+        input.principal.userId,
+      );
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
       const snapshot = record.snapshot;
@@ -4000,7 +4038,7 @@ export function createLaunch2Service(
                     BigInt(record.pool.userSellVolumeUsd1),
                   ),
                 }),
-          recentTrades: trades.map(tradeOf),
+          recentTrades: trades.map((trade) => tradeOf(trade, traderAccounts)),
           viewer:
             wallet === null
               ? null

@@ -113,11 +113,13 @@ import type { HooksLaunchReviewRepository } from "../features/launch/hooks-launc
 import type { HooksLaunchSubmissionRepository } from "../features/launch/hooks-launch-submission.js";
 import { createPostgresMiningRepository } from "./mining-repository.js";
 import { createPostgresReferralRepository } from "./referral-repository.js";
+import { createPostgresWalletAccountLookup } from "./wallet-account-directory-repository.js";
 import type { LaunchRepository } from "../features/launch/launch-repository.js";
 import type { LaunchChainRepository } from "../features/launch/launch-chain-repository.js";
 import { createPostgresLaunchChainRepository } from "./launch-chain-repository.js";
 import type { MiningRepository } from "../features/mining/mining-repository.js";
 import type { ReferralRepository } from "../features/referral/referral-repository.js";
+import type { WalletAccountLookup } from "../features/profile/wallet-account-directory.js";
 import type {
   CommunicationRepository,
   CommunityChannelPersonaRepository,
@@ -265,6 +267,8 @@ export interface Database {
   readonly mining?: MiningRepository;
   /** Invite codes and referral edges (Decision 0036). */
   readonly referral?: ReferralRepository;
+  /** Decision 0162: wallet address → account for trade feeds. */
+  readonly walletAccounts?: WalletAccountLookup;
   /** MEME curve launchpad: tokens, lane, salts, Intents (Decision 0101). */
   readonly meme?: MemeRepository;
   /** MEME v2 read model: instances, lane facts, Intents (Decision 0114). */
@@ -570,6 +574,7 @@ export function createPostgresDatabase(
     adminLoginAttempts: createPostgresAdminLoginAttemptStore(pool),
     mining,
     referral,
+    walletAccounts: createPostgresWalletAccountLookup(pool),
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `

@@ -1,4 +1,8 @@
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import {
+  InvalidV2CursorError,
+  type V2CursorCodec,
+} from "../../core/http/v2-cursor.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import {
   referralRulesConfigVersion,
@@ -32,7 +36,10 @@ import {
   ReferralCodeTakenError,
   ReferralIdempotencyConflictError,
   ReferralRepositoryUnavailableError,
+  type ReferralBoostRecord,
   type ReferralEdgeRecord,
+  type ReferralInviteeKey,
+  type ReferralInviteeStatus,
   type ReferralRepository,
 } from "./referral-repository.js";
 
@@ -63,11 +70,31 @@ export interface ReferralBindingProjection {
   readonly claimWindow: ReturnType<typeof claimWindow>;
 }
 
+/** Decision 0162: the caller's referral power of the newest settled hour. */
+export interface ReferralBoostProjection {
+  readonly status: "available";
+  readonly referralPower: string;
+  readonly nftReferralPower: string;
+  readonly assetReferralPower: string;
+  readonly levels: ReferralBoostRecord["levels"];
+  readonly epochId: string;
+  readonly hourStart: string;
+  readonly hourEnd: string;
+}
+
 export interface ReferralResource {
   readonly inviteCode: { readonly code: string; readonly issuedAt: string };
+  /** Decision 0162: `{PUBLIC_BASE_URL}/i/{code}` (Universal Link / App Link). */
+  readonly inviteLink: string;
   readonly binding: ReferralBindingProjection;
   readonly levels: readonly ReferralLevelProjection[];
-  readonly boost: UnavailableProjection;
+  readonly stats: {
+    readonly directCount: number;
+    readonly validCount: number;
+    readonly level2to5Count: number;
+    readonly validAsOf: string | null;
+  };
+  readonly boost: ReferralBoostProjection | UnavailableProjection;
   readonly rules: {
     readonly configVersion: typeof referralRulesConfigVersion;
     readonly effectiveAt: typeof referralRulesEffectiveAt;
@@ -83,6 +110,28 @@ export interface ReferralClaimResource {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+export interface ReferralInviteeProjection {
+  readonly publicProfileId: string | null;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+  readonly boundAt: string;
+  readonly validationStatus: ReferralInviteeStatus;
+}
+
+export interface ReferralInviteeListResource {
+  readonly items: readonly ReferralInviteeProjection[];
+  readonly nextCursor: string | null;
+  readonly contractVersion: typeof v2ContractVersion;
+}
+
+export const referralInviteePaging = Object.freeze({
+  defaultLimit: 20,
+  maximumLimit: 50,
+});
+
+const inviteeCursorRoute = "referralInvitees";
+const inviteeCursorFilter = "depth=1";
+
 export interface ReferralService {
   getReferral(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -94,6 +143,11 @@ export interface ReferralService {
     readonly requestId: string;
     readonly body: unknown;
   }): Promise<ReferralClaimResource>;
+  listInvitees(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly cursor?: unknown;
+    readonly limit?: unknown;
+  }): Promise<ReferralInviteeListResource>;
 }
 
 function translate(error: unknown): never {
@@ -146,10 +200,99 @@ function bindingProjection(
 
 export function createReferralService(dependencies: {
   readonly repository: ReferralRepository;
+  /** `PUBLIC_BASE_URL`: the origin that serves `/i/{code}` and the AASA. */
+  readonly publicBaseUrl: string;
+  /** Null keeps `GET /v2/referral/invitees` 503 V2_CURSOR_NOT_CONFIGURED. */
+  readonly cursorCodec?: V2CursorCodec | null;
   readonly now?: () => Date;
 }): ReferralService {
   const { repository } = dependencies;
   const now = dependencies.now ?? ((): Date => new Date());
+  const linkBase = dependencies.publicBaseUrl.replace(/\/+$/, "");
+  const codec = dependencies.cursorCodec ?? null;
+
+  async function boostOf(
+    userId: string,
+    epochId: string | null,
+  ): Promise<ReferralBoostProjection | UnavailableProjection> {
+    let record: ReferralBoostRecord | null;
+    try {
+      record = await repository.getReferralBoost(userId, epochId);
+    } catch {
+      // The boost is a derived figure: a failed read never fails the page.
+      return unavailable(referralReasonCodes.boostPending);
+    }
+    if (record === null) {
+      return unavailable(referralReasonCodes.boostPending);
+    }
+    return Object.freeze({
+      status: "available" as const,
+      referralPower: record.referralPower,
+      nftReferralPower: record.nftReferralPower,
+      assetReferralPower: record.assetReferralPower,
+      levels: record.levels,
+      epochId: record.epochId,
+      hourStart: record.hourStart,
+      hourEnd: record.hourEnd,
+    });
+  }
+
+  function parsePage(
+    ownerId: string,
+    input: { readonly cursor?: unknown; readonly limit?: unknown },
+  ): { readonly limit: number; readonly after: ReferralInviteeKey | null } {
+    if (codec === null) {
+      throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+        reasonCode: "V2_CURSOR_NOT_CONFIGURED",
+      });
+    }
+    if (input.cursor !== undefined && input.limit !== undefined) {
+      throw V2ApiError.invalidRequest();
+    }
+    if (input.cursor === undefined) {
+      const limit = input.limit ?? referralInviteePaging.defaultLimit;
+      if (
+        typeof limit !== "number" ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > referralInviteePaging.maximumLimit
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      return { limit, after: null };
+    }
+    if (typeof input.cursor !== "string") {
+      throw V2ApiError.invalidRequest();
+    }
+    let continuation;
+    try {
+      continuation = codec.decode({
+        ownerId,
+        route: inviteeCursorRoute,
+        filter: inviteeCursorFilter,
+        cursor: input.cursor,
+      });
+    } catch (error) {
+      if (error instanceof InvalidV2CursorError) {
+        throw V2ApiError.invalidRequest();
+      }
+      throw error;
+    }
+    const limit = continuation["limit"];
+    const boundAtKey = continuation["boundAt"];
+    const referralEdgeId = continuation["edge"];
+    if (
+      typeof limit !== "number" ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > referralInviteePaging.maximumLimit ||
+      typeof boundAtKey !== "string" ||
+      typeof referralEdgeId !== "string"
+    ) {
+      throw V2ApiError.invalidRequest();
+    }
+    return { limit, after: { boundAtKey, referralEdgeId } };
+  }
 
   async function ensureInviteCode(
     ownerUserId: string,
@@ -183,12 +326,17 @@ export function createReferralService(dependencies: {
     async getReferral(input: Parameters<ReferralService["getReferral"]>[0]) {
       try {
         const ownerUserId = input.principal.userId;
-        const [inviteCode, state, direct, counts] = await Promise.all([
-          ensureInviteCode(ownerUserId, input.requestId),
-          repository.getAccountState(ownerUserId),
-          repository.getDirectEdge(ownerUserId),
-          repository.countInvitees(ownerUserId),
-        ]);
+        // Decision 0162: one settled hour for counts, stats, and boost.
+        const epochId = await repository.getLatestSettledEpochId();
+        const [inviteCode, state, direct, counts, stats, boost] =
+          await Promise.all([
+            ensureInviteCode(ownerUserId, input.requestId),
+            repository.getAccountState(ownerUserId),
+            repository.getDirectEdge(ownerUserId),
+            repository.countInvitees(ownerUserId, epochId),
+            repository.getInviteeStats(ownerUserId, epochId),
+            boostOf(ownerUserId, epochId),
+          ]);
         const levels = referralRulesV1.levels.map((rule) => {
           const perStatus = Object.fromEntries(
             referralValidationStatuses.map((status) => [status, 0]),
@@ -212,12 +360,19 @@ export function createReferralService(dependencies: {
             code: inviteCode.code,
             issuedAt: inviteCode.issuedAt,
           }),
+          inviteLink: `${linkBase}/i/${inviteCode.code}`,
           binding: bindingProjection(
             direct,
             claimWindow(state.activatedAt, now()),
           ),
           levels: Object.freeze(levels),
-          boost: unavailable(referralReasonCodes.boostPending),
+          stats: Object.freeze({
+            directCount: stats.directCount,
+            validCount: stats.validCount,
+            level2to5Count: stats.level2to5Count,
+            validAsOf: stats.validAsOf,
+          }),
+          boost,
           rules: Object.freeze({
             configVersion: referralRulesConfigVersion,
             effectiveAt: referralRulesEffectiveAt,
@@ -301,6 +456,50 @@ export function createReferralService(dependencies: {
         return translate(error);
       }
     },
+
+    async listInvitees(input: Parameters<ReferralService["listInvitees"]>[0]) {
+      try {
+        const ownerUserId = input.principal.userId;
+        const page = parsePage(ownerUserId, input);
+        const rows = await repository.listDirectInvitees({
+          inviterUserId: ownerUserId,
+          after: page.after,
+          limit: page.limit + 1,
+        });
+        const served = rows.slice(0, page.limit);
+        const last = served.at(-1);
+        const nextCursor =
+          rows.length > page.limit && last !== undefined && codec !== null
+            ? codec.encode({
+                ownerId: ownerUserId,
+                route: inviteeCursorRoute,
+                filter: inviteeCursorFilter,
+                continuation: {
+                  limit: page.limit,
+                  boundAt: last.boundAtKey,
+                  edge: last.referralEdgeId,
+                },
+              })
+            : null;
+        return Object.freeze({
+          items: Object.freeze(
+            served.map((row) =>
+              Object.freeze({
+                publicProfileId: row.publicProfileId,
+                alias: row.alias,
+                avatarRef: row.avatarRef,
+                boundAt: row.boundAt,
+                validationStatus: row.validationStatus,
+              }),
+            ),
+          ),
+          nextCursor,
+          contractVersion: v2ContractVersion,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
   });
 }
 
@@ -310,5 +509,6 @@ export function createUnavailableReferralService(): ReferralService {
   return Object.freeze({
     getReferral: unavailableService,
     claim: unavailableService,
+    listInvitees: unavailableService,
   });
 }

@@ -12,6 +12,7 @@ import {
 } from "../../core/http/v2-error.js";
 import { isOpaqueId } from "../../core/ids/opaque-id.js";
 import type { AccountWalletRepository } from "../../database/account-wallet-repository.js";
+import { projectTraderAccount } from "../profile/wallet-account-directory.js";
 import {
   BscChainMismatchError,
   BscReadUnavailableError,
@@ -954,7 +955,20 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
             logIndex: trade.logIndex,
             blockNumber: trade.blockNumber,
             wallet: trade.wallet,
-            account: trade.account,
+            // Decision 0162 §D: the launch2 projection rule, shared.
+            account: projectTraderAccount(
+              trade.account === null || trade.accountOwnerUserId === null
+                ? null
+                : {
+                    address: trade.wallet,
+                    ownerUserId: trade.accountOwnerUserId,
+                    publicProfileId: trade.account.publicProfileId,
+                    alias: trade.account.displayName,
+                    avatarRef: trade.account.avatarRef,
+                    tradeVisibility: trade.accountTradeVisibility,
+                  },
+              input.principal.userId,
+            ),
             isBuy: trade.isBuy,
             usd1Amount: trade.usd1Amount,
             tokenAmount: trade.tokenAmount,

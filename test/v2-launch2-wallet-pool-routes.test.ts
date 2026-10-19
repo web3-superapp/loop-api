@@ -302,6 +302,7 @@ describe("V2 launch2 wallet balances and own pool trades (Decision 0126)", () =>
     expect(body["trades"]).toEqual([
       {
         poolTradeId: "5e0f0a8e-4c0a-4b8e-9a0c-2f7d1c3b4a50",
+        account: null,
         side: "buy",
         inputToken: "usd1",
         outputToken: "meme",

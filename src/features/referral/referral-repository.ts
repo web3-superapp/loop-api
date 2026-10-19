@@ -34,6 +34,56 @@ export interface ReferralLevelCountRecord {
   readonly count: number;
 }
 
+/** Decision 0162: the invitee-facing validity, derived from settled facts. */
+export const referralInviteeStatuses = ["pending", "valid", "invalid"] as const;
+export type ReferralInviteeStatus = (typeof referralInviteeStatuses)[number];
+
+/** Decision 0162: one direct invitee of the caller. */
+export interface ReferralInviteeRecord {
+  readonly referralEdgeId: string;
+  /** Null when the invitee has no active profile or blocked the inviter. */
+  readonly publicProfileId: string | null;
+  readonly alias: string | null;
+  readonly avatarRef: string | null;
+  readonly boundAt: string;
+  /** Microsecond-exact `locked_at` (keyset key), never sent to clients. */
+  readonly boundAtKey: string;
+  readonly validationStatus: ReferralInviteeStatus;
+}
+
+export interface ReferralInviteeKey {
+  readonly boundAtKey: string;
+  readonly referralEdgeId: string;
+}
+
+export interface ReferralInviteeStatsRecord {
+  /** Direct invitees in force (depth 1, `effective_to` null). */
+  readonly directCount: number;
+  /** In-force direct invitees with self power > 0 in the newest settled hour. */
+  readonly validCount: number;
+  /** In-force edges of depth 2..5. */
+  readonly level2to5Count: number;
+  /** `hourEnd` of the newest settled hour; null before the first one. */
+  readonly validAsOf: string | null;
+}
+
+/** Decision 0162: the caller's referral power of the newest settled hour. */
+export interface ReferralBoostRecord {
+  readonly epochId: string;
+  readonly hourStart: string;
+  readonly hourEnd: string;
+  /** `nft_referral_power + asset_referral_power` (decimal string). */
+  readonly referralPower: string;
+  readonly nftReferralPower: string;
+  readonly assetReferralPower: string;
+  readonly levels: readonly {
+    readonly level: number;
+    readonly effectiveMembers: number;
+    readonly nftPower: string;
+    readonly assetPower: string;
+  }[];
+}
+
 export interface ClaimReferralInput {
   readonly inviteeUserId: string;
   readonly idempotencyKey: string;
@@ -61,8 +111,13 @@ export interface ReferralRepository {
   getDirectEdge(inviteeUserId: string): Promise<ReferralEdgeRecord | null>;
   /** Writes the edges and audit atomically; a replay returns the direct edge. */
   claim(input: ClaimReferralInput): Promise<ReferralEdgeRecord>;
+  /**
+   * Decision 0162: `epochId` is the settled hour `valid` is read from (the
+   * one `getLatestSettledEpochId` returned for this response); null = none.
+   */
   countInvitees(
     inviterUserId: string,
+    epochId: string | null,
   ): Promise<readonly ReferralLevelCountRecord[]>;
   recordRejectedClaim(input: {
     readonly inviteeUserId: string;
@@ -70,6 +125,23 @@ export interface ReferralRepository {
     readonly reasonCode: string;
     readonly requestId: string;
   }): Promise<void>;
+  /** Decision 0162: newest binding first, keyset after `after`. */
+  listDirectInvitees(input: {
+    readonly inviterUserId: string;
+    readonly after: ReferralInviteeKey | null;
+    readonly limit: number;
+  }): Promise<readonly ReferralInviteeRecord[]>;
+  /** Decision 0162: the newest settled mining hour, read once per response. */
+  getLatestSettledEpochId(): Promise<string | null>;
+  getInviteeStats(
+    inviterUserId: string,
+    epochId: string | null,
+  ): Promise<ReferralInviteeStatsRecord>;
+  /** Null when `epochId` is null (before the first settled hour). */
+  getReferralBoost(
+    userId: string,
+    epochId: string | null,
+  ): Promise<ReferralBoostRecord | null>;
 }
 
 export class ReferralRepositoryUnavailableError extends Error {
@@ -121,5 +193,9 @@ export function createUnavailableReferralRepository(): ReferralRepository {
     claim: unavailable,
     countInvitees: unavailable,
     recordRejectedClaim: unavailable,
+    listDirectInvitees: unavailable,
+    getLatestSettledEpochId: unavailable,
+    getInviteeStats: unavailable,
+    getReferralBoost: unavailable,
   });
 }
