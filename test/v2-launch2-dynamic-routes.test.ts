@@ -792,6 +792,62 @@ describe("V2 launch2 LoopDynamic routes (Decision 0131)", () => {
     ]);
     expect(decoded.args[5]).toBe(launch2NowSeconds + 180n);
     expect(body.quote).toMatchObject({ dynamic: { rewardWeight: "10" } });
+    // Decision 0165: a MEME-taxed buy carries no USD1 tax.
+    expect(body.launch2Intent["taxUsd1"]).toBe("0");
+    expect(body.quote["taxUsd1"]).toBe("0");
+  });
+
+  it("prepares an S209 Hook's USD1-taxed buy with the quote's taxUsd1 (Decision 0165)", async () => {
+    const base = graduatedDynamicInstance();
+    const poolId = dynamicPoolIdFor(
+      base.addresses.meme,
+      launch2DynamicHookS209,
+    );
+    const record = graduatedDynamicInstance({
+      dynamicPool: { hook: launch2DynamicHookS209, poolId, boundBlock: "4000" },
+      graduation: {
+        ...(base.graduation as NonNullable<typeof base.graduation>),
+        poolId,
+      },
+    });
+    const { repository } = seeded(record);
+    const { app } = await createApp({
+      repository,
+      dynamic: defaultDynamicState({
+        hook: { poolId },
+        factoryHook: launch2DynamicHookS209,
+      }),
+    });
+    const quoted = await get(
+      app,
+      quoteUrl(
+        record.instanceId,
+        "side=buy&mode=exactIn&amount=10&slippageBps=100",
+      ),
+    );
+    expect(quoted.statusCode).toBe(200);
+    const quote = quoted.json<{ quote: Record<string, unknown> }>().quote;
+    const response = await post(
+      app,
+      `/v2/launch2/instances/${record.instanceId}/pool/trade/prepare`,
+      {
+        walletId,
+        side: "buy",
+        mode: "exactIn",
+        amount: "10",
+        slippageBps: 100,
+      },
+    );
+    expect(response.statusCode).toBe(201);
+    const body = response.json<{
+      launch2Intent: Record<string, unknown>;
+      quote: Record<string, unknown>;
+    }>();
+    expect(body.launch2Intent["kind"]).toBe("pool_buy");
+    // 10 USD1 at a 2 % buy fee: 0.2 USD1, the quote's taxUsd1 exactly.
+    expect(body.launch2Intent["taxUsd1"]).toBe("0.2");
+    expect(body.launch2Intent["taxUsd1"]).toBe(quote["taxUsd1"]);
+    expect(body.quote).toMatchObject({ taxToken: "usd1", taxUsd1: "0.2" });
   });
 
   it("lists the wallet's reward rounds with the projected claimable amount", async () => {

@@ -1786,6 +1786,9 @@ export async function buildApp(
         database.marketFacts !== undefined &&
         database.bscIndexer !== undefined &&
         v2CursorCodec !== null));
+  // Decision 0165: assigned once the Hooks Factory reader is composed
+  // below; read per request, so the wallet path sees the final value.
+  let launchUsd1FactoryToken: (() => Promise<string>) | null = null;
   const walletReadService =
     options.walletReadService ??
     createWalletReadService({
@@ -1814,6 +1817,14 @@ export async function buildApp(
               usd1Address: config.launchContract.usd1Address,
               spender: config.launchContract.address,
             }),
+      // Decision 0165: with a Hooks Factory composed (below) the USD1 token
+      // is its `usd1()`; LAUNCH_USD1_ADDRESS is only the fallback.
+      launchUsd1Token: (): Promise<string> =>
+        launchUsd1FactoryToken === null
+          ? Promise.resolve(
+              config.launchContract?.usd1Address.toLowerCase() ?? "",
+            )
+          : launchUsd1FactoryToken(),
       logger: app.log,
       tokenLogos,
     });
@@ -2142,6 +2153,13 @@ export async function buildApp(
                 : {}),
             })
           : null;
+  if (hooksFactoryReader?.usd1 !== undefined) {
+    const reader = hooksFactoryReader;
+    launchUsd1FactoryToken = (): Promise<string> =>
+      reader.usd1 === undefined
+        ? Promise.reject(new Error("Hooks launch factory usd1 unavailable"))
+        : reader.usd1();
+  }
   const hooksLaunchProjectConfigService = hooksLaunchEnabled
     ? createHooksLaunchProjectConfigService({
         repository: database.hooksLaunchProjectConfigs ?? null,

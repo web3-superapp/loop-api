@@ -45,6 +45,7 @@ import {
   type ChainVerificationState,
 } from "../src/integrations/bsc/rpc-client.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import type { HooksLaunchFactoryReader } from "../src/features/launch/hooks-launch-deployment.js";
 import type {
   CachedFact,
   MarketFactService,
@@ -556,6 +557,7 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
   async function createApp(
     dependencies: ReturnType<typeof fakes> & {
       readonly launchChainReadClient?: BscReadClient;
+      readonly hooksLaunchFactoryReader?: HooksLaunchFactoryReader;
     } = fakes(),
     overrides: Readonly<Record<string, string>> = {},
     marketFactService?: MarketFactService,
@@ -569,6 +571,9 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       ...(dependencies.launchChainReadClient === undefined
         ? {}
         : { launchChainReadClient: dependencies.launchChainReadClient }),
+      ...(dependencies.hooksLaunchFactoryReader === undefined
+        ? {}
+        : { hooksLaunchFactoryReader: dependencies.hooksLaunchFactoryReader }),
       privyWalletReader: dependencies.walletReader,
       privyBalanceReader: dependencies.balanceReader,
       ...(marketFactService === undefined ? {} : { marketFactService }),
@@ -1058,6 +1063,141 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
       plain.json<{ readonly launchChain: Record<string, unknown> }>()
         .launchChain,
     ).not.toHaveProperty("usd1");
+  });
+
+  it("reads launchChain.usd1 on the Hooks Factory's usd1(), the env address only without a Factory (Decision 0165)", async () => {
+    const envUsd1 = "0x2222222222222222222222222222222222222222";
+    const factoryUsd1 = "0x3a120000000000000000000000000000000a0195";
+    const launchContract = "0x1111111111111111111111111111111111111111";
+    const balanceTokens: (string | null)[] = [];
+    const allowanceRequests: { token: string; spender: string }[] = [];
+    const base = launchClientFake();
+    const client = {
+      ...base,
+      readBalances: (
+        owner: string,
+        items: readonly { assetId: string; address: string | null }[],
+      ) =>
+        items.length === 1 && items[0]?.address !== null
+          ? (balanceTokens.push(items[0]?.address ?? null),
+            Promise.resolve({
+              head: {
+                blockNumber: launchHeadNumber,
+                blockHash: launchHeadHash,
+                observedAt,
+              },
+              balances: items.map((item) => ({
+                assetId: item.assetId,
+                rawValue:
+                  item.address === factoryUsd1
+                    ? 7_000_000_000_000_000_000n
+                    : 1n,
+                reasonCode: null,
+              })),
+            }))
+          : base.readBalances(owner, items),
+      readAllowances: (
+        _owner: string,
+        items: readonly { assetId: string; token: string; spender: string }[],
+      ) => {
+        allowanceRequests.push(
+          ...items.map((item) => ({
+            token: item.token,
+            spender: item.spender,
+          })),
+        );
+        return Promise.resolve({
+          head: {
+            blockNumber: launchHeadNumber,
+            blockHash: launchHeadHash,
+            observedAt,
+          },
+          allowances: items.map((item) => ({
+            assetId: item.assetId,
+            spender: item.spender,
+            rawValue: 0n,
+            reasonCode: null,
+          })),
+        });
+      },
+    } as unknown as BscReadClient;
+    let usd1Reads = 0;
+    const factory = (usd1: () => Promise<string>): HooksLaunchFactoryReader =>
+      ({
+        factoryAddress: "0xd05e00000000000000000000000000000000c8d4",
+        chainId: 97,
+        hookKind: "officialTax",
+        usd1: () => {
+          usd1Reads += 1;
+          return usd1();
+        },
+      }) as unknown as HooksLaunchFactoryReader;
+    const env = {
+      LAUNCH_CHAIN_ID: "97",
+      LAUNCH_CONTRACT_ADDRESS: launchContract,
+      LAUNCH_CONTRACT_VERSION: "1.0.0",
+      LAUNCH_CONTRACT_START_BLOCK: "1",
+      LAUNCH_USD1_ADDRESS: envUsd1,
+      HOOKS_LAUNCH_ENABLED: "on",
+    };
+    const read = async (app: FastifyInstance) => {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/balances`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      return response.json<{ readonly launchChain: Record<string, unknown> }>()
+        .launchChain;
+    };
+
+    // Factory composed: the USD1 token is its usd1(), never the env one;
+    // the allowance spender is still LAUNCH_CONTRACT_ADDRESS.
+    const { app } = await createApp(
+      {
+        ...fakes(),
+        launchChainReadClient: client,
+        hooksLaunchFactoryReader: factory(() => Promise.resolve(factoryUsd1)),
+      },
+      env,
+    );
+    const withFactory = await read(app);
+    expect(withFactory["usd1"]).toEqual({
+      balance: "7000000000000000000",
+      allowance: "0",
+    });
+    expect(balanceTokens).toEqual([factoryUsd1]);
+    expect(allowanceRequests).toEqual([
+      { token: factoryUsd1, spender: launchContract },
+    ]);
+    expect(usd1Reads).toBe(1);
+
+    // Factory read fails: the pair is absent (never the env token), the
+    // native balance is still published.
+    balanceTokens.length = 0;
+    const { app: failing } = await createApp(
+      {
+        ...fakes(),
+        launchChainReadClient: client,
+        hooksLaunchFactoryReader: factory(() =>
+          Promise.reject(new Error("Hooks launch factory read unavailable")),
+        ),
+      },
+      env,
+    );
+    const failed = await read(failing);
+    expect(failed).not.toHaveProperty("usd1");
+    expect(failed["availability"]).toBe("available");
+    expect(balanceTokens).toEqual([]);
+
+    // No Factory (Hooks launch off): LAUNCH_USD1_ADDRESS is the fallback.
+    const { app: noFactory } = await createApp(
+      { ...fakes(), launchChainReadClient: client },
+      { ...env, HOOKS_LAUNCH_ENABLED: "off" },
+    );
+    const fallback = await read(noFactory);
+    expect(fallback["usd1"]).toEqual({ balance: "1", allowance: "0" });
+    expect(balanceTokens).toEqual([envUsd1]);
   });
 
   it("publishes launchUsd1 at the root only while the launch slot is shared and the contract keys are set (Decision 0081)", async () => {
