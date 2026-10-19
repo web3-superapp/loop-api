@@ -396,7 +396,8 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 }
 ```
 
-- `name` 1–32 字符（首尾空格去掉）；`symbol` 2–10 位 `A-Z0-9`（客户端先转大写）；`description` ≤ 500；
+- `name` / `symbol`：决策 0164 同一规则——任何文字，NFC + 去首尾空格后 1–20 个 UTF-16 单元，
+  **不转大写**（`frog` 合法；详见 `frontend-v2-hooks-launch-api.md` §3.1）；`description` ≤ 500；
   `links` 只收 https，空字符串视为未填；`imageMediaId` = 本人通过 `POST /v2/media/community-logos`
   （multipart `file`，512×512 WebP，S107 同一管线）上传得到的 `mediaId`，裁 1:1 在客户端做。
 - `201` = §4 的详情（`status: "draft"`，`tokenAddress: null`，`priceUsd1: null` + `quoteUnavailable`

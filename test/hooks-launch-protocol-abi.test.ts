@@ -2,7 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BaseError, HttpRequestError } from "viem";
+import {
+  BaseError,
+  HttpRequestError,
+  decodeErrorResult,
+  toFunctionSelector,
+} from "viem";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -82,6 +87,35 @@ describe("Hooks launch protocol ABI (Decision 0112)", () => {
       }
     },
   );
+
+  it("carries the S242 field errors with their selectors (Decision 0164)", () => {
+    expect(toFunctionSelector("InvalidName()")).toBe("0x430f13b3");
+    expect(toFunctionSelector("InvalidTicker()")).toBe("0x9ceb5e72");
+    // Decision 0164 §10: the text-rule generation getter on both factories.
+    expect(toFunctionSelector("launchTextRulesVersion()")).toBe("0x231cd5bd");
+    for (const abi of [
+      generated.loopLaunchFactoryAbi,
+      generated.loopDynamicLaunchFactoryAbi,
+    ]) {
+      expect(
+        abi.some(
+          (item) =>
+            item.type === "function" && item.name === "launchTextRulesVersion",
+        ),
+      ).toBe(true);
+    }
+    for (const abi of [
+      generated.loopLaunchFactoryAbi,
+      generated.loopDynamicLaunchFactoryAbi,
+    ]) {
+      expect(decodeErrorResult({ abi, data: "0x430f13b3" }).errorName).toBe(
+        "InvalidName",
+      );
+      expect(decodeErrorResult({ abi, data: "0x9ceb5e72" }).errorName).toBe(
+        "InvalidTicker",
+      );
+    }
+  });
 
   it("classifies node refusals without swallowing transport failures", () => {
     const refusal = (details: string) =>

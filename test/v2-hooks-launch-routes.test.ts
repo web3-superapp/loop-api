@@ -1192,6 +1192,91 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect(unsigned.statusCode).toBe(401);
   });
 
+  it("gates a non-legacy ticker by the Factory's probed rule (Decision 0164)", async () => {
+    let rule: "utf8" | "ascii" = "ascii";
+    const probe = vi.fn(() => Promise.resolve(rule));
+    const reader: HooksLaunchFactoryReader = {
+      ...factoryReader,
+      tickerTextRule: probe,
+    };
+    const fake = submissionsFake();
+    const accept = vi.fn((input: Parameters<typeof fake.accept>[0]) =>
+      fake.accept(input),
+    );
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader,
+      submissions: submissionsFake({ accept }),
+    });
+    const put = (ticker: string, expectedVersion: number) =>
+      app.inject({
+        method: "PUT",
+        url: `/v2/launch/projects/${projectId}/hooks-config`,
+        headers: s7CommonHeaders(),
+        payload: { expectedVersion, config: { ...draftBody, ticker } },
+      });
+    const expectUnsupported = (response: {
+      statusCode: number;
+      body: string;
+      json: () => unknown;
+    }) => {
+      expect(response.statusCode, response.body).toBe(422);
+      expect(response.json()).toMatchObject({
+        code: "VALIDATION_FAILED",
+        detailsSafe: {
+          reasonCode: "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY",
+          field: "ticker",
+        },
+      });
+    };
+    // Pre-S242 Factory: a Chinese or lower-case ticker is refused at save.
+    expectUnsupported(await put("狗狗币", 0));
+    expectUnsupported(await put("mcat", 0));
+    // A legacy ticker never needs the probe.
+    probe.mockClear();
+    expect((await put("MCAT", 0)).statusCode).toBe(200);
+    expect(probe).not.toHaveBeenCalled();
+
+    // S242 Factory: the same Chinese ticker saves, kept as typed.
+    rule = "utf8";
+    const saved = await put("狗狗币", 1);
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json()).toMatchObject({ config: { ticker: "狗狗币" } });
+    const payload = await signedSubmission(app);
+    expect(payload.request["ticker"]).toBe("狗狗币");
+
+    // The Factory turned out pre-S242 after all: signing and submitting
+    // are refused before any task is recorded.
+    rule = "ascii";
+    expectUnsupported(
+      await app.inject({
+        url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+        headers: s7CommonHeaders(),
+      }),
+    );
+    expectUnsupported(
+      await app.inject({
+        method: "POST",
+        url: `/v2/launch/projects/${projectId}/hooks-deployments`,
+        headers: s7CommandHeaders(),
+        payload,
+      }),
+    );
+    expect(accept).not.toHaveBeenCalled();
+
+    // An unreadable probe fails closed.
+    probe.mockImplementation(() => Promise.reject(new Error("rpc down")));
+    const unreadable = await app.inject({
+      url: `/v2/launch/projects/${projectId}/hooks-config/signing-request?walletId=${walletId}`,
+      headers: s7CommonHeaders(),
+    });
+    expect(unreadable.statusCode).toBe(503);
+    expect(unreadable.json()).toMatchObject({
+      code: "CAPABILITY_UNAVAILABLE",
+      detailsSafe: { reasonCode: "HOOKS_LAUNCH_FACTORY_UNAVAILABLE" },
+    });
+  }, 60_000);
+
   it("fixes the buyback recipient and shows a reviewer rejection (Decision 0122)", async () => {
     const app = await createApp({
       configs: configRepositoryFake({

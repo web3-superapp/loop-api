@@ -95125,7 +95125,7 @@
                                         "maxDynamicFeeWad": {
                                           "type": "string",
                                           "pattern": "^(0|[1-9][0-9]{0,77})$",
-                                          "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories."
+                                          "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer read from the Factory, never hard-coded: 500000000000000000 = 50 % (S242 ruling; the sell side totals at most 51 % with the base sell fee), 200000000000000000 = 20 % on S193 Factories; 0 = uncapped. Absent on templates of pre-S193 Factories."
                                         },
                                         "maxCumulativeBuy": {
                                           "type": "string",
@@ -96034,7 +96034,7 @@
         "operationId": "saveV2HooksLaunchProjectConfig",
         "summary": "Save an owner-scoped fixed-template Hooks project draft",
         "tags": ["launch"],
-        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Decision 0122: config.buybackRecipient must be the platform's fixed recipient (LAUNCH2_BUYBACK_RECIPIENT, case-insensitive), else 422 VALIDATION_FAILED (reasonCode HOOKS_BUYBACK_RECIPIENT_FIXED); not configured → 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE. Never publishes, deploys, or activates.",
+        "description": "Decision 0108. Appends a new immutable draft version (compare-and-swap on expectedVersion; Idempotency-Key is rejected). The server derives the fixed hooks_launch_v1 economics and configHash; economic override keys are INVALID_REQUEST. Decision 0119: fixedEconomics.nftSaleDurationSeconds is the target Factory's on-chain nftSaleDuration() (3600 on the BSC Testnet 1-hour Factory, 604800 on a 7-day / pre-S141 Factory), read before hashing; without a configured or readable Factory the save is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE), never a constant. Saving a new version invalidates any earlier approval for signing. Decision 0122: config.buybackRecipient must be the platform's fixed recipient (LAUNCH2_BUYBACK_RECIPIENT, case-insensitive), else 422 VALIDATION_FAILED (reasonCode HOOKS_BUYBACK_RECIPIENT_FIXED); not configured → 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE. Never publishes, deploys, or activates. Decision 0164: name and ticker follow the four.meme rule (any script, 1–20 UTF-16 units after NFC + trim, never upper-cased); while the configured Factory predates S242 (probed on chain, lifted automatically once an S242 Factory is configured) a ticker outside ^[A-Z0-9]{2,12}$ is 422 VALIDATION_FAILED (reasonCode HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY, field ticker); an unreadable probe is 503 CAPABILITY_UNAVAILABLE (HOOKS_LAUNCH_FACTORY_UNAVAILABLE).",
         "requestBody": {
           "required": true,
           "content": {
@@ -96064,15 +96064,16 @@
                     ],
                     "properties": {
                       "name": {
-                        "description": "Decision 0154: any language or script (Chinese, English, mixed, emoji); NFC-normalised and trimmed; at most 64 characters and 64 UTF-8 bytes (the launch factory's on-chain bound: 64 ASCII letters, 21 CJK characters, 16 emoji); control, bidi-override and other format characters refused except the emoji zero-width joiner and tag characters.",
+                        "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters.",
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 64
+                        "maxLength": 256
                       },
                       "ticker": {
-                        "description": "Decision 0154: bound by the deployed launch factories' on-chain `_validTicker` (2–12 of A–Z, 0–9), not by a language policy of LOOP's; lower case is accepted where the pattern allows it and stored upper-cased.",
+                        "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters. The ticker is stored and signed exactly as typed (after NFC + trim); the S242 launch factories return it unchanged from symbol().",
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9]{2,12}$"
+                        "minLength": 1,
+                        "maxLength": 256
                       },
                       "logoAssetUrl": {
                         "type": "string",
@@ -96362,7 +96363,7 @@
                                 "maxDynamicFeeWad": {
                                   "type": "string",
                                   "pattern": "^(0|[1-9][0-9]{0,77})$",
-                                  "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories."
+                                  "description": "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer read from the Factory, never hard-coded: 500000000000000000 = 50 % (S242 ruling; the sell side totals at most 51 % with the base sell fee), 200000000000000000 = 20 % on S193 Factories; 0 = uncapped. Absent on templates of pre-S193 Factories."
                                 },
                                 "maxCumulativeBuy": {
                                   "type": "string",
@@ -96986,7 +96987,7 @@
         "operationId": "getV2HooksLaunchSigningRequest",
         "summary": "Prepare the owner's BSC Testnet Hooks deployment signature",
         "tags": ["launch"],
-        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC; Decision 0132: 0x10C4 — Decision 0152: 0x10CC for an S209 LoopDynamic Factory, by its template — and typedData.message.templateHash = the LoopDynamic Factory TEMPLATE_HASH with HOOKS_LAUNCH_HOOK_KIND=loopDynamic). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); Decision 0132: or the config was hashed for another Hook kind / template; re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient). Decision 0127: 422 VALIDATION_FAILED HOOKS_CONFIG_VERSION_USED: the Factory already recorded a launch for (this wallet, this configVersion) — a draft saved before versions were allocated per owner; save the config again (a new owner-unique version) and get it approved. request.configVersion is unique across all projects of the owner, so it may skip numbers within one project. Decision 0160: all Factory reads of one request share an 8 s budget (inside the 15 s request timeout) and run concurrently where independent; a slow or failing RPC is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE). The request never writes or reserves anything, so a timeout leaves nothing behind.",
+        "description": "Decision 0108. Owner-scoped, BSC Testnet (97) only. Resolves the opaque walletId in the caller's active wallet inventory, reads the latest draft and the Factory nonce (Factory code hash verified on every call), and returns EIP-712 typed data, the mined MEME salt (address suffix 6666) and Hook CREATE2 salt (permission bits 0x20CC; Decision 0132: 0x10C4 — Decision 0152: 0x10CC for an S209 LoopDynamic Factory, by its template — and typedData.message.templateHash = the LoopDynamic Factory TEMPLATE_HASH with HOOKS_LAUNCH_HOOK_KIND=loopDynamic). Never signs, stores, or broadcasts. 503 CAPABILITY_UNAVAILABLE: HOOKS_LAUNCH_DISABLED (switch off), HOOKS_LAUNCH_FACTORY_UNAVAILABLE (Factory not configured, RPC/code check failed, salt search exhausted, or busy: Retry-After 5), HOOKS_FACTORY_TEMPLATE_MISMATCH (Decision 0119: the saved config's fixedEconomics.nftSaleDurationSeconds is not the Factory's nftSaleDuration(); Decision 0132: or the config was hashed for another Hook kind / template; re-save the config and get it approved again), HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE (Decision 0122: no fixed recipient configured). 422 VALIDATION_FAILED HOOKS_BUYBACK_RECIPIENT_FIXED: the saved config names another recipient (re-save with fixedBuybackRecipient). Decision 0127: 422 VALIDATION_FAILED HOOKS_CONFIG_VERSION_USED: the Factory already recorded a launch for (this wallet, this configVersion) — a draft saved before versions were allocated per owner; save the config again (a new owner-unique version) and get it approved. request.configVersion is unique across all projects of the owner, so it may skip numbers within one project. Decision 0160: all Factory reads of one request share an 8 s budget (inside the 15 s request timeout) and run concurrently where independent; a slow or failing RPC is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE). The request never writes or reserves anything, so a timeout leaves nothing behind. Decision 0164: name and ticker follow the four.meme rule (any script, 1–20 UTF-16 units after NFC + trim, never upper-cased); while the configured Factory predates S242 (probed on chain, lifted automatically once an S242 Factory is configured) a ticker outside ^[A-Z0-9]{2,12}$ is 422 VALIDATION_FAILED (reasonCode HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY, field ticker); an unreadable probe is 503 CAPABILITY_UNAVAILABLE (HOOKS_LAUNCH_FACTORY_UNAVAILABLE).",
         "parameters": [
           {
             "schema": {
@@ -97077,11 +97078,12 @@
                         "name": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 64
+                          "maxLength": 80
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "nftSaleStart": {
                           "type": "string",
@@ -97661,7 +97663,7 @@
         "operationId": "submitV2HooksLaunchDeployment",
         "summary": "Verify and record a project-signed Testnet deployment task",
         "tags": ["launch"],
-        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded. Decision 0122: a config naming another buyback recipient than LAUNCH2_BUYBACK_RECIPIENT is 422 VALIDATION_FAILED (HOOKS_BUYBACK_RECIPIENT_FIXED); none configured is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE; nothing recorded. Decision 0155: all Factory reads of one submission share an 8 s budget (inside the 15 s request timeout); a slow or failing RPC is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE) with nothing recorded, so a timed-out submission never leaves a task behind.",
+        "description": "Decision 0108. Requires the latest config version to carry an independent operator approval (else 403 POLICY_BLOCKED, reasonCode HOOKS_CONFIG_NOT_APPROVED). Verifies the project wallet's low-S EIP-712 signature, deadline (<= 1 hour), Factory nonce, and both CREATE2 predictions, then creates or renews one awaiting_executor task. Exact Idempotency-Key replay returns the same task; a different body under the same key is IDEMPOTENCY_CONFLICT. Never broadcasts or activates; the response never contains the signature. Decision 0119: a config whose fixedEconomics.nftSaleDurationSeconds differs from the Factory nftSaleDuration() is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_FACTORY_TEMPLATE_MISMATCH), nothing recorded. Decision 0122: a config naming another buyback recipient than LAUNCH2_BUYBACK_RECIPIENT is 422 VALIDATION_FAILED (HOOKS_BUYBACK_RECIPIENT_FIXED); none configured is 503 HOOKS_BUYBACK_RECIPIENT_UNAVAILABLE; nothing recorded. Decision 0155: all Factory reads of one submission share an 8 s budget (inside the 15 s request timeout); a slow or failing RPC is 503 CAPABILITY_UNAVAILABLE (reasonCode HOOKS_LAUNCH_FACTORY_UNAVAILABLE) with nothing recorded, so a timed-out submission never leaves a task behind. Decision 0164: name and ticker follow the four.meme rule (any script, 1–20 UTF-16 units after NFC + trim, never upper-cased); while the configured Factory predates S242 (probed on chain, lifted automatically once an S242 Factory is configured) a ticker outside ^[A-Z0-9]{2,12}$ is 422 VALIDATION_FAILED (reasonCode HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY, field ticker); an unreadable probe is 503 CAPABILITY_UNAVAILABLE (HOOKS_LAUNCH_FACTORY_UNAVAILABLE).",
         "requestBody": {
           "required": true,
           "content": {
@@ -97708,11 +97710,12 @@
                       "name": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 64
+                        "maxLength": 80
                       },
                       "ticker": {
                         "type": "string",
-                        "pattern": "^[A-Z0-9]{2,12}$"
+                        "minLength": 1,
+                        "maxLength": 80
                       },
                       "nftSaleStart": {
                         "type": "string",
@@ -100569,7 +100572,8 @@
                               },
                               "ticker": {
                                 "type": "string",
-                                "pattern": "^[A-Z0-9]{2,12}$"
+                                "minLength": 1,
+                                "maxLength": 80
                               },
                               "chainId": {
                                 "type": "string",
@@ -100803,7 +100807,8 @@
                               },
                               "ticker": {
                                 "type": "string",
-                                "pattern": "^[A-Z0-9]{2,12}$"
+                                "minLength": 1,
+                                "maxLength": 80
                               },
                               "chainId": {
                                 "type": "string",
@@ -101037,7 +101042,8 @@
                               },
                               "ticker": {
                                 "type": "string",
-                                "pattern": "^[A-Z0-9]{2,12}$"
+                                "minLength": 1,
+                                "maxLength": 80
                               },
                               "chainId": {
                                 "type": "string",
@@ -101271,7 +101277,8 @@
                               },
                               "ticker": {
                                 "type": "string",
-                                "pattern": "^[A-Z0-9]{2,12}$"
+                                "minLength": 1,
+                                "maxLength": 80
                               },
                               "chainId": {
                                 "type": "string",
@@ -101537,7 +101544,8 @@
                                   },
                                   "ticker": {
                                     "type": "string",
-                                    "pattern": "^[A-Z0-9]{2,12}$"
+                                    "minLength": 1,
+                                    "maxLength": 80
                                   },
                                   "chainId": {
                                     "type": "string",
@@ -102372,7 +102380,8 @@
                           },
                           "ticker": {
                             "type": "string",
-                            "pattern": "^[A-Z0-9]{2,12}$"
+                            "minLength": 1,
+                            "maxLength": 80
                           },
                           "narrative": {
                             "anyOf": [
@@ -103071,15 +103080,16 @@
                 "required": ["name", "ticker", "narrative"],
                 "properties": {
                   "name": {
-                    "description": "Decision 0154: any language or script (Chinese, English, mixed, emoji); NFC-normalised and trimmed; at most 64 characters and 64 UTF-8 bytes (the launch factory's on-chain bound: 64 ASCII letters, 21 CJK characters, 16 emoji); control, bidi-override and other format characters refused except the emoji zero-width joiner and tag characters.",
+                    "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters.",
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 4096
                   },
                   "ticker": {
-                    "description": "Decision 0154: bound by the deployed launch factories' on-chain `_validTicker` (2–12 of A–Z, 0–9), not by a language policy of LOOP's; lower case is accepted where the pattern allows it and stored upper-cased.",
+                    "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters. The ticker is stored and signed exactly as typed (after NFC + trim); the S242 launch factories return it unchanged from symbol().",
                     "type": "string",
-                    "pattern": "^[A-Z0-9]{2,12}$"
+                    "minLength": 1,
+                    "maxLength": 4096
                   },
                   "narrative": {
                     "description": "Decision 0154: any language or script; NFC-normalised, CRLF folded to LF, trimmed; at most 2000 characters; line feeds and tabs kept, other control and format characters refused except the emoji zero-width joiner and tag characters.",
@@ -103243,7 +103253,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "narrative": {
                           "anyOf": [
@@ -104151,7 +104162,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "narrative": {
                           "anyOf": [
@@ -104844,15 +104856,16 @@
                     "required": ["name", "ticker", "narrative"],
                     "properties": {
                       "name": {
-                        "description": "Decision 0154: any language or script (Chinese, English, mixed, emoji); NFC-normalised and trimmed; at most 64 characters and 64 UTF-8 bytes (the launch factory's on-chain bound: 64 ASCII letters, 21 CJK characters, 16 emoji); control, bidi-override and other format characters refused except the emoji zero-width joiner and tag characters.",
+                        "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters.",
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 4096
                       },
                       "ticker": {
-                        "description": "Decision 0154: bound by the deployed launch factories' on-chain `_validTicker` (2–12 of A–Z, 0–9), not by a language policy of LOOP's; lower case is accepted where the pattern allows it and stored upper-cased.",
+                        "description": "Decision 0164 (four.meme rule, same for name and ticker): any language or script (Chinese, Japanese, Korean, emoji, mixed, spaces inside, `$`, lower case, leading digit); NFC-normalised and trimmed, then 1–20 UTF-16 code units (JavaScript string length) and at most 80 UTF-8 bytes; never upper-cased and not unique. Refused: control, bidi-override and other format characters (except the emoji zero-width joiner between characters and the emoji tag characters), line / paragraph separators, spaces other than U+0020 / U+3000, invisible fillers and noncharacters. The ticker is stored and signed exactly as typed (after NFC + trim); the S242 launch factories return it unchanged from symbol().",
                         "type": "string",
-                        "pattern": "^[A-Z0-9]{2,12}$"
+                        "minLength": 1,
+                        "maxLength": 4096
                       },
                       "narrative": {
                         "description": "Decision 0154: any language or script; NFC-normalised, CRLF folded to LF, trimmed; at most 2000 characters; line feeds and tabs kept, other control and format characters refused except the emoji zero-width joiner and tag characters.",
@@ -105017,7 +105030,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "narrative": {
                           "anyOf": [
@@ -105934,7 +105948,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "narrative": {
                           "anyOf": [
@@ -107463,7 +107478,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "chainId": {
                           "type": "string",
@@ -107669,7 +107685,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "narrative": {
                           "anyOf": [
@@ -145549,7 +145566,12 @@
                 "required": ["name", "symbol"],
                 "properties": {
                   "name": { "type": "string", "minLength": 1, "maxLength": 64 },
-                  "symbol": { "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
+                  "symbol": {
+                    "description": "Decision 0164: same rule as the name — any script, NFC + trim, 1–20 UTF-16 units, never upper-cased.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
                   "description": { "type": "string", "maxLength": 2000 },
                   "imageMediaId": {
                     "type": "string",
@@ -155133,7 +155155,8 @@
                           },
                           "ticker": {
                             "type": "string",
-                            "pattern": "^[A-Z0-9]{2,12}$"
+                            "minLength": 1,
+                            "maxLength": 80
                           },
                           "logoUrl": {
                             "anyOf": [
@@ -155898,7 +155921,8 @@
                           },
                           "ticker": {
                             "type": "string",
-                            "pattern": "^[A-Z0-9]{2,12}$"
+                            "minLength": 1,
+                            "maxLength": 80
                           },
                           "name": {
                             "type": "string",
@@ -157273,7 +157297,8 @@
                         },
                         "ticker": {
                           "type": "string",
-                          "pattern": "^[A-Z0-9]{2,12}$"
+                          "minLength": 1,
+                          "maxLength": 80
                         },
                         "logoUrl": {
                           "anyOf": [
@@ -164650,7 +164675,7 @@
                             },
                             { "type": "null" }
                           ],
-                          "description": "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.2 (20 %)."
+                          "description": "Decision 0144: maxDynamicFeeWad() as a decimal fraction — the dynamic sell rate is min(drop, cap); 0 = uncapped (an uncapped Factory or a pre-S193 Hook without the getter). The ruled value is 0.5 (50 %, S242; the sell side totals at most 51 % with the base sell fee); S193 Factories carry 0.2 (20 %). Read from the chain, never hard-coded."
                         },
                         "maxDynamicFeeBps": {
                           "anyOf": [

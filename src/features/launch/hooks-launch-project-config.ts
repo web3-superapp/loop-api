@@ -12,7 +12,7 @@ import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
 /** Decision 0132: the reader surface a config save hashes against. */
 export type HooksLaunchTemplateFactory = Pick<
   HooksLaunchFactoryReader,
-  "nftSaleDuration" | "hookKind" | "loopDynamicTemplate"
+  "nftSaleDuration" | "hookKind" | "loopDynamicTemplate" | "tickerTextRule"
 >;
 
 export interface HooksLaunchProjectConfigRecord {
@@ -124,6 +124,57 @@ export class HooksLaunchBuybackRecipientFixedError extends Error {
     super("The buyback recipient is fixed by the platform");
     this.name = "HooksLaunchBuybackRecipientFixedError";
   }
+}
+
+/**
+ * Decision 0164: the ticker is not on the pre-S242 factories' pattern and
+ * the target Factory still enforces it (422 VALIDATION_FAILED,
+ * `HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY`, field `ticker`).
+ */
+export class HooksLaunchTickerUnsupportedByFactoryError extends Error {
+  constructor() {
+    super("The target launch factory does not support this ticker");
+    this.name = "HooksLaunchTickerUnsupportedByFactoryError";
+  }
+}
+
+/** The pre-S242 factories' `_validTicker` (every such ticker passes S242). */
+const legacyFactoryTickerPattern = /^[A-Z0-9]{2,12}$/u;
+
+/**
+ * Decision 0164 (transition gate): whether the target Factory accepts
+ * `ticker`. A `^[A-Z0-9]{2,12}$` ticker passes every generation without a
+ * read; anything else needs a Factory whose on-chain probe answers `utf8`
+ * (S242+). A reader without the probe counts as `ascii` (fail closed).
+ * Rejects when the probe cannot be read — callers map that to their
+ * Factory-unavailable error. Switching the configured Factory to an S242
+ * one lifts the gate with no other change.
+ */
+export async function hooksLaunchFactorySupportsTicker(
+  factory: Pick<HooksLaunchFactoryReader, "tickerTextRule"> | null,
+  ticker: string,
+): Promise<boolean> {
+  if (legacyFactoryTickerPattern.test(ticker)) return true;
+  if (factory?.tickerTextRule === undefined) return false;
+  return (await factory.tickerTextRule()) === "utf8";
+}
+
+/**
+ * Decision 0164: `hooksLaunchFactorySupportsTicker` for a config save —
+ * unsupported throws `HooksLaunchTickerUnsupportedByFactoryError`, an
+ * unreadable probe `HooksLaunchProjectConfigUnavailableError("factory")`.
+ */
+export async function assertHooksLaunchFactorySupportsTicker(
+  factory: Pick<HooksLaunchFactoryReader, "tickerTextRule"> | null,
+  ticker: string,
+): Promise<void> {
+  let supported: boolean;
+  try {
+    supported = await hooksLaunchFactorySupportsTicker(factory, ticker);
+  } catch {
+    throw new HooksLaunchProjectConfigUnavailableError("factory");
+  }
+  if (!supported) throw new HooksLaunchTickerUnsupportedByFactoryError();
 }
 
 /**
@@ -298,6 +349,12 @@ export function createHooksLaunchProjectConfigService(input: {
           // Decision 0132: + the LoopDynamic Hook parameters, if any.
           ...(await hooksLaunchFactoryHashPolicy(input.factory)),
         },
+      );
+      // Decision 0164: refuse here, not at the deploy simulation, a ticker
+      // the configured (pre-S242) Factory would reject.
+      await assertHooksLaunchFactorySupportsTicker(
+        input.factory,
+        config.ticker,
       );
       return requireRepository().saveOwnedDraft({
         projectId: request.projectId,

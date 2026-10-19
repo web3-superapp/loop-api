@@ -310,13 +310,18 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
         field: "links.website",
       },
     });
-    const lowercase = await app.inject({
+    // Decision 0164: lower case is a valid symbol now; 21 units are not.
+    const tooLong = await app.inject({
       method: "POST",
       url: "/v2/meme/tokens",
       headers: s7CommandHeaders(),
-      payload: { name: "Frog", symbol: "frog" },
+      payload: { name: "Frog", symbol: "f".repeat(21) },
     });
-    expect(lowercase.statusCode).toBe(400);
+    expect(tooLong.statusCode).toBe(422);
+    expect(tooLong.json()).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: { reasonCode: "MEME_METADATA_INVALID", field: "symbol" },
+    });
     repository.rateLimited = true;
     const limited = await app.inject({
       method: "POST",

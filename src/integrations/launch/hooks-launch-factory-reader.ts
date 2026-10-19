@@ -27,6 +27,7 @@ import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
 import {
   loopDynamicLaunchFactoryAbi,
+  loopLaunchFactoryAbi,
   loopHookDeploymentFactoryAbi,
   loopRouterRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
@@ -260,6 +261,125 @@ export function isHooksLaunchContractRevert(error: unknown): boolean {
   );
 }
 
+/**
+ * Decision 0164 (§10): the Factory's text-rule generation. S242 factories
+ * expose `launchTextRulesVersion() external pure returns (uint8)` (2);
+ * earlier factories have no such function, so the call reverts with no
+ * return data.
+ *
+ * - a value ≥ 2 → `utf8` (the S242 `LaunchText` floor);
+ * - a revert without return data, or empty return data → `ascii` (the
+ *   pre-S242 `^[A-Z0-9]{2,12}$` `_validTicker`);
+ * - anything else (RPC / transport error, timeout, a revert carrying data
+ *   or a reason, a value below 2) → `null`: unreadable, fail closed.
+ *
+ * (An earlier draft inferred the generation from the revert order of a
+ * simulated `deployLaunch`; replaced by this getter, which does not depend
+ * on the factories' check order.)
+ */
+export const hooksLaunchTextRulesVersionAbi = loopLaunchFactoryAbi.filter(
+  (item) => item.type === "function" && item.name === "launchTextRulesVersion",
+);
+
+export function hooksLaunchTextRulesFromVersion(
+  version: unknown,
+): "utf8" | null {
+  return typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 2 &&
+    version <= 255
+    ? "utf8"
+    : null;
+}
+
+/** The node's generic message for a revert without data (bnbchain seed nodes append ": 0x"). */
+const emptyRevertReason = /^execution reverted(: 0x)?$/u;
+
+function isEmptyRevertData(value: unknown): boolean {
+  return value === undefined || value === null || value === "0x";
+}
+
+/** Every link of an error's cause chain (bounded). */
+function causeChain(error: unknown): readonly unknown[] {
+  const links: unknown[] = [];
+  let current: unknown = error;
+  while (current !== undefined && current !== null && links.length < 16) {
+    links.push(current);
+    current =
+      typeof current === "object"
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return links;
+}
+
+/**
+ * Decision 0164 §10: true only for "no such function" on a contract — an
+ * `eth_call` revert that carries no return data and no reason beyond the
+ * node's generic message, or a call that returned `0x`. Node shapes:
+ *
+ * - publicnode: `{code: 3, message: "execution reverted", data: "0x"}`;
+ * - bnbchain seed: `{code: 3, message: "execution reverted: 0x", data: "0x"}`;
+ * - geth-style (NodeReal): `{code: -32000, message: "execution reverted"}`
+ *   with no `data` or `data: "0x"`;
+ * - `result: "0x"` (`ContractFunctionZeroDataError`).
+ *
+ * A revert carrying error data, any other reason, rate limits, transport
+ * errors and timeouts are not (→ unreadable, fail closed).
+ */
+export function isHooksLaunchMissingFunctionRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  const links = causeChain(error);
+  // Any link carrying revert data means a real (custom) revert.
+  if (
+    links.some(
+      (link) =>
+        typeof link === "object" &&
+        link !== null &&
+        "data" in link &&
+        typeof (link as { data?: unknown }).data === "string" &&
+        !isEmptyRevertData((link as { data?: unknown }).data),
+    )
+  ) {
+    return false;
+  }
+  if (
+    error.walk((cause) => cause instanceof ContractFunctionZeroDataError) !==
+    null
+  ) {
+    return true;
+  }
+  const reverted = error.walk(
+    (cause) => cause instanceof ContractFunctionRevertedError,
+  );
+  if (reverted instanceof ContractFunctionRevertedError) {
+    const reason = reverted.reason?.trim().toLowerCase();
+    return (
+      isEmptyRevertData(reverted.raw) &&
+      reverted.data === undefined &&
+      reverted.signature === undefined &&
+      (reason === undefined || emptyRevertReason.test(reason))
+    );
+  }
+  // geth-style -32000 (or code 3) mapped to ExecutionRevertedError.
+  const execution = error.walk(
+    (cause) => cause instanceof ExecutionRevertedError,
+  );
+  if (!(execution instanceof ExecutionRevertedError)) return false;
+  const codes = links
+    .map((link) =>
+      typeof link === "object" && link !== null
+        ? (link as { code?: unknown }).code
+        : undefined,
+    )
+    .filter((code) => typeof code === "number");
+  const details = execution.details.trim().toLowerCase();
+  return (
+    (codes.includes(-32000) || codes.includes(3)) &&
+    emptyRevertReason.test(details)
+  );
+}
+
 export function createHooksLaunchFactoryReader(input: {
   readonly factoryAddress: string;
   readonly expectedRuntimeCodeHash: string;
@@ -352,9 +472,35 @@ export function createHooksLaunchFactoryReader(input: {
     return template;
   }
 
+  // Decision 0164: immutable for a code-hash-pinned Factory; an unreadable
+  // answer is not cached (the next call reads again).
+  let tickerRule: "utf8" | "ascii" | null = null;
+  async function tickerTextRule(): Promise<"utf8" | "ascii"> {
+    if (tickerRule !== null) return tickerRule;
+    await verifyNetworkAndCode();
+    let outcome: "utf8" | "ascii" | null;
+    try {
+      outcome = hooksLaunchTextRulesFromVersion(
+        await client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchTextRulesVersionAbi,
+          functionName: "launchTextRulesVersion",
+        }),
+      );
+    } catch (error) {
+      outcome = isHooksLaunchMissingFunctionRevert(error) ? "ascii" : null;
+    }
+    if (outcome === null) {
+      throw new Error("Hooks launch factory text rules unreadable");
+    }
+    tickerRule = outcome;
+    return outcome;
+  }
+
   return Object.freeze({
     factoryAddress,
     chainId: chainReference,
+    tickerTextRule,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
     ...(loopDynamic
       ? {

@@ -76,7 +76,7 @@ describe("000072 official-pool market trades apart from buybacks (Decision 0127)
   });
 
   it("is the latest migration and the counter table is a schema table", () => {
-    expect(latestMigrationName).toBe("000093_launch2_instance_listing");
+    expect(latestMigrationName).toBe("000094_launch_token_text_utf8");
     expect(requiredDatabaseRelations).toContain(
       "public.hooks_launch_owner_config_versions",
     );

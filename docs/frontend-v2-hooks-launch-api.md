@@ -141,8 +141,59 @@
   `HOOKS_LAUNCH_MIN_SALE_LEAD_SECONDS`，生产默认 86,400 s = 24 小时；Development / 测试网可配到
   下限 4,200 s = 合约激活缓冲 3,600 s + 执行器余量 600 s，决策 0117），不足 `400 INVALID_REQUEST`；
   前端不要写死 24 小时，以服务端拒绝为准；`links` ≤ 8 条且必须 https；
-  ticker 2–12 位字母数字（服务端转大写）。
+  name / ticker 规则见 §3.1（决策 0164，**不再转大写**）。
 - 任何多余字段（例如想改税率）→ `400 INVALID_REQUEST`。
+
+### 3.1 名称 / 代码规则（决策 0164，S243，与 four.meme 一致）
+
+适用于 `POST/PUT /v2/launch/projects`（`name` / `ticker`）、本接口（`config.name` /
+`config.ticker`）和 `POST /v2/meme/tokens`（`name` / `symbol`），三处同一规则、同一函数：
+
+- 服务端先 NFC 规范化、去首尾空白，再计长度：**1–20 个 UTF-16 单元**（= Dart `String.length` /
+  JS `string.length`：汉字、假名、谚文、ASCII 各 1；BMP 外 emoji 如 🐸 各 2）。
+- 允许任何文字：中文、日文、韩文、emoji（含 ZWJ 组合 👨‍👩‍👧、国旗）、中间空格（半角 / 全角）、
+  `$`、小写、数字开头。例：`狗狗币`、`$1`、`四`、`doge`、`フリーダム.オブ.マネー` 都合法。
+- **不转大写、不要求唯一**：`doge` 存、签名、上链都是 `doge`；链上 `symbol()` 原样返回。App
+  提交前**不要**自行转大写或再做规范化（以服务端返回的 `config.ticker` 为准、签名的就是它）。
+- 拒绝：空、> 20 单元、控制字符（换行 / 制表等）、双向覆写与零宽字符（U+202E、U+200B 等）、
+  除半角 / 全角以外的空格（NBSP 等）、隐形填充字符、ZWJ 在首尾。
+- 错误：项目 `400 VALIDATION_FAILED`；本接口 `400 INVALID_REQUEST`；MEME `422 VALIDATION_FAILED`
+  `detailsSafe {reasonCode: "MEME_METADATA_INVALID", field: "name" | "symbol"}`。
+- 计数器建议「x/20」，按 `String.length` 计；前端只做提示，以服务端为准。
+- 旧规则（≤ 64 字）下保存的草稿仍可审批、签名、提交（签名请求按链上 80 字节底线校验）。
+- 过渡门控（决策 0164 §10）：服务端配置的发射工厂若仍是 S242 之前的旧代际（服务端读工厂 `launchTextRulesVersion()` 判定，
+  无需前端判断），代码不是 2–12 位大写字母或数字（`^[A-Z0-9]{2,12}$`）时，**保存本接口、取签名请求、
+  提交部署**三处都返回：
+
+  ```json
+  {
+    "code": "VALIDATION_FAILED",
+    "category": "validation",
+    "retryable": false,
+    "userMessageKey": "errors.validation.failed",
+    "correlationId": "…",
+    "detailsSafe": {
+      "reasonCode": "HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY",
+      "field": "ticker"
+    },
+    "providerReferenceSafe": null
+  }
+  ```
+
+  HTTP 422；文案「当前发射工厂暂不支持该代码格式，请使用 2–12 位大写字母或数字」，高亮代码输入框。
+  平台切到 S242 工厂后自动放开（同一请求直接成功），App 不需要发版或开关。合法的旧格式代码不受影响。
+  服务端探测不可读时为 503 `CAPABILITY_UNAVAILABLE`（`HOOKS_LAUNCH_FACTORY_UNAVAILABLE`），按既有 503 处理。
+
+- 换到 S242 工厂后，若链上仍拒（理论上不应发生），部署任务 `failure.code` 为
+  `HOOKS_LAUNCH_NAME_INVALID` / `HOOKS_LAUNCH_TICKER_INVALID`（§9.2）。
+
+```json
+{
+  "expectedVersion": 3,
+  "config": { "name": "狗狗币 Doge", "ticker": "狗狗币", "...": "..." }
+}
+```
+
 - 200 返回与 §2 `draft` 相同结构的新版本。保存新版本会使旧版本的审批失效（需重新审批）。
 
 ## 4. `GET …/hooks-config/signing-request?walletId=<walletId>`（`getV2HooksLaunchSigningRequest`）
@@ -346,6 +397,8 @@ NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不�
 | `HOOKS_LAUNCH_ALREADY_DEPLOYED`        | 否        | 该版本已在链上部署，联系平台                       |
 | `HOOKS_ACTIVATION_WINDOW_CLOSED`       | 否        | 距开售太近无法激活，修改开售时间后重新提交         |
 | `HOOKS_DEPLOY_SIMULATION_REVERTED`     | 否        | 链上预执行失败，联系平台                           |
+| `HOOKS_LAUNCH_NAME_INVALID`            | 否        | 名称不符合链上规则，修改名称后重新保存并签名       |
+| `HOOKS_LAUNCH_TICKER_INVALID`          | 否        | 代码不符合链上规则，修改代码后重新保存并签名       |
 | `HOOKS_DEPLOY_GAS_ABOVE_CAP`           | 否        | 联系平台                                           |
 | `HOOKS_VERIFICATION_MISMATCH`          | 否        | 部署核验不一致，**未激活**，联系平台               |
 | `HOOKS_ACTIVATION_STATE_UNEXPECTED`    | 否        | 联系平台                                           |

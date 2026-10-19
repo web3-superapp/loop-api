@@ -6,59 +6,127 @@ import {
   parseLaunchProjectValues,
 } from "../src/features/launch/launch-contract.js";
 import {
+  isOnChainLaunchTokenText,
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
+  normalizeLaunchTokenText,
+  normalizeLaunchTokenTicker,
   utf8ByteLength,
 } from "../src/features/launch/launch-token-text.js";
+import {
+  MemeMetadataInvalidError,
+  parseMemeTokenMetadata,
+} from "../src/features/meme/meme-contract.js";
 
-/** Decision 0154: no language or script rule on the token's text. */
-describe("launch token text (Decision 0154)", () => {
-  it("accepts Chinese, English, mixed and emoji names", () => {
-    for (const name of [
+/**
+ * Decision 0154: no language or script rule on the token's text.
+ * Decision 0164: name and ticker share the four.meme rule — NFC + trim,
+ * 1–20 UTF-16 units, never upper-cased.
+ */
+describe("launch token text (Decisions 0154 / 0164)", () => {
+  it("uses one function for name and ticker", () => {
+    expect(normalizeLaunchTokenName).toBe(normalizeLaunchTokenText);
+    expect(normalizeLaunchTokenTicker).toBe(normalizeLaunchTokenText);
+  });
+
+  it("accepts Chinese, English, mixed, kana, Hangul and emoji", () => {
+    for (const text of [
       "币安人生",
       "Loop Doge",
       "狗狗 Doge 2026",
       "🐸 Pepe 青蛙",
-      "👨‍👩‍👧 家族",
+      "👨\u200d👩\u200d👧 家族",
       "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scot",
       "Ünïcödé · ñame",
       "ミーム코인",
+      "四",
+      "$1",
+      "doge",
+      "1inch",
+      "フリーダム.オブ.マネー",
+      "币安\u3000人生",
     ]) {
-      expect(normalizeLaunchTokenName(name)).toBe(name);
+      expect(normalizeLaunchTokenText(text)).toBe(text);
     }
   });
 
+  it("never upper-cases", () => {
+    expect(normalizeLaunchTokenTicker("doge")).toBe("doge");
+    expect(normalizeLaunchTokenTicker("straße")).toBe("straße");
+  });
+
   it("trims and NFC-normalises", () => {
-    expect(normalizeLaunchTokenName("  éclair　")).toBe("éclair");
+    expect(normalizeLaunchTokenText("  éclair\u3000")).toBe("éclair");
+    expect(normalizeLaunchTokenText(" DOGE ")).toBe("DOGE");
   });
 
-  it("bounds the name by 64 characters and the factory's 64 UTF-8 bytes", () => {
-    expect(normalizeLaunchTokenName("a".repeat(64))).toBe("a".repeat(64));
-    expect(normalizeLaunchTokenName("a".repeat(65))).toBeNull();
-    const chinese21 = "中".repeat(21);
-    expect(utf8ByteLength(chinese21)).toBe(63);
-    expect(normalizeLaunchTokenName(chinese21)).toBe(chinese21);
-    expect(normalizeLaunchTokenName("中".repeat(22))).toBeNull();
-    expect(normalizeLaunchTokenName("🐸".repeat(16))).toBe("🐸".repeat(16));
-    expect(normalizeLaunchTokenName("🐸".repeat(17))).toBeNull();
+  it("bounds by 20 UTF-16 units (JavaScript length, as four.meme)", () => {
+    expect(normalizeLaunchTokenText("a".repeat(20))).toBe("a".repeat(20));
+    expect(normalizeLaunchTokenText("a".repeat(21))).toBeNull();
+    expect(normalizeLaunchTokenText("中".repeat(20))).toBe("中".repeat(20));
+    expect(normalizeLaunchTokenText("中".repeat(21))).toBeNull();
+    // An emoji outside the BMP is two units: 10 fit, 11 do not.
+    expect(normalizeLaunchTokenText("🐸".repeat(10))).toBe("🐸".repeat(10));
+    expect(normalizeLaunchTokenText("🐸".repeat(11))).toBeNull();
+    expect(normalizeLaunchTokenText("狗".repeat(19) + "🐸")).toBeNull();
+    // Trimming happens before counting.
+    expect(normalizeLaunchTokenText(`  ${"a".repeat(20)}  `)).toBe(
+      "a".repeat(20),
+    );
   });
 
-  it("refuses control, bidi-override and blank names", () => {
-    for (const name of [
+  it("stays inside the factory's 80-byte floor at 20 units", () => {
+    expect(utf8ByteLength("中".repeat(20))).toBe(60);
+    expect(utf8ByteLength("🐸".repeat(10))).toBe(40);
+    expect(isOnChainLaunchTokenText("a".repeat(80))).toBe(true);
+    expect(isOnChainLaunchTokenText("a".repeat(81))).toBe(false);
+  });
+
+  it("refuses control, format, separator, filler and blank text", () => {
+    for (const text of [
       "",
       "   ",
+      "\u3000",
       "a\nb",
       "a\tb",
       "a\u0000b",
       "a\u007fb",
+      "a\u0085b",
       "abc\u202egpj",
       "a\u2066b",
       "a\u200bb",
+      "a\u200cb",
       "a\u2028b",
+      "a\u2029b",
+      "a\u2065b",
       "a\ud800b",
+      "a\u00a0b",
+      "a\u2003b",
+      "a\u202fb",
+      "a\u00adb",
+      "a\u034fb",
+      "a\u180eb",
+      "a\u3164b",
+      "a\u2800b",
+      "a\ufeffb",
+      "a\ufdd0b",
+      "a\uffffb",
+      "\u200d",
+      "\u200da",
+      "a\u200d",
     ]) {
-      expect(normalizeLaunchTokenName(name)).toBeNull();
+      expect(normalizeLaunchTokenText(text)).toBeNull();
     }
+  });
+
+  it("checks stored / signed text without trimming or the 20-unit length", () => {
+    expect(isOnChainLaunchTokenText("币安人生 Life")).toBe(true);
+    expect(isOnChainLaunchTokenText("a".repeat(64))).toBe(true);
+    expect(isOnChainLaunchTokenText(" DOGE")).toBe(false);
+    expect(isOnChainLaunchTokenText("DOGE ")).toBe(false);
+    expect(isOnChainLaunchTokenText("é")).toBe(false);
+    expect(isOnChainLaunchTokenText("")).toBe(false);
+    expect(isOnChainLaunchTokenText(1)).toBe(false);
   });
 
   it("keeps line feeds and tabs in the description, folds CRLF", () => {
@@ -77,33 +145,35 @@ describe("launch token text (Decision 0154)", () => {
     expect(normalizeLaunchTokenDescription("中".repeat(2_001))).toBeNull();
   });
 
-  it("applies to the catalogue project", () => {
+  it("applies to the catalogue project, ticker included", () => {
     const values = parseLaunchProjectValues({
       name: " 狗狗 Doge 🐶 ",
-      ticker: "DOGE",
+      ticker: " 狗狗币 ",
       narrative: "中文简介\n第二行 🚀",
     });
     expect(values.name).toBe("狗狗 Doge 🐶");
+    expect(values.ticker).toBe("狗狗币");
     expect(values.narrative).toBe("中文简介\n第二行 🚀");
-    expect(() =>
-      parseLaunchProjectValues({
-        name: "中".repeat(22),
-        ticker: "DOGE",
-        narrative: null,
-      }),
-    ).toThrow(InvalidLaunchRequestError);
+    expect(
+      parseLaunchProjectValues({ name: "四", ticker: "$1", narrative: null })
+        .ticker,
+    ).toBe("$1");
+    for (const bad of [
+      { name: "中".repeat(21), ticker: "DOGE" },
+      { name: "狗", ticker: "a".repeat(21) },
+      { name: "狗", ticker: "a\u202eb" },
+      { name: "狗", ticker: "" },
+    ]) {
+      expect(() =>
+        parseLaunchProjectValues({ ...bad, narrative: null }),
+      ).toThrow(InvalidLaunchRequestError);
+    }
   });
 
-  it("keeps the ticker on the factories' on-chain pattern", () => {
-    expect(() =>
-      parseLaunchProjectValues({ name: "狗", ticker: "狗狗", narrative: null }),
-    ).toThrow(InvalidLaunchRequestError);
-  });
-
-  it("applies to the Hooks draft that the factory signs", () => {
+  it("applies to the Hooks draft that the factory signs, keeping case", () => {
     const body = {
       name: " 币安人生 Life ",
-      ticker: "life",
+      ticker: " life ",
       logoAssetUrl: "https://example.com/logo.png",
       description: "中文\n🐸",
       links: [],
@@ -117,13 +187,43 @@ describe("launch token text (Decision 0154)", () => {
     };
     const draft = parseHooksLaunchDraft(body, policy);
     expect(draft.name).toBe("币安人生 Life");
-    expect(draft.ticker).toBe("LIFE");
+    expect(draft.ticker).toBe("life");
     expect(draft.description).toBe("中文\n🐸");
+    expect(
+      parseHooksLaunchDraft(
+        { ...body, ticker: "フリーダム.オブ.マネー" },
+        policy,
+      ).ticker,
+    ).toBe("フリーダム.オブ.マネー");
+    // Case is part of the signed bytes, so it changes the config hash.
+    expect(
+      parseHooksLaunchDraft({ ...body, ticker: "LIFE" }, policy).configHash,
+    ).not.toBe(draft.configHash);
+    for (const patch of [
+      { name: "中".repeat(21) },
+      { name: "a\u0001" },
+      { ticker: "a".repeat(21) },
+      { ticker: "\u200dA" },
+      { ticker: "  " },
+    ]) {
+      expect(() =>
+        parseHooksLaunchDraft({ ...body, ...patch }, policy),
+      ).toThrow();
+    }
+  });
+
+  it("applies to MEME create (name and symbol)", () => {
+    const parsed = parseMemeTokenMetadata({ name: " 青蛙 ", symbol: " 🐸蛙 " });
+    expect(parsed.name).toBe("青蛙");
+    expect(parsed.symbol).toBe("🐸蛙");
+    expect(
+      parseMemeTokenMetadata({ name: "Pepe", symbol: "pepe" }).symbol,
+    ).toBe("pepe");
     expect(() =>
-      parseHooksLaunchDraft({ ...body, name: "中".repeat(22) }, policy),
-    ).toThrow();
+      parseMemeTokenMetadata({ name: "Pepe", symbol: "a".repeat(21) }),
+    ).toThrow(MemeMetadataInvalidError);
     expect(() =>
-      parseHooksLaunchDraft({ ...body, name: "a\u0001" }, policy),
-    ).toThrow();
+      parseMemeTokenMetadata({ name: "a".repeat(21), symbol: "PEPE" }),
+    ).toThrow(MemeMetadataInvalidError);
   });
 });

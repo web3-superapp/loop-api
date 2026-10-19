@@ -234,6 +234,17 @@ describe("Hooks deployment executor (Decision 0112)", () => {
       { estimate: new HooksLaunchChainRevertError("InvalidProjectSignature") },
       "HOOKS_DEPLOY_SIMULATION_REVERTED",
     ],
+    // Decision 0164: the S242 factories' field errors.
+    [
+      "simulation InvalidName",
+      { estimate: new HooksLaunchChainRevertError("InvalidName") },
+      "HOOKS_LAUNCH_NAME_INVALID",
+    ],
+    [
+      "simulation InvalidTicker",
+      { estimate: new HooksLaunchChainRevertError("InvalidTicker") },
+      "HOOKS_LAUNCH_TICKER_INVALID",
+    ],
     [
       "gas above the cap",
       { estimate: 15_000_000n },

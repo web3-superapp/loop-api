@@ -56,6 +56,14 @@ export type HooksLaunchExecutorFailureCode =
   | "HOOKS_LAUNCH_ALREADY_DEPLOYED"
   | "HOOKS_ACTIVATION_WINDOW_CLOSED"
   | "HOOKS_DEPLOY_SIMULATION_REVERTED"
+  /**
+   * Decision 0164 (loop-contracts Decision 0016): the S242 factories' field
+   * errors `InvalidName()` (0x430f13b3) / `InvalidTicker()` (0x9ceb5e72) in
+   * the deploy simulation — the signed name / ticker breaks the on-chain
+   * text floor (e.g. a non-ASCII ticker signed for a pre-S242 factory).
+   */
+  | "HOOKS_LAUNCH_NAME_INVALID"
+  | "HOOKS_LAUNCH_TICKER_INVALID"
   | "HOOKS_DEPLOY_GAS_ABOVE_CAP"
   | "HOOKS_EXECUTOR_FUNDS_INSUFFICIENT"
   | "HOOKS_BROADCAST_REJECTED"
@@ -65,6 +73,18 @@ export type HooksLaunchExecutorFailureCode =
   | "HOOKS_ACTIVATION_STATE_UNEXPECTED"
   | "HOOKS_ACTIVATION_SIMULATION_REVERTED"
   | "HOOKS_ACTIVATION_REVERTED";
+
+/**
+ * Decision 0164: deploy-simulation revert names that map to a field-level
+ * failure code (the decoded error name of the generated factory ABI).
+ */
+const hooksLaunchTextRevertCodes: ReadonlyMap<
+  string,
+  HooksLaunchExecutorFailureCode
+> = new Map([
+  ["InvalidName", "HOOKS_LAUNCH_NAME_INVALID"],
+  ["InvalidTicker", "HOOKS_LAUNCH_TICKER_INVALID"],
+]);
 
 /** Lane-level reasons: nothing is claimed or changed while one holds. */
 export type HooksLaunchExecutorIdleReason =
@@ -752,7 +772,8 @@ export function createHooksLaunchExecutor(options: {
       estimate = await chain.estimateDeploy(call);
     } catch (error) {
       if (error instanceof HooksLaunchChainRevertError) {
-        return fail(task, "HOOKS_DEPLOY_SIMULATION_REVERTED", {
+        const fieldCode = hooksLaunchTextRevertCodes.get(error.reason);
+        return fail(task, fieldCode ?? "HOOKS_DEPLOY_SIMULATION_REVERTED", {
           retryable: false,
           details: { revert: error.reason },
         });

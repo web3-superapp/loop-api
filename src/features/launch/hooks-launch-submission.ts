@@ -17,6 +17,7 @@ import {
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactorySupportsTicker,
   type HooksLaunchProjectConfigRepository,
 } from "./hooks-launch-project-config.js";
 import {
@@ -25,6 +26,7 @@ import {
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
 import { hooksLaunchLoopDynamicHookPermissionBits } from "./hooks-launch-config.js";
+import { isOnChainLaunchTokenText } from "./launch-token-text.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
 import {
   createHooksLaunchDeploymentTypedData,
@@ -47,8 +49,10 @@ export const hooksLaunchSubmissionSchema = z
         configHash: hex32,
         projectOwner: address,
         configVersion: z.number().int().min(1).max(0xffff_ffff),
-        name: z.string().min(1).max(64),
-        ticker: z.string().regex(/^[A-Z0-9]{2,12}$/),
+        // Decision 0164: the signed bytes as stored (canonical, ≤ 80 UTF-8
+        // bytes); equality with the draft is checked below, never cased.
+        name: z.string().refine(isOnChainLaunchTokenText),
+        ticker: z.string().refine(isOnChainLaunchTokenText),
         nftSaleStart: uint,
         buybackRecipient: address,
         deadline: uint,
@@ -200,6 +204,8 @@ export class HooksLaunchSubmissionError extends Error {
       | "recipient_fixed"
       /** Decision 0122: LAUNCH2_BUYBACK_RECIPIENT is not configured. */
       | "recipient_unavailable"
+      /** Decision 0164: a non-legacy ticker for a pre-S242 Factory. */
+      | "ticker_unsupported"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
@@ -378,7 +384,7 @@ export function createHooksLaunchSubmissionService(input: {
         draft.config.configHash.toLowerCase() !==
           request.configHash.toLowerCase() ||
         draft.config.name !== request.name ||
-        draft.config.ticker.toUpperCase() !== request.ticker ||
+        draft.config.ticker !== request.ticker ||
         draft.config.nftSaleStartAt !== request.nftSaleStart ||
         draft.config.buybackRecipient.toLowerCase() !==
           request.buybackRecipient.toLowerCase()
@@ -418,27 +424,39 @@ export function createHooksLaunchSubmissionService(input: {
         // Decision 0155: the independent Factory reads run concurrently
         // under the command's chain budget; results are still checked in
         // the original order (template, nonce, MEME, Hook).
-        const [templateCheck, nonceRead, tokenRead, hookRead, templateRead] =
-          await withinChainBudget(
-            Promise.allSettled([
-              assertHooksLaunchFactoryTemplate(
-                reader,
-                draft.config,
-                () => new HooksLaunchSubmissionError("template_mismatch"),
-              ),
-              reader.nonce(wallet.address),
-              reader.tokenDeployment(request),
-              reader.hookDeployment(request),
-              loopDynamic
-                ? readHooksLaunchFactoryTemplate(reader)
-                : Promise.resolve(null),
-            ]),
-          );
+        const [
+          templateCheck,
+          nonceRead,
+          tokenRead,
+          hookRead,
+          templateRead,
+          tickerRead,
+        ] = await withinChainBudget(
+          Promise.allSettled([
+            assertHooksLaunchFactoryTemplate(
+              reader,
+              draft.config,
+              () => new HooksLaunchSubmissionError("template_mismatch"),
+            ),
+            reader.nonce(wallet.address),
+            reader.tokenDeployment(request),
+            reader.hookDeployment(request),
+            loopDynamic
+              ? readHooksLaunchFactoryTemplate(reader)
+              : Promise.resolve(null),
+            // Decision 0164: the transition gate.
+            hooksLaunchFactorySupportsTicker(reader, request.ticker),
+          ]),
+        );
         const settled = <T>(result: PromiseSettledResult<T>): T => {
           if (result.status === "rejected") throw result.reason;
           return result.value;
         };
         settled(templateCheck);
+        if (tickerRead.status === "rejected")
+          throw new HooksLaunchSubmissionError("unavailable");
+        if (!tickerRead.value)
+          throw new HooksLaunchSubmissionError("ticker_unsupported");
         if (settled(nonceRead) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({

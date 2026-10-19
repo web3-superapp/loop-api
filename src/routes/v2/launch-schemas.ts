@@ -26,7 +26,6 @@ import {
   launchReviewStatuses,
   launchScheduleStatuses,
   launchSlotStatuses,
-  launchTickerPatternSource,
   maximumLaunchLinkLength,
   maximumLaunchRawTextLength,
   opaqueIdPatternSource,
@@ -35,6 +34,11 @@ import {
   venueMilestoneStates,
   venueMilestoneVenues,
 } from "../../features/launch/launch-contract.js";
+import {
+  launchTokenTextMaxRawLength,
+  launchTokenTextMaxUtf8Bytes,
+  launchTokenTextRuleDescription,
+} from "../../features/launch/launch-token-text.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
 
@@ -45,13 +49,18 @@ import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
  * documents that no contract baseline exists.
  */
 
-// Decision 0154: no language or script rule on the token's text.
-const launchTokenNameDescription =
-  "Decision 0154: any language or script (Chinese, English, mixed, emoji); NFC-normalised and trimmed; at most 64 characters and 64 UTF-8 bytes (the launch factory's on-chain bound: 64 ASCII letters, 21 CJK characters, 16 emoji); control, bidi-override and other format characters refused except the emoji zero-width joiner and tag characters.";
+// Decision 0154 / 0164: no language or script rule on the token's text;
+// name and ticker share the four.meme rule (a regex cannot express it).
+const launchTokenNameDescription = launchTokenTextRuleDescription;
 const launchTokenTextDescription =
   "Decision 0154: any language or script; NFC-normalised, CRLF folded to LF, trimmed; at most 2000 characters; line feeds and tabs kept, other control and format characters refused except the emoji zero-width joiner and tag characters.";
-const launchTickerDescription =
-  "Decision 0154: bound by the deployed launch factories' on-chain `_validTicker` (2–12 of A–Z, 0–9), not by a language policy of LOOP's; lower case is accepted where the pattern allows it and stored upper-cased.";
+const launchTickerDescription = `${launchTokenTextRuleDescription} The ticker is stored and signed exactly as typed (after NFC + trim); the S242 launch factories return it unchanged from symbol().`;
+/** Stored / signed name or ticker: canonical, at most 80 UTF-8 bytes. */
+const launchTokenStoredTextSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: launchTokenTextMaxUtf8Bytes,
+} as const;
 
 const reasonCodeSchema = {
   type: "string",
@@ -170,7 +179,8 @@ const projectValuesRequestSchema = {
     ticker: {
       description: launchTickerDescription,
       type: "string",
-      pattern: launchTickerPatternSource,
+      minLength: 1,
+      maxLength: maximumLaunchRawTextLength,
     },
     narrative: {
       description: launchTokenTextDescription,
@@ -281,7 +291,7 @@ const projectProjectionSchema = {
       minLength: 1,
       maxLength: maximumLaunchRawTextLength,
     },
-    ticker: { type: "string", pattern: launchTickerPatternSource },
+    ticker: launchTokenStoredTextSchema,
     narrative: {
       anyOf: [
         { type: "string", minLength: 1, maxLength: maximumLaunchRawTextLength },
@@ -502,7 +512,7 @@ const launchSummarySchema = {
       minLength: 1,
       maxLength: maximumLaunchRawTextLength,
     },
-    ticker: { type: "string", pattern: launchTickerPatternSource },
+    ticker: launchTokenStoredTextSchema,
     chainId: {
       type: "string",
       enum: [...launchChainIds],
@@ -849,7 +859,7 @@ export const launchDetailResourceSchema = {
           minLength: 1,
           maxLength: maximumLaunchRawTextLength,
         },
-        ticker: { type: "string", pattern: launchTickerPatternSource },
+        ticker: launchTokenStoredTextSchema,
         narrative: {
           anyOf: [
             {
@@ -1788,12 +1798,13 @@ const hooksLaunchDraftBodySchema = {
       description: launchTokenNameDescription,
       type: "string",
       minLength: 1,
-      maxLength: 64,
+      maxLength: launchTokenTextMaxRawLength,
     },
     ticker: {
       description: launchTickerDescription,
       type: "string",
-      pattern: "^[A-Za-z0-9]{2,12}$",
+      minLength: 1,
+      maxLength: launchTokenTextMaxRawLength,
     },
     logoAssetUrl: { type: "string", format: "uri", maxLength: 2_048 },
     description: {
@@ -1913,7 +1924,7 @@ const hooksLaunchFixedEconomicsSchema = {
         maxDynamicFeeWad: {
           ...uintStringSchema,
           description:
-            "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer (200000000000000000 = 20 %; 0 = uncapped). Absent on templates of pre-S193 Factories.",
+            "Decision 0144: the Factory's dynamic sell rate cap, a raw 18-decimal integer read from the Factory, never hard-coded: 500000000000000000 = 50 % (S242 ruling; the sell side totals at most 51 % with the base sell fee), 200000000000000000 = 20 % on S193 Factories; 0 = uncapped. Absent on templates of pre-S193 Factories.",
         },
         // Decision 0152 (S209 generation). The service already emitted both; the response schema
         // lagged behind and fast-json-stringify answered 500 for every S209 draft (S215 finding).
@@ -1990,8 +2001,8 @@ const hooksLaunchRequestFieldsSchema = {
   projectOwner: addressSchema,
   configVersion: { type: "integer", minimum: 1, maximum: 4_294_967_295 },
   configHash: bytes32Schema,
-  name: { type: "string", minLength: 1, maxLength: 64 },
-  ticker: { type: "string", pattern: "^[A-Z0-9]{2,12}$" },
+  name: launchTokenStoredTextSchema,
+  ticker: launchTokenStoredTextSchema,
   nftSaleStart: unixSecondsStringSchema,
   buybackRecipient: addressSchema,
   deadline: unixSecondsStringSchema,

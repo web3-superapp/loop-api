@@ -7,10 +7,15 @@ import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
   hooksLaunchFactoryHashPolicy,
+  hooksLaunchFactorySupportsTicker,
   hooksLaunchRejectionReasons,
   type HooksLaunchTemplateFactory,
 } from "./hooks-launch-project-config.js";
-import { launchTokenDescriptionMaxCodePoints } from "./launch-token-text.js";
+import {
+  launchTokenDescriptionMaxCodePoints,
+  launchTokenTextMaxRawLength,
+  normalizeLaunchTokenTicker,
+} from "./launch-token-text.js";
 
 /**
  * Decision 0108: platform-side Hooks launch review (ported from the requirer
@@ -67,6 +72,8 @@ export const hooksLaunchReviewErrorCodes = [
   "OPS_COMMAND_FAILED",
   /** Decision 0122: a config names another buyback recipient. */
   "OPS_BUYBACK_RECIPIENT_FIXED",
+  /** Decision 0164: a non-legacy ticker for a pre-S242 target Factory. */
+  "OPS_TICKER_UNSUPPORTED_BY_FACTORY",
   /** Decision 0122: the catalog project is not submitted / in review. */
   "OPS_LAUNCH_NOT_IN_REVIEW",
   /** Decision 0122: the config version was already approved or rejected. */
@@ -87,8 +94,10 @@ const hash32Schema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 
 const hooksLaunchOperatorConfigSchema = z
   .object({
-    name: z.string().trim().min(1).max(64),
-    ticker: z.string().regex(/^[A-Za-z0-9]{2,12}$/),
+    // Decision 0164: shape only; `parseHooksLaunchDraft` (repository)
+    // applies the shared name / ticker rule.
+    name: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
+    ticker: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
     logoAssetUrl: z.url().startsWith("https://"),
     // Decision 0154: characters, not UTF-16 units (an emoji is two).
     description: z
@@ -407,6 +416,21 @@ export function createHooksLaunchReviewService(input: {
         policy = await hooksLaunchFactoryHashPolicy(factory);
       } catch {
         throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+      }
+      // Decision 0164: the transition gate, before anything is written.
+      const ticker = normalizeLaunchTokenTicker(
+        parsed.data.payload.config.ticker,
+      );
+      if (ticker !== null) {
+        let supported: boolean;
+        try {
+          supported = await hooksLaunchFactorySupportsTicker(factory, ticker);
+        } catch {
+          throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+        }
+        if (!supported) {
+          throw new HooksLaunchReviewError("OPS_TICKER_UNSUPPORTED_BY_FACTORY");
+        }
       }
       // OfficialTax: exactly the pre-0132 context (no loopDynamic key).
       return repository.execute(operator, parsed.data, policy);
