@@ -25,6 +25,7 @@ import {
   type TokenLogoSource,
 } from "./token-logo.js";
 import { bscChainId } from "../chain/chain-contract.js";
+import { createRateLimiter } from "../../integrations/market/provider-http.js";
 
 /**
  * The token logo proxy (Decisions 0089, 0161).
@@ -47,8 +48,10 @@ import { bscChainId } from "../chain/chain-contract.js";
  * A `found` row past its 7 days is refetched; if that refetch fails the old
  * bytes are still served. A row is also refetched early when the
  * highest-priority origin changed (a Provider image appeared after the Trust
- * Wallet file was cached), and when it predates normalisation (any type but
- * WebP). A picture served from a lower origin because a higher one failed is
+ * Wallet file was cached). A picture stored before normalisation (any type
+ * but WebP) is served until it expires; the pre-warm re-encodes it early.
+ * A refetch whose upstream sent only undecodable bytes keeps a stored
+ * picture. A picture served from a lower origin because a higher one failed is
  * served but not stored, and the CDN may keep it for five minutes only.
  *
  * Decision 0161 §3: a `manual` row (an operator's upload) is always served
@@ -74,6 +77,11 @@ export const tokenLogoOversizeTtlMs = 24 * 60 * 60 * 1_000;
 /** Pre-warm refreshes a row this long before it expires (0161 §2). */
 export const tokenLogoWarmRefreshAheadMs = 24 * 60 * 60 * 1_000;
 export const tokenLogoUpstreamConcurrency = 8;
+/**
+ * Refetches a minute per process for chains other than BSC (Decision 0161
+ * §4); a miss over the budget answers `unreachable` and writes nothing.
+ */
+export const tokenLogoOtherChainRefetchesPerMinute = 10;
 export const tokenLogoMaximumRedirects = 3;
 
 export type TokenLogoProxyResult =
@@ -137,10 +145,22 @@ export interface CreateTokenLogoProxyServiceInput {
   readonly fetch?: typeof fetch;
   readonly now?: () => Date;
   readonly upstreamTimeoutMs?: number;
+  /** Ethereum / Base refetch budget a minute (default 10). */
+  readonly otherChainRefetchesPerMinute?: number;
   /** Test seam; defaults to the sharp 128 x 128 WebP normaliser. */
   readonly normalize?: TokenLogoNormalizer;
   readonly logger?: TokenLogoProxyLogger;
 }
+
+/**
+ * What one shared task settled: the route's answer (`null` when the task
+ * did not read the bytes) and the pre-warm outcome (`null` when the task
+ * did not decide it).
+ */
+type Settled = Readonly<{
+  result: TokenLogoProxyResult | null;
+  warm: TokenLogoWarmOutcome | null;
+}>;
 
 interface Candidate {
   readonly source: TokenLogoSource;
@@ -155,6 +175,8 @@ type UpstreamOutcome =
     }>
   | Readonly<{ kind: "oversize"; url: string }>
   | Readonly<{ kind: "missing" }>
+  /** 200 with bytes that are not a usable raster picture. */
+  | Readonly<{ kind: "unusable" }>
   | Readonly<{ kind: "failed" }>;
 
 type OriginsOutcome =
@@ -172,6 +194,11 @@ type OriginsOutcome =
       degraded: boolean;
     }>
   | Readonly<{ kind: "missing" }>
+  /**
+   * No origin had a usable picture and at least one answered 200 with
+   * bytes that could not be decoded (Decision 0161 review: never a 404).
+   */
+  | Readonly<{ kind: "undecodable" }>
   | Readonly<{ kind: "failed" }>;
 
 const redirectStatuses: ReadonlySet<number> = new Set([
@@ -301,7 +328,15 @@ export function createTokenLogoProxyService(
   const timeoutMs = input.upstreamTimeoutMs ?? tokenLogoUpstreamTimeoutMs;
   const normalize = input.normalize ?? normalizeTokenLogo;
   const limit = createLimiter(tokenLogoUpstreamConcurrency);
-  const inFlight = new Map<string, Promise<unknown>>();
+  const inFlight = new Map<string, Promise<Settled>>();
+  // Decision 0161 §4: Ethereum / Base misses may refetch at most this many
+  // times a minute per process (a random address must not mint rows).
+  const otherChainBudget = createRateLimiter({
+    capacityPerMinute:
+      input.otherChainRefetchesPerMinute ??
+      tokenLogoOtherChainRefetchesPerMinute,
+    now: () => now().getTime(),
+  });
 
   function warn(fields: Record<string, unknown>, message: string): void {
     input.logger?.warn(fields, message);
@@ -418,7 +453,7 @@ export function createTokenLogoProxyService(
           }
           // Only a sniffed raster type reaches the decoder (never SVG).
           if (sniffTokenLogoContentType(bytes) === null) {
-            return { kind: "missing" };
+            return { kind: "unusable" };
           }
           return { kind: "image", bytes, url: current };
         }
@@ -445,12 +480,18 @@ export function createTokenLogoProxyService(
     list: readonly Candidate[],
   ): Promise<OriginsOutcome> {
     let degraded = false;
+    let unusable = false;
     for (const candidate of list) {
       const outcome = await fetchOne(candidate.url);
+      if (outcome.kind === "unusable") {
+        unusable = true;
+        continue;
+      }
       if (outcome.kind === "image") {
         const normalized = await normalize(outcome.bytes);
         if (normalized === null) {
           // Undecodable bytes are "no picture" at this origin.
+          unusable = true;
           warn(
             {
               source: candidate.source,
@@ -482,7 +523,10 @@ export function createTokenLogoProxyService(
         );
       }
     }
-    return degraded ? { kind: "failed" } : { kind: "missing" };
+    if (degraded) {
+      return { kind: "failed" };
+    }
+    return unusable ? { kind: "undecodable" } : { kind: "missing" };
   }
 
   async function store(record: TokenLogoCacheAutomaticRecord): Promise<void> {
@@ -540,18 +584,24 @@ export function createTokenLogoProxyService(
     return row !== null && row.source === "manual" && row.status === "found";
   }
 
-  /** Whether `row` may be served without asking the upstreams. */
+  /**
+   * Whether `row` may be served without asking the upstreams. A picture
+   * stored before normalisation (not WebP) stays valid for on-demand reads
+   * until it expires; only the pre-warm (`requireNormalized`) re-encodes it
+   * early (Decision 0161 review).
+   */
   function isCurrent(
     row: TokenLogoCacheRecord | null,
     top: Candidate,
     nowMs: number,
     aheadMs: number,
+    requireNormalized: boolean,
   ): boolean {
     if (row === null || row.candidateUrl !== top.url) {
       return false;
     }
-    // A picture stored before normalisation is refetched (Decision 0161).
     if (
+      requireNormalized &&
       row.status === "found" &&
       row.contentType !== tokenLogoNormalizedContentType
     ) {
@@ -560,50 +610,67 @@ export function createTokenLogoProxyService(
     return Date.parse(row.expiresAt) - aheadMs > nowMs;
   }
 
-  type Refreshed = Readonly<{
-    result: TokenLogoProxyResult;
-    warm: TokenLogoWarmOutcome;
-  }>;
+  /** The stored picture kept after a refetch that produced none. */
+  function keep(row: TokenLogoCacheRecord): Settled {
+    return {
+      result: row.bytes === null ? null : fromRow(row),
+      warm: "kept",
+    };
+  }
 
   async function refresh(
     chainId: string,
     key: string,
     list: readonly Candidate[],
     row: TokenLogoCacheRecord | null,
-  ): Promise<Refreshed> {
+  ): Promise<Settled> {
     const top = list[0];
     if (top === undefined) {
       return { result: { kind: "missing" }, warm: "unsupported" };
+    }
+    const stored = row !== null && row.status === "found" ? row : null;
+    if (chainId !== bscChainId && !otherChainBudget.tryAcquire()) {
+      // Over the Ethereum / Base refetch budget: nothing fetched or written.
+      warn(
+        { reasonCode: "TOKEN_LOGO_OTHER_CHAIN_BUDGET_EXHAUSTED" },
+        "Token logo refetch budget for this chain is exhausted",
+      );
+      return stored !== null
+        ? keep(stored)
+        : { result: { kind: "unreachable" }, warm: "failed" };
     }
     const outcome = await limit(() => fetchOrigins(list));
     const nowMs = now().getTime();
     const fetchedAt = new Date(nowMs).toISOString();
     const expires = (ttl: number) => new Date(nowMs + ttl).toISOString();
+    const storeMissing = async (): Promise<Settled> => {
+      await store({
+        chainId,
+        address: key,
+        status: "missing",
+        bytes: null,
+        contentType: null,
+        etag: null,
+        source: null,
+        sourceUrl: null,
+        candidateUrl: top.url,
+        fetchedAt,
+        expiresAt: expires(tokenLogoMissingTtlMs),
+      });
+      return { result: { kind: "missing" }, warm: "missing" };
+    };
     switch (outcome.kind) {
       case "failed":
         // Never cached; an older picture is better than none.
-        if (row?.status === "found" && row.bytes !== null) {
-          return { result: fromRow(row), warm: "kept" };
-        }
-        return {
-          result: { kind: "unreachable" },
-          warm: row?.status === "found" ? "kept" : "failed",
-        };
+        return stored !== null
+          ? keep(stored)
+          : { result: { kind: "unreachable" }, warm: "failed" };
+      case "undecodable":
+        // The upstream answered, but nothing it sent could be decoded: a
+        // stored picture is kept rather than replaced by "no picture".
+        return stored !== null ? keep(stored) : storeMissing();
       case "missing":
-        await store({
-          chainId,
-          address: key,
-          status: "missing",
-          bytes: null,
-          contentType: null,
-          etag: null,
-          source: null,
-          sourceUrl: null,
-          candidateUrl: top.url,
-          fetchedAt,
-          expiresAt: expires(tokenLogoMissingTtlMs),
-        });
-        return { result: { kind: "missing" }, warm: "missing" };
+        return storeMissing();
       case "oversize":
         if (!outcome.degraded) {
           await store({
@@ -662,53 +729,68 @@ export function createTokenLogoProxyService(
     }
   }
 
-  async function resolveUncached(
+  async function resolveTask(
     chainId: string,
     address: string | null,
-  ): Promise<TokenLogoProxyResult> {
+  ): Promise<Settled> {
     const key = address ?? "native";
     const row = await readRow(chainId, key);
     if (isManual(row) && row !== null) {
-      return fromRow(row);
+      return { result: fromRow(row), warm: "manual" };
     }
     const list = await candidates(chainId, address);
     const top = list[0];
     if (top === undefined) {
-      return { kind: "missing" };
+      return { result: { kind: "missing" }, warm: "unsupported" };
     }
-    if (isCurrent(row, top, now().getTime(), 0) && row !== null) {
-      return fromRow(row);
+    const nowMs = now().getTime();
+    if (isCurrent(row, top, nowMs, 0, false) && row !== null) {
+      return {
+        result: fromRow(row),
+        // A joined pre-warm may reuse this only when it would also be fresh.
+        warm: isCurrent(row, top, nowMs, tokenLogoWarmRefreshAheadMs, true)
+          ? "fresh"
+          : null,
+      };
     }
-    return (await refresh(chainId, key, list, row)).result;
+    return refresh(chainId, key, list, row);
   }
 
-  async function warmUncached(
+  async function warmTask(
     chainId: string,
     address: string | null,
     state: TokenLogoCacheRecord | null | undefined,
-  ): Promise<TokenLogoWarmOutcome> {
+  ): Promise<Settled> {
     const key = address ?? "native";
     const known = state === undefined ? await readRow(chainId, key) : state;
     if (isManual(known)) {
-      return "manual";
+      return { result: null, warm: "manual" };
     }
     const list = await candidates(chainId, address);
     const top = list[0];
     if (top === undefined) {
-      return "unsupported";
+      return { result: { kind: "missing" }, warm: "unsupported" };
     }
-    if (isCurrent(known, top, now().getTime(), tokenLogoWarmRefreshAheadMs)) {
-      return "fresh";
+    if (
+      isCurrent(known, top, now().getTime(), tokenLogoWarmRefreshAheadMs, true)
+    ) {
+      return { result: null, warm: "fresh" };
     }
-    // Due: the bytes of the stored row are needed only to keep serving them
-    // when the refetch fails, which `refresh` reports as `kept` either way.
-    return (await refresh(chainId, key, list, known)).warm;
+    // Due: without the stored bytes (a `listStates` row) a failed refetch
+    // still reports `kept`; a request joining it reads the row itself.
+    return refresh(chainId, key, list, known);
   }
 
-  function shared<T>(key: string, task: () => Promise<T>): Promise<T> {
+  /**
+   * One in-flight task per (chain, token), shared by `resolve` and `warm`
+   * (Decision 0161 review): a caller joins the running task and only runs
+   * its own when the joined one could not answer it (a pre-warm that did
+   * not read the bytes; a request that does not decide pre-warm freshness).
+   */
+  function shared(key: string, task: () => Promise<Settled>): Promise<Settled> {
     const pending = inFlight.get(key);
     if (pending !== undefined) {
-      return pending as Promise<T>;
+      return pending;
     }
     const tracked = task().finally(() => {
       if (inFlight.get(key) === tracked) {
@@ -720,18 +802,23 @@ export function createTokenLogoProxyService(
   }
 
   return Object.freeze({
-    resolve({
+    async resolve({
       chainId,
       address,
     }: {
       readonly chainId: string;
       readonly address: string | null;
     }): Promise<TokenLogoProxyResult> {
-      return shared(`resolve:${chainId}/${address ?? "native"}`, () =>
-        resolveUncached(chainId, address),
-      );
+      const key = `${chainId}/${address ?? "native"}`;
+      const run = () => resolveTask(chainId, address);
+      const joined = await shared(key, run);
+      if (joined.result !== null) {
+        return joined.result;
+      }
+      const own = await shared(key, run);
+      return own.result ?? (await run()).result ?? { kind: "missing" };
     },
-    warm({
+    async warm({
       chainId,
       address,
       state,
@@ -740,9 +827,14 @@ export function createTokenLogoProxyService(
       readonly address: string | null;
       readonly state?: TokenLogoCacheRecord | null;
     }): Promise<TokenLogoWarmOutcome> {
-      return shared(`warm:${chainId}/${address ?? "native"}`, () =>
-        warmUncached(chainId, address, state),
-      );
+      const key = `${chainId}/${address ?? "native"}`;
+      const run = () => warmTask(chainId, address, state);
+      const joined = await shared(key, run);
+      if (joined.warm !== null) {
+        return joined.warm;
+      }
+      const own = await shared(key, run);
+      return own.warm ?? (await run()).warm ?? "failed";
     },
   });
 }

@@ -342,10 +342,10 @@ describe("token logo proxy service (Decision 0089)", () => {
     });
   });
 
-  it("refetches a row stored before normalisation (not WebP) even inside its 7 days", async () => {
+  it("serves a row stored before normalisation (not WebP) until it expires on demand, and only the pre-warm re-encodes it early", async () => {
     const cache = memoryLogoCache();
     const legacy = png(32, 9);
-    cache.rows.set(`${chainId}/${wbnb}`, {
+    const legacyRow: TokenLogoCacheRecord = {
       chainId,
       address: wbnb,
       status: "found",
@@ -357,15 +357,119 @@ describe("token logo proxy service (Decision 0089)", () => {
       candidateUrl: trustWalletWbnb,
       fetchedAt: start.toISOString(),
       expiresAt: "2026-10-05T08:00:00.000Z",
-    });
+    };
+    cache.rows.set(`${chainId}/${wbnb}`, legacyRow);
     const fresh = png(64, 5);
     const fetch = upstreamFetch({
       [trustWalletWbnb]: { kind: "body", body: fresh },
     });
-    expect(
-      await service({ fetch, cache }).resolve({ chainId, address: wbnb }),
-    ).toMatchObject({ kind: "image", contentType: "image/webp" });
+    const proxy = service({ fetch, cache });
+    expect(await proxy.resolve({ chainId, address: wbnb })).toEqual({
+      kind: "image",
+      bytes: legacy,
+      contentType: "image/png",
+      etag: tokenLogoEtag(legacy),
+      durable: true,
+    });
+    expect(fetch.calls).toEqual([]);
+    expect(await proxy.warm({ chainId, address: wbnb })).toBe("stored");
     expect(fetch.calls).toEqual([trustWalletWbnb]);
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toMatchObject({
+      contentType: "image/webp",
+      bytes: normalized(fresh),
+    });
+  });
+
+  it("keeps a stored picture when the refetch only brought undecodable bytes, and writes no 'missing'", async () => {
+    const cache = memoryLogoCache();
+    const good = png(64, 6);
+    await service({
+      fetch: upstreamFetch({ [trustWalletWbnb]: { kind: "body", body: good } }),
+      cache,
+    }).resolve({ chainId, address: wbnb });
+    const stored = cache.rows.get(`${chainId}/${wbnb}`);
+    cache.put.mockClear();
+    const later = () => new Date("2026-10-06T00:00:00.000Z");
+    for (const body of [
+      Buffer.concat([png(16), Buffer.from("UNDECODABLE")]),
+      Buffer.from("<html>maintenance</html>"),
+    ]) {
+      const proxy = service({
+        fetch: upstreamFetch({ [trustWalletWbnb]: { kind: "body", body } }),
+        cache,
+        now: later,
+      });
+      expect(await proxy.resolve({ chainId, address: wbnb })).toMatchObject({
+        kind: "image",
+        bytes: normalized(good),
+      });
+      expect(await proxy.warm({ chainId, address: wbnb })).toBe("kept");
+      const states = await cache.listStates(chainId, [wbnb]);
+      expect(
+        await proxy.warm({
+          chainId,
+          address: wbnb,
+          state: states.get(wbnb) ?? null,
+        }),
+      ).toBe("kept");
+    }
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(cache.rows.get(`${chainId}/${wbnb}`)).toBe(stored);
+  });
+
+  it("shares one in-flight task between a request and a pre-warm of the same token", async () => {
+    const fetch = upstreamFetch(
+      { [trustWalletWbnb]: { kind: "body", body: png() } },
+      { delayMs: 20 },
+    );
+    const cache = memoryLogoCache();
+    const proxy = service({ fetch, cache, upstreamTimeoutMs: 1_000 });
+    const [image, warmed, again] = await Promise.all([
+      proxy.resolve({ chainId, address: wbnb }),
+      proxy.warm({ chainId, address: wbnb }),
+      proxy.resolve({ chainId, address: wbnb }),
+    ]);
+    expect(image).toMatchObject({ kind: "image" });
+    expect(again).toEqual(image);
+    expect(warmed).toBe("stored");
+    expect(fetch.calls).toEqual([trustWalletWbnb]);
+    expect(cache.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps Ethereum / Base refetches per process and leaves BSC alone", async () => {
+    const eth = "eip155:1";
+    const fetch = upstreamFetch({});
+    const cache = memoryLogoCache();
+    const proxy = createTokenLogoProxyService({
+      cache,
+      facts: null,
+      fetch,
+      now: () => start,
+      upstreamTimeoutMs: 50,
+      normalize: fakeNormalize,
+      otherChainRefetchesPerMinute: 3,
+    });
+    const addresses = Array.from(
+      { length: 5 },
+      (_, index) => `0x${(index + 1).toString(16).padStart(40, "0")}`,
+    );
+    const results = [];
+    for (const address of addresses) {
+      results.push(await proxy.resolve({ chainId: eth, address }));
+    }
+    expect(results.map((result) => result.kind)).toEqual([
+      "missing",
+      "missing",
+      "missing",
+      "unreachable",
+      "unreachable",
+    ]);
+    expect(fetch.calls).toHaveLength(3);
+    expect(cache.rows.size).toBe(3);
+    expect(await proxy.resolve({ chainId, address: wbnb })).toEqual({
+      kind: "missing",
+    });
+    expect(fetch.calls).toHaveLength(4);
   });
 
   it("serves a manual picture without asking any upstream, and neither resolve nor warm overwrites it", async () => {

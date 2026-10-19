@@ -16,16 +16,19 @@ import sharp from "sharp";
  *   padded with transparent pixels; a smaller picture is enlarged so every
  *   row has the same size. An animated GIF / WebP keeps its first frame.
  * - EXIF orientation is applied, then all metadata is dropped.
- * - Anything sharp cannot decode, a picture above the pixel limit, and an
- *   output above the stored-size limit are "no picture" (`null`).
+ * - Anything sharp cannot decode, a picture above 2048 x 2048 pixels, a
+ *   re-encode taking more than 5 s, and an output above the stored-size
+ *   limit are "no picture" (`null`).
  */
 
 export const tokenLogoNormalizedSize = 128;
 export const tokenLogoNormalizedContentType = "image/webp" as const;
 /** WebP quality of the colour channels; alpha is stored at full quality. */
 export const tokenLogoNormalizedQuality = 85;
-/** Largest input decoded (pixels); 4096 x 4096 is far above any logo. */
-export const tokenLogoMaximumInputPixels = 4096 * 4096;
+/** Largest input decoded (pixels); 2048 x 2048 is far above any logo. */
+export const tokenLogoMaximumInputPixels = 2048 * 2048;
+/** libvips time limit of one re-encode; a slower picture is "no picture". */
+export const tokenLogoNormalizeTimeoutSeconds = 5;
 /** Largest normalised output stored (the `token_logo_cache` byte check). */
 export const tokenLogoMaximumStoredBytes = 256 * 1024;
 
@@ -52,6 +55,7 @@ export const normalizeTokenLogo: TokenLogoNormalizer = async (input) => {
         alphaQuality: 100,
         effort: 4,
       })
+      .timeout({ seconds: tokenLogoNormalizeTimeoutSeconds })
       .toBuffer();
     if (output.length === 0 || output.length > tokenLogoMaximumStoredBytes) {
       return null;

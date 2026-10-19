@@ -139,7 +139,7 @@ Bearer、`X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.m
 - **公开资源**：不需要 `Authorization`、不需要 `X-Loop-Contract-Version` 或任何 LOOP 头；
   普通图片加载器（`Image.network` / `CachedNetworkImage`）直接 GET 即可。带 query 参数 → 400。
 - `chainId`：`eip155:56`（`logo.url` 只会是它）；决策 0161 起路由也能读 `eip155:1`、`eip155:8453`
-  （Trust Wallet 对应链目录），但**不会出现在任何 `logo.url` 里**，客户端无需改正则。
+  （Trust Wallet 对应链目录），但**不会出现在任何 `logo.url` 里**，客户端无需改正则；这两条链未命中时的回源每进程限 10 次 / 分钟，超出回 502。
 - `file`：`0x`+40 位十六进制（大小写均可，下发的都是小写）+ `.png`，或 `native.png`；
   `.webp` 后缀是同一资源（同 ETag），留给以后，当前客户端照旧用 `.png`。
 - **字节恒为 128 × 128 WebP**（决策 0161：服务端把任何来源、任何尺寸的图统一转成 128 × 128、

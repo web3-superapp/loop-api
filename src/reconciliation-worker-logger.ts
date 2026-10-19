@@ -143,6 +143,7 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled"
   | "LOOP market sparkline warm lane could not refresh an asset"
   | "LOOP token logo prewarm pass finished"
+  | "LOOP token logo upstream or cache warning"
   | "LOOP voice room reaper ended a room"
   | "LOOP voice room reaper could not confirm the Stream call end"
   | "LOOP voice room reaper could not end a room"

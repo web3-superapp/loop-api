@@ -74,8 +74,11 @@ describe("normalizeTokenLogo (Decision 0161)", () => {
     expect(alpha).toBeLessThan(145);
   });
 
-  it("answers null for empty, truncated, SVG and non-image input", async () => {
+  it("answers null for empty, truncated, SVG, non-image and over-2048² input", async () => {
     const good = await logoPng();
+    expect(
+      await normalizeTokenLogo(await logoPng({ width: 3000, height: 3000 })),
+    ).toBeNull();
     for (const input of [
       Buffer.alloc(0),
       good.subarray(0, 40),

@@ -5,7 +5,8 @@ import type { TokenLogoPrewarmSummary } from "./features/market/token-logo-prewa
 /**
  * The `token_logo_prewarm` lane (Decision 0161 §2), default on behind
  * `TOKEN_LOGO_PREWARM_ENABLED` in the standalone worker process and
- * constructed only with a database. Each tick is one pre-warm pass
+ * constructed only with a database. After a random 1–5 min start delay,
+ * each tick is one pre-warm pass
  * (`runTokenLogoPrewarmPass`), then the lane sleeps `intervalMs`
  * (`TOKEN_LOGO_PREWARM_INTERVAL_MS`, default 6 h). A pass that throws
  * (registry / watchlist read failed) is retried with backoff; per-token
@@ -15,6 +16,8 @@ import type { TokenLogoPrewarmSummary } from "./features/market/token-logo-prewa
 export const TOKEN_LOGO_PREWARM_LANE = "token_logo_prewarm" as const;
 export const TOKEN_LOGO_PREWARM_RETRY_BASE_DELAY_MS = 5_000;
 export const TOKEN_LOGO_PREWARM_RETRY_MAX_DELAY_MS = 15 * 60 * 1_000;
+export const TOKEN_LOGO_PREWARM_INITIAL_DELAY_MIN_MS = 60_000;
+export const TOKEN_LOGO_PREWARM_INITIAL_DELAY_MAX_MS = 5 * 60_000;
 
 export interface TokenLogoPrewarmInfrastructureBackoff {
   readonly reasonCode: "token_logo_prewarm_unavailable";
@@ -32,6 +35,12 @@ export interface TokenLogoPrewarmWorker {
 export interface CreateTokenLogoPrewarmWorkerOptions {
   readonly pass: (signal?: AbortSignal) => Promise<TokenLogoPrewarmSummary>;
   readonly intervalMs: number;
+  /**
+   * Pause before the first pass (default a random 1–5 min, so a restart
+   * loop or several workers do not hit the Providers together).
+   */
+  readonly initialDelayMs?: number;
+  readonly random?: () => number;
   readonly createUuid?: () => string;
   readonly onRunResult?: (summary: TokenLogoPrewarmSummary) => void;
   readonly onInfrastructureBackoff?: (
@@ -100,6 +109,17 @@ export function createTokenLogoPrewarmWorker(
       loopRunning = true;
       let consecutiveFailures = 0;
       try {
+        const random = options.random ?? Math.random;
+        await waitFor(
+          options.initialDelayMs ??
+            TOKEN_LOGO_PREWARM_INITIAL_DELAY_MIN_MS +
+              Math.floor(
+                random() *
+                  (TOKEN_LOGO_PREWARM_INITIAL_DELAY_MAX_MS -
+                    TOKEN_LOGO_PREWARM_INITIAL_DELAY_MIN_MS),
+              ),
+          signal,
+        );
         while (!signal.aborted) {
           try {
             const summary = await runOnce(signal);

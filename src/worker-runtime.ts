@@ -2394,6 +2394,20 @@ export async function runReconciliationWorker(
     // and said so once, with the same reason the API publishes.
     const sparklineWarmConfig = options.config.sparklineWarm;
     let sparklineWarmWorker: MarketSparklineWarmWorker | null = null;
+    // One worker-role Provider set for the sparkline and logo pre-warm lanes
+    // (Decision 0161 review): they share the GeckoTerminal / DexScreener
+    // limiters instead of each spending the worker share on its own.
+    let laneMarketProviders: ReturnType<typeof createMarketProviders> | null =
+      null;
+    const sharedLaneMarketProviders = (): ReturnType<
+      typeof createMarketProviders
+    > => {
+      laneMarketProviders ??= createMarketProviders(
+        options.config.market,
+        "worker",
+      );
+      return laneMarketProviders;
+    };
     if (
       sparklineWarmConfig !== null &&
       database.chainRegistry !== undefined &&
@@ -2409,10 +2423,7 @@ export async function runReconciliationWorker(
           "LOOP market sparkline warm lane stays idle: the OHLCV Provider is disabled",
         );
       } else {
-        const providers = createMarketProviders(
-          options.config.market,
-          "worker",
-        );
+        const providers = sharedLaneMarketProviders();
         sparklineWarmWorker = sparklineWarmWorkerFactory({
           registry: database.chainRegistry,
           watchlist: database.watchlistsV2 ?? null,
@@ -2464,16 +2475,27 @@ export async function runReconciliationWorker(
       const logoCache = database.tokenLogoCache;
       const logoRegistry = database.chainRegistry ?? null;
       const logoWatchlist = database.watchlistsV2 ?? null;
-      const logoProviders = createMarketProviders(
-        options.config.market,
-        "worker",
-      );
+      const logoProviders = sharedLaneMarketProviders();
+      const logoFacts = database.marketFacts ?? null;
       const logoProxy = createTokenLogoProxyService({
         cache: logoCache,
-        facts: database.marketFacts ?? null,
+        facts: logoFacts,
         ...(options.tokenLogoFetch === undefined
           ? {}
           : { fetch: options.tokenLogoFetch }),
+        logger: {
+          warn: (fields) => {
+            const reasonCode = fields["reasonCode"];
+            options.logger.warn(
+              {
+                ...logFields(),
+                lane: "token_logo_prewarm",
+                ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+              },
+              "LOOP token logo upstream or cache warning",
+            );
+          },
+        },
       });
       const logoPairs =
         database.marketFacts === undefined || logoProviders.pairs === null
@@ -2498,6 +2520,16 @@ export async function runReconciliationWorker(
             watchlist: logoWatchlist,
             topPools: logoProviders.topPools,
             hotLimit: tokenLogoPrewarmConfig.hotLimit,
+            hotListCache:
+              logoFacts === null
+                ? null
+                : {
+                    store: logoFacts,
+                    reuseSeconds: Math.min(
+                      86_400,
+                      Math.floor(tokenLogoPrewarmConfig.intervalMs / 1_000),
+                    ),
+                  },
             pairs: logoPairs,
             ...(signal === undefined ? {} : { signal }),
           }),

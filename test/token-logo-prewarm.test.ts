@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AssetRecord } from "../src/database/chain-registry-repository.js";
+import type { MarketFactCacheRecord } from "../src/database/market-fact-cache-repository.js";
 import { bscMainstreamTokenLogos } from "../src/features/market/token-logo-mainstream.js";
 import {
   collectTokenLogoPrewarmTargets,
@@ -337,11 +338,11 @@ describe("runTokenLogoPrewarmPass", () => {
     expect(recovered.hotListed).toBe(20);
     expect(throttled.calls()).toBe(4);
 
-    // A lasting rate refusal gives up after ten retries.
+    // A lasting rate refusal gives up after three retries.
     const stuck = topPools([fullPage, "error"]);
     const gaveUp = await runTokenLogoPrewarmPass({ ...base, topPools: stuck });
     expect(gaveUp.hotReasonCode).toBe("TOKEN_LOGO_HOT_LIST_FAILED");
-    expect(stuck.calls()).toBe(1 + 11);
+    expect(stuck.calls()).toBe(1 + 4);
 
     const capped = await runTokenLogoPrewarmPass({
       chainId,
@@ -405,6 +406,110 @@ describe("runTokenLogoPrewarmPass", () => {
   });
 });
 
+describe("hot list pacing and reuse", () => {
+  const fullPage = Array.from({ length: 20 }, (_, index) =>
+    pool(`0x${(index + 1).toString(16).padStart(40, "0")}`),
+  );
+  const proxy = {
+    resolve: vi.fn(),
+    warm: vi.fn(() => Promise.resolve("fresh" as const)),
+  };
+
+  it("backs off 30 / 60 / 120 s between rate-refused pages", async () => {
+    vi.useFakeTimers();
+    try {
+      const stuck = topPools([fullPage, "error"]);
+      const pass = runTokenLogoPrewarmPass({
+        chainId,
+        proxy,
+        cache: null,
+        mainstream: [],
+        registry: null,
+        watchlist: null,
+        topPools: stuck,
+        hotLimit: 200,
+        pairs: null,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stuck.calls()).toBe(2);
+      await vi.advanceTimersByTimeAsync(29_990);
+      expect(stuck.calls()).toBe(2);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(stuck.calls()).toBe(3);
+      await vi.advanceTimersByTimeAsync(59_980);
+      expect(stuck.calls()).toBe(3);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(stuck.calls()).toBe(4);
+      await vi.advanceTimersByTimeAsync(119_980);
+      expect(stuck.calls()).toBe(4);
+      await vi.advanceTimersByTimeAsync(20);
+      const summary = await pass;
+      expect(stuck.calls()).toBe(5);
+      expect(summary.hotReasonCode).toBe("TOKEN_LOGO_HOT_LIST_FAILED");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches a complete hot list and reuses it within one interval without asking GeckoTerminal", async () => {
+    const rows = new Map<string, MarketFactCacheRecord>();
+    const store = {
+      get: vi.fn((subjectKey: string) =>
+        Promise.resolve(rows.get(subjectKey) ?? null),
+      ),
+      put: vi.fn((input: MarketFactCacheRecord) => {
+        rows.set(input.subjectKey, input);
+        return Promise.resolve(input);
+      }),
+    };
+    let now = new Date("2026-10-19T00:00:00.000Z");
+    const run = (provider: ReturnType<typeof topPools>) =>
+      runTokenLogoPrewarmPass({
+        chainId,
+        proxy,
+        cache: null,
+        mainstream: [],
+        registry: null,
+        watchlist: null,
+        topPools: provider,
+        hotLimit: 200,
+        pairs: null,
+        now: () => now,
+        hotListCache: { store, reuseSeconds: 21_600 },
+      });
+    const first = topPools([fullPage, []]);
+    expect(await run(first)).toMatchObject({
+      hotSource: "provider",
+      hotListed: 20,
+    });
+    expect(rows.get("logohot:bsc")).toMatchObject({
+      factKind: "logo_hot_list",
+      source: "geckoterminal",
+      ttlSeconds: 21_600,
+    });
+    now = new Date("2026-10-19T05:59:00.000Z");
+    const second = topPools([fullPage]);
+    expect(await run(second)).toMatchObject({
+      hotSource: "cache",
+      hotListed: 20,
+      targetCount: 21,
+    });
+    expect(second.calls()).toBe(0);
+    now = new Date("2026-10-19T06:00:01.000Z");
+    const third = topPools([fullPage, []]);
+    expect((await run(third)).hotSource).toBe("provider");
+    expect(third.calls()).toBe(2);
+
+    // A list cut short is used but not cached.
+    rows.clear();
+    const partial = topPools([fullPage, "reject"]);
+    expect((await run(partial)).hotReasonCode).toBe(
+      "TOKEN_LOGO_HOT_LIST_FAILED",
+    );
+    expect(rows.size).toBe(0);
+  });
+});
+
 describe("token_logo_prewarm lane", () => {
   it("runs a pass, reports it, sleeps the interval, and backs off when a pass throws", async () => {
     const controller = new AbortController();
@@ -413,6 +518,7 @@ describe("token_logo_prewarm lane", () => {
     let attempt = 0;
     const lane = createTokenLogoPrewarmWorker({
       intervalMs: 5,
+      initialDelayMs: 0,
       pass: () => {
         attempt += 1;
         if (attempt === 2) {
@@ -440,6 +546,7 @@ describe("token_logo_prewarm lane", () => {
           },
           hotListed: 0,
           hotReasonCode: null,
+          hotSource: "none" as const,
           pairSeedReasonCode: null,
           aborted: false,
         });
@@ -467,5 +574,29 @@ describe("token_logo_prewarm lane", () => {
       },
     ]);
     expect(tokenLogoPrewarmRetryDelayMs(20)).toBe(15 * 60 * 1_000);
+  });
+
+  it("waits a random 1–5 min before its first pass", async () => {
+    const controller = new AbortController();
+    const pass = vi.fn(() => {
+      controller.abort();
+      return Promise.reject(new Error("stop"));
+    });
+    const lane = createTokenLogoPrewarmWorker({
+      intervalMs: 1_000,
+      random: () => 0.5,
+      pass,
+    });
+    vi.useFakeTimers();
+    try {
+      const running = lane.run(controller.signal);
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(pass).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(pass).toHaveBeenCalledTimes(1);
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

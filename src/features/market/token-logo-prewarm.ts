@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { AssetRecord } from "../../database/chain-registry-repository.js";
+import type { MarketFactCacheRepository } from "../../database/market-fact-cache-repository.js";
 import type {
   TokenLogoCacheRecord,
   TokenLogoCacheRepository,
@@ -129,6 +132,8 @@ export interface TokenLogoPrewarmSummary {
   readonly hotListed: number;
   /** Why the hot list is short or empty, `null` when it was read in full. */
   readonly hotReasonCode: string | null;
+  /** `cache`: reused the last complete list; `provider`: asked; `none`. */
+  readonly hotSource: "provider" | "cache" | "none";
   /** Why the DexScreener pair seeding was skipped or failed, else `null`. */
   readonly pairSeedReasonCode: string | null;
   readonly aborted: boolean;
@@ -152,8 +157,16 @@ export interface TokenLogoPrewarmDependencies {
   readonly pairs: Pick<MarketFactService, "readTokenPairsBatch"> | null;
   readonly now?: () => Date;
   readonly concurrency?: number;
-  /** Test seam: pause after a rate-limited hot-list page (default 30 s). */
+  /** Test seam: first pause after a rate-limited hot-list page (30 s). */
   readonly hotRetryDelayMs?: number;
+  /**
+   * Where the last complete hot list is kept, and for how long it is reused
+   * (one lane interval, ≤ 86 400 s). `null` always asks the Provider.
+   */
+  readonly hotListCache?: {
+    readonly store: Pick<MarketFactCacheRepository, "get" | "put">;
+    readonly reuseSeconds: number;
+  } | null;
   readonly signal?: AbortSignal;
 }
 
@@ -195,10 +208,21 @@ function isSettled(
   return Date.parse(row.expiresAt) - tokenLogoWarmRefreshAheadMs > nowMs;
 }
 
-/** Pause before asking the same hot-list page again after a rate refusal. */
+/**
+ * First pause after a rate-refused hot-list page; it doubles on each retry
+ * (30 / 60 / 120 s).
+ */
 export const tokenLogoPrewarmHotRetryDelayMs = 30_000;
 /** Rate refusals tolerated in one pass before the hot list is cut short. */
-export const tokenLogoPrewarmHotMaximumRetries = 10;
+export const tokenLogoPrewarmHotMaximumRetries = 3;
+
+/**
+ * The last complete hot list is kept in `market_fact_cache` under this key
+ * (kind `logo_hot_list`, source `geckoterminal`); a pass within one lane
+ * interval of it reuses the list and asks GeckoTerminal nothing.
+ */
+export const tokenLogoHotListSubjectKey = "logohot:bsc";
+export const tokenLogoHotListFactKind = "logo_hot_list";
 
 async function pause(delayMs: number, signal: AbortSignal | undefined) {
   if (signal?.aborted === true || delayMs <= 0) {
@@ -266,7 +290,7 @@ async function readHotAddresses(
         retries < tokenLogoPrewarmHotMaximumRetries
       ) {
         retries += 1;
-        await pause(retryDelayMs, signal);
+        await pause(retryDelayMs * 2 ** (retries - 1), signal);
         continue;
       }
       // What was read so far is used; the next pass asks again.
@@ -274,6 +298,85 @@ async function readHotAddresses(
     }
   }
   return { addresses, reasonCode: null };
+}
+
+const evmAddress = /^0x[0-9a-f]{40}$/;
+
+/**
+ * The hot list: the cached complete list when it is younger than one lane
+ * interval (no Provider request), else GeckoTerminal; a complete answer is
+ * cached for the next pass. Cache failures only mean "ask the Provider".
+ */
+async function readHotList(
+  dependencies: TokenLogoPrewarmDependencies,
+  now: () => Date,
+  signal: AbortSignal | undefined,
+): Promise<{
+  readonly addresses: readonly string[];
+  readonly reasonCode: string | null;
+  readonly source: "provider" | "cache" | "none";
+}> {
+  if (dependencies.hotLimit === 0) {
+    return { addresses: [], reasonCode: null, source: "none" };
+  }
+  const cache = dependencies.hotListCache ?? null;
+  if (cache !== null && dependencies.topPools !== null) {
+    try {
+      const row = await cache.store.get(
+        tokenLogoHotListSubjectKey,
+        tokenLogoHotListFactKind,
+        "geckoterminal",
+      );
+      const age =
+        row === null ? Infinity : now().getTime() - Date.parse(row.fetchedAt);
+      const listed = row?.value["addresses"];
+      if (
+        row !== null &&
+        age >= 0 &&
+        age < cache.reuseSeconds * 1_000 &&
+        Array.isArray(listed) &&
+        listed.every(
+          (value) => typeof value === "string" && evmAddress.test(value),
+        )
+      ) {
+        return {
+          addresses: (listed as string[]).slice(0, dependencies.hotLimit),
+          reasonCode: null,
+          source: "cache",
+        };
+      }
+    } catch {
+      // Ask the Provider.
+    }
+  }
+  const read = await readHotAddresses(
+    dependencies.topPools,
+    dependencies.hotLimit,
+    signal,
+    dependencies.hotRetryDelayMs ?? tokenLogoPrewarmHotRetryDelayMs,
+  );
+  if (dependencies.topPools === null) {
+    return { ...read, source: "none" };
+  }
+  if (cache !== null && read.reasonCode === null && read.addresses.length > 0) {
+    try {
+      const value = { addresses: [...read.addresses] };
+      await cache.store.put({
+        subjectKey: tokenLogoHotListSubjectKey,
+        factKind: tokenLogoHotListFactKind,
+        source: "geckoterminal",
+        value,
+        rawDigest: createHash("sha256")
+          .update(JSON.stringify(value))
+          .digest("hex"),
+        fetchedAt: now().toISOString(),
+        ttlSeconds: Math.max(1, Math.min(86_400, cache.reuseSeconds)),
+      });
+    } catch {
+      // The next pass asks the Provider again.
+    }
+  }
+  return { ...read, source: "provider" };
 }
 
 /** One pre-warm pass (worker lane tick, or `pnpm token-logo:prewarm`). */
@@ -298,12 +401,7 @@ export async function runTokenLogoPrewarmPass(
     dependencies.watchlist === null
       ? []
       : await dependencies.watchlist.listDistinctAssetIds(watchlistReadLimit);
-  const hot = await readHotAddresses(
-    dependencies.topPools,
-    dependencies.hotLimit,
-    signal,
-    dependencies.hotRetryDelayMs ?? tokenLogoPrewarmHotRetryDelayMs,
-  );
+  const hot = await readHotList(dependencies, now, signal);
   const targets = collectTokenLogoPrewarmTargets({
     chainId: dependencies.chainId,
     mainstream: dependencies.mainstream,
@@ -390,6 +488,7 @@ export async function runTokenLogoPrewarmPass(
     outcomes: Object.freeze(outcomes),
     hotListed: hot.addresses.length,
     hotReasonCode: hot.reasonCode,
+    hotSource: hot.source,
     pairSeedReasonCode,
     aborted,
   });

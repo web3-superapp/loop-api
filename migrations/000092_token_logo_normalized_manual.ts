@@ -10,11 +10,10 @@ import type { MigrationBuilder } from "node-pg-migrate";
  *   refetched; its `expires_at` is the far-future sentinel.
  * - `candidate_url` becomes nullable for that reason; every non-manual row
  *   still needs one.
- * - Every `found` / `oversize` row written before this migration is marked
- *   expired (`expires_at` one millisecond after `fetched_at`): the proxy
- *   refetches and re-encodes it into the 128 x 128 WebP on its next request
- *   or pre-warm pass, and keeps serving the old bytes if that refetch fails.
- *   `missing` rows keep their 24 h.
+ * - No row is rewritten: a picture stored before Decision 0161 (PNG / JPEG
+ *   / GIF / WebP as fetched) keeps being served until it expires; the
+ *   pre-warm lane re-encodes it into the 128 x 128 WebP ahead of that, and
+ *   any refetch writes the normalised form.
  *
  * `down` removes manual rows (a cache of re-fetchable pictures plus
  * operator uploads that the console can upload again), then restores the
@@ -49,12 +48,6 @@ export function up(pgm: MigrationBuilder): void {
             and (source = 'manual' or source_url is not null)
           )
         );
-
-    update public.token_logo_cache
-      set expires_at = fetched_at + interval '1 millisecond',
-          updated_at = clock_timestamp()
-      where status in ('found', 'oversize')
-        and expires_at > fetched_at + interval '1 millisecond';
 
     comment on table public.token_logo_cache is
       'Decisions 0089, 0161: the logo proxy cache. found = the picture as a 128 x 128 WebP (rows older than 0161 may hold the upstream type until refreshed) with ETag, 7 days; source manual = an operator upload, never refetched; missing = every origin answered no such file or the picture could not be decoded (24 h); oversize = upstream picture above the read limit, no bytes (24 h). An upstream timeout never writes a row.';
