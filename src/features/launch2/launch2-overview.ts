@@ -1,4 +1,5 @@
 import { v2ContractVersion } from "../meta/product-policy.js";
+import type { TraderAccountProjection } from "../profile/wallet-account-directory.js";
 import { formatLaunch2Amount, type Launch2Stage } from "./launch2-contract.js";
 import type {
   Launch2ActivityRecord,
@@ -55,7 +56,10 @@ function nullableDescending(a: bigint | null, b: bigint | null): number {
   return a > b ? -1 : a < b ? 1 : 0;
 }
 
-function activityOf(record: Launch2ActivityRecord): Record<string, unknown> {
+function activityOf(
+  record: Launch2ActivityRecord,
+  accounts: ReadonlyMap<string, TraderAccountProjection | null>,
+): Record<string, unknown> {
   return Object.freeze({
     kind: record.kind,
     instanceId: record.instanceId,
@@ -63,6 +67,11 @@ function activityOf(record: Launch2ActivityRecord): Record<string, unknown> {
     name: record.name,
     logoUrl: record.logoUrl,
     actor: record.actor,
+    // Decision 0162: the actor's LOOP account under the trade-visibility rule.
+    account:
+      record.actor === null
+        ? null
+        : (accounts.get(record.actor.toLowerCase()) ?? null),
     amountUsd1:
       record.amountUsd1 === null
         ? null
@@ -82,7 +91,10 @@ export function projectLaunch2Overview(input: {
   readonly activity: readonly Launch2ActivityRecord[];
   readonly facts: readonly Launch2OverviewInstanceFacts[];
   readonly now: Date;
+  /** Decision 0162: lower-case actor address → account (absent = null). */
+  readonly accounts?: ReadonlyMap<string, TraderAccountProjection | null>;
 }): Record<string, unknown> {
+  const accounts = input.accounts ?? new Map();
   const nowSeconds = BigInt(Math.floor(input.now.getTime() / 1000));
   const weekStart = launch2WeekStart(input.now).getTime();
   const counts = new Map<Launch2Stage, number>();
@@ -109,7 +121,7 @@ export function projectLaunch2Overview(input: {
     activity: [...input.activity]
       .sort(compareActivity)
       .slice(0, launch2OverviewActivityLimit)
-      .map(activityOf),
+      .map((record) => activityOf(record, accounts)),
     stats: Object.freeze({
       liveCount: live,
       mintingCount: count("nft_sale"),

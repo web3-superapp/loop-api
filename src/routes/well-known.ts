@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto";
+
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import type { AppConfig } from "../config.js";
 import { errorResponseSchema } from "../core/http/schemas.js";
+import {
+  InvalidInviteCodeError,
+  parseInviteCode,
+} from "../features/referral/invite-code.js";
 
 /**
  * Passkey relying-party discovery (Decision 0063) merged with Universal Links /
@@ -45,12 +51,14 @@ export const wellKnownCacheControl = "public, max-age=3600";
 
 /**
  * Universal Link paths the app claims: shared LOOP IDs (Decision 0090),
- * voice-room share links `/c/{communityId}/room` (Decision 0091), and
- * community links `/c/{communityId}` (Decision 0095).
+ * voice-room share links `/c/{communityId}/room` (Decision 0091), community
+ * links `/c/{communityId}` (Decision 0095), and invite links `/i/{code}`
+ * (Decision 0162).
  */
 export const appleAppLinkComponents = Object.freeze([
   Object.freeze({ "/": "/u/*" }),
   Object.freeze({ "/": "/c/*" }),
+  Object.freeze({ "/": "/i/*" }),
 ]);
 
 /** Community IDs are canonical lower-case UUIDv4 (Decision 0032). */
@@ -273,6 +281,42 @@ export function registerWellKnownRoutes(
     },
   );
 
+  app.get<{ Params: { code: string } }>(
+    "/i/:code",
+    {
+      schema: {
+        hide: true,
+        operationId: "getInviteLandingPage",
+        summary: "Landing page for a shared invite link without the app",
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code"],
+          properties: { code: { type: "string", maxLength: 64 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      setLandingHeaders(reply, inviteLandingContentSecurityPolicy);
+      let code: string;
+      try {
+        code = parseInviteCode(request.params.code);
+      } catch (error) {
+        if (!(error instanceof InvalidInviteCodeError)) throw error;
+        reply.header("cache-control", "no-store");
+        return reply.code(404).send(renderInviteLandingPage(null, null));
+      }
+      reply.header("cache-control", wellKnownCacheControl);
+      return reply.send(
+        renderInviteLandingPage(code, {
+          ios: config.appLinks.iosStoreUrl,
+          android: config.appLinks.androidStoreUrl,
+          fallback: config.appLinks.downloadUrl,
+        }),
+      );
+    },
+  );
+
   app.get<{ Params: { communityId: string } }>(
     "/c/:communityId",
     {
@@ -330,9 +374,12 @@ export function registerWellKnownRoutes(
   );
 }
 
-function setLandingHeaders(reply: FastifyReply): void {
+function setLandingHeaders(
+  reply: FastifyReply,
+  contentSecurityPolicy: string = landingContentSecurityPolicy,
+): void {
   reply.header("content-type", "text/html; charset=utf-8");
-  reply.header("content-security-policy", landingContentSecurityPolicy);
+  reply.header("content-security-policy", contentSecurityPolicy);
   reply.header("referrer-policy", "no-referrer");
   reply.header("x-content-type-options", "nosniff");
   reply.header("x-robots-tag", "noindex");
@@ -340,6 +387,19 @@ function setLandingHeaders(reply: FastifyReply): void {
 
 const landingContentSecurityPolicy =
   "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/**
+ * Decision 0162: the one script of the invite page — copy the code, then
+ * open the store for the platform (or the generic download link). Static
+ * text, allowed by its hash; the code and links travel in data attributes.
+ */
+export const inviteLandingScript = `(function(){var b=document.getElementById("copy");if(!b)return;var s=document.getElementById("status");function copyFallback(c){var t=document.createElement("textarea");t.value=c;t.setAttribute("readonly","");t.style.position="absolute";t.style.left="-9999px";document.body.appendChild(t);t.select();try{document.execCommand("copy")}catch(e){}document.body.removeChild(t)}b.addEventListener("click",function(){var c=b.getAttribute("data-code")||"";var u=navigator.userAgent||"";var target=/iPhone|iPad|iPod/.test(u)?b.getAttribute("data-ios"):(/Android/.test(u)?b.getAttribute("data-android"):null);target=target||b.getAttribute("data-fallback");function go(){if(s)s.textContent="\u9080\u8bf7\u7801\u5df2\u590d\u5236";if(target)window.location.href=target}if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(go,function(){copyFallback(c);go()})}else{copyFallback(c);go()}})})();`;
+
+const inviteLandingScriptHash = createHash("sha256")
+  .update(inviteLandingScript, "utf8")
+  .digest("base64");
+
+export const inviteLandingContentSecurityPolicy = `default-src 'none'; script-src 'sha256-${inviteLandingScriptHash}'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 
 function escapeHtml(value: string): string {
   return value
@@ -398,20 +458,70 @@ export function renderCommunityLandingPage(
   return renderLandingDocument(body);
 }
 
+/**
+ * Minimal page for a shared invite link `/i/{code}` opened without LOOP
+ * installed (Decision 0162). With the app installed the system opens it
+ * directly (`/i/*` is claimed in both association files) and the app reads
+ * the code from the path. Like `/u/`, it never reads the database: the code
+ * shown is the canonical form of the one in the URL (check symbol verified),
+ * and nothing says whether it was ever issued.
+ */
+export function renderInviteLandingPage(
+  code: string | null,
+  stores: {
+    readonly ios: string | null;
+    readonly android: string | null;
+    readonly fallback: string | null;
+  } | null,
+): string {
+  if (code === null || stores === null) {
+    return renderLandingDocument(
+      `<p class="label">LOOP</p><h1>链接无效</h1><p>这个邀请链接里没有有效的邀请码。</p>`,
+    );
+  }
+  const safeCode = escapeHtml(code);
+  const attribute = (name: string, value: string | null): string =>
+    value === null ? "" : ` data-${name}="${escapeHtml(value)}"`;
+  const storeLinks = [
+    stores.ios === null
+      ? ""
+      : `<a class="store" href="${escapeHtml(stores.ios)}" rel="noopener noreferrer">App Store</a>`,
+    stores.android === null
+      ? ""
+      : `<a class="store" href="${escapeHtml(stores.android)}" rel="noopener noreferrer">Google Play</a>`,
+  ].join("");
+  const body = `<p class="label">LOOP</p><h1>邀请码</h1><p class="id code">${safeCode}</p><p>好友邀请你加入 LOOP</p><button id="copy" class="cta" type="button" data-code="${safeCode}"${attribute("ios", stores.ios)}${attribute("android", stores.android)}${attribute("fallback", stores.fallback)}>复制邀请码并下载 LOOP</button><p id="status" class="hint" aria-live="polite"></p>${storeLinks === "" ? "" : `<p class="stores">${storeLinks}</p>`}<p class="hint">注册后在「填写邀请码」粘贴即可绑定（注册后 7 天内有效）。已安装 LOOP 时打开这个链接会直接进入 App。</p>`;
+  return renderLandingDocument(body, {
+    title: `LOOP 邀请码 ${safeCode}`,
+    head: `<meta property="og:title" content="LOOP 邀请码 ${safeCode}">
+<meta property="og:description" content="好友邀请你加入 LOOP，注册时填写邀请码 ${safeCode}">
+<meta name="loop-invite-code" content="${safeCode}">
+`,
+    script: inviteLandingScript,
+  });
+}
+
 function downloadLink(downloadUrl: string | null): string {
   return downloadUrl === null
     ? ""
     : `<a class="cta" href="${escapeHtml(downloadUrl)}" rel="noopener noreferrer">下载 LOOP</a>`;
 }
 
-function renderLandingDocument(body: string): string {
+function renderLandingDocument(
+  body: string,
+  extra: {
+    readonly title: string;
+    readonly head: string;
+    readonly script: string;
+  } | null = null,
+): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>LOOP</title>
+${extra === null ? "" : extra.head}<title>${extra === null ? "LOOP" : extra.title}</title>
 <style>
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0b0b;color:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
 main{max-width:360px;padding:32px 24px;text-align:center}
@@ -419,10 +529,13 @@ main{max-width:360px;padding:32px 24px;text-align:center}
 h1{margin:8px 0 16px;font-size:28px}
 .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .hint{color:#9a9a92;font-size:14px;line-height:1.5}
-.cta{display:inline-block;margin-top:16px;min-height:44px;line-height:44px;padding:0 24px;border-radius:22px;background:#c6f432;color:#0b0b0b;font-weight:600;text-decoration:none}
+.cta{display:inline-block;margin-top:16px;min-height:44px;line-height:44px;padding:0 24px;border:0;border-radius:22px;background:#c6f432;color:#0b0b0b;font-weight:600;font-size:16px;text-decoration:none;cursor:pointer}
+.code{margin:0 0 8px;font-size:24px;letter-spacing:.06em}
+.stores{display:flex;gap:12px;justify-content:center}
+.store{color:#f5f5f0;font-size:14px}
 </style>
 </head>
-<body><main>${body}</main></body>
+<body><main>${body}</main>${extra === null ? "" : `<script>${extra.script}</script>`}</body>
 </html>
 `;
 }

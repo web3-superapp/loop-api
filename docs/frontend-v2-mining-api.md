@@ -821,6 +821,9 @@ HTTP 错误：`400 INVALID_REQUEST`（非法 `scope`、多余 query/body）、`4
 
 ### 5.1 `GET /v2/referral`
 
+> **S239 / 决策 0162**：本接口新增 `inviteLink`、`stats`，`boost` 有了 `available` 形态（最新已结算小时的五级邀请算力），
+> 另有 `GET /v2/referral/invitees` 直推列表与 `/i/{code}` 邀请链接。完整契约见 `docs/frontend-v2-referral-api.md`。
+
 首次读取自动签发本账号邀请码（每账号一个，随机、唯一、不可枚举）。
 
 ```json

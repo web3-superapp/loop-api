@@ -414,6 +414,7 @@ import {
   type MiningService,
 } from "./features/mining/mining-service.js";
 import { createUnavailableMiningRepository } from "./features/mining/mining-repository.js";
+import { createWalletAccountDirectory } from "./features/profile/wallet-account-directory.js";
 import {
   createReferralService,
   createUnavailableReferralService,
@@ -2201,6 +2202,8 @@ export async function buildApp(
       ? createReferralService({
           repository:
             database.referral ?? createUnavailableReferralRepository(),
+          publicBaseUrl: config.publicBaseUrl,
+          cursorCodec: v2CursorCodec,
         })
       : createUnavailableReferralService());
   // MEME curve launchpad (Decision 0101): the lane's PostgreSQL projection
@@ -2393,6 +2396,22 @@ export async function buildApp(
               : null,
           logger: app.log,
           now: options.walletIntentNow ?? ((): Date => new Date()),
+          // Decision 0162: trader wallet → account (batched, 30 s cache).
+          accounts:
+            database.walletAccounts === undefined
+              ? null
+              : createWalletAccountDirectory({
+                  lookup: database.walletAccounts,
+                  onLookupError: (error) => {
+                    app.log.warn(
+                      {
+                        err: error,
+                        reasonCode: "WALLET_ACCOUNT_LOOKUP_FAILED",
+                      },
+                      "wallet account lookup failed; traders stay bare wallets",
+                    );
+                  },
+                }),
         })
       : createUnavailableLaunch2Service());
   // Decision 0116: hourly settlement rewards and claims under the `mining`

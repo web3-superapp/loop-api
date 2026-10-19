@@ -897,6 +897,8 @@ const environmentSchema = z
     PASSKEY_IOS_BUNDLE_ID: optionalCredential(255),
     ANDROID_RELEASE_CERT_SHA256: optionalCredential(1_024),
     APP_DOWNLOAD_URL: optionalCredential(2_048),
+    APP_STORE_URL_IOS: optionalCredential(2_048),
+    APP_STORE_URL_ANDROID: optionalCredential(2_048),
     COMMUNITY_CHAT_REAL_IDENTITY: booleanString,
     RECOMMENDED_COMMUNITY_IDS: optionalCredential(4_096),
     // Decision 0105: hosts an intel promotion `imageUrl` may point at.
@@ -1651,6 +1653,12 @@ export interface AppLinksConfig {
   readonly androidCertificateFingerprints: readonly string[];
   /** `APP_DOWNLOAD_URL`; `null` hides the download link on the landing page. */
   readonly downloadUrl: string | null;
+  /**
+   * Decision 0162: `APP_STORE_URL_IOS` / `APP_STORE_URL_ANDROID` (https) for
+   * the `/i/{code}` invite page; `null` hides that store button.
+   */
+  readonly iosStoreUrl: string | null;
+  readonly androidStoreUrl: string | null;
 }
 
 export interface BscIndexerConfig {
@@ -3487,6 +3495,8 @@ function parseAppLinksConfig(
   data: {
     readonly ANDROID_RELEASE_CERT_SHA256?: string | undefined;
     readonly APP_DOWNLOAD_URL?: string | undefined;
+    readonly APP_STORE_URL_IOS?: string | undefined;
+    readonly APP_STORE_URL_ANDROID?: string | undefined;
   },
   ios: PasskeyIosConfig | null,
 ): AppLinksConfig {
@@ -3495,20 +3505,26 @@ function parseAppLinksConfig(
     data.ANDROID_RELEASE_CERT_SHA256,
     [appLinksAndroidDebugFingerprint],
   );
-  let downloadUrl: string | null = null;
-  if (data.APP_DOWNLOAD_URL !== undefined) {
-    const url = parseUrl("APP_DOWNLOAD_URL", data.APP_DOWNLOAD_URL);
+  const httpsUrl = (name: string, value: string | undefined): string | null => {
+    if (value === undefined) return null;
+    const url = parseUrl(name, value);
     if (
       url.protocol !== "https:" ||
       url.username !== "" ||
       url.password !== ""
     ) {
       throw new ConfigurationError([
-        "APP_DOWNLOAD_URL: must be an https URL without credentials",
+        `${name}: must be an https URL without credentials`,
       ]);
     }
-    downloadUrl = url.toString();
-  }
+    return url.toString();
+  };
+  const downloadUrl = httpsUrl("APP_DOWNLOAD_URL", data.APP_DOWNLOAD_URL);
+  const iosStoreUrl = httpsUrl("APP_STORE_URL_IOS", data.APP_STORE_URL_IOS);
+  const androidStoreUrl = httpsUrl(
+    "APP_STORE_URL_ANDROID",
+    data.APP_STORE_URL_ANDROID,
+  );
   return Object.freeze({
     iosAppIds: Object.freeze(ios === null ? [] : [ios.appId]),
     androidPackage: appLinksAndroidPackage,
@@ -3517,6 +3533,8 @@ function parseAppLinksConfig(
       ...release,
     ]),
     downloadUrl,
+    iosStoreUrl,
+    androidStoreUrl,
   });
 }
 
@@ -4031,6 +4049,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["PASSKEY_IOS_BUNDLE_ID"] ?? defaultPasskeyIosBundleId,
     ANDROID_RELEASE_CERT_SHA256: environment["ANDROID_RELEASE_CERT_SHA256"],
     APP_DOWNLOAD_URL: environment["APP_DOWNLOAD_URL"],
+    APP_STORE_URL_IOS: environment["APP_STORE_URL_IOS"],
+    APP_STORE_URL_ANDROID: environment["APP_STORE_URL_ANDROID"],
     COMMUNITY_CHAT_REAL_IDENTITY:
       environment["COMMUNITY_CHAT_REAL_IDENTITY"] ?? "true",
     RECOMMENDED_COMMUNITY_IDS: environment["RECOMMENDED_COMMUNITY_IDS"],

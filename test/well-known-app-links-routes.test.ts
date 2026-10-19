@@ -11,7 +11,12 @@ import { createUnavailablePerpIntentRepository } from "../src/database/perp-inte
 import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
+import { inviteCodeCheckSymbol } from "../src/features/referral/invite-code.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
+import {
+  inviteLandingContentSecurityPolicy,
+  inviteLandingScript,
+} from "../src/routes/well-known.js";
 
 const debugKeystoreFingerprint =
   "AE:60:82:E6:21:F5:9D:3E:63:96:F8:CB:4B:8D:86:28:7C:F6:2B:29:06:D5:2C:2E:5D:8E:A7:D4:DB:5E:3E:FA";
@@ -116,7 +121,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     expect(response.headers["cache-control"]).toBe("public, max-age=3600");
     expect(response.headers.location).toBeUndefined();
     expect(response.body).toBe(
-      '{"applinks":{"details":[{"appIDs":["ABCDE12345.com.example.loopnext"],"components":[{"/":"/u/*"},{"/":"/c/*"}]}]},"webcredentials":{"apps":["ABCDE12345.com.example.loopnext"]}}',
+      '{"applinks":{"details":[{"appIDs":["ABCDE12345.com.example.loopnext"],"components":[{"/":"/u/*"},{"/":"/c/*"},{"/":"/i/*"}]}]},"webcredentials":{"apps":["ABCDE12345.com.example.loopnext"]}}',
     );
   });
 
@@ -134,7 +139,7 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
         details: [
           {
             appIDs: ["ABCDE12345.com.cywd.loopapp"],
-            components: [{ "/": "/u/*" }, { "/": "/c/*" }],
+            components: [{ "/": "/u/*" }, { "/": "/c/*" }, { "/": "/i/*" }],
           },
         ],
       },
@@ -415,9 +420,82 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     );
 
     expect(paths).not.toContain("/u/{loopId}");
+    expect(paths).not.toContain("/i/{code}");
     expect(paths).not.toContain("/c/{communityId}/room");
     expect(paths).not.toContain("/c/{communityId}");
     expect(paths).not.toContain("/.well-known/assetlinks.json");
     expect(paths).not.toContain("/.well-known/apple-app-site-association");
+  });
+
+  const inviteCode = `LOOP-7HJK${inviteCodeCheckSymbol("7HJK")}`;
+
+  it("serves the invite landing page with the canonical code, the copy button and only its own script (Decision 0162)", async () => {
+    const { app, database } = await buildTestApp({
+      APP_STORE_URL_IOS: "https://apps.apple.com/app/id000000",
+      APP_STORE_URL_ANDROID:
+        "https://play.google.com/store/apps/details?id=com.cywd.loop",
+      APP_DOWNLOAD_URL: "https://example.com/loop",
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: `/i/${inviteCode.toLowerCase().replace("loop-", "")}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers["cache-control"]).toBe("public, max-age=3600");
+    const policy = response.headers["content-security-policy"];
+    expect(policy).toBe(inviteLandingContentSecurityPolicy);
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).toMatch(/script-src 'sha256-[A-Za-z0-9+/]+=*'/);
+    expect(response.body).toContain(`<script>${inviteLandingScript}</script>`);
+    expect(response.body.match(/<script/g)).toHaveLength(1);
+    expect(response.body).toContain(`邀请码`);
+    expect(response.body).toContain(`data-code="${inviteCode}"`);
+    expect(response.body).toContain("复制邀请码并下载 LOOP");
+    expect(response.body).toContain(
+      'data-ios="https://apps.apple.com/app/id000000"',
+    );
+    expect(response.body).toContain(
+      'href="https://apps.apple.com/app/id000000"',
+    );
+    expect(response.body).toContain(
+      'data-android="https://play.google.com/store/apps/details?id=com.cywd.loop"',
+    );
+    expect(response.body).toContain('data-fallback="https://example.com/loop"');
+    expect(response.body).toContain(
+      `<meta property="og:title" content="LOOP 邀请码 ${inviteCode}">`,
+    );
+    expect(response.body).toContain("background:#0b0b0b");
+    expect(database.lookups).not.toHaveBeenCalled();
+  });
+
+  it("shows no store link without the store env, and answers a bad code with an uncached 404", async () => {
+    const { app } = await buildTestApp();
+    const page = await app.inject({ method: "GET", url: `/i/${inviteCode}` });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).not.toContain("<a ");
+    expect(page.body).not.toContain('data-ios="');
+    expect(page.body).toContain(`data-code="${inviteCode}"`);
+    for (const url of [
+      "/i/LOOP-7HJKX",
+      "/i/%3Cscript%3E",
+      "/i/LOOP-7HJ",
+      `/i/${inviteCode}1`,
+    ]) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toContain("<script");
+      expect(response.body).toContain("链接无效");
+    }
+  });
+
+  it("rejects store URLs that are not https", () => {
+    expect(() =>
+      testConfig({ APP_STORE_URL_IOS: "http://apps.apple.com/app/id1" }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      testConfig({ APP_STORE_URL_ANDROID: "javascript:alert(1)" }),
+    ).toThrow(ConfigurationError);
   });
 });

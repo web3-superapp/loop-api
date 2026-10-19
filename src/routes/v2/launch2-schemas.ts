@@ -13,6 +13,17 @@ import {
 import { launch2ActivityKinds } from "../../features/launch2/launch2-ports.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
+import { accountSchema as memeAccountSchema } from "./meme-schemas.js";
+
+/**
+ * Decision 0162: the trader's LOOP account, the MEME trade `account` shape.
+ * Optional in the schema (older servers omit it), always sent by this one.
+ */
+const traderAccountSchema = {
+  ...memeAccountSchema,
+  description:
+    "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}.",
+} as const;
 
 /**
  * Route schemas of the MEME v2 read model (`launch2`, Decision 0114). Every
@@ -286,6 +297,7 @@ const overviewActivitySchema = {
         "The full 0x address; null for platform actions (graduated, buyback, round_activated) and for anonymous official-pool swaps (Decision 0132: not through LoopRouter / OfficialPoolRouter attribution).",
       anyOf: [addressSchema, { type: "null" }],
     },
+    account: traderAccountSchema,
     amountUsd1: {
       description:
         "curve_buy = USD1 paid (tax included), curve_sell = USD1 received, nft_mint = the mint price (100), buyback = USD1 spent, reward_claimed = USD1 claimed; null for graduated and round_activated.",
@@ -530,6 +542,7 @@ const tradeItemSchema = {
     tradeId: opaqueIdSchema,
     side: { type: "string", enum: ["buy", "sell"] },
     traderAddress: addressSchema,
+    account: traderAccountSchema,
     memeAmount: decimalSchema,
     usd1Gross: decimalSchema,
     usd1Net: decimalSchema,
@@ -1598,6 +1611,7 @@ const poolTradeItemSchema = {
       description:
         "Opaque id of the indexed PoolManager Swap fact (stable across re-scans).",
     },
+    account: traderAccountSchema,
     side: poolSideSchema,
     inputToken: { type: "string", enum: ["usd1", "meme"] },
     outputToken: { type: "string", enum: ["usd1", "meme"] },

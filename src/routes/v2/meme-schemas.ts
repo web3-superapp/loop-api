@@ -86,7 +86,7 @@ const sourceSchema = {
   },
 } as const;
 
-const accountSchema = {
+export const accountSchema = {
   anyOf: [
     {
       type: "object",
