@@ -112,6 +112,26 @@ export interface AdminMemeTokenRecord {
   readonly createdAt: string;
 }
 
+/** Decision 0163: list visibility of a MEME v2 (launch2) instance. */
+export type AdminLaunch2Listing = "visible" | "hidden";
+
+export interface AdminLaunch2InstanceListingRecord {
+  readonly instanceId: string;
+  readonly projectId: string;
+  readonly chainId: string;
+  readonly name: string;
+  readonly ticker: string;
+  readonly memeAddress: string;
+  /** The stored (indexer-projected) stage; the App derives the live one. */
+  readonly stage: string;
+  readonly graduatedAt: string | null;
+  readonly registeredAt: string;
+  readonly listing: AdminLaunch2Listing;
+  readonly listingReason: string | null;
+  readonly listingUpdatedAt: string | null;
+  readonly listingUpdatedBy: string | null;
+}
+
 export interface AdminCommunityWeightEntry {
   readonly communityId: string;
   readonly weight: string;
@@ -249,6 +269,24 @@ export interface AdminRepository {
     readonly audit: Omit<AdminAuditInput, "before" | "after">;
   }): Promise<{
     readonly token: AdminMemeTokenRecord;
+    readonly changed: boolean;
+    readonly audit: AdminAuditRecord;
+  }>;
+
+  /** Decision 0163: newest registered first, at most `limit`. */
+  listLaunch2Instances(input: {
+    readonly listing: AdminLaunch2Listing | null;
+    readonly query: string | null;
+    readonly limit: number;
+  }): Promise<readonly AdminLaunch2InstanceListingRecord[]>;
+  setLaunch2Listing(input: {
+    readonly instanceId: string;
+    readonly listing: AdminLaunch2Listing;
+    /** Required for hidden; null keeps the previous reason on restore. */
+    readonly reason: string | null;
+    readonly audit: Omit<AdminAuditInput, "before" | "after">;
+  }): Promise<{
+    readonly instance: AdminLaunch2InstanceListingRecord;
     readonly changed: boolean;
     readonly audit: AdminAuditRecord;
   }>;

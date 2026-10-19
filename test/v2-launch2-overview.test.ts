@@ -276,6 +276,8 @@ describe("V2 launch2 overview (Decision 0139)", () => {
     // paused (hold) and not listed (no activation): not counted as live.
     add(instanceFixture({ holdReason: "LAUNCH2_ACTIVATION_MISSING" }));
     add(instanceFixture({ activatedAt: null, nftMintedCount: "9" }));
+    // Decision 0163: hidden by an operator — in no count.
+    add(instanceFixture({ listing: "hidden", nftMintedCount: "7" }));
     const app = await createApp(repository);
     const response = await get(app);
     expect(response.statusCode).toBe(200);

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000092_token_logo_normalized_manual";
+export const latestMigrationName = "000093_launch2_instance_listing";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

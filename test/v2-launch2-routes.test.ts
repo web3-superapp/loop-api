@@ -316,6 +316,38 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(orphanDetail.instance).toMatchObject({ summary: null, links: [] });
   });
 
+  it("drops a hidden instance from every list, keeps its detail, and never sends listing on /v2 (Decision 0163)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const shown = instanceFixture();
+    const hidden = instanceFixture({ listing: "hidden" });
+    repository.instances.set(shown.instanceId, shown);
+    repository.instances.set(hidden.instanceId, hidden);
+    const { app } = await createApp({ repository });
+    for (const url of [
+      "/v2/launch2/instances",
+      "/v2/launch2/instances?stage=nft_sale",
+    ]) {
+      const rows = (await get(app, url)).json<{
+        instances: Record<string, unknown>[];
+      }>().instances;
+      expect(
+        rows.map((row) => row["instanceId"]),
+        url,
+      ).toEqual([shown.instanceId]);
+      // Decision 0163: /v2 never carries `listing` (strict App codec).
+      expect(Object.hasOwn(rows[0] as object, "listing")).toBe(false);
+    }
+    const detail = await get(app, `/v2/launch2/instances/${hidden.instanceId}`);
+    expect(detail.statusCode).toBe(200);
+    const instance = detail.json<{ instance: Record<string, unknown> }>()
+      .instance;
+    expect(instance).toMatchObject({ instanceId: hidden.instanceId });
+    expect(Object.hasOwn(instance, "listing")).toBe(false);
+    expect(
+      requiredOf(launch2InstanceDetailResourceSchema, ["instance"]),
+    ).not.toContain("listing");
+  });
+
   it("ends the NFT sale at the instance's own saleEnd: 1 hour on the testnet Factory (Decision 0119)", async () => {
     const repository = createInMemoryLaunch2Repository();
     const selling = instanceFixture(

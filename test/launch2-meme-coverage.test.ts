@@ -92,6 +92,6 @@ describe("000075 MEME coverage integrity (Decision 0129 §2)", () => {
   });
 
   it("is the latest migration", () => {
-    expect(latestMigrationName).toBe("000092_token_logo_normalized_manual");
+    expect(latestMigrationName).toBe("000093_launch2_instance_listing");
   });
 });

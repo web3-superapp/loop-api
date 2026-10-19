@@ -388,6 +388,7 @@ export const publicMemeDetailSchema = {
         "chainId",
         "explorerBaseUrl",
         "socials",
+        "listing",
       ],
       properties: {
         instanceId: { type: "string", pattern: opaqueIdPatternSource },
@@ -418,6 +419,12 @@ export const publicMemeDetailSchema = {
             x: nullableUrlSchema,
             telegram: nullableUrlSchema,
           },
+        },
+        listing: {
+          type: "string",
+          enum: ["visible", "hidden"],
+          description:
+            "Decision 0163: `hidden` = taken off the public list (GET /public/v1/meme) by an operator; this detail still reads it.",
         },
       },
     },

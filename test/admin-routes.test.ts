@@ -18,6 +18,7 @@ import type { MemePauseSender } from "../src/integrations/meme/meme-pause-sender
 import {
   adminCommunityFixture,
   adminFormulaFixture,
+  adminLaunch2InstanceFixture,
   adminMemeFixture,
   createInMemoryAdminRepository,
   fakeMemePauseSender,
@@ -891,6 +892,101 @@ describe("Operator console routes (Decision 0102)", () => {
     expect(
       expectError(pause, 503, "CAPABILITY_UNAVAILABLE")["detailsSafe"],
     ).toEqual({ reasonCode: "MEME_OPERATOR_KEY_MISSING" });
+  });
+
+  it("hides and restores a launch2 instance with an audit row (Decision 0163)", async () => {
+    const { app, repository } = await createApp();
+    const instance = adminLaunch2InstanceFixture();
+    const other = adminLaunch2InstanceFixture({ name: "Frog", ticker: "FROG" });
+    repository.launch2Instances.set(instance.instanceId, instance);
+    repository.launch2Instances.set(other.instanceId, other);
+    const cookie = await login(app);
+    const put = (instanceId: string, body: Record<string, unknown>) =>
+      app.inject({
+        method: "PUT",
+        url: `/admin/v1/launch2/instances/${instanceId}/listing`,
+        headers: { cookie },
+        payload: body,
+      });
+    expect(
+      expectError(
+        await put(instance.instanceId, { listing: "hidden" }),
+        422,
+        "VALIDATION_FAILED",
+      )["detailsSafe"],
+    ).toEqual({ reasonCode: "ADMIN_REASON_TEXT_REQUIRED" });
+    expectError(
+      await put(instance.instanceId, { listing: "listed", reason: "x" }),
+      400,
+      "INVALID_REQUEST",
+    );
+    expect(
+      expectError(
+        await put(randomUUID(), { listing: "hidden", reason: "test" }),
+        404,
+        "NOT_FOUND",
+      )["detailsSafe"],
+    ).toEqual({ reasonCode: "ADMIN_LAUNCH2_INSTANCE_NOT_FOUND" });
+    expect(
+      repository.audit.filter((row) => row.action === "launch2.listing.update"),
+    ).toHaveLength(0);
+
+    const hidden = await put(instance.instanceId, {
+      listing: "hidden",
+      reason: "  测试网验收项目  ",
+    });
+    expect(hidden.statusCode).toBe(200);
+    expect(hidden.headers["cache-control"]).toBe("no-store");
+    expect(hidden.json()).toMatchObject({
+      changed: true,
+      instance: {
+        instanceId: instance.instanceId,
+        listing: "hidden",
+        listingReason: "测试网验收项目",
+      },
+    });
+    expect(
+      typeof hidden.json<{ audit: { auditId: unknown } }>().audit.auditId,
+    ).toBe("string");
+    expect(repository.audit.at(-1)).toMatchObject({
+      action: "launch2.listing.update",
+      targetType: "launch2_instance",
+      targetId: instance.instanceId,
+      before: { listing: "visible", reason: null },
+      after: { listing: "hidden", reason: "测试网验收项目" },
+    });
+
+    const hiddenList = await app.inject({
+      method: "GET",
+      url: "/admin/v1/launch2/instances?listing=hidden",
+      headers: { cookie },
+    });
+    expect(hiddenList.statusCode).toBe(200);
+    expect(
+      hiddenList
+        .json<{ items: { instanceId: string }[] }>()
+        .items.map((row) => row.instanceId),
+    ).toEqual([instance.instanceId]);
+    expectError(
+      await app.inject({
+        method: "GET",
+        url: "/admin/v1/launch2/instances?listing=listed",
+        headers: { cookie },
+      }),
+      400,
+      "INVALID_REQUEST",
+    );
+
+    const restored = await put(instance.instanceId, { listing: "visible" });
+    expect(restored.json()).toMatchObject({
+      changed: true,
+      instance: { listing: "visible", listingReason: "测试网验收项目" },
+    });
+    const again = await put(instance.instanceId, { listing: "visible" });
+    expect(again.json()).toMatchObject({ changed: false });
+    expect(
+      repository.audit.filter((row) => row.action === "launch2.listing.update"),
+    ).toHaveLength(3);
   });
 
   it("broadcasts pause/unpause through the executor and audits it", async () => {

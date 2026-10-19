@@ -1154,6 +1154,14 @@ not held back, and the worker lane indexes the LoopDynamic Factory (+ `LAUNCH2_L
 `LAUNCH2_FACTORY_NOT_CONFIGURED` now means **neither** the OfficialTax nor the LoopDynamic pair
 is configured. Nothing in the wire format changes.
 
+### 3.14 运营列表隐藏（Decision 0163，S245）
+
+运营可在后台把实例设为「列表隐藏」（链上事实不变、不改名）。**线上格式不变：App 暂不下发 `listing`**（已发布 App 的 strict codec 遇未知键会整页 invalidPayload）；以后需要时作为可选键随移动端一起发。
+
+- 列表（任何 `stage`，含已毕业）、`GET /v2/launch2/overview` 的计数与动态、`GET /public/v1/meme`、广场时间线 / 置顶里关于该实例的事件帖（buy / claim / graduation / system），都**不再出现**隐藏实例。
+- 按 id 直达仍可读：详情、quote、pool、dynamic-pool、buybacks、`/v2/launch2/me/positions`、`GET /v2/square/posts/{postId}`；用户 opinion 帖照常显示。持有人从持仓 / 分享链接进入照常可看、可交易。
+- App 无需任何改动、无新错误码。（官网 `GET /public/v1/meme/{id}` 另有 `instance.listing`。）
+
 ### 3.13 `GET /v2/launch2/overview`（Decision 0139，S181）
 
 发射台整页（docs/32 §7.1 实时流、§7.5 战绩条）。鉴权与 headers 同 §3.1；无 query（带任何 query → `400`）；

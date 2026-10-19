@@ -503,6 +503,8 @@ function summaryOf(
       priceUsd1: formatLaunch2Amount(BigInt(record.priceE18)),
     }),
     graduatedAt: record.graduation?.graduatedAt ?? null,
+    // Decision 0163: no `listing` on /v2 — the shipped App's strict codec
+    // refuses unknown keys; it ships later as an optional key with the App.
   });
 }
 
@@ -2874,6 +2876,7 @@ export function createLaunch2Service(
         socials: launch2PublicSocials(
           launch2ProjectProfileProjection(profile).links,
         ),
+        listing: record.listing,
       }),
       community:
         community === null

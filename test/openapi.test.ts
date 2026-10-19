@@ -1332,6 +1332,7 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/launch/projects/{projectId}",
       "GET /admin/v1/launch2/campaigns",
       "GET /admin/v1/launch2/campaigns/{campaignId}",
+      "GET /admin/v1/launch2/instances",
       "GET /admin/v1/market/logos/{chainId}/{address}",
       "GET /admin/v1/meme/tokens",
       "GET /admin/v1/mining/epochs",
@@ -1380,6 +1381,7 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/square/posts",
       "POST /admin/v1/square/posts/{postId}/archive",
       "POST /admin/v1/square/posts/{postId}/publish",
+      "PUT /admin/v1/launch2/instances/{instanceId}/listing",
       "PUT /admin/v1/settings/intel-promotions",
       "PUT /admin/v1/settings/recommended-communities",
     ]);
