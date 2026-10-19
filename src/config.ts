@@ -983,6 +983,15 @@ const environmentSchema = z
     // counted from the prepare (the approve and the trade are two device
     // signatures). The quote TTL above stays the quote's freshness.
     LAUNCH2_POOL_TRADE_DEADLINE_SECONDS: positiveIntegerString(60, 600),
+    // Decision 0166: off|on (default off; any other value refuses boot).
+    // off omits the Decision 0162 `account` key from the launch2 trades /
+    // activity and skips the wallet → account lookup; on emits it. Turn on
+    // only once every supported client (build >= 31) decodes the key.
+    LAUNCH2_TRADER_ACCOUNT_EMIT: z.enum(["off", "on"]),
+    // Decision 0166: off|on (default off). off keeps GET /v2/referral in its
+    // pre-0162 shape (no inviteLink / stats, boost always unavailable); on
+    // emits them. Turn on only once every supported client is at build >= 31.
+    REFERRAL_CENTER_EMIT: z.enum(["off", "on"]),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1853,6 +1862,8 @@ export interface AppConfig {
    * (`LAUNCH_CONTRACT_BASELINE_PENDING`) even with a configured contract.
    */
   readonly launchGraduatedListEnabled: boolean;
+  /** Decision 0166: REFERRAL_CENTER_EMIT === "on" (default off). */
+  readonly referralCenterEmit: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -1870,6 +1881,11 @@ export interface AppConfig {
     readonly defaultSlippageBps: number;
     /** Decision 0126: LAUNCH2_POOL_TRADE_DEADLINE_SECONDS (default 180). */
     readonly tradeDeadlineSeconds: number;
+    /**
+     * Decision 0166: LAUNCH2_TRADER_ACCOUNT_EMIT === "on". False (default)
+     * omits the trader `account` key and skips the directory lookup.
+     */
+    readonly traderAccountEmit: boolean;
     /**
      * Decision 0124: LAUNCH2_POOL_ROUTER_ADDRESS / _CODE_HASH (lower-case);
      * null keeps the official-pool quote / prepare unavailable.
@@ -4126,6 +4142,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_QUOTE_TTL_SECONDS: environment["LAUNCH2_QUOTE_TTL_SECONDS"] ?? "60",
     LAUNCH2_POOL_TRADE_DEADLINE_SECONDS:
       environment["LAUNCH2_POOL_TRADE_DEADLINE_SECONDS"] ?? "180",
+    LAUNCH2_TRADER_ACCOUNT_EMIT:
+      environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] ?? "off",
+    REFERRAL_CENTER_EMIT: environment["REFERRAL_CENTER_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4292,6 +4311,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launchContract: parseLaunchContractConfig(parsed.data),
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
+    referralCenterEmit: parsed.data.REFERRAL_CENTER_EMIT === "on",
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:
@@ -4318,6 +4338,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       quoteTtlSeconds: parsed.data.LAUNCH2_QUOTE_TTL_SECONDS,
       defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
       tradeDeadlineSeconds: parsed.data.LAUNCH2_POOL_TRADE_DEADLINE_SECONDS,
+      traderAccountEmit: parsed.data.LAUNCH2_TRADER_ACCOUNT_EMIT === "on",
       poolRouter:
         parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
         parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined

@@ -246,6 +246,13 @@ export interface Launch2ServiceDependencies {
    * bare wallet (`account: null`).
    */
   readonly accounts?: WalletAccountDirectory | null;
+  /**
+   * Decision 0166 (LAUNCH2_TRADER_ACCOUNT_EMIT): whether the three
+   * projections above carry the `account` key at all. False (default) omits
+   * the key and skips the directory lookup — builds <= 30 decode those
+   * objects strictly and reject the extra key.
+   */
+  readonly traderAccountEmit?: boolean;
 }
 
 type Resource = Record<string, unknown>;
@@ -548,13 +555,16 @@ function buybackOf(record: Launch2BuybackRecord): Resource {
 
 function tradeOf(
   record: Launch2TradeRecord,
-  accounts: ReadonlyMap<string, TraderAccountProjection | null>,
+  /** Decision 0166: null = LAUNCH2_TRADER_ACCOUNT_EMIT off, no `account` key. */
+  accounts: ReadonlyMap<string, TraderAccountProjection | null> | null,
 ): Resource {
   return Object.freeze({
     tradeId: record.tradeId,
     side: record.side,
     traderAddress: record.traderAddress,
-    account: accounts.get(record.traderAddress.toLowerCase()) ?? null,
+    ...(accounts === null
+      ? {}
+      : { account: accounts.get(record.traderAddress.toLowerCase()) ?? null }),
     memeAmount: formatLaunch2Amount(BigInt(record.memeAmount)),
     usd1Gross: formatLaunch2Amount(BigInt(record.usd1Gross)),
     usd1Net: formatLaunch2Amount(BigInt(record.usd1Net)),
@@ -950,12 +960,13 @@ function poolTradeStatsOf(stats: Launch2PoolTradeStats | undefined): Resource {
 
 function poolTradeOf(
   record: Launch2PoolTradeRecord,
-  account: TraderAccountProjection | null,
+  /** Decision 0166: undefined = LAUNCH2_TRADER_ACCOUNT_EMIT off, no key. */
+  account: TraderAccountProjection | null | undefined,
 ): Resource {
   const buy = record.side === "buy";
   return Object.freeze({
     poolTradeId: record.poolTradeId,
-    account,
+    ...(account === undefined ? {} : { account }),
     side: record.side,
     inputToken: buy ? "usd1" : "meme",
     outputToken: buy ? "meme" : "usd1",
@@ -1012,6 +1023,8 @@ export function createLaunch2Service(
   const now = deps.now ?? ((): Date => new Date());
   const createUuid = deps.createUuid ?? randomUUID;
   const accounts = deps.accounts ?? createEmptyWalletAccountDirectory();
+  // Decision 0166: off (default) = no `account` key and no lookup.
+  const traderAccountEmit = deps.traderAccountEmit === true;
   const tradeDeadlineSeconds = BigInt(
     Math.min(
       Math.max(
@@ -3754,10 +3767,11 @@ export function createLaunch2Service(
       const wallet = await walletFor(input.principal, input.walletId, true);
       if (wallet === null) throw V2ApiError.notFound();
       const address = wallet.address.toLowerCase();
-      const own =
-        (await accounts.resolve([address], input.principal.userId)).get(
-          address,
-        ) ?? null;
+      const own = traderAccountEmit
+        ? ((await accounts.resolve([address], input.principal.userId)).get(
+            address,
+          ) ?? null)
+        : undefined;
       const [rows, stats] =
         record.graduation === null
           ? [[] as readonly Launch2PoolTradeRecord[], [] as const]
@@ -3794,10 +3808,12 @@ export function createLaunch2Service(
         }),
         store.listOverviewFacts({ chainId: deps.chainId }),
       ]).catch(translate);
-      const actorAccounts = await accounts.resolve(
-        activity.flatMap((row) => (row.actor === null ? [] : [row.actor])),
-        input.principal.userId,
-      );
+      const actorAccounts = traderAccountEmit
+        ? await accounts.resolve(
+            activity.flatMap((row) => (row.actor === null ? [] : [row.actor])),
+            input.principal.userId,
+          )
+        : null;
       return projectLaunch2Overview({
         activity,
         facts,
@@ -3930,10 +3946,13 @@ export function createLaunch2Service(
         dynamicRouterForView(record),
       ]);
       // Decision 0162: one batched (cached) lookup for the 20 traders.
-      const traderAccounts = await accounts.resolve(
-        trades.map((trade) => trade.traderAddress),
-        input.principal.userId,
-      );
+      // Decision 0166: skipped (and no key) while the emit gate is off.
+      const traderAccounts = traderAccountEmit
+        ? await accounts.resolve(
+            trades.map((trade) => trade.traderAddress),
+            input.principal.userId,
+          )
+        : null;
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
       const snapshot = record.snapshot;

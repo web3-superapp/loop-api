@@ -125000,10 +125000,8 @@
                   "additionalProperties": false,
                   "required": [
                     "inviteCode",
-                    "inviteLink",
                     "binding",
                     "levels",
-                    "stats",
                     "boost",
                     "rules",
                     "contractVersion"
@@ -125024,7 +125022,7 @@
                     "inviteLink": {
                       "type": "string",
                       "format": "uri",
-                      "description": "Decision 0162: {PUBLIC_BASE_URL}/i/{code}. With LOOP installed the system opens the app (Universal Link / App Link, path /i/*); otherwise a landing page offers copy-code-and-download."
+                      "description": "Decision 0162: {PUBLIC_BASE_URL}/i/{code}. With LOOP installed the system opens the app (Universal Link / App Link, path /i/*); otherwise a landing page offers copy-code-and-download. Decision 0166: OPTIONAL key — sent only with REFERRAL_CENTER_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31."
                     },
                     "binding": {
                       "type": "object",
@@ -125203,7 +125201,8 @@
                           ],
                           "description": "hourEnd of the settled hour validCount was read from; null before the first one."
                         }
-                      }
+                      },
+                      "description": "Decision 0162: direct / valid / depth 2..5 counts. Decision 0166: OPTIONAL key — sent only with REFERRAL_CENTER_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31."
                     },
                     "boost": {
                       "anyOf": [
@@ -125300,7 +125299,7 @@
                           }
                         }
                       ],
-                      "description": "Decision 0162: available from the newest settled mining hour; unavailable MINING_REFERRAL_BOOST_PENDING before the first one."
+                      "description": "Decision 0162: available from the newest settled mining hour; unavailable MINING_REFERRAL_BOOST_PENDING before the first one. Decision 0166: with REFERRAL_CENTER_EMIT off (default) always unavailable MINING_REFERRAL_BOOST_PENDING (builds <= 30 decode only that branch)."
                     },
                     "rules": {
                       "type": "object",
@@ -156605,7 +156604,7 @@
                               },
                               { "type": "null" }
                             ],
-                            "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}."
+                            "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}. Decision 0166: OPTIONAL key — absent unless the server runs LAUNCH2_TRADER_ACCOUNT_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31 (decodes it as an optional key)."
                           },
                           "amountUsd1": {
                             "description": "curve_buy = USD1 paid (tax included), curve_sell = USD1 received, nft_mint = the mint price (100), buyback = USD1 spent, reward_claimed = USD1 claimed; null for graduated and round_activated.",
@@ -158765,7 +158764,7 @@
                                   },
                                   { "type": "null" }
                                 ],
-                                "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}."
+                                "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}. Decision 0166: OPTIONAL key — absent unless the server runs LAUNCH2_TRADER_ACCOUNT_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31 (decodes it as an optional key)."
                               },
                               "memeAmount": {
                                 "type": "string",
@@ -164577,7 +164576,7 @@
                               },
                               { "type": "null" }
                             ],
-                            "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}."
+                            "description": "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}. Decision 0166: OPTIONAL key — absent unless the server runs LAUNCH2_TRADER_ACCOUNT_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31 (decodes it as an optional key)."
                           },
                           "side": { "type": "string", "enum": ["buy", "sell"] },
                           "inputToken": {

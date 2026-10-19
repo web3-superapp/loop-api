@@ -25,6 +25,11 @@
 > 有值 → 显示头像 / 名字，点按打开 `GET /v2/public-profiles/{publicProfileId}`；`null` → 继续显示缩短的钱包地址
 > （没有绑定账户、资料未激活、或对方把「交易记录」设为仅自己可见；本人永远看得到自己）。服务端最长缓存 30 s。
 > 新增键在 schema 里是可选的；严格解码的客户端须先接受 `account` 再上这一版 API。
+>
+> **S248 / 决策 0166（热修）**：上面的 `account` **默认不下发**（键整个不存在），由服务端
+> `LAUNCH2_TRADER_ACCOUNT_EMIT`（`off` 默认 / `on`）控制。build ≤ 30 的严格解码器遇到该键会让整页报
+> 「返回的数据不完整」。App 须在 codec 里把三处的 `account` 加为**可选键**（缺省 = 显示钱包地址）并随
+> build ≥ 31 发版；全部受支持版本都 ≥ 31 后，服务端才把开关切到 `on`。
 
 > **S150 / 决策 0126 变化（给 App）**：① **签名有效期**：报价（`…/quote`、`…/pool/quote`）的 `deadline` /
 > `expiresAt` 仍是 60 s 新鲜度；prepare 返回的意图 `deadline` / `expiresAt`（以及编码进合约调用的 deadline）

@@ -267,12 +267,11 @@ const referralResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
   additionalProperties: false,
+  // Decision 0166: inviteLink / stats are optional (REFERRAL_CENTER_EMIT).
   required: [
     "inviteCode",
-    "inviteLink",
     "binding",
     "levels",
-    "stats",
     "boost",
     "rules",
     "contractVersion",
@@ -291,7 +290,7 @@ const referralResourceSchema = {
       type: "string",
       format: "uri",
       description:
-        "Decision 0162: {PUBLIC_BASE_URL}/i/{code}. With LOOP installed the system opens the app (Universal Link / App Link, path /i/*); otherwise a landing page offers copy-code-and-download.",
+        "Decision 0162: {PUBLIC_BASE_URL}/i/{code}. With LOOP installed the system opens the app (Universal Link / App Link, path /i/*); otherwise a landing page offers copy-code-and-download. Decision 0166: OPTIONAL key — sent only with REFERRAL_CENTER_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31.",
     },
     binding: bindingSchema,
     levels: {
@@ -323,11 +322,15 @@ const referralResourceSchema = {
         },
       },
     },
-    stats: referralStatsSchema,
+    stats: {
+      ...referralStatsSchema,
+      description:
+        "Decision 0162: direct / valid / depth 2..5 counts. Decision 0166: OPTIONAL key — sent only with REFERRAL_CENTER_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31.",
+    },
     boost: {
       anyOf: [boostAvailableSchema, unavailableSchema],
       description:
-        "Decision 0162: available from the newest settled mining hour; unavailable MINING_REFERRAL_BOOST_PENDING before the first one.",
+        "Decision 0162: available from the newest settled mining hour; unavailable MINING_REFERRAL_BOOST_PENDING before the first one. Decision 0166: with REFERRAL_CENTER_EMIT off (default) always unavailable MINING_REFERRAL_BOOST_PENDING (builds <= 30 decode only that branch).",
     },
     rules: {
       type: "object",

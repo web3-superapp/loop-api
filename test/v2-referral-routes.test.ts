@@ -130,7 +130,9 @@ describe("LOOP API V2 referral module", () => {
   });
 
   it("issues the invite code on first read and publishes level counts with the boost unavailable", async () => {
-    const { app, repository } = await createApp();
+    const { app, repository } = await createApp(repositoryFake(), {
+      REFERRAL_CENTER_EMIT: "on",
+    });
     const response = await app.inject({
       method: "GET",
       url: "/v2/referral",
@@ -361,6 +363,7 @@ describe("LOOP API V2 referral module", () => {
       repositoryFake({
         getReferralBoost: vi.fn(() => Promise.resolve(boost)),
       }),
+      { REFERRAL_CENTER_EMIT: "on" },
     );
     const response = await app.inject({
       method: "GET",
@@ -389,6 +392,7 @@ describe("LOOP API V2 referral module", () => {
       repositoryFake({
         getReferralBoost: vi.fn(() => Promise.reject(new Error("down"))),
       }),
+      { REFERRAL_CENTER_EMIT: "on" },
     );
     const degraded = await failing.app.inject({
       method: "GET",
@@ -401,6 +405,44 @@ describe("LOOP API V2 referral module", () => {
       reasonCode: "MINING_REFERRAL_BOOST_PENDING",
     });
   });
+
+  // Decision 0166: builds <= 30 decode GET /v2/referral strictly (six keys,
+  // boost only as unavailable); the gate defaults off and keeps that shape.
+  for (const gate of ["off", "unset"] as const) {
+    it(`keeps the pre-0162 shape and skips the stats / boost reads (REFERRAL_CENTER_EMIT ${gate})`, async () => {
+      const { app, repository } = await createApp(
+        repositoryFake({
+          getReferralBoost: vi.fn(() =>
+            Promise.reject(new Error("must not be read")),
+          ),
+        }),
+        gate === "unset" ? {} : { REFERRAL_CENTER_EMIT: gate },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/referral",
+        headers: s7CommonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<Record<string, unknown>>();
+      expect(Object.keys(body).sort()).toEqual(
+        [
+          "binding",
+          "boost",
+          "contractVersion",
+          "inviteCode",
+          "levels",
+          "rules",
+        ].sort(),
+      );
+      expect(body["boost"]).toEqual({
+        status: "unavailable",
+        reasonCode: "MINING_REFERRAL_BOOST_PENDING",
+      });
+      expect(calls(repository, "getInviteeStats")).not.toHaveBeenCalled();
+      expect(calls(repository, "getReferralBoost")).not.toHaveBeenCalled();
+    });
+  }
 
   function invitee(index: number): ReferralInviteeRecord {
     const second = String(59 - index).padStart(2, "0");

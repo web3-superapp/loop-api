@@ -84,11 +84,15 @@ export interface ReferralBoostProjection {
 
 export interface ReferralResource {
   readonly inviteCode: { readonly code: string; readonly issuedAt: string };
-  /** Decision 0162: `{PUBLIC_BASE_URL}/i/{code}` (Universal Link / App Link). */
-  readonly inviteLink: string;
+  /**
+   * Decision 0162: `{PUBLIC_BASE_URL}/i/{code}` (Universal Link / App Link).
+   * Decision 0166: absent unless REFERRAL_CENTER_EMIT is on.
+   */
+  readonly inviteLink?: string;
   readonly binding: ReferralBindingProjection;
   readonly levels: readonly ReferralLevelProjection[];
-  readonly stats: {
+  /** Decision 0166: absent unless REFERRAL_CENTER_EMIT is on. */
+  readonly stats?: {
     readonly directCount: number;
     readonly validCount: number;
     readonly level2to5Count: number;
@@ -205,11 +209,19 @@ export function createReferralService(dependencies: {
   /** Null keeps `GET /v2/referral/invitees` 503 V2_CURSOR_NOT_CONFIGURED. */
   readonly cursorCodec?: V2CursorCodec | null;
   readonly now?: () => Date;
+  /**
+   * Decision 0166 (REFERRAL_CENTER_EMIT): whether `GET /v2/referral` carries
+   * the Decision 0162 `inviteLink`, `stats`, and available `boost`. False
+   * (default) keeps the pre-0162 shape that builds <= 30 decode strictly
+   * (boost always unavailable) and skips the stats / boost reads.
+   */
+  readonly centerEmit?: boolean;
 }): ReferralService {
   const { repository } = dependencies;
   const now = dependencies.now ?? ((): Date => new Date());
   const linkBase = dependencies.publicBaseUrl.replace(/\/+$/, "");
   const codec = dependencies.cursorCodec ?? null;
+  const centerEmit = dependencies.centerEmit === true;
 
   async function boostOf(
     userId: string,
@@ -334,8 +346,12 @@ export function createReferralService(dependencies: {
             repository.getAccountState(ownerUserId),
             repository.getDirectEdge(ownerUserId),
             repository.countInvitees(ownerUserId, epochId),
-            repository.getInviteeStats(ownerUserId, epochId),
-            boostOf(ownerUserId, epochId),
+            centerEmit
+              ? repository.getInviteeStats(ownerUserId, epochId)
+              : null,
+            centerEmit
+              ? boostOf(ownerUserId, epochId)
+              : unavailable(referralReasonCodes.boostPending),
           ]);
         const levels = referralRulesV1.levels.map((rule) => {
           const perStatus = Object.fromEntries(
@@ -360,18 +376,24 @@ export function createReferralService(dependencies: {
             code: inviteCode.code,
             issuedAt: inviteCode.issuedAt,
           }),
-          inviteLink: `${linkBase}/i/${inviteCode.code}`,
+          ...(centerEmit
+            ? { inviteLink: `${linkBase}/i/${inviteCode.code}` }
+            : {}),
           binding: bindingProjection(
             direct,
             claimWindow(state.activatedAt, now()),
           ),
           levels: Object.freeze(levels),
-          stats: Object.freeze({
-            directCount: stats.directCount,
-            validCount: stats.validCount,
-            level2to5Count: stats.level2to5Count,
-            validAsOf: stats.validAsOf,
-          }),
+          ...(stats === null
+            ? {}
+            : {
+                stats: Object.freeze({
+                  directCount: stats.directCount,
+                  validCount: stats.validCount,
+                  level2to5Count: stats.level2to5Count,
+                  validAsOf: stats.validAsOf,
+                }),
+              }),
           boost,
           rules: Object.freeze({
             configVersion: referralRulesConfigVersion,

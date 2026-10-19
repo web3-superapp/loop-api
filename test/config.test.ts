@@ -698,6 +698,46 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses LAUNCH2_TRADER_ACCOUNT_EMIT as off|on, default off, and refuses anything else (Decision 0166)", () => {
+    expect(loadConfig(validEnvironment()).launch2.traderAccountEmit).toBe(
+      false,
+    );
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] = value;
+      expect(loadConfig(environment).launch2.traderAccountEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /LAUNCH2_TRADER_ACCOUNT_EMIT/,
+      );
+    }
+  });
+
+  it("parses REFERRAL_CENTER_EMIT as off|on, default off, and refuses anything else (Decision 0166)", () => {
+    expect(loadConfig(validEnvironment()).referralCenterEmit).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["REFERRAL_CENTER_EMIT"] = value;
+      expect(loadConfig(environment).referralCenterEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["REFERRAL_CENTER_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /REFERRAL_CENTER_EMIT/,
+      );
+    }
+  });
+
   it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
     expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
       enabled: false,

@@ -188,11 +188,12 @@ describe("V2 launch2 overview (Decision 0139)", () => {
       name: "Frog Launch",
       logoUrl: "https://example.com/frog.png",
       actor: trader,
-      account: null,
       amountUsd1: "20.5",
       at: at(10n),
       transactionHash: hash("ab"),
     });
+    // Decision 0166: LAUNCH2_TRADER_ACCOUNT_EMIT defaults off — no key at all.
+    expect(rows.some((row) => "account" in row)).toBe(false);
   });
 
   it("orders newest first (block, log index as tie-breaks) and keeps at most 30", () => {

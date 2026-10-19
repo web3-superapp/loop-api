@@ -17,12 +17,13 @@ import { accountSchema as memeAccountSchema } from "./meme-schemas.js";
 
 /**
  * Decision 0162: the trader's LOOP account, the MEME trade `account` shape.
- * Optional in the schema (older servers omit it), always sent by this one.
+ * Decision 0166: optional — sent only with LAUNCH2_TRADER_ACCOUNT_EMIT=on
+ * (default off), which needs every supported client at build >= 31.
  */
 const traderAccountSchema = {
   ...memeAccountSchema,
   description:
-    "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}.",
+    "Decision 0162: the LOOP account behind the wallet (earliest active wallet row, active public profile) — null when there is none or the owner keeps trade history to themselves (trade_history_visibility = self; the owner still sees their own). Opens GET /v2/public-profiles/{publicProfileId}. Decision 0166: OPTIONAL key — absent unless the server runs LAUNCH2_TRADER_ACCOUNT_EMIT=on (default off); the server may enable it only once every supported client is at build >= 31 (decodes it as an optional key).",
 } as const;
 
 /**

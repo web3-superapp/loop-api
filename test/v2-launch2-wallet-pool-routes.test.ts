@@ -302,7 +302,6 @@ describe("V2 launch2 wallet balances and own pool trades (Decision 0126)", () =>
     expect(body["trades"]).toEqual([
       {
         poolTradeId: "5e0f0a8e-4c0a-4b8e-9a0c-2f7d1c3b4a50",
-        account: null,
         side: "buy",
         inputToken: "usd1",
         outputToken: "meme",
@@ -328,6 +327,10 @@ describe("V2 launch2 wallet balances and own pool trades (Decision 0126)", () =>
         taxToken: "usd1",
       }),
     ]);
+    // Decision 0166: LAUNCH2_TRADER_ACCOUNT_EMIT defaults off — no key.
+    for (const trade of body["trades"] as Record<string, unknown>[]) {
+      expect(trade).not.toHaveProperty("account");
+    }
     const one = await get(app, `${url}?walletId=${walletId}&limit=1`);
     expect(one.json<{ trades: unknown[] }>().trades).toHaveLength(1);
     // Before graduation: an empty list, not an error.

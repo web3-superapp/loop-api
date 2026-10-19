@@ -4,6 +4,8 @@
 
 已实现（分支 `feat/S239-profile-links-and-referral`，基线 `40921be`）。无迁移、无新表、无新错误码。新增 `GET /v2/referral/invitees`、扩展 `GET /v2/referral`、`/v2/launch2` 三处成交 / 动态加可选字段 `account`；新增非 `/v2` 公开页 `GET /i/{code}`（不进 OpenAPI），AASA 加 `/i/*`。新增可选 env `APP_STORE_URL_IOS` / `APP_STORE_URL_ANDROID`。
 
+> **决策 0166（2026-10-19 热修）**：§A 的 launch2 `account` 与 §B.2 的 `inviteLink` / `stats` / 可用 `boost` 改为默认不下发，分别由 `LAUNCH2_TRADER_ACCOUNT_EMIT` / `REFERRAL_CENTER_EMIT`（默认 `off`）控制；§A「本服务端总是发」不再成立。
+
 ## 2. Context
 
 需求方 docs/42 第 3 条：「a. 对方头像都可以点击查看；b. 行情 - 推广 这块应该显示邀请相关功能」。用户裁决：邀请功能按常见做法做。

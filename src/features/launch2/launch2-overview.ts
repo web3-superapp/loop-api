@@ -58,7 +58,8 @@ function nullableDescending(a: bigint | null, b: bigint | null): number {
 
 function activityOf(
   record: Launch2ActivityRecord,
-  accounts: ReadonlyMap<string, TraderAccountProjection | null>,
+  /** Decision 0166: null = LAUNCH2_TRADER_ACCOUNT_EMIT off, no `account` key. */
+  accounts: ReadonlyMap<string, TraderAccountProjection | null> | null,
 ): Record<string, unknown> {
   return Object.freeze({
     kind: record.kind,
@@ -67,11 +68,16 @@ function activityOf(
     name: record.name,
     logoUrl: record.logoUrl,
     actor: record.actor,
-    // Decision 0162: the actor's LOOP account under the trade-visibility rule.
-    account:
-      record.actor === null
-        ? null
-        : (accounts.get(record.actor.toLowerCase()) ?? null),
+    // Decision 0162: the actor's LOOP account under the trade-visibility rule;
+    // Decision 0166: only while LAUNCH2_TRADER_ACCOUNT_EMIT is on.
+    ...(accounts === null
+      ? {}
+      : {
+          account:
+            record.actor === null
+              ? null
+              : (accounts.get(record.actor.toLowerCase()) ?? null),
+        }),
     amountUsd1:
       record.amountUsd1 === null
         ? null
@@ -91,10 +97,16 @@ export function projectLaunch2Overview(input: {
   readonly activity: readonly Launch2ActivityRecord[];
   readonly facts: readonly Launch2OverviewInstanceFacts[];
   readonly now: Date;
-  /** Decision 0162: lower-case actor address → account (absent = null). */
-  readonly accounts?: ReadonlyMap<string, TraderAccountProjection | null>;
+  /**
+   * Decision 0162: lower-case actor address → account (absent = null).
+   * Decision 0166: null / omitted = the emit gate is off, no `account` key.
+   */
+  readonly accounts?: ReadonlyMap<
+    string,
+    TraderAccountProjection | null
+  > | null;
 }): Record<string, unknown> {
-  const accounts = input.accounts ?? new Map();
+  const accounts = input.accounts ?? null;
   const nowSeconds = BigInt(Math.floor(input.now.getTime() / 1000));
   const weekStart = launch2WeekStart(input.now).getTime();
   const counts = new Map<Launch2Stage, number>();

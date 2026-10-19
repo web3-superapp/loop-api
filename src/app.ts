@@ -2223,6 +2223,8 @@ export async function buildApp(
             database.referral ?? createUnavailableReferralRepository(),
           publicBaseUrl: config.publicBaseUrl,
           cursorCodec: v2CursorCodec,
+          // Decision 0166: off (default) keeps the pre-0162 shape.
+          centerEmit: config.referralCenterEmit,
         })
       : createUnavailableReferralService());
   // MEME curve launchpad (Decision 0101): the lane's PostgreSQL projection
@@ -2395,6 +2397,8 @@ export async function buildApp(
           quoteTtlSeconds: config.launch2.quoteTtlSeconds,
           defaultSlippageBps: config.launch2.defaultSlippageBps,
           tradeDeadlineSeconds: config.launch2.tradeDeadlineSeconds,
+          // Decision 0166: off (default) omits trader `account`, no lookup.
+          traderAccountEmit: config.launch2.traderAccountEmit,
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,

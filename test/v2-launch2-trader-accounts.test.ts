@@ -202,9 +202,15 @@ describe("launch2 trader accounts on the routes (Decision 0162)", () => {
   async function createApp(
     repository: ReturnType<typeof createInMemoryLaunch2Repository>,
     lookup: WalletAccountLookup | undefined,
+    // Decision 0166: the 0162 cases run with the emit gate on.
+    emit: "on" | "off" | "unset" = "on",
   ) {
     const app = await buildApp({
-      config: s7TestConfig({ ...launch2Env, ...launch2PoolEnv }),
+      config: s7TestConfig({
+        ...launch2Env,
+        ...launch2PoolEnv,
+        ...(emit === "unset" ? {} : { LAUNCH2_TRADER_ACCOUNT_EMIT: emit }),
+      }),
       contractSurface: "v2",
       database: {
         ...s7Database({}),
@@ -372,4 +378,85 @@ describe("launch2 trader accounts on the routes (Decision 0162)", () => {
     expect(find).toHaveBeenCalledOnce();
     expect(find).toHaveBeenCalledWith([visible, hidden]);
   });
+
+  // Decision 0166: builds <= 30 decode these objects strictly; with the gate
+  // off (the default) the `account` key is absent and nothing is looked up.
+  for (const emit of ["off", "unset"] as const) {
+    it(`omits the account key on all three projections and skips the lookup (gate ${emit})`, async () => {
+      const repository = createInMemoryLaunch2Repository();
+      const instance = graduatedInstance();
+      repository.instances.set(instance.instanceId, instance);
+      repository.trades.set(instance.instanceId, [
+        trade(visible, 1),
+        trade(hidden, 2),
+      ]);
+      repository.poolTrades.set(
+        `${instance.instanceId}|${walletAddress.toLowerCase()}`,
+        [
+          {
+            poolTradeId: "5e0f0a8e-4c0a-4b8e-9a0c-2f7d1c3b4a50",
+            side: "buy",
+            amountIn: (10n * wad).toString(),
+            amountOut: (15_680n * wad).toString(),
+            usd1Amount: (10n * wad).toString(),
+            memeAmount: (16_000n * wad).toString(),
+            taxAmount: (320n * wad).toString(),
+            taxToken: "meme",
+            priceE18: "625000000000000",
+            recipientAddress: walletAddress,
+            tradedAt: iso(launch2NowSeconds - 20n),
+            transactionHash: `0x${"ab".repeat(32)}`,
+            logIndex: 4,
+            blockNumber: "136098447",
+          },
+        ],
+      );
+      repository.activity.push({
+        kind: "curve_buy",
+        instanceId: instance.instanceId,
+        ticker: "FROG",
+        name: "Frog Launch",
+        logoUrl: null,
+        actor: visible,
+        amountUsd1: (20n * wad).toString(10),
+        at: iso(launch2NowSeconds - 60n),
+        transactionHash: `0x${"ab".repeat(32)}`,
+        blockNumber: "1000",
+        logIndex: 1,
+      });
+      const { lookup, find } = lookupFake();
+      const app = await createApp(repository, lookup, emit);
+
+      const detail = await get(
+        app,
+        `/v2/launch2/instances/${instance.instanceId}`,
+      );
+      expect(detail.statusCode).toBe(200);
+      const trades = detail.json<{
+        instance: { recentTrades: Record<string, unknown>[] };
+      }>().instance.recentTrades;
+      expect(trades).toHaveLength(2);
+      for (const row of trades) expect(row).not.toHaveProperty("account");
+
+      const pool = await get(
+        app,
+        `/v2/launch2/instances/${instance.instanceId}/pool/trades?walletId=${walletId}`,
+      );
+      expect(pool.statusCode).toBe(200);
+      const poolRows = pool.json<{ trades: Record<string, unknown>[] }>()
+        .trades;
+      expect(poolRows).toHaveLength(1);
+      expect(poolRows[0]).not.toHaveProperty("account");
+
+      const overview = await get(app, "/v2/launch2/overview");
+      expect(overview.statusCode).toBe(200);
+      const activity = overview.json<{
+        activity: Record<string, unknown>[];
+      }>().activity;
+      expect(activity).toHaveLength(1);
+      expect(activity[0]).not.toHaveProperty("account");
+
+      expect(find).not.toHaveBeenCalled();
+    });
+  }
 });

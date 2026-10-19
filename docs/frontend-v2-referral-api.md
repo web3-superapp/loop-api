@@ -18,6 +18,12 @@
 
 首次读取自动签发本账号邀请码。决策 0162 新增 `inviteLink`、`stats`，`boost` 多了可用形态。
 
+> **S248 / 决策 0166（热修）**：`inviteLink`、`stats` 两个键与 `boost` 的 `available` 形态**默认不下发**，由服务端
+> `REFERRAL_CENTER_EMIT`（`off` 默认 / `on`）控制；`off` 时响应保持 0162 之前的六键形状（`boost` 恒为
+> `unavailable` / `MINING_REFERRAL_BOOST_PENDING`）。App（build ≥ 31）须把 `inviteLink` / `stats` 解码为**可选键**、
+> `boost` 两种形态都接受；缺 `inviteLink` 时用邀请码自行分享。全部受支持版本 ≥ 31 后服务端才切 `on`。
+> `GET /v2/referral/invitees` 是新路径，不受开关影响。
+
 ```json
 {
   "inviteCode": {
