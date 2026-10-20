@@ -33,6 +33,7 @@ import {
   walletGasReserveConfigVersion,
 } from "../../features/wallet/wallet-read-service.js";
 import { indexerLanes } from "../../database/bsc-indexer-repository.js";
+import { walletLaunch2ActivityKinds } from "../../features/wallet/wallet-activity-launch2.js";
 import {
   marketSources,
   signedDecimalPatternSource,
@@ -773,6 +774,134 @@ export const walletBalancesResourceSchema = {
   },
 } as const;
 
+/** Decision 0167: a launch2 18-decimal amount (the launch2 route shape). */
+const launch2DecimalSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+} as const;
+
+/** One indexed ERC-20 transfer row (unchanged since Decision 0033). */
+const walletActivityTransferItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "assetId",
+    "symbol",
+    "decimals",
+    "direction",
+    "counterpartyAddress",
+    "rawValue",
+    "displayValue",
+    "transactionHash",
+    "logIndex",
+    "blockNumber",
+    "blockHash",
+    "confirmations",
+    "status",
+    "observedAt",
+  ],
+  properties: {
+    assetId: assetIdSchema,
+    symbol: { type: "string", maxLength: 32 },
+    decimals: { type: "integer", minimum: 0, maximum: 36 },
+    direction: { type: "string", enum: ["in", "out", "self"] },
+    counterpartyAddress: addressSchema,
+    rawValue: rawAmountSchema,
+    displayValue: decimalAmountSchema,
+    transactionHash: {
+      type: "string",
+      pattern: transactionHashPatternSource,
+    },
+    logIndex: { type: "integer", minimum: 0 },
+    blockNumber: blockNumberSchema,
+    blockHash: { type: "string", pattern: blockHashPatternSource },
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+    },
+    status: {
+      type: "string",
+      enum: ["confirmed", "pending", "reorged"],
+      description:
+        "A reorged row is kept and reported so a client can reconcile what it already displayed.",
+    },
+    observedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+/**
+ * Decision 0167: one MEME v2 (launch2) fact of the wallet on the Launch
+ * chain. Sent only with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off); a
+ * client tells it from a transfer row by the `kind` key.
+ */
+const walletActivityLaunch2ItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "kind",
+    "chainId",
+    "instanceId",
+    "ticker",
+    "name",
+    "logoUrl",
+    "amountMeme",
+    "amountUsd1",
+    "taxUsd1",
+    "transactionHash",
+    "logIndex",
+    "blockNumber",
+    "occurredAt",
+    "confirmations",
+  ],
+  properties: {
+    kind: {
+      type: "string",
+      enum: [...walletLaunch2ActivityKinds],
+      description:
+        "Decision 0167. curve_buy / curve_sell = bonding-curve trade by the wallet; pool_buy / pool_sell = official-pool user swap the wallet paid, received, or (buy) was credited by the Hook for (delivery attribution, loop-contracts 0014); nft_mint = NFT bought by the wallet; reward_claim = LoopDynamic reward claimed by the wallet; buyback = executed buyback whose MEME went to the wallet (the instance's buyback recipient).",
+    },
+    chainId: {
+      type: "string",
+      pattern: chainIdPatternSource,
+      description: "CAIP-2 of the Launch chain (eip155:97, or eip155:56).",
+    },
+    instanceId: { type: "string", pattern: opaqueIdPatternSource },
+    ticker: { type: "string", minLength: 1, maxLength: 80 },
+    name: { type: "string", minLength: 1, maxLength: 64 },
+    logoUrl: { anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }] },
+    amountMeme: {
+      anyOf: [launch2DecimalSchema, { type: "null" }],
+      description:
+        "MEME moved (18 decimals, human decimal string): curve buy / sell = curve amount; pool buy = MEME received (router amountOut, else gross − MEME tax); pool sell = MEME paid; buyback = MEME delivered. null for nft_mint and reward_claim.",
+    },
+    amountUsd1: {
+      anyOf: [launch2DecimalSchema, { type: "null" }],
+      description:
+        "USD1 moved (human decimal string): curve buy = paid incl. tax, curve sell = received net; pool buy = paid (router amountIn, else pool input), pool sell = received net of a USD1 tax; nft_mint = mint price; reward_claim = claimed; buyback = spent.",
+    },
+    taxUsd1: {
+      anyOf: [launch2DecimalSchema, { type: "null" }],
+      description:
+        "USD1 tax of the trade (curve trades; pool swaps taxed in USD1). null when the tax was taken in MEME or the kind has no tax.",
+    },
+    transactionHash: {
+      type: "string",
+      pattern: transactionHashPatternSource,
+    },
+    logIndex: { type: "integer", minimum: 0 },
+    blockNumber: blockNumberSchema,
+    occurredAt: {
+      type: "string",
+      format: "date-time",
+      description: "Block time of the fact (indexed, never re-read).",
+    },
+    confirmations: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+      description:
+        "Against the Launch chain head; null when that head is unreadable.",
+    },
+  },
+} as const;
+
 export const walletActivityResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -792,50 +921,12 @@ export const walletActivityResourceSchema = {
       type: "array",
       maxItems: walletActivityLimits.maximum,
       items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "assetId",
-          "symbol",
-          "decimals",
-          "direction",
-          "counterpartyAddress",
-          "rawValue",
-          "displayValue",
-          "transactionHash",
-          "logIndex",
-          "blockNumber",
-          "blockHash",
-          "confirmations",
-          "status",
-          "observedAt",
+        anyOf: [
+          walletActivityTransferItemSchema,
+          walletActivityLaunch2ItemSchema,
         ],
-        properties: {
-          assetId: assetIdSchema,
-          symbol: { type: "string", maxLength: 32 },
-          decimals: { type: "integer", minimum: 0, maximum: 36 },
-          direction: { type: "string", enum: ["in", "out", "self"] },
-          counterpartyAddress: addressSchema,
-          rawValue: rawAmountSchema,
-          displayValue: decimalAmountSchema,
-          transactionHash: {
-            type: "string",
-            pattern: transactionHashPatternSource,
-          },
-          logIndex: { type: "integer", minimum: 0 },
-          blockNumber: blockNumberSchema,
-          blockHash: { type: "string", pattern: blockHashPatternSource },
-          confirmations: {
-            anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
-          },
-          status: {
-            type: "string",
-            enum: ["confirmed", "pending", "reorged"],
-            description:
-              "A reorged row is kept and reported so a client can reconcile what it already displayed.",
-          },
-          observedAt: { type: "string", format: "date-time" },
-        },
+        description:
+          "Transfer rows only by default. Decision 0167: with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off; build >= 32 clients) launch2 rows (they carry `kind`) are mixed in, newest first by (occurredAt, blockNumber, logIndex); a transfer row's time is its observedAt.",
       },
     },
     nextCursor: {
@@ -869,6 +960,29 @@ export const walletActivityResourceSchema = {
     },
     nativeTransfers: unavailableSchema,
     crossChain: unavailableSchema,
+    launch2: {
+      description:
+        "Decision 0167: OPTIONAL key — present only with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off). available = the launch2 rows of chainId are merged (indexerBlockNumber = the launch2_event lane checkpoint); unavailable = none are (LAUNCH2_INDEXER_NOT_STARTED, LAUNCH2_ACTIVITY_READ_FAILED) and the page holds transfer rows only.",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "chainId",
+            "indexerBlockNumber",
+            "headBlockNumber",
+          ],
+          properties: {
+            status: { type: "string", const: "available" },
+            chainId: { type: "string", pattern: chainIdPatternSource },
+            indexerBlockNumber: blockNumberSchema,
+            headBlockNumber: { anyOf: [blockNumberSchema, { type: "null" }] },
+          },
+        },
+        unavailableSchema,
+      ],
+    },
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;

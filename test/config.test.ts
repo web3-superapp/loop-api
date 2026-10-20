@@ -738,6 +738,27 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses WALLET_ACTIVITY_LAUNCH2_EMIT as off|on, default off, and refuses anything else (Decision 0167)", () => {
+    expect(loadConfig(validEnvironment()).walletActivityLaunch2Emit).toBe(
+      false,
+    );
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] = value;
+      expect(loadConfig(environment).walletActivityLaunch2Emit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /WALLET_ACTIVITY_LAUNCH2_EMIT/,
+      );
+    }
+  });
+
   it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
     expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
       enabled: false,

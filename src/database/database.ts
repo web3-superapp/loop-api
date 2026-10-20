@@ -71,6 +71,8 @@ import type { SquareRepository } from "../features/square/square-contract.js";
 import type { Launch2CampaignRepository } from "../features/launch2/launch2-campaigns.js";
 import { createPostgresMemeRepository } from "./meme-repository.js";
 import { createPostgresLaunch2Repository } from "./launch2-repository.js";
+import { createPostgresWalletActivityMergeRepository } from "./wallet-activity-merge-repository.js";
+import type { WalletActivityMergeRepository } from "../features/wallet/wallet-activity-launch2.js";
 import { createPostgresLaunch2PublicationRepository } from "./launch2-snapshot-publication-repository.js";
 import { createPostgresLaunch2BuybackAttemptRepository } from "./launch2-buyback-attempt-repository.js";
 import { createPostgresLaunch2MemeAssetRepository } from "./launch2-meme-asset-repository.js";
@@ -291,6 +293,8 @@ export interface Database {
   readonly squareFeed?: SquareRepository;
   /** Decision 0145: hourly wallet net worth snapshots. */
   readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
+  /** Decision 0167: wallet activity merged with launch2 facts (read-only). */
+  readonly walletActivityMerge?: WalletActivityMergeRepository;
   /** Decision 0149: fiat FX reference rates with a source. */
   readonly fiatFxRates?: FiatFxRateRepository;
   /** Operator console settings, audit, review notes (Decision 0102). */
@@ -567,6 +571,7 @@ export function createPostgresDatabase(
     squareFeed: createPostgresSquareRepository(pool),
     walletNetWorthSnapshots:
       createPostgresWalletNetWorthSnapshotRepository(pool),
+    walletActivityMerge: createPostgresWalletActivityMergeRepository(pool),
     fiatFxRates: createPostgresFiatFxRateRepository(pool),
     admin: createPostgresAdminRepository(pool),
     adminAccounts: createPostgresAdminAccountRepository(pool),

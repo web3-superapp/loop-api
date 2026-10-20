@@ -510,6 +510,122 @@ query：`cursor`（不透明）或 `limit`（1–50，默认 25），二者互�
   `walletId`）→ `404 NOT_FOUND`，因为 `walletId` 先做不可枚举校验（S5 联调
   发现 4）。两种都不要重试，重新从 `limit` 拉第一页。
 
+### 7.1 合并 Launch 链 MEME v2 活动（决策 0167，`WALLET_ACTIVITY_LAUNCH2_EMIT`）
+
+**默认关闭**。关闭时本接口与上面 §7 逐字节相同。服务端只有在所有受支持的 App
+版本（build ≥ 32）都按下面要求解码后才会打开。Base URL、headers、错误体不变
+（读接口：Bearer + `X-Loop-Contract-Version: 2.0`，无 `Idempotency-Key`）。
+
+打开后的响应（节选）：
+
+```json
+{
+  "walletId": "0b2c1d3e-…",
+  "items": [
+    {
+      "kind": "launch2_reward_claim",
+      "chainId": "eip155:97",
+      "instanceId": "3a7b2d4f-6c8e-4f0a-9b2c-4d6e8f0a2b3c",
+      "ticker": "MOON",
+      "name": "Moon",
+      "logoUrl": null,
+      "amountMeme": null,
+      "amountUsd1": "1.25",
+      "taxUsd1": null,
+      "transactionHash": "0x…",
+      "logIndex": 0,
+      "blockNumber": "52000123",
+      "occurredAt": "2026-10-19T12:00:00.000Z",
+      "confirmations": 41
+    },
+    {
+      "assetId": "eip155:56:0xbb4c…",
+      "symbol": "WBNB",
+      "decimals": 18,
+      "direction": "in",
+      "counterpartyAddress": "0x…",
+      "rawValue": "1500000000000000000",
+      "displayValue": "1.5",
+      "transactionHash": "0x…",
+      "logIndex": 3,
+      "blockNumber": "120628064",
+      "blockHash": "0x…",
+      "confirmations": 101,
+      "status": "confirmed",
+      "observedAt": "2026-10-19T10:00:00.000Z"
+    },
+    {
+      "kind": "launch2_curve_buy",
+      "chainId": "eip155:97",
+      "instanceId": "2f6a1c3e-5b7d-4e9f-8a1b-3c5d7e9f1a2b",
+      "ticker": "WIND",
+      "name": "Evening Wind",
+      "logoUrl": "https://…/wind.png",
+      "amountMeme": "1000",
+      "amountUsd1": "10.2",
+      "taxUsd1": "0.2",
+      "transactionHash": "0x…",
+      "logIndex": 1,
+      "blockNumber": "51999000",
+      "occurredAt": "2026-10-19T08:00:00.000Z",
+      "confirmations": 1124
+    }
+  ],
+  "nextCursor": "…",
+  "freshness": { "…": "同 §7（主网 erc20_transfer 车道）" },
+  "nativeTransfers": {
+    "status": "unavailable",
+    "reasonCode": "NATIVE_TRANSFER_SCAN_NOT_SUPPORTED"
+  },
+  "crossChain": {
+    "status": "unavailable",
+    "reasonCode": "CROSS_CHAIN_ACTIVITY_NOT_SUPPORTED"
+  },
+  "launch2": {
+    "status": "available",
+    "chainId": "eip155:97",
+    "indexerBlockNumber": "52000160",
+    "headBlockNumber": "52000163"
+  },
+  "contractVersion": "2.0"
+}
+```
+
+解码规则：
+
+- 根对象：在原 7 键之外接受**可选**键 `launch2`：
+  `{status:"available", chainId, indexerBlockNumber, headBlockNumber|null}` 或
+  `{status:"unavailable", reasonCode}`。
+- `items[]` 每行：**有 `kind` 键** → launch2 行（14 键全部必带，见下）；**无
+  `kind`** → 原转账行（14 键不变）。未知 `kind` 建议跳过该行。
+- launch2 行键：`kind`、`chainId`、`instanceId`、`ticker`、`name`、`logoUrl`、
+  `amountMeme`、`amountUsd1`、`taxUsd1`、`transactionHash`、`logIndex`、
+  `blockNumber`、`occurredAt`、`confirmations`。金额是 18 位小数的十进制字符串
+  （同 `/v2/launch2/*`），无该金额为 `null`。
+
+| kind                   | 展示建议                     | amountMeme | amountUsd1   | taxUsd1        |
+| ---------------------- | ---------------------------- | ---------- | ------------ | -------------- |
+| `launch2_curve_buy`    | 内盘买入                     | 买到       | 实付（含税） | 税             |
+| `launch2_curve_sell`   | 内盘卖出                     | 卖出       | 实收         | 税             |
+| `launch2_pool_buy`     | 外盘买入（含代买交割给自己） | 实收       | 实付         | USD1 税或 null |
+| `launch2_pool_sell`    | 外盘卖出                     | 实付       | 实收         | USD1 税或 null |
+| `launch2_nft_mint`     | 铸造 NFT                     | null       | 铸造价       | null           |
+| `launch2_reward_claim` | 领取奖励                     | null       | 领取额       | null           |
+| `launch2_buyback`      | 回购到账（仅回购收币地址）   | 到账 MEME  | 回购花费     | null           |
+
+- 排序：新→旧，按 `occurredAt`（转账行用 `observedAt`）、再块号、logIndex。
+- 点 launch2 行打开 `/v2/launch2/instances/{instanceId}` 详情；浏览器链接按
+  `chainId`（97 = testnet.bscscan.com）。
+- `launch2.status = unavailable`：`LAUNCH2_INDEXER_NOT_STARTED`（Launch 链车道未
+  运行）或 `LAUNCH2_ACTIVITY_READ_FAILED`（读失败）。此时列表只有转账行——应在
+  列表顶部提示「MEME 记录暂不可用」，不要当作「没有 MEME 记录」。
+- `confirmations` 按 Launch 链 head 计，head 不可读时为 `null`（显示「确认中」或
+  不显示确认数）。launch2 行不会是 reorged（被回滚的事实不下发）。
+- 错误码：与 §7 相同（`400 INVALID_REQUEST`、`401`、`404 NOT_FOUND`、
+  `503 INDEXING_DELAYED`、`503 CAPABILITY_UNAVAILABLE`）。开关切换前后的游标
+  互不通用，拿旧游标翻页会 `400 INVALID_REQUEST`——按既有规则从 `limit` 重拉
+  第一页。
+
 ## 8. `GET /v2/wallets/{walletId}/receive` → `receive` 页
 
 ```json

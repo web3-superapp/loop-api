@@ -60,6 +60,14 @@ import type {
   PrivyBalanceReader,
   PrivyWalletReader,
 } from "../src/integrations/privy/wallet-reader.js";
+import {
+  compareSortKeys,
+  sortKeyOfEntry,
+  type WalletActivityMergeRepository,
+  type WalletActivitySortKey,
+  type WalletLaunch2ActivityRecord,
+  type WalletTimedTransferRecord,
+} from "../src/features/wallet/wallet-activity-launch2.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const walletId = "0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
@@ -1998,6 +2006,546 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     const response = await pending;
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ freshness: { lagBlocks: 5 } });
+  });
+
+  describe("Decision 0167: WALLET_ACTIVITY_LAUNCH2_EMIT", () => {
+    const launchInstanceId = "2f6a1c3e-5b7d-4e9f-8a1b-3c5d7e9f1a2b";
+    const secondInstanceId = "3a7b2d4f-6c8e-4f0a-9b2c-4d6e8f0a2b3c";
+    /**
+     * Captured from `ab9f70d` (before Decision 0167) with the same fakes:
+     * two transfer rows, `limit=2`, more to come. The cursor and the
+     * freshness observation time vary per call and are masked.
+     */
+    const baselineBody =
+      '{"walletId":"0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e","items":[{"assetId":"eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c","symbol":"WBNB","decimals":18,"direction":"in","counterpartyAddress":"0x00000000000000000000000000000000000000b2","rawValue":"1500000000000000000","displayValue":"1.5","transactionHash":"0x7777777777777777777777777777777777777777777777777777777777777777","logIndex":3,"blockNumber":"43999900","blockHash":"0x2222222222222222222222222222222222222222222222222222222222222222","confirmations":101,"status":"confirmed","observedAt":"2026-09-08T00:00:00.000Z"},{"assetId":"eip155:56:0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c","symbol":"WBNB","decimals":18,"direction":"out","counterpartyAddress":"0x00000000000000000000000000000000000000b2","rawValue":"1","displayValue":"0.000000000000000001","transactionHash":"0x8888888888888888888888888888888888888888888888888888888888888888","logIndex":0,"blockNumber":"43999900","blockHash":"0x2222222222222222222222222222222222222222222222222222222222222222","confirmations":101,"status":"reorged","observedAt":"2026-09-08T00:00:00.000Z"}],"nextCursor":"<cursor>","freshness":{"indexerBlockNumber":"43999995","headBlockNumber":"44000000","lagBlocks":5,"observedAt":"<now>"},"nativeTransfers":{"status":"unavailable","reasonCode":"NATIVE_TRANSFER_SCAN_NOT_SUPPORTED"},"crossChain":{"status":"unavailable","reasonCode":"CROSS_CHAIN_ACTIVITY_NOT_SUPPORTED"},"contractVersion":"2.0"}';
+    const secondTransfer: IndexedTransferRecord = {
+      ...transferRecord,
+      transactionHash: `0x${"8".repeat(64)}`,
+      logIndex: 0,
+      fromAddress: walletAddress,
+      toAddress: counterparty,
+      rawValue: "1",
+      removed: true,
+    };
+    const mask = (body: string): string =>
+      body
+        .replace(/"nextCursor":"[^"]+"/u, '"nextCursor":"<cursor>"')
+        .replace(/("lagBlocks":[0-9]+,"observedAt":)"[^"]+"/u, '$1"<now>"');
+    const micros = (iso: string): string =>
+      (BigInt(Date.parse(iso)) * 1000n).toString(10);
+    const timedTransfer = (
+      record: IndexedTransferRecord,
+    ): WalletTimedTransferRecord => ({
+      ...record,
+      atMicros: micros(record.observedAt),
+    });
+    const launch2Record = (
+      kind: WalletLaunch2ActivityRecord["kind"],
+      at: string,
+      block: string,
+      log: number,
+      overrides: Partial<WalletLaunch2ActivityRecord> = {},
+    ): WalletLaunch2ActivityRecord => ({
+      kind,
+      chainId: "eip155:97",
+      instanceId: launchInstanceId,
+      ticker: "WIND",
+      name: "Evening Wind",
+      logoUrl: "https://example.com/wind.png",
+      amountMeme: "1000000000000000000000",
+      amountUsd1: "10200000000000000000",
+      taxUsd1: "200000000000000000",
+      transactionHash: `0x${block.padStart(64, "a")}`,
+      logIndex: log,
+      blockNumber: block,
+      occurredAt: at,
+      atMicros: micros(at),
+      ...overrides,
+    });
+    function mergeFake(
+      options: {
+        readonly transfers?: readonly WalletTimedTransferRecord[];
+        readonly launch2?: readonly WalletLaunch2ActivityRecord[];
+        readonly checkpoint?: string | null | Error;
+        readonly launch2Error?: Error;
+      } = {},
+    ) {
+      const page = <T>(
+        rows: readonly T[],
+        limit: number,
+        key: (row: T) => WalletActivitySortKey,
+        before: WalletActivitySortKey | undefined,
+      ) => {
+        const after = rows
+          .filter(
+            (row) =>
+              before === undefined || compareSortKeys(key(row), before) < 0,
+          )
+          .sort((a, b) => compareSortKeys(key(b), key(a)));
+        return Promise.resolve({
+          items: after.slice(0, limit),
+          hasMore: after.length > limit,
+        });
+      };
+      const repository = {
+        getLaunch2Checkpoint: vi.fn<
+          WalletActivityMergeRepository["getLaunch2Checkpoint"]
+        >(() => {
+          const checkpoint =
+            options.checkpoint === undefined ? "52000000" : options.checkpoint;
+          return checkpoint instanceof Error
+            ? Promise.reject(checkpoint)
+            : Promise.resolve(checkpoint);
+        }),
+        listTransfersByTime: vi.fn<
+          WalletActivityMergeRepository["listTransfersByTime"]
+        >((input) =>
+          page(
+            options.transfers ?? [],
+            input.limit,
+            (row) => sortKeyOfEntry({ source: "erc20", record: row }),
+            input.before,
+          ),
+        ),
+        listLaunch2Activity: vi.fn<
+          WalletActivityMergeRepository["listLaunch2Activity"]
+        >((input) =>
+          options.launch2Error !== undefined
+            ? Promise.reject(options.launch2Error)
+            : page(
+                options.launch2 ?? [],
+                input.limit,
+                (row) => sortKeyOfEntry({ source: "launch2", record: row }),
+                input.before,
+              ),
+        ),
+      } satisfies WalletActivityMergeRepository;
+      return repository;
+    }
+    async function mergedApp(
+      repository: WalletActivityMergeRepository | undefined,
+      emit: "on" | "off" | "unset",
+      extra: Partial<ReturnType<typeof fakes>["database"]> = {},
+    ) {
+      const dependencies = fakes();
+      return createApp(
+        {
+          ...dependencies,
+          launchChainReadClient: launchClientFake(),
+          database: {
+            ...dependencies.database,
+            ...extra,
+            ...(repository === undefined
+              ? {}
+              : { walletActivityMerge: repository }),
+          },
+        },
+        {
+          LAUNCH_CHAIN_ID: "97",
+          ...(emit === "unset" ? {} : { WALLET_ACTIVITY_LAUNCH2_EMIT: emit }),
+        },
+      );
+    }
+
+    for (const emit of ["off", "unset"] as const) {
+      it(`keeps the activity bytes and cursor of before (${emit})`, async () => {
+        const merge = mergeFake();
+        const listWalletTransfers = vi.fn<
+          BscIndexerRepository["listWalletTransfers"]
+        >(() =>
+          Promise.resolve({
+            items: [transferRecord, secondTransfer],
+            hasMore: true,
+          }),
+        );
+        const { app } = await mergedApp(merge, emit, {
+          bscIndexer: { ...indexerFake(), listWalletTransfers },
+        });
+        const first = await app.inject({
+          method: "GET",
+          url: `/v2/wallets/${walletId}/activity?limit=2`,
+          headers: commonHeaders(),
+        });
+        expect(first.statusCode).toBe(200);
+        expect(mask(first.body)).toBe(baselineBody);
+        const cursor = first.json<{ nextCursor: string }>().nextCursor;
+        const next = await app.inject({
+          method: "GET",
+          url: `/v2/wallets/${walletId}/activity?cursor=${cursor}`,
+          headers: commonHeaders(),
+        });
+        expect(next.statusCode).toBe(200);
+        // The block / log cursor of before, same page size.
+        expect(listWalletTransfers).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            limit: 2,
+            beforeBlockNumber: "43999900",
+            beforeLogIndex: 0,
+          }),
+        );
+        // Nothing of the merge is read while the switch is off.
+        expect(merge.getLaunch2Checkpoint).not.toHaveBeenCalled();
+        expect(merge.listTransfersByTime).not.toHaveBeenCalled();
+        expect(merge.listLaunch2Activity).not.toHaveBeenCalled();
+      });
+    }
+
+    it("mixes launch2 rows into the list newest first (on)", async () => {
+      // 晚风-style: two instances, buy / sell / mint / claim / pool trades,
+      // and two transfers on the primary chain between them.
+      const transfers = [
+        timedTransfer({
+          ...transferRecord,
+          observedAt: "2026-10-19T10:00:00.000Z",
+        }),
+        timedTransfer({
+          ...secondTransfer,
+          removed: false,
+          observedAt: "2026-10-19T07:30:00.000Z",
+        }),
+      ];
+      const launch2 = [
+        launch2Record(
+          "launch2_nft_mint",
+          "2026-10-19T06:00:00.000Z",
+          "100",
+          0,
+          {
+            amountMeme: null,
+            amountUsd1: "100000000000000000000",
+            taxUsd1: null,
+          },
+        ),
+        launch2Record(
+          "launch2_curve_buy",
+          "2026-10-19T08:00:00.000Z",
+          "200",
+          1,
+        ),
+        launch2Record(
+          "launch2_curve_sell",
+          "2026-10-19T09:00:00.000Z",
+          "300",
+          2,
+          {
+            amountUsd1: "4900000000000000000",
+            taxUsd1: "100000000000000000",
+            amountMeme: "500000000000000000000",
+          },
+        ),
+        launch2Record(
+          "launch2_pool_buy",
+          "2026-10-19T11:00:00.000Z",
+          "400",
+          3,
+          {
+            instanceId: secondInstanceId,
+            ticker: "MOON",
+            name: "Moon",
+            logoUrl: null,
+            taxUsd1: null,
+          },
+        ),
+        launch2Record(
+          "launch2_reward_claim",
+          "2026-10-19T12:00:00.000Z",
+          "500",
+          0,
+          {
+            instanceId: secondInstanceId,
+            ticker: "MOON",
+            name: "Moon",
+            logoUrl: null,
+            amountMeme: null,
+            taxUsd1: null,
+            amountUsd1: "1250000000000000000",
+          },
+        ),
+      ];
+      const merge = mergeFake({ transfers, launch2 });
+      const listWalletTransfers = vi.fn<
+        BscIndexerRepository["listWalletTransfers"]
+      >(() => Promise.resolve({ items: [], hasMore: false }));
+      const { app } = await mergedApp(merge, "on", {
+        bscIndexer: { ...indexerFake(), listWalletTransfers },
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        readonly items: readonly Record<string, unknown>[];
+        readonly launch2: Record<string, unknown>;
+        readonly nextCursor: string | null;
+      }>();
+      expect(
+        body.items.map((item) =>
+          typeof item["kind"] === "string" ? item["kind"] : "transfer",
+        ),
+      ).toEqual([
+        "launch2_reward_claim",
+        "launch2_pool_buy",
+        "transfer",
+        "launch2_curve_sell",
+        "launch2_curve_buy",
+        "transfer",
+        "launch2_nft_mint",
+      ]);
+      expect(body.items[0]).toEqual({
+        kind: "launch2_reward_claim",
+        chainId: "eip155:97",
+        instanceId: secondInstanceId,
+        ticker: "MOON",
+        name: "Moon",
+        logoUrl: null,
+        amountMeme: null,
+        amountUsd1: "1.25",
+        taxUsd1: null,
+        transactionHash: `0x${"500".padStart(64, "a")}`,
+        logIndex: 0,
+        blockNumber: "500",
+        occurredAt: "2026-10-19T12:00:00.000Z",
+        // Launch chain head (52000000) + 1 − 500.
+        confirmations: 51_999_501,
+      });
+      expect(body.items[3]).toMatchObject({
+        kind: "launch2_curve_sell",
+        amountMeme: "500",
+        amountUsd1: "4.9",
+        taxUsd1: "0.1",
+      });
+      // A transfer row keeps exactly its keys of before.
+      expect(Object.keys(body.items[2] ?? {})).toEqual([
+        "assetId",
+        "symbol",
+        "decimals",
+        "direction",
+        "counterpartyAddress",
+        "rawValue",
+        "displayValue",
+        "transactionHash",
+        "logIndex",
+        "blockNumber",
+        "blockHash",
+        "confirmations",
+        "status",
+        "observedAt",
+      ]);
+      expect(body.launch2).toEqual({
+        status: "available",
+        chainId: "eip155:97",
+        indexerBlockNumber: "52000000",
+        headBlockNumber: "52000000",
+      });
+      expect(body.nextCursor).toBeNull();
+      // The merged list reads transfers by time, not by block.
+      expect(listWalletTransfers).not.toHaveBeenCalled();
+      expect(merge.listLaunch2Activity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chainId: "eip155:97",
+          address: walletAddress,
+          limit: 25,
+        }),
+      );
+    });
+
+    it("pages the merged list with one cursor and no row twice (on)", async () => {
+      const transfers = [
+        timedTransfer({
+          ...transferRecord,
+          observedAt: "2026-10-19T10:00:00.000Z",
+        }),
+      ];
+      const launch2 = [
+        launch2Record(
+          "launch2_curve_buy",
+          "2026-10-19T11:00:00.000Z",
+          "300",
+          0,
+        ),
+        // Same block time as the transfer: the higher block goes first.
+        launch2Record(
+          "launch2_curve_sell",
+          "2026-10-19T10:00:00.000Z",
+          "200",
+          5,
+        ),
+        launch2Record("launch2_nft_mint", "2026-10-19T09:00:00.000Z", "100", 0),
+      ];
+      const merge = mergeFake({ transfers, launch2 });
+      const { app } = await mergedApp(merge, "on");
+      const seen: string[] = [];
+      let url = `/v2/wallets/${walletId}/activity?limit=1`;
+      for (let pageIndex = 0; pageIndex < 6; pageIndex += 1) {
+        const response = await app.inject({
+          method: "GET",
+          url,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode).toBe(200);
+        const body = response.json<{
+          readonly items: readonly {
+            readonly kind?: string;
+            readonly blockNumber: string;
+          }[];
+          readonly nextCursor: string | null;
+        }>();
+        expect(body.items).toHaveLength(1);
+        const item = body.items[0];
+        seen.push(`${item?.kind ?? "transfer"}:${item?.blockNumber ?? ""}`);
+        if (body.nextCursor === null) break;
+        url = `/v2/wallets/${walletId}/activity?cursor=${body.nextCursor}`;
+      }
+      expect(seen).toEqual([
+        "launch2_curve_buy:300",
+        "transfer:43999900",
+        "launch2_curve_sell:200",
+        "launch2_nft_mint:100",
+      ]);
+    });
+
+    it("refuses a cursor of the other mode", async () => {
+      const listWalletTransfers = vi.fn<
+        BscIndexerRepository["listWalletTransfers"]
+      >(() => Promise.resolve({ items: [transferRecord], hasMore: true }));
+      const { app: off } = await mergedApp(mergeFake(), "off", {
+        bscIndexer: { ...indexerFake(), listWalletTransfers },
+      });
+      const offPage = await off.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity?limit=1`,
+        headers: commonHeaders(),
+      });
+      const offCursor = offPage.json<{ nextCursor: string }>().nextCursor;
+      const { app: on } = await mergedApp(
+        mergeFake({
+          transfers: [timedTransfer(transferRecord)],
+          launch2: [
+            launch2Record(
+              "launch2_curve_buy",
+              "2026-10-19T11:00:00.000Z",
+              "1",
+              0,
+            ),
+          ],
+        }),
+        "on",
+      );
+      const stale = await on.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity?cursor=${offCursor}`,
+        headers: commonHeaders(),
+      });
+      expect(stale.statusCode).toBe(400);
+      expect(stale.json()).toMatchObject({ code: "INVALID_REQUEST" });
+
+      const onPage = await on.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity?limit=1`,
+        headers: commonHeaders(),
+      });
+      const onCursor = onPage.json<{ nextCursor: string }>().nextCursor;
+      const back = await off.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity?cursor=${onCursor}`,
+        headers: commonHeaders(),
+      });
+      expect(back.statusCode).toBe(400);
+    });
+
+    it("reports the launch2 leg unavailable without failing the page (on)", async () => {
+      for (const [options, reasonCode] of [
+        [{ checkpoint: null }, "LAUNCH2_INDEXER_NOT_STARTED"],
+        [{ checkpoint: new Error("db") }, "LAUNCH2_ACTIVITY_READ_FAILED"],
+        [{ launch2Error: new Error("db") }, "LAUNCH2_ACTIVITY_READ_FAILED"],
+      ] as const) {
+        const merge = mergeFake({
+          transfers: [timedTransfer(transferRecord)],
+          launch2: [
+            launch2Record(
+              "launch2_curve_buy",
+              "2026-10-19T11:00:00.000Z",
+              "1",
+              0,
+            ),
+          ],
+          ...options,
+        });
+        const { app } = await mergedApp(merge, "on");
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/wallets/${walletId}/activity`,
+          headers: commonHeaders(),
+        });
+        expect(response.statusCode, reasonCode).toBe(200);
+        const body = response.json<{
+          readonly items: readonly Record<string, unknown>[];
+          readonly launch2: Record<string, unknown>;
+        }>();
+        expect(body.launch2).toEqual({ status: "unavailable", reasonCode });
+        expect(body.items).toHaveLength(1);
+        expect(body.items[0]).not.toHaveProperty("kind");
+      }
+    });
+
+    it("fails closed without the merge reads, and keeps INDEXING_DELAYED (on)", async () => {
+      const { app } = await mergedApp(undefined, "on");
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "CAPABILITY_UNAVAILABLE" });
+
+      const { app: delayed } = await mergedApp(mergeFake(), "on", {
+        bscIndexer: indexerFake({ checkpoint: false }),
+      });
+      const late = await delayed.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity`,
+        headers: commonHeaders(),
+      });
+      expect(late.statusCode).toBe(503);
+      expect(late.json()).toMatchObject({ code: "INDEXING_DELAYED" });
+    });
+
+    it("counts launch2 confirmations as null when the Launch head is unreadable (on)", async () => {
+      const dependencies = fakes();
+      const database = {
+        ...dependencies.database,
+        walletActivityMerge: mergeFake({
+          launch2: [
+            launch2Record(
+              "launch2_curve_buy",
+              "2026-10-19T11:00:00.000Z",
+              "1",
+              0,
+            ),
+          ],
+        }),
+      };
+      const { app } = await createApp(
+        {
+          ...dependencies,
+          launchChainReadClient: launchClientFake({ configured: false }),
+          database,
+        },
+        { LAUNCH_CHAIN_ID: "97", WALLET_ACTIVITY_LAUNCH2_EMIT: "on" },
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: `/v2/wallets/${walletId}/activity`,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [{ kind: "launch2_curve_buy", confirmations: null }],
+        launch2: { status: "available", headBlockNumber: null },
+      });
+    });
   });
 
   it("reports INDEXING_DELAYED instead of an empty activity page", async () => {
