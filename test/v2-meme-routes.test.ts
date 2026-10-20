@@ -390,6 +390,35 @@ describe("V2 MEME launchpad routes (Decision 0101)", () => {
       code: "VALIDATION_FAILED",
       detailsSafe: { reasonCode: "MEME_METADATA_INVALID", field: "symbol" },
     });
+    // Decision 0168: reasonCode is kept; the visibility code is added.
+    const invisible = await app.inject({
+      method: "POST",
+      url: "/v2/meme/tokens",
+      headers: s7CommandHeaders(),
+      payload: { name: "\ufe0f", symbol: "FROG" },
+    });
+    expect(invisible.statusCode).toBe(422);
+    expect(invisible.json()).toMatchObject({
+      code: "VALIDATION_FAILED",
+      detailsSafe: {
+        reasonCode: "MEME_METADATA_INVALID",
+        field: "name",
+        textReasonCode: "TEXT_NOT_VISIBLE",
+      },
+    });
+    const tag = await app.inject({
+      method: "POST",
+      url: "/v2/meme/tokens",
+      headers: s7CommandHeaders(),
+      payload: { name: "Frog", symbol: "F\u{e0041}" },
+    });
+    expect(tag.json()).toMatchObject({
+      detailsSafe: {
+        reasonCode: "MEME_METADATA_INVALID",
+        field: "symbol",
+        textReasonCode: "TAG_OUTSIDE_FLAG",
+      },
+    });
     repository.rateLimited = true;
     const limited = await app.inject({
       method: "POST",

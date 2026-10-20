@@ -7,6 +7,8 @@ import {
 } from "../src/features/launch/launch-contract.js";
 import {
   isOnChainLaunchTokenText,
+  launchTokenTextRejectionReason,
+  launchTokenTextVisibilityViolation,
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
   normalizeLaunchTokenText,
@@ -225,5 +227,160 @@ describe("launch token text (Decisions 0154 / 0164)", () => {
     expect(() =>
       parseMemeTokenMetadata({ name: "a".repeat(21), symbol: "PEPE" }),
     ).toThrow(MemeMetadataInvalidError);
+  });
+});
+
+/**
+ * Decision 0168 (S255 audit L-6): a name / ticker must be visibly something.
+ * ① at least one `[\p{L}\p{N}\p{S}\p{P}]`; ② tag characters only inside a
+ * 🏴 … U+E007F flag; ③ no leading combining mark.
+ */
+describe("launch token text visibility (Decision 0168)", () => {
+  const england =
+    "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}";
+
+  it.each([
+    ["U+E0041 (a lone tag)", "\u{e0041}", "TEXT_NOT_VISIBLE"],
+    ["two tags", "\u{e0041}\u{e0042}", "TEXT_NOT_VISIBLE"],
+    ["U+FE0F", "\ufe0f", "TEXT_NOT_VISIBLE"],
+    ["U+FE00", "\ufe00", "TEXT_NOT_VISIBLE"],
+    ["U+E0100", "\u{e0100}", "TEXT_NOT_VISIBLE"],
+    ["U+0301 alone", "\u0301", "TEXT_NOT_VISIBLE"],
+    ["a cancel tag alone", "\u{e007f}", "TEXT_NOT_VISIBLE"],
+    ["a tag after a letter", "A\u{e0041}", "TAG_OUTSIDE_FLAG"],
+    ["a tag after an emoji", "\u{1f600}\u{e0041}", "TAG_OUTSIDE_FLAG"],
+    ["an unterminated flag", "\u{1f3f4}\u{e0067}\u{e0062}", "TAG_OUTSIDE_FLAG"],
+    ["a flag with no tag body", "\u{1f3f4}\u{e007f}", "TAG_OUTSIDE_FLAG"],
+    ["a tag after a complete flag", `${england}\u{e0041}`, "TAG_OUTSIDE_FLAG"],
+    ["a combining acute first", "\u0301abc", "LEADING_COMBINING_MARK"],
+    ["a variation selector first", "\ufe0fA", "LEADING_COMBINING_MARK"],
+    ["U+E0100 first", "\u{e0100}币", "LEADING_COMBINING_MARK"],
+  ] as const)("refuses %s with %s", (_label, text, reason) => {
+    expect(normalizeLaunchTokenText(text)).toBeNull();
+    expect(isOnChainLaunchTokenText(text)).toBe(false);
+    expect(launchTokenTextVisibilityViolation(text)).toBe(reason);
+    expect(launchTokenTextRejectionReason(text)).toBe(reason);
+    // Surrounding spaces are trimmed first.
+    expect(launchTokenTextRejectionReason(` ${text} `)).toBe(reason);
+  });
+
+  it.each([
+    ["the England flag", england],
+    ["the England flag with text", `${england} ENG`],
+    ["the Scotland flag", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"],
+    ["a plain black flag", "\u{1f3f4}"],
+    ["Chinese", "币安人生"],
+    ["an emoji", "🐸"],
+    ["an emoji with VS16", "\u2764\ufe0f"],
+    ["a ZWJ family", "👨\u200d👩\u200d👧"],
+    ["a dollar sign", "$"],
+    ["punctuation", "."],
+    ["a digit", "1"],
+    ["a decomposed é (NFC composes it)", "e\u0301"],
+    ["a mark after a letter", "a\u0301\u0302"],
+  ] as const)("accepts %s", (_label, text) => {
+    const normalized = normalizeLaunchTokenText(text);
+    expect(normalized).toBe(text.normalize("NFC"));
+    expect(launchTokenTextVisibilityViolation(normalized ?? "")).toBeNull();
+    expect(isOnChainLaunchTokenText(normalized)).toBe(true);
+  });
+
+  it("reports no visibility reason for text another rule refuses", () => {
+    expect(launchTokenTextRejectionReason("a".repeat(21))).toBeNull();
+    expect(launchTokenTextRejectionReason("\u{e0041}".repeat(11))).toBeNull();
+    expect(launchTokenTextRejectionReason("a\u202eb")).toBeNull();
+    expect(launchTokenTextRejectionReason("")).toBeNull();
+    expect(launchTokenTextRejectionReason("DOGE")).toBeNull();
+    expect(launchTokenTextRejectionReason(1)).toBeNull();
+  });
+
+  it("names the field and reason on the catalogue project", () => {
+    expect(() =>
+      parseLaunchProjectValues({
+        name: "狗",
+        ticker: "\u{e0041}",
+        narrative: null,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        textRejection: { reasonCode: "TEXT_NOT_VISIBLE", field: "ticker" },
+      }),
+    );
+    expect(() =>
+      parseLaunchProjectValues({
+        name: "\u0301abc",
+        ticker: "DOGE",
+        narrative: null,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        textRejection: { reasonCode: "LEADING_COMBINING_MARK", field: "name" },
+      }),
+    );
+    expect(() =>
+      parseLaunchProjectValues({
+        name: "中".repeat(21),
+        ticker: "DOGE",
+        narrative: null,
+      }),
+    ).toThrow(expect.objectContaining({ textRejection: null }));
+  });
+
+  it("names the field and reason on the Hooks draft", () => {
+    const body = {
+      name: "Loop",
+      ticker: "LOOP",
+      logoAssetUrl: "https://example.com/logo.png",
+      description: "",
+      links: [],
+      nftSaleStartAt: "1900000000",
+      buybackRecipient: "0x3333333333333333333333333333333333333333",
+    };
+    const policy = {
+      nowUnixSeconds: "1800000000",
+      minimumLeadSeconds: 86_400,
+      nftSaleDurationSeconds: 3_600,
+    };
+    expect(() =>
+      parseHooksLaunchDraft({ ...body, name: "\ufe0f" }, policy),
+    ).toThrow(
+      expect.objectContaining({
+        textRejection: { reasonCode: "TEXT_NOT_VISIBLE", field: "name" },
+      }),
+    );
+    expect(() =>
+      parseHooksLaunchDraft({ ...body, ticker: "A\u{e0041}" }, policy),
+    ).toThrow(
+      expect.objectContaining({
+        textRejection: { reasonCode: "TAG_OUTSIDE_FLAG", field: "ticker" },
+      }),
+    );
+    expect(
+      parseHooksLaunchDraft({ ...body, ticker: england }, policy).ticker,
+    ).toBe(england);
+  });
+
+  it("adds textReasonCode on MEME create, keeping the field", () => {
+    expect(() =>
+      parseMemeTokenMetadata({ name: "\u{e0100}", symbol: "PEPE" }),
+    ).toThrow(
+      expect.objectContaining({
+        field: "name",
+        textReasonCode: "TEXT_NOT_VISIBLE",
+      }),
+    );
+    expect(() =>
+      parseMemeTokenMetadata({ name: "Pepe", symbol: "\u0301abc" }),
+    ).toThrow(
+      expect.objectContaining({
+        field: "symbol",
+        textReasonCode: "LEADING_COMBINING_MARK",
+      }),
+    );
+    expect(() =>
+      parseMemeTokenMetadata({ name: "Pepe", symbol: "a".repeat(21) }),
+    ).toThrow(
+      expect.objectContaining({ field: "symbol", textReasonCode: null }),
+    );
   });
 });

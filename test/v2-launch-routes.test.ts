@@ -335,6 +335,34 @@ describe("LOOP API V2 launch module", () => {
       payload: { ...payload, ticker: "M".repeat(21) },
     });
     expect(badTicker.statusCode).toBe(400);
+    expect(badTicker.json()).toMatchObject({
+      code: "INVALID_REQUEST",
+      detailsSafe: null,
+    });
+    // Decision 0168: an invisible-only ticker names its reason and field.
+    const invisible = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, ticker: "\u{e0041}" },
+    });
+    expect(invisible.statusCode).toBe(400);
+    expect(invisible.json()).toEqual(
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        detailsSafe: { reasonCode: "TEXT_NOT_VISIBLE", field: "ticker" },
+      }),
+    );
+    const leadingMark = await app.inject({
+      method: "POST",
+      url: "/v2/launch/projects",
+      headers: s7CommandHeaders(),
+      payload: { ...payload, name: "\u0301abc" },
+    });
+    expect(leadingMark.json()).toMatchObject({
+      code: "INVALID_REQUEST",
+      detailsSafe: { reasonCode: "LEADING_COMBINING_MARK", field: "name" },
+    });
   });
 
   it("replaces material by compare-and-swap, rejects an Idempotency-Key, and maps stale/conflict errors", async () => {

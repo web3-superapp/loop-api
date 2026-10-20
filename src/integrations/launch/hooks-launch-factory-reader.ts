@@ -274,11 +274,15 @@ export function isHooksLaunchContractRevert(error: unknown): boolean {
  * earlier factories have no such function, so the call reverts with no
  * return data.
  *
- * - a value ≥ 2 → `utf8` (the S242 `LaunchText` floor);
+ * - exactly 2 → `utf8` (the S242 `LaunchText` floor). Decision 0168 (S255
+ *   audit I-21): only the generation this backend was written against is
+ *   trusted; any other value (1, 3, …, 255) → `null`, fail closed, and the
+ *   reader logs a warn — a future v3 may be stricter than v2, so an old
+ *   backend must not sign for it as v2;
  * - a revert without return data, or empty return data → `ascii` (the
  *   pre-S242 `^[A-Z0-9]{2,12}$` `_validTicker`);
  * - anything else (RPC / transport error, timeout, a revert carrying data
- *   or a reason, a value below 2) → `null`: unreadable, fail closed.
+ *   or a reason) → `null`: unreadable, fail closed.
  *
  * (An earlier draft inferred the generation from the revert order of a
  * simulated `deployLaunch`; replaced by this getter, which does not depend
@@ -288,15 +292,13 @@ export const hooksLaunchTextRulesVersionAbi = loopLaunchFactoryAbi.filter(
   (item) => item.type === "function" && item.name === "launchTextRulesVersion",
 );
 
+/** Decision 0168: the one `launchTextRulesVersion()` this backend trusts. */
+export const hooksLaunchSupportedTextRulesVersion = 2;
+
 export function hooksLaunchTextRulesFromVersion(
   version: unknown,
 ): "utf8" | null {
-  return typeof version === "number" &&
-    Number.isInteger(version) &&
-    version >= 2 &&
-    version <= 255
-    ? "utf8"
-    : null;
+  return version === hooksLaunchSupportedTextRulesVersion ? "utf8" : null;
 }
 
 /** The node's generic message for a revert without data (bnbchain seed nodes append ": 0x"). */
@@ -407,6 +409,11 @@ export function createHooksLaunchFactoryReader(input: {
   readonly chainReference?: 56 | 97;
   /** Test seam (anvil); production uses the RPC URL list. */
   readonly transport?: Transport;
+  /**
+   * Decision 0168: told when the Factory answers a `launchTextRulesVersion()`
+   * other than 2 (the read then fails closed). The app passes its logger.
+   */
+  readonly onUnsupportedTextRulesVersion?: (version: number) => void;
 }): HooksLaunchFactoryReader {
   const chainReference = input.chainReference ?? 97;
   if (
@@ -486,16 +493,20 @@ export function createHooksLaunchFactoryReader(input: {
     if (tickerRule !== null) return tickerRule;
     await verifyNetworkAndCode();
     let outcome: "utf8" | "ascii" | null;
+    let version: unknown;
     try {
-      outcome = hooksLaunchTextRulesFromVersion(
-        await client.readContract({
-          address: factoryAddress,
-          abi: hooksLaunchTextRulesVersionAbi,
-          functionName: "launchTextRulesVersion",
-        }),
-      );
+      version = await client.readContract({
+        address: factoryAddress,
+        abi: hooksLaunchTextRulesVersionAbi,
+        functionName: "launchTextRulesVersion",
+      });
+      outcome = hooksLaunchTextRulesFromVersion(version);
     } catch (error) {
+      version = undefined;
       outcome = isHooksLaunchMissingFunctionRevert(error) ? "ascii" : null;
+    }
+    if (outcome === null && typeof version === "number") {
+      input.onUnsupportedTextRulesVersion?.(version);
     }
     if (outcome === null) {
       throw new Error("Hooks launch factory text rules unreadable");

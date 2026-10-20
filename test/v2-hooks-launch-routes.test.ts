@@ -609,6 +609,36 @@ describe("LOOP API V2 Hooks launch routes (Decision 0108)", () => {
     expect((await put(testnet, 1, 4_100)).statusCode).toBe(400);
   });
 
+  it("names a visibility refusal of the name / ticker (Decision 0168)", async () => {
+    const app = await createApp({
+      configs: configRepositoryFake(),
+      reader: factoryReader,
+    });
+    const put = (patch: Record<string, string>) =>
+      app.inject({
+        method: "PUT",
+        url: `/v2/launch/projects/${projectId}/hooks-config`,
+        headers: s7CommonHeaders(),
+        payload: { expectedVersion: 0, config: { ...draftBody, ...patch } },
+      });
+    const invisible = await put({ name: "\u{e0100}" });
+    expect(invisible.statusCode).toBe(400);
+    expect(invisible.json()).toMatchObject({
+      code: "INVALID_REQUEST",
+      detailsSafe: { reasonCode: "TEXT_NOT_VISIBLE", field: "name" },
+    });
+    const tag = await put({ ticker: "A\u{e0041}" });
+    expect(tag.json()).toMatchObject({
+      code: "INVALID_REQUEST",
+      detailsSafe: { reasonCode: "TAG_OUTSIDE_FLAG", field: "ticker" },
+    });
+    const tooLong = await put({ name: "中".repeat(21) });
+    expect(tooLong.json()).toMatchObject({
+      code: "INVALID_REQUEST",
+      detailsSafe: null,
+    });
+  });
+
   it("returns owner-wallet EIP-712 data and CREATE2 salts without signing", async () => {
     const app = await createApp({
       configs: configRepositoryFake(),

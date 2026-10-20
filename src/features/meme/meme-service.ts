@@ -1245,8 +1245,13 @@ export function createMemeService(deps: MemeServiceDependencies): MemeService {
         metadata = parseMemeTokenMetadata(input.body);
       } catch (error) {
         if (error instanceof MemeMetadataInvalidError) {
+          // Decision 0168: `reasonCode` stays MEME_METADATA_INVALID (the
+          // App's copy keys on it); a visibility refusal adds its code.
           return refuse("VALIDATION_FAILED", memeReasonCodes.metadataInvalid, {
             field: error.field,
+            ...(error.textReasonCode === null
+              ? {}
+              : { textReasonCode: error.textReasonCode }),
           });
         }
         throw error;
