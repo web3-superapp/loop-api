@@ -1829,6 +1829,15 @@ export async function buildApp(
           : launchUsd1FactoryToken(),
       logger: app.log,
       tokenLogos,
+      // Decision 0167: WALLET_ACTIVITY_LAUNCH2_EMIT off (default) keeps the
+      // activity list unmerged and byte-identical; on merges the wallet's
+      // launch2 facts of the Launch chain (read model only).
+      launch2ActivityMerge: config.walletActivityLaunch2Emit
+        ? Object.freeze({
+            chainId: config.launchChain.chainId,
+            repository: database.walletActivityMerge ?? null,
+          })
+        : null,
     });
   // Decision 0145: net worth history. `current` is valued live with the
   // balances valuation (same registry, read client, and price facts).

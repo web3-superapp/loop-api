@@ -992,6 +992,13 @@ const environmentSchema = z
     // pre-0162 shape (no inviteLink / stats, boost always unavailable); on
     // emits them. Turn on only once every supported client is at build >= 31.
     REFERRAL_CENTER_EMIT: z.enum(["off", "on"]),
+    // Decision 0167: off|on (default off). off keeps
+    // GET /v2/wallets/{walletId}/activity byte-identical to before (ERC-20
+    // rows of the primary chain only, the block / log cursor); on merges the
+    // wallet's MEME v2 (launch2) activity on the Launch chain into the same
+    // list and adds the `launch2` block. Turn on only once every supported
+    // client decodes the new row shape (build >= 32).
+    WALLET_ACTIVITY_LAUNCH2_EMIT: z.enum(["off", "on"]),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1864,6 +1871,8 @@ export interface AppConfig {
   readonly launchGraduatedListEnabled: boolean;
   /** Decision 0166: REFERRAL_CENTER_EMIT === "on" (default off). */
   readonly referralCenterEmit: boolean;
+  /** Decision 0167: WALLET_ACTIVITY_LAUNCH2_EMIT === "on" (default off). */
+  readonly walletActivityLaunch2Emit: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -4145,6 +4154,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_TRADER_ACCOUNT_EMIT:
       environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] ?? "off",
     REFERRAL_CENTER_EMIT: environment["REFERRAL_CENTER_EMIT"] ?? "off",
+    WALLET_ACTIVITY_LAUNCH2_EMIT:
+      environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4312,6 +4323,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launchSnapshotCacheTtlMs: parsed.data.LAUNCH_SNAPSHOT_CACHE_TTL_MS,
     launchGraduatedListEnabled: parsed.data.LAUNCH_GRADUATED_LIST === "on",
     referralCenterEmit: parsed.data.REFERRAL_CENTER_EMIT === "on",
+    walletActivityLaunch2Emit:
+      parsed.data.WALLET_ACTIVITY_LAUNCH2_EMIT === "on",
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:

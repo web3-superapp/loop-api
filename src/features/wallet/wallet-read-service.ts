@@ -13,7 +13,10 @@ import {
   type AccountWalletRecord,
   type AccountWalletRepository,
 } from "../../database/account-wallet-repository.js";
-import type { BscIndexerRepository } from "../../database/bsc-indexer-repository.js";
+import type {
+  BscIndexerRepository,
+  IndexedTransferRecord,
+} from "../../database/bsc-indexer-repository.js";
 import type { AssetRecord } from "../../database/chain-registry-repository.js";
 import {
   asChainCallClient,
@@ -59,6 +62,15 @@ import type {
   AssetPriceFact,
   MarketFactService,
 } from "../market/market-fact-service.js";
+import {
+  compareSortKeys,
+  mergeActivityPages,
+  projectLaunch2ActivityItem,
+  sortKeyOfEntry,
+  type WalletActivityMergeRepository,
+  type WalletActivitySortKey,
+  type WalletLaunch2ActivityItem,
+} from "./wallet-activity-launch2.js";
 import {
   observedLogoImage,
   type TokenLogoProjection,
@@ -313,9 +325,29 @@ export interface WalletActivityItem {
   readonly observedAt: string;
 }
 
+/**
+ * Decision 0167: the `launch2` block of the merged list (only while
+ * WALLET_ACTIVITY_LAUNCH2_EMIT is on).
+ */
+export type WalletActivityLaunch2Projection =
+  | {
+      readonly status: "available";
+      readonly chainId: string;
+      readonly indexerBlockNumber: string;
+      readonly headBlockNumber: string | null;
+    }
+  | UnavailableProjection;
+
+export const walletActivityLaunch2ReasonCodes = Object.freeze({
+  repositoryUnavailable: "LAUNCH2_REPOSITORY_UNAVAILABLE",
+  indexerNotStarted: "LAUNCH2_INDEXER_NOT_STARTED",
+  readFailed: "LAUNCH2_ACTIVITY_READ_FAILED",
+} as const);
+
 export interface WalletActivityResource {
   readonly walletId: string;
-  readonly items: readonly WalletActivityItem[];
+  /** Decision 0167: launch2 rows only while the merge is on. */
+  readonly items: readonly (WalletActivityItem | WalletLaunch2ActivityItem)[];
   readonly nextCursor: string | null;
   readonly freshness: {
     readonly indexerBlockNumber: string;
@@ -325,7 +357,20 @@ export interface WalletActivityResource {
   };
   readonly nativeTransfers: UnavailableProjection;
   readonly crossChain: UnavailableProjection;
+  /** Decision 0167: present only while the merge is on. */
+  readonly launch2?: WalletActivityLaunch2Projection;
   readonly contractVersion: typeof v2ContractVersion;
+}
+
+/**
+ * Decision 0167 (WALLET_ACTIVITY_LAUNCH2_EMIT on): merge the wallet's
+ * launch2 facts of `chainId` (the Launch chain) into the activity list.
+ * `repository` null = the merge reads are not composed: the route fails
+ * closed (503 CAPABILITY_UNAVAILABLE), never an ERC-20-only page.
+ */
+export interface WalletActivityLaunch2Merge {
+  readonly chainId: string;
+  readonly repository: WalletActivityMergeRepository | null;
 }
 
 export interface WalletReceiveResource {
@@ -422,6 +467,8 @@ export interface CreateWalletReadServiceInput {
    */
   readonly walletInventoryTtlMs?: number;
   readonly now?: () => Date;
+  /** Decision 0167: absent / null = WALLET_ACTIVITY_LAUNCH2_EMIT off. */
+  readonly launch2ActivityMerge?: WalletActivityLaunch2Merge | null;
 }
 
 /**
@@ -1207,6 +1254,53 @@ function raceAbort<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+/** One indexed ERC-20 transfer as an activity row (Decisions 0033, 0088). */
+function projectTransferItem(
+  transfer: IndexedTransferRecord,
+  assets: readonly AssetRecord[],
+  walletAddress: string,
+  headBlockNumber: bigint | null,
+  confirmations: number,
+): WalletActivityItem {
+  const asset = assets.find(
+    (candidate) => candidate.assetId === transfer.assetId,
+  );
+  const decimals = asset?.decimals ?? 0;
+  const blockNumber = BigInt(transfer.blockNumber);
+  const observedConfirmations =
+    headBlockNumber === null
+      ? null
+      : Number(subtractFloorZero(headBlockNumber + 1n, blockNumber));
+  const direction =
+    transfer.fromAddress === walletAddress &&
+    transfer.toAddress === walletAddress
+      ? ("self" as const)
+      : transfer.toAddress === walletAddress
+        ? ("in" as const)
+        : ("out" as const);
+  return Object.freeze({
+    assetId: transfer.assetId,
+    symbol: asset?.symbol ?? "",
+    decimals,
+    direction,
+    counterpartyAddress:
+      direction === "in" ? transfer.fromAddress : transfer.toAddress,
+    rawValue: transfer.rawValue,
+    displayValue: formatDecimalAmount(BigInt(transfer.rawValue), decimals),
+    transactionHash: transfer.transactionHash,
+    logIndex: transfer.logIndex,
+    blockNumber: transfer.blockNumber,
+    blockHash: transfer.blockHash,
+    confirmations: observedConfirmations,
+    status: transfer.removed
+      ? ("reorged" as const)
+      : observedConfirmations !== null && observedConfirmations >= confirmations
+        ? ("confirmed" as const)
+        : ("pending" as const),
+    observedAt: transfer.observedAt,
+  });
+}
+
 export function createWalletReadService(
   input: CreateWalletReadServiceInput,
 ): WalletReadService {
@@ -1471,6 +1565,255 @@ export function createWalletReadService(
       throw V2ApiError.capabilityUnavailable();
     }
     return stored;
+  }
+
+  /**
+   * Decision 0167: the activity list merged with the wallet's launch2 facts
+   * on the Launch chain, one cursor over both (see wallet-activity-launch2).
+   * The ERC-20 leg keeps every rule of the unmerged list (INDEXING_DELAYED
+   * without a checkpoint, the same row shape); the launch2 leg settles on
+   * its own and is reported in the `launch2` block, never as an error.
+   */
+  async function getMergedActivity({
+    principal,
+    wallet,
+    codec,
+    merge,
+    cursor,
+    limit,
+  }: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly wallet: AccountWalletRecord;
+    readonly codec: V2CursorCodec;
+    readonly merge: WalletActivityLaunch2Merge;
+    readonly cursor: unknown;
+    readonly limit: unknown;
+  }): Promise<WalletActivityResource> {
+    const repository = merge.repository;
+    if (repository === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    const headPending: Promise<bigint | null> = input.readClient.getHead().then(
+      (head) => head.blockNumber,
+      () => null,
+    );
+    const launchClient =
+      merge.chainId === input.chainId
+        ? null
+        : input.launchChainReadClient !== null &&
+            input.launchChainReadClient.chainId === merge.chainId
+          ? input.launchChainReadClient
+          : undefined;
+    // The Launch chain head only counts the launch2 rows' confirmations; a
+    // failed read (or no client for that chain) is null, as for the primary.
+    const launchHeadPending: Promise<bigint | null> =
+      launchClient === null
+        ? headPending
+        : launchClient === undefined
+          ? Promise.resolve(null)
+          : launchClient.getHead().then(
+              (head) => head.blockNumber,
+              () => null,
+            );
+    const assetsPending = input.assetRegistry.listReadableAssets();
+    assetsPending.catch(() => undefined);
+    const launch2CheckpointPending: Promise<string | null | Error> = repository
+      .getLaunch2Checkpoint(merge.chainId)
+      .catch((error: unknown): Error => {
+        noteActivityLeg(error);
+        return new Error("launch2 checkpoint read failed");
+      });
+    const checkpoint = await input.indexerRepository.getCheckpoint(
+      "erc20_transfer",
+      input.chainId,
+    );
+    if (checkpoint === null) {
+      throw V2ApiError.fromCode("INDEXING_DELAYED");
+    }
+
+    const filter = `wallet=${wallet.walletId};launch2=${merge.chainId}`;
+    let pageSize: number = walletActivityLimits.default;
+    let before: WalletActivitySortKey | undefined;
+    if (typeof cursor === "string") {
+      let continuation;
+      try {
+        continuation = codec.decode({
+          ownerId: principal.userId,
+          route: activityCursorRoute,
+          filter,
+          cursor,
+        });
+      } catch (error) {
+        if (error instanceof InvalidV2CursorError) {
+          throw V2ApiError.invalidRequest();
+        }
+        throw error;
+      }
+      const at = continuation["at"];
+      const block = continuation["block"];
+      const log = continuation["log"];
+      const source = continuation["src"];
+      const hash = continuation["tx"];
+      const size = continuation["limit"];
+      if (
+        typeof at !== "string" ||
+        !/^[0-9]{1,20}$/u.test(at) ||
+        typeof block !== "string" ||
+        !/^[0-9]{1,20}$/u.test(block) ||
+        typeof log !== "number" ||
+        !Number.isSafeInteger(log) ||
+        (source !== "erc20" && source !== "launch2") ||
+        typeof hash !== "string" ||
+        typeof size !== "number"
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      before = {
+        atMicros: at,
+        blockNumber: block,
+        logIndex: log,
+        source,
+        transactionHash: hash,
+      };
+      pageSize = size;
+    } else if (typeof limit === "number") {
+      if (
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > walletActivityLimits.maximum
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
+      pageSize = limit;
+    }
+
+    const assets = await assetsPending;
+    // The merged order is by time, so the ERC-20 leg is read through the
+    // merge repository (same filters as listWalletTransfers).
+    const transfersPending = repository.listTransfersByTime({
+      chainId: input.chainId,
+      address: wallet.address,
+      assetIds: assets.map((asset) => asset.assetId),
+      limit: pageSize,
+      ...(before === undefined ? {} : { before }),
+    });
+    transfersPending.catch(() => undefined);
+    const launch2Checkpoint = await launch2CheckpointPending;
+    let launch2Block: WalletActivityLaunch2Projection;
+    let launch2Page: Awaited<
+      ReturnType<WalletActivityMergeRepository["listLaunch2Activity"]>
+    > = Object.freeze({ items: Object.freeze([]), hasMore: false });
+    if (launch2Checkpoint instanceof Error) {
+      launch2Block = unavailable(walletActivityLaunch2ReasonCodes.readFailed);
+    } else if (launch2Checkpoint === null) {
+      launch2Block = unavailable(
+        walletActivityLaunch2ReasonCodes.indexerNotStarted,
+      );
+    } else {
+      try {
+        launch2Page = await repository.listLaunch2Activity({
+          chainId: merge.chainId,
+          address: wallet.address,
+          limit: pageSize,
+          ...(before === undefined ? {} : { before }),
+        });
+        const launchHead = await launchHeadPending;
+        launch2Block = Object.freeze({
+          status: "available" as const,
+          chainId: merge.chainId,
+          indexerBlockNumber: launch2Checkpoint,
+          headBlockNumber: launchHead === null ? null : launchHead.toString(10),
+        });
+      } catch (error) {
+        noteActivityLeg(error);
+        launch2Block = unavailable(walletActivityLaunch2ReasonCodes.readFailed);
+      }
+    }
+    const transfers = await transfersPending;
+    const merged = mergeActivityPages({
+      transfers,
+      launch2: launch2Page,
+      pageSize,
+    });
+
+    const headBlockNumber = await headPending;
+    const launchHeadBlockNumber = await launchHeadPending;
+    const indexerBlock = BigInt(checkpoint.lastBlockNumber);
+    const confirmations = input.readClient.confirmations;
+    const items = merged.entries.map(
+      (entry): WalletActivityItem | WalletLaunch2ActivityItem =>
+        entry.source === "erc20"
+          ? projectTransferItem(
+              entry.record,
+              assets,
+              wallet.address,
+              headBlockNumber,
+              confirmations,
+            )
+          : projectLaunch2ActivityItem(entry.record, launchHeadBlockNumber),
+    );
+
+    const lastEntry = merged.entries.at(-1);
+    const last =
+      lastEntry === undefined ? undefined : sortKeyOfEntry(lastEntry);
+    const nextCursor =
+      merged.hasMore && last !== undefined
+        ? codec.encode({
+            ownerId: principal.userId,
+            route: activityCursorRoute,
+            filter,
+            continuation: {
+              at: last.atMicros,
+              block: last.blockNumber,
+              log: last.logIndex,
+              src: last.source,
+              tx: last.transactionHash,
+              limit: pageSize,
+            },
+          })
+        : null;
+    // The page is strictly older than its cursor (a defensive check: the
+    // repositories already filter, this keeps a merge bug from looping).
+    if (
+      before !== undefined &&
+      merged.entries.some(
+        (entry) => compareSortKeys(sortKeyOfEntry(entry), before) >= 0,
+      )
+    ) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+
+    return Object.freeze({
+      walletId: wallet.walletId,
+      items: Object.freeze(items),
+      nextCursor,
+      freshness: Object.freeze({
+        indexerBlockNumber: checkpoint.lastBlockNumber,
+        headBlockNumber:
+          headBlockNumber === null ? null : headBlockNumber.toString(10),
+        lagBlocks:
+          headBlockNumber === null
+            ? null
+            : Number(subtractFloorZero(headBlockNumber, indexerBlock)),
+        observedAt: now().toISOString(),
+      }),
+      nativeTransfers: unavailable(
+        walletReasonCodes.nativeTransfersUnsupported,
+      ),
+      crossChain: unavailable("CROSS_CHAIN_ACTIVITY_NOT_SUPPORTED"),
+      launch2: launch2Block,
+      contractVersion: v2ContractVersion,
+    });
+  }
+
+  function noteActivityLeg(error: unknown): void {
+    input.logger?.warn?.(
+      {
+        leg: "launch2Activity",
+        errorName: error instanceof Error ? error.name : typeof error,
+      },
+      "Wallet activity launch2 leg unavailable",
+    );
   }
 
   return Object.freeze({
@@ -1962,6 +2305,17 @@ export function createWalletReadService(
       if (cursor !== undefined && limit !== undefined) {
         throw V2ApiError.invalidRequest();
       }
+      const merge = input.launch2ActivityMerge ?? null;
+      if (merge !== null) {
+        return getMergedActivity({
+          principal,
+          wallet,
+          codec,
+          merge,
+          cursor,
+          limit,
+        });
+      }
       // Decision 0088: the chain head is only used for the confirmation
       // count and the lag, and needs nothing the database reads return, so
       // it is asked once the wallet is known to be the caller's and runs
@@ -2040,49 +2394,15 @@ export function createWalletReadService(
       const indexerBlock = BigInt(checkpoint.lastBlockNumber);
       const confirmations = input.readClient.confirmations;
 
-      const items = page.items.map((transfer): WalletActivityItem => {
-        const asset = assets.find(
-          (candidate) => candidate.assetId === transfer.assetId,
-        );
-        const decimals = asset?.decimals ?? 0;
-        const blockNumber = BigInt(transfer.blockNumber);
-        const observedConfirmations =
-          headBlockNumber === null
-            ? null
-            : Number(subtractFloorZero(headBlockNumber + 1n, blockNumber));
-        const direction =
-          transfer.fromAddress === wallet.address &&
-          transfer.toAddress === wallet.address
-            ? ("self" as const)
-            : transfer.toAddress === wallet.address
-              ? ("in" as const)
-              : ("out" as const);
-        return Object.freeze({
-          assetId: transfer.assetId,
-          symbol: asset?.symbol ?? "",
-          decimals,
-          direction,
-          counterpartyAddress:
-            direction === "in" ? transfer.fromAddress : transfer.toAddress,
-          rawValue: transfer.rawValue,
-          displayValue: formatDecimalAmount(
-            BigInt(transfer.rawValue),
-            decimals,
-          ),
-          transactionHash: transfer.transactionHash,
-          logIndex: transfer.logIndex,
-          blockNumber: transfer.blockNumber,
-          blockHash: transfer.blockHash,
-          confirmations: observedConfirmations,
-          status: transfer.removed
-            ? ("reorged" as const)
-            : observedConfirmations !== null &&
-                observedConfirmations >= confirmations
-              ? ("confirmed" as const)
-              : ("pending" as const),
-          observedAt: transfer.observedAt,
-        });
-      });
+      const items = page.items.map((transfer): WalletActivityItem =>
+        projectTransferItem(
+          transfer,
+          assets,
+          wallet.address,
+          headBlockNumber,
+          confirmations,
+        ),
+      );
 
       const last = page.items.at(-1);
       const nextCursor =

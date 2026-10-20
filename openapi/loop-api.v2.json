@@ -69331,85 +69331,202 @@
                       "type": "array",
                       "maxItems": 50,
                       "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": [
-                          "assetId",
-                          "symbol",
-                          "decimals",
-                          "direction",
-                          "counterpartyAddress",
-                          "rawValue",
-                          "displayValue",
-                          "transactionHash",
-                          "logIndex",
-                          "blockNumber",
-                          "blockHash",
-                          "confirmations",
-                          "status",
-                          "observedAt"
-                        ],
-                        "properties": {
-                          "assetId": {
-                            "type": "string",
-                            "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
-                            "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "assetId",
+                              "symbol",
+                              "decimals",
+                              "direction",
+                              "counterpartyAddress",
+                              "rawValue",
+                              "displayValue",
+                              "transactionHash",
+                              "logIndex",
+                              "blockNumber",
+                              "blockHash",
+                              "confirmations",
+                              "status",
+                              "observedAt"
+                            ],
+                            "properties": {
+                              "assetId": {
+                                "type": "string",
+                                "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$",
+                                "description": "Canonical CAIP asset ID: eip155:<chainId>:<0x lowercase address>, or eip155:<chainId>:native. Tickers and symbols are never identifiers."
+                              },
+                              "symbol": { "type": "string", "maxLength": 32 },
+                              "decimals": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 36
+                              },
+                              "direction": {
+                                "type": "string",
+                                "enum": ["in", "out", "self"]
+                              },
+                              "counterpartyAddress": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{40}$",
+                                "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
+                              },
+                              "rawValue": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                "description": "Integer amount in the asset's smallest unit, as a string."
+                              },
+                              "displayValue": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                                "description": "Exact decimal string; never a JavaScript floating-point value."
+                              },
+                              "transactionHash": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              "logIndex": { "type": "integer", "minimum": 0 },
+                              "blockNumber": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                              },
+                              "blockHash": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              "confirmations": {
+                                "anyOf": [
+                                  { "type": "integer", "minimum": 0 },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": ["confirmed", "pending", "reorged"],
+                                "description": "A reorged row is kept and reported so a client can reconcile what it already displayed."
+                              },
+                              "observedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
                           },
-                          "symbol": { "type": "string", "maxLength": 32 },
-                          "decimals": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 36
-                          },
-                          "direction": {
-                            "type": "string",
-                            "enum": ["in", "out", "self"]
-                          },
-                          "counterpartyAddress": {
-                            "type": "string",
-                            "pattern": "^0x[0-9a-f]{40}$",
-                            "description": "Normalised lowercase public chain address. It is a chain fact, never a LOOP identity or authorization key."
-                          },
-                          "rawValue": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})$",
-                            "description": "Integer amount in the asset's smallest unit, as a string."
-                          },
-                          "displayValue": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
-                            "description": "Exact decimal string; never a JavaScript floating-point value."
-                          },
-                          "transactionHash": {
-                            "type": "string",
-                            "pattern": "^0x[0-9a-f]{64}$"
-                          },
-                          "logIndex": { "type": "integer", "minimum": 0 },
-                          "blockNumber": {
-                            "type": "string",
-                            "pattern": "^(0|[1-9][0-9]{0,19})$",
-                            "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
-                          },
-                          "blockHash": {
-                            "type": "string",
-                            "pattern": "^0x[0-9a-f]{64}$"
-                          },
-                          "confirmations": {
-                            "anyOf": [
-                              { "type": "integer", "minimum": 0 },
-                              { "type": "null" }
-                            ]
-                          },
-                          "status": {
-                            "type": "string",
-                            "enum": ["confirmed", "pending", "reorged"],
-                            "description": "A reorged row is kept and reported so a client can reconcile what it already displayed."
-                          },
-                          "observedAt": {
-                            "type": "string",
-                            "format": "date-time"
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "kind",
+                              "chainId",
+                              "instanceId",
+                              "ticker",
+                              "name",
+                              "logoUrl",
+                              "amountMeme",
+                              "amountUsd1",
+                              "taxUsd1",
+                              "transactionHash",
+                              "logIndex",
+                              "blockNumber",
+                              "occurredAt",
+                              "confirmations"
+                            ],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "launch2_curve_buy",
+                                  "launch2_curve_sell",
+                                  "launch2_pool_buy",
+                                  "launch2_pool_sell",
+                                  "launch2_nft_mint",
+                                  "launch2_reward_claim",
+                                  "launch2_buyback"
+                                ],
+                                "description": "Decision 0167. curve_buy / curve_sell = bonding-curve trade by the wallet; pool_buy / pool_sell = official-pool user swap the wallet paid, received, or (buy) was credited by the Hook for (delivery attribution, loop-contracts 0014); nft_mint = NFT bought by the wallet; reward_claim = LoopDynamic reward claimed by the wallet; buyback = executed buyback whose MEME went to the wallet (the instance's buyback recipient)."
+                              },
+                              "chainId": {
+                                "type": "string",
+                                "pattern": "^eip155:[1-9][0-9]{0,9}$",
+                                "description": "CAIP-2 of the Launch chain (eip155:97, or eip155:56)."
+                              },
+                              "instanceId": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                              },
+                              "ticker": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "logoUrl": {
+                                "anyOf": [
+                                  { "type": "string", "maxLength": 2048 },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "amountMeme": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  },
+                                  { "type": "null" }
+                                ],
+                                "description": "MEME moved (18 decimals, human decimal string): curve buy / sell = curve amount; pool buy = MEME received (router amountOut, else gross − MEME tax); pool sell = MEME paid; buyback = MEME delivered. null for nft_mint and reward_claim."
+                              },
+                              "amountUsd1": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  },
+                                  { "type": "null" }
+                                ],
+                                "description": "USD1 moved (human decimal string): curve buy = paid incl. tax, curve sell = received net; pool buy = paid (router amountIn, else pool input), pool sell = received net of a USD1 tax; nft_mint = mint price; reward_claim = claimed; buyback = spent."
+                              },
+                              "taxUsd1": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  },
+                                  { "type": "null" }
+                                ],
+                                "description": "USD1 tax of the trade (curve trades; pool swaps taxed in USD1). null when the tax was taken in MEME or the kind has no tax."
+                              },
+                              "transactionHash": {
+                                "type": "string",
+                                "pattern": "^0x[0-9a-f]{64}$"
+                              },
+                              "logIndex": { "type": "integer", "minimum": 0 },
+                              "blockNumber": {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                              },
+                              "occurredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "description": "Block time of the fact (indexed, never re-read)."
+                              },
+                              "confirmations": {
+                                "anyOf": [
+                                  { "type": "integer", "minimum": 0 },
+                                  { "type": "null" }
+                                ],
+                                "description": "Against the Launch chain head; null when that head is unreadable."
+                              }
+                            }
                           }
-                        }
+                        ],
+                        "description": "Transfer rows only by default. Decision 0167: with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off; build >= 32 clients) launch2 rows (they carry `kind`) are mixed in, newest first by (occurredAt, blockNumber, logIndex); a transfer row's time is its observedAt."
                       }
                     },
                     "nextCursor": {
@@ -69483,6 +69600,61 @@
                           "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
                         }
                       }
+                    },
+                    "launch2": {
+                      "description": "Decision 0167: OPTIONAL key — present only with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off). available = the launch2 rows of chainId are merged (indexerBlockNumber = the launch2_event lane checkpoint); unavailable = none are (LAUNCH2_INDEXER_NOT_STARTED, LAUNCH2_ACTIVITY_READ_FAILED) and the page holds transfer rows only.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "status",
+                            "chainId",
+                            "indexerBlockNumber",
+                            "headBlockNumber"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["available"]
+                            },
+                            "chainId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                            },
+                            "indexerBlockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$",
+                              "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                            },
+                            "headBlockNumber": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$",
+                                  "description": "Block height as a canonical decimal string; heights are never JavaScript numbers."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["status", "reasonCode"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["unavailable"]
+                            },
+                            "reasonCode": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            }
+                          }
+                        }
+                      ]
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
                   }
