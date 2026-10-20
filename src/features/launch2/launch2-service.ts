@@ -257,6 +257,28 @@ export interface Launch2ServiceDependencies {
 
 type Resource = Record<string, unknown>;
 
+/**
+ * Decision 0169: one instance a wallet address holds something of, for the
+ * public profile holdings. Raw 18-decimal integers.
+ */
+export interface Launch2AddressHolding {
+  readonly instanceId: string;
+  readonly chainId: string;
+  readonly ticker: string;
+  readonly name: string;
+  readonly logoUrl: string | null;
+  readonly stage: Launch2Stage;
+  /** NFTs held (the indexed NFT transfers). */
+  readonly nftHeld: number;
+  /**
+   * MEME held: the live balance once graduated (null when that read
+   * failed), the curve net (bought − sold) before graduation.
+   */
+  readonly memeRaw: bigint | null;
+  /** The indexed last price (pool once graduated, else curve); 0 = none. */
+  readonly priceE18: bigint;
+}
+
 export interface Launch2Service {
   listInstances(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -286,6 +308,15 @@ export interface Launch2Service {
   listMyPositions(input: {
     readonly principal: AuthenticatedLoopPrincipal;
   }): Promise<Resource>;
+  /**
+   * Decision 0169: what `address` holds on the Launch chain, per instance
+   * (the `launch2_positions` rows of the address, hidden listings included
+   * as in Decision 0167). Not a route: the public profile reads it for the
+   * profile owner's active wallet.
+   */
+  listAddressHoldings(input: {
+    readonly address: string;
+  }): Promise<readonly Launch2AddressHolding[]>;
   /** Decision 0139: the launchpad activity feed and scoreboard. */
   getOverview(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -998,6 +1029,7 @@ export function createUnavailableLaunch2Service(
     quote: fail,
     listBuybacks: fail,
     listMyPositions: fail,
+    listAddressHoldings: fail,
     getOverview: fail,
     prepareNftMint: fail,
     prepareTrade: fail,
@@ -4384,6 +4416,50 @@ export function createLaunch2Service(
         }),
         contractVersion: v2ContractVersion,
       });
+    },
+
+    async listAddressHoldings(input) {
+      const store = repository();
+      const address = input.address.toLowerCase();
+      const positions = await store
+        .listPositions({ holderAddresses: [address], instanceId: null })
+        .catch(translate);
+      const at = nowSeconds();
+      const rows: Launch2AddressHolding[] = [];
+      for (const position of positions) {
+        const record = await store
+          .getInstance(position.instanceId)
+          .catch(translate);
+        if (record === null || record.chainId !== deps.chainId) continue;
+        let memeRaw: bigint | null;
+        if (record.graduation === null) {
+          const bought = BigInt(position.curveBought);
+          const sold = BigInt(position.curveSold);
+          memeRaw = bought > sold ? bought - sold : 0n;
+        } else {
+          const balances = await walletBalancesOf(record, address);
+          const meme = balances["memeBalance"];
+          memeRaw =
+            balances["balanceStatus"] === "available" &&
+            typeof meme === "string"
+              ? parseLaunch2Amount(meme)
+              : null;
+        }
+        rows.push(
+          Object.freeze({
+            instanceId: record.instanceId,
+            chainId: record.chainId,
+            ticker: record.ticker,
+            name: record.name,
+            logoUrl: record.logoUrl,
+            stage: stageOf(record, at).stage,
+            nftHeld: position.nftHeld,
+            memeRaw,
+            priceE18: publicLastPriceE18(record),
+          }),
+        );
+      }
+      return Object.freeze(rows);
     },
 
     async prepareNftMint(input) {

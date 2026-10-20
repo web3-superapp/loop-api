@@ -231,7 +231,8 @@ export const defaultProfileV2Values: ProfileV2Values = Object.freeze({
 /**
  * Version-0 defaults. Presentation flags fail closed (nothing is shown until
  * the owner opts in) except holdings and trades, which docs/09 B11 makes
- * public by default (Decision 0095); the three social gates default open
+ * public by default (Decision 0095), mining power (Decision 0148), and the
+ * joined-communities list (Decision 0169); the three social gates default open
  * (Decision 0070) so an account that never visited the privacy centre can
  * still be reached.
  */
@@ -241,7 +242,7 @@ export const defaultPrivacyV2Values: PrivacyV2Values = Object.freeze({
   visibility: Object.freeze({
     totalAssets: "everyone",
     miningPower: "everyone",
-    communities: "self",
+    communities: "everyone",
     tradeHistory: "everyone",
   }),
   friendRequests: "enabled",

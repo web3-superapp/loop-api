@@ -722,7 +722,7 @@ describe("LOOP API V2 profile module", () => {
     });
     expect(defaults.statusCode).toBe(200);
     // Decision 0095 (docs/09 B11): holdings and trades default public;
-    // Decision 0148: so does mining power.
+    // Decision 0148: so does mining power; Decision 0169: and communities.
     expect(defaults.json()).toEqual({
       privacy: {
         discoverable: false,
@@ -730,7 +730,7 @@ describe("LOOP API V2 profile module", () => {
         visibility: {
           totalAssets: "everyone",
           miningPower: "everyone",
-          communities: "self",
+          communities: "everyone",
           tradeHistory: "everyone",
         },
         friendRequests: "enabled",

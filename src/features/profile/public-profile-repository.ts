@@ -37,6 +37,8 @@ export interface PublicProfileRecord {
   readonly visibility: {
     readonly totalAssets: PrivacyVisibility;
     readonly tradeHistory: PrivacyVisibility;
+    /** Decision 0169: the joined-communities list (missing row = everyone). */
+    readonly communities: PrivacyVisibility;
   };
 }
 
@@ -86,6 +88,46 @@ export interface ListTradesInput {
   readonly before?: TradeCursorPosition | undefined;
 }
 
+/**
+ * Decision 0169: a trade row with its merge time (microseconds since the
+ * epoch): the block time, else the indexer's observation time.
+ */
+export type TimedTradeRow = TradeRow & { readonly atMicros: string };
+
+/** Decision 0169: the merged (time-ordered) cursor position. */
+export interface TradeTimeCursorPosition {
+  readonly atMicros: string;
+  readonly blockNumber: string;
+  readonly logIndex: number;
+  readonly source: "erc20" | "launch2";
+  readonly transactionHash: string;
+}
+
+export interface ListTradesByTimeInput {
+  readonly chainId: string;
+  readonly address: string;
+  readonly limit: number;
+  readonly before?: TradeTimeCursorPosition | undefined;
+}
+
+/** Decision 0169: one community the profile owner belongs to. */
+export interface ProfileCommunityRecord {
+  readonly communityId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly logoRef: string | null;
+  readonly memberCount: number;
+  readonly verificationStatus: "verified" | "unverified";
+  readonly joinedAt: string;
+  /** `joined_at` in microseconds (the cursor key; ISO keeps ms only). */
+  readonly joinedAtMicros: string;
+}
+
+export interface ProfileCommunityCursorPosition {
+  readonly joinedAtMicros: string;
+  readonly communityId: string;
+}
+
 export interface RemoveFriendInput {
   readonly ownerUserId: string;
   readonly targetPublicProfileId: string;
@@ -119,6 +161,26 @@ export interface PublicProfileRepository {
   hasTransferCheckpoint(chainId: string): Promise<boolean>;
   listTrades(input: ListTradesInput): Promise<{
     readonly items: readonly TradeRow[];
+    readonly hasMore: boolean;
+  }>;
+  /**
+   * Decision 0169: the same rows as `listTrades`, newest first by
+   * (time, block, log, hash) — the order merged with launch2 rows.
+   */
+  listTradesByTime(input: ListTradesByTimeInput): Promise<{
+    readonly items: readonly TimedTradeRow[];
+    readonly hasMore: boolean;
+  }>;
+  /**
+   * Decision 0169: the owner's current (non-banned) memberships of verified
+   * communities — the set `counts.communities` counts — newest join first.
+   */
+  listProfileCommunities(input: {
+    readonly ownerUserId: string;
+    readonly limit: number;
+    readonly before?: ProfileCommunityCursorPosition | undefined;
+  }): Promise<{
+    readonly items: readonly ProfileCommunityRecord[];
     readonly hasMore: boolean;
   }>;
   removeFriend(input: RemoveFriendInput): Promise<{
@@ -167,6 +229,8 @@ export function createUnavailablePublicProfileRepository(): PublicProfileReposit
     getActiveWallet: unavailable,
     hasTransferCheckpoint: unavailable,
     listTrades: unavailable,
+    listTradesByTime: unavailable,
+    listProfileCommunities: unavailable,
     removeFriend: unavailable,
     listVerifiedCommunitiesByIds: unavailable,
   });

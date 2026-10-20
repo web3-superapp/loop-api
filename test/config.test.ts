@@ -759,6 +759,25 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses PROFILE_LAUNCH2_EMIT as off|on, default off, and refuses anything else (Decision 0169)", () => {
+    expect(loadConfig(validEnvironment()).profileLaunch2Emit).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["PROFILE_LAUNCH2_EMIT"] = value;
+      expect(loadConfig(environment).profileLaunch2Emit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["PROFILE_LAUNCH2_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /PROFILE_LAUNCH2_EMIT/,
+      );
+    }
+  });
+
   it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
     expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
       enabled: false,

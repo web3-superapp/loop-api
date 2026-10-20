@@ -77,7 +77,11 @@ function record(
       blocked: false,
       blockedBy: false,
     },
-    visibility: { totalAssets: "everyone", tradeHistory: "everyone" },
+    visibility: {
+      totalAssets: "everyone",
+      tradeHistory: "everyone",
+      communities: "everyone",
+    },
     ...overrides,
   };
 }
@@ -233,6 +237,12 @@ function fakes() {
         hasMore: start + input.limit < trades.length,
       });
     }),
+    listTradesByTime: vi.fn<PublicProfileRepository["listTradesByTime"]>(() =>
+      Promise.reject(new Error("PROFILE_LAUNCH2_EMIT is off")),
+    ),
+    listProfileCommunities: vi.fn<
+      PublicProfileRepository["listProfileCommunities"]
+    >(() => Promise.resolve({ items: [], hasMore: false })),
     removeFriend: vi.fn<PublicProfileRepository["removeFriend"]>(() =>
       Promise.resolve({ publicProfileId: targetProfileId, removed: true }),
     ),
@@ -491,7 +501,13 @@ describe("LOOP API V2 public profiles (Decision 0095)", () => {
   it("reports hidden, unbound, unreadable, and uncomposed holdings without a zero", async () => {
     const hidden = fakes();
     hidden.repository.findProfile.mockResolvedValue(
-      record({ visibility: { totalAssets: "self", tradeHistory: "self" } }),
+      record({
+        visibility: {
+          totalAssets: "self",
+          tradeHistory: "self",
+          communities: "self",
+        },
+      }),
     );
     const hiddenApp = await createApp(hidden);
     for (const path of ["holdings", "trades"]) {
@@ -513,7 +529,11 @@ describe("LOOP API V2 public profiles (Decision 0095)", () => {
     self.repository.findProfile.mockResolvedValue(
       record({
         targetUserId: viewerId,
-        visibility: { totalAssets: "self", tradeHistory: "self" },
+        visibility: {
+          totalAssets: "self",
+          tradeHistory: "self",
+          communities: "self",
+        },
       }),
     );
     const selfApp = await createApp(self);

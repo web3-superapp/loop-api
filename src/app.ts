@@ -1930,6 +1930,26 @@ export async function buildApp(
       recommendedCommunityIds: config.recommendedCommunityIds,
       recommendedCommunityIdsOverride: () =>
         adminSettingsReader.recommendedCommunityIds(),
+      // Decision 0169: PROFILE_LAUNCH2_EMIT off (default) keeps holdings and
+      // trades byte-identical; on merges the owner's Launch-chain launch2
+      // holdings / activity (read model + graduated MEME balances).
+      launch2: config.profileLaunch2Emit
+        ? Object.freeze({
+            chainId: config.launchChain.chainId,
+            activity: database.walletActivityMerge ?? null,
+            // launch2Service is composed further down; only called per request.
+            holdings: Object.freeze({
+              listAddressHoldings: (input: { readonly address: string }) =>
+                launch2Service.listAddressHoldings(input),
+            }),
+            readHead: (): Promise<bigint | null> =>
+              (launchChainReadClient ?? bscReadClient).getHead().then(
+                (head) => head.blockNumber,
+                () => null,
+              ),
+          })
+        : null,
+      logger: app.log,
     });
   const tokenLogoProxyService = createTokenLogoProxyService({
     cache: database.tokenLogoCache ?? null,

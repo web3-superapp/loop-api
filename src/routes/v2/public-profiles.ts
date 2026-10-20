@@ -12,9 +12,22 @@ import {
   isLoopId,
   loopIdPatternSource,
 } from "../../features/identity/loop-id.js";
+import { launch2Stages } from "../../features/launch2/launch2-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
+import { chainIdPatternSource } from "../../features/chain/chain-contract.js";
+import { profileLaunch2HoldingKinds } from "../../features/profile/profile-launch2.js";
 import { friendshipStates } from "../../features/profile/public-profile-repository.js";
-import { profileTradeLimits } from "../../features/profile/public-profile-service.js";
+import {
+  profileCommunitiesHiddenReasonCode,
+  profileCommunityLimits,
+  profileTradeLimits,
+} from "../../features/profile/public-profile-service.js";
+import {
+  blockNumberSchema,
+  launch2DecimalSchema,
+  unavailableSchema,
+  walletActivityLaunch2ItemSchema,
+} from "./chain-schemas.js";
 import {
   assertNoBodyOrQueryV2,
   assertNoBodyV2,
@@ -145,6 +158,116 @@ const profileResourceSchema = {
   },
 } as const;
 
+/**
+ * Decision 0169: the optional `launch2` block (the Decision 0167 shapes),
+ * sent only with PROFILE_LAUNCH2_EMIT=on.
+ */
+function launch2BlockSchema(reasons: string) {
+  return {
+    description: `Decision 0169: OPTIONAL key — present only with PROFILE_LAUNCH2_EMIT=on (default off), and only once the owner's active wallet is known (absent when hidden / not bound / cursor not configured). available = the owner's launch2 rows of chainId are merged (indexerBlockNumber = the launch2_event lane checkpoint, headBlockNumber = the Launch chain head or null); unavailable = none are (${reasons}); the primary-chain rows stand.`,
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "status",
+          "chainId",
+          "indexerBlockNumber",
+          "headBlockNumber",
+        ],
+        properties: {
+          status: { type: "string", const: "available" },
+          chainId: { type: "string", pattern: chainIdPatternSource },
+          indexerBlockNumber: blockNumberSchema,
+          headBlockNumber: { anyOf: [blockNumberSchema, { type: "null" }] },
+        },
+      },
+      unavailableSchema,
+    ],
+  } as const;
+}
+
+const holdingItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["assetId", "symbol", "name", "logoUrl", "balance", "usdValue"],
+  properties: {
+    assetId: { type: "string", minLength: 1, maxLength: 128 },
+    symbol: { type: "string", minLength: 1, maxLength: 32 },
+    name: { type: "string", minLength: 1, maxLength: 128 },
+    logoUrl: {
+      anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+    },
+    balance: decimalString,
+    usdValue: nullableDecimal,
+  },
+} as const;
+
+/**
+ * Decision 0169: one Launch-chain (MEME v2) holding of the owner. Sent only
+ * with PROFILE_LAUNCH2_EMIT=on; a client tells it from a primary-chain row
+ * by the `kind` key. Two shapes with the same ten keys: a MEME row always
+ * has `amountMeme` (and `nftCount` null), an NFT row always has `nftCount`
+ * (and `amountMeme` / `valueUsd1` null).
+ */
+function launch2HoldingItemSchema(kind: "meme" | "nft") {
+  const meme = kind === "meme";
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "kind",
+      "chainId",
+      "instanceId",
+      "ticker",
+      "name",
+      "logoUrl",
+      "amountMeme",
+      "nftCount",
+      "stage",
+      "valueUsd1",
+    ],
+    properties: {
+      kind: {
+        type: "string",
+        const: meme
+          ? profileLaunch2HoldingKinds[0]
+          : profileLaunch2HoldingKinds[1],
+        description: meme
+          ? "MEME of the instance held: the live balance once graduated (an unreadable balance emits no row, never a guessed zero), else curve bought − sold."
+          : "The instance's NFTs held (indexed NFT transfers).",
+      },
+      chainId: {
+        type: "string",
+        pattern: chainIdPatternSource,
+        description: "CAIP-2 of the Launch chain (eip155:97, or eip155:56).",
+      },
+      instanceId: { type: "string", pattern: opaqueIdPatternSource },
+      ticker: { type: "string", minLength: 1, maxLength: 80 },
+      name: { type: "string", minLength: 1, maxLength: 64 },
+      logoUrl: {
+        anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }],
+      },
+      amountMeme: meme
+        ? {
+            ...launch2DecimalSchema,
+            description:
+              "MEME held, > 0 (18 decimals, human decimal string as /v2/launch2/*).",
+          }
+        : { type: "null" },
+      nftCount: meme ? { type: "null" } : { type: "integer", minimum: 1 },
+      stage: { type: "string", enum: [...launch2Stages] },
+      valueUsd1: meme
+        ? {
+            anyOf: [launch2DecimalSchema, { type: "null" }],
+            description:
+              "amountMeme × the indexed last price (pool once graduated, else curve) in USD1; null without a price. Not added to totalUsd.",
+          }
+        : { type: "null" },
+    },
+  } as const;
+}
+
 const holdingsResourceSchema = {
   type: "object",
   additionalProperties: false,
@@ -167,29 +290,19 @@ const holdingsResourceSchema = {
     items: {
       type: "array",
       items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "assetId",
-          "symbol",
-          "name",
-          "logoUrl",
-          "balance",
-          "usdValue",
+        anyOf: [
+          holdingItemSchema,
+          launch2HoldingItemSchema("meme"),
+          launch2HoldingItemSchema("nft"),
         ],
-        properties: {
-          assetId: { type: "string", minLength: 1, maxLength: 128 },
-          symbol: { type: "string", minLength: 1, maxLength: 32 },
-          name: { type: "string", minLength: 1, maxLength: 128 },
-          logoUrl: {
-            anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
-          },
-          balance: decimalString,
-          usdValue: nullableDecimal,
-        },
+        description:
+          "Primary-chain rows only by default. Decision 0169: with PROFILE_LAUNCH2_EMIT=on (default off; build >= 34 clients) the owner's Launch-chain rows (they carry `kind`) follow them; status / reasonCode / totalUsd / observedAt keep describing the primary chain only.",
       },
     },
     observedAt: nullableDateTime,
+    launch2: launch2BlockSchema(
+      "LAUNCH2_INDEXER_NOT_STARTED, LAUNCH2_HOLDINGS_READ_FAILED, LAUNCH2_REPOSITORY_UNAVAILABLE",
+    ),
     contractVersion: { type: "string", const: v2ContractVersion },
   },
 } as const;
@@ -205,37 +318,44 @@ const tradesResourceSchema = {
       type: "array",
       maxItems: profileTradeLimits.maximum,
       items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "eventId",
-          "kind",
-          "assetId",
-          "symbol",
-          "amount",
-          "usdValue",
-          "blockTimestamp",
-          "blockNumber",
-          "txHash",
+        anyOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "eventId",
+              "kind",
+              "assetId",
+              "symbol",
+              "amount",
+              "usdValue",
+              "blockTimestamp",
+              "blockNumber",
+              "txHash",
+            ],
+            properties: {
+              eventId: { type: "string", pattern: opaqueIdPatternSource },
+              kind: {
+                type: "string",
+                enum: ["buy", "sell", "transfer_in", "transfer_out"],
+              },
+              assetId: { type: "string", minLength: 1, maxLength: 128 },
+              symbol: { type: "string", minLength: 1, maxLength: 32 },
+              amount: decimalString,
+              usdValue: nullableDecimal,
+              blockTimestamp: {
+                ...nullableDateTime,
+                description:
+                  "Block time; null for a transfer whose block has no indexed pool event.",
+              },
+              blockNumber: { type: "string", pattern: "^[0-9]{1,20}$" },
+              txHash: { type: "string", pattern: "^0x[0-9a-f]{64}$" },
+            },
+          },
+          walletActivityLaunch2ItemSchema,
         ],
-        properties: {
-          eventId: { type: "string", pattern: opaqueIdPatternSource },
-          kind: {
-            type: "string",
-            enum: ["buy", "sell", "transfer_in", "transfer_out"],
-          },
-          assetId: { type: "string", minLength: 1, maxLength: 128 },
-          symbol: { type: "string", minLength: 1, maxLength: 32 },
-          amount: decimalString,
-          usdValue: nullableDecimal,
-          blockTimestamp: {
-            ...nullableDateTime,
-            description:
-              "Block time; null for a transfer whose block has no indexed pool event.",
-          },
-          blockNumber: { type: "string", pattern: "^[0-9]{1,20}$" },
-          txHash: { type: "string", pattern: "^0x[0-9a-f]{64}$" },
-        },
+        description:
+          "Primary-chain rows only by default. Decision 0169: with PROFILE_LAUNCH2_EMIT=on (default off; build >= 34 clients) the owner's Launch-chain launch2 rows (the Decision 0167 row: they carry `chainId` / `instanceId` / `occurredAt`; their `kind` values start with `launch2_`) are mixed in, newest first by (time, blockNumber, logIndex); a primary row's time is its blockTimestamp, else its indexer observation time. The cursor of the merged list is not interchangeable with the unmerged one (400 INVALID_REQUEST either way).",
       },
     },
     nextCursor: {
@@ -244,7 +364,101 @@ const tradesResourceSchema = {
         { type: "null" },
       ],
     },
+    launch2: launch2BlockSchema(
+      "LAUNCH2_INDEXER_NOT_STARTED, LAUNCH2_ACTIVITY_READ_FAILED, LAUNCH2_REPOSITORY_UNAVAILABLE",
+    ),
     contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/** Decision 0169: the communities the profile owner joined. */
+const communitiesResourceSchema = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "items", "nextCursor", "contractVersion"],
+      properties: {
+        status: { type: "string", const: "available" },
+        items: {
+          type: "array",
+          maxItems: profileCommunityLimits.maximum,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "communityId",
+              "name",
+              "slug",
+              "logoRef",
+              "memberCount",
+              "verificationStatus",
+              "joinedAt",
+            ],
+            properties: {
+              communityId: { type: "string", pattern: opaqueIdPatternSource },
+              name: { type: "string", minLength: 1, maxLength: 40 },
+              slug: { type: "string", pattern: "^[a-z0-9-]{3,32}$" },
+              logoRef: {
+                anyOf: [
+                  {
+                    type: "string",
+                    pattern:
+                      "^(avatar:preset/community-(0[1-9]|1[0-2])|logo:media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+                  },
+                  { type: "null" },
+                ],
+                description:
+                  "`avatar:preset/community-NN` or `logo:media/{mediaId}` (rendered as for the community resources); anything else is null.",
+              },
+              memberCount: { type: "integer", minimum: 0 },
+              verificationStatus: {
+                type: "string",
+                enum: ["verified", "unverified"],
+                description:
+                  "Only verified communities are listed today (the set counts.communities counts); `unverified` is reserved.",
+              },
+              joinedAt: { type: "string", format: "date-time" },
+            },
+          },
+        },
+        nextCursor: {
+          anyOf: [
+            { type: "string", minLength: 1, maxLength: 1536 },
+            { type: "null" },
+          ],
+        },
+        contractVersion: { type: "string", const: v2ContractVersion },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["status", "reasonCode", "contractVersion"],
+      properties: {
+        status: { type: "string", const: "unavailable" },
+        reasonCode: {
+          type: "string",
+          const: profileCommunitiesHiddenReasonCode,
+        },
+        contractVersion: { type: "string", const: v2ContractVersion },
+      },
+    },
+  ],
+} as const;
+
+const communitiesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: { type: "string", minLength: 1, maxLength: 1536 },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: profileCommunityLimits.maximum,
+      description:
+        "Page size, 1-50. Absent: 20 on the first page; with a cursor, the size of the page that issued it.",
+    },
   },
 } as const;
 
@@ -426,7 +640,7 @@ export function registerV2PublicProfileRoutes(
         operationId: "getV2PublicProfileHoldings",
         summary: "Get a public profile's token holdings",
         description:
-          "The owner's selected active wallet read on chain through the wallet balance service (one block, registry assets, zero rows omitted). `hidden` when the owner's privacy `visibility.totalAssets` is `self` (the owner always sees their own). `unavailable` with a reasonCode when no wallet is bound or the chain cannot be read; never a zero. No address is published.",
+          "The owner's selected active wallet read on chain through the wallet balance service (one block, registry assets, zero rows omitted). `hidden` when the owner's privacy `visibility.totalAssets` is `self` (the owner always sees their own). `unavailable` with a reasonCode when no wallet is bound or the chain cannot be read; never a zero. No address is published. Decision 0169: with PROFILE_LAUNCH2_EMIT=on (default off) the owner's MEME v2 holdings on the Launch chain (launch2_meme / launch2_nft rows, see items) follow the primary rows and the optional `launch2` block reports that leg; status / totalUsd stay primary-chain only, so items may hold launch2 rows while status is `unavailable`.",
         tags: ["social"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -459,7 +673,7 @@ export function registerV2PublicProfileRoutes(
         operationId: "listV2PublicProfileTrades",
         summary: "List a public profile's trades and transfers",
         description:
-          "Indexed swaps and registry-asset transfers of the owner's selected active wallet, newest first (Decision 0095 §3 kind rules: a swap whose recipient or sender is the wallet is buy/sell of the non-quote token; other transfers are transfer_in/transfer_out). `hidden` when `visibility.tradeHistory` is `self`. Opaque cursor bound to the viewer and the profile.",
+          "Indexed swaps and registry-asset transfers of the owner's selected active wallet, newest first (Decision 0095 §3 kind rules: a swap whose recipient or sender is the wallet is buy/sell of the non-quote token; other transfers are transfer_in/transfer_out). `hidden` when `visibility.tradeHistory` is `self`. Opaque cursor bound to the viewer and the profile. Decision 0169: with PROFILE_LAUNCH2_EMIT=on (default off) the owner's MEME v2 activity on the Launch chain (the Decision 0167 launch2 rows) is mixed in under a merged cursor, with the optional `launch2` block; status / reasonCode stay primary-chain only, so items may hold launch2 rows while status is `unavailable` (BSC_INDEXER_NOT_STARTED).",
         tags: ["social"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -480,6 +694,44 @@ export function registerV2PublicProfileRoutes(
         readonly limit?: unknown;
       };
       const resource = await service.getTrades({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        publicProfileId,
+        cursor: query.cursor,
+        limit: query.limit,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/profiles/:publicProfileId/communities",
+    {
+      schema: {
+        operationId: "listV2PublicProfileCommunities",
+        summary: "List the communities a public profile joined",
+        description:
+          "Decision 0169. Page: first request `limit` (default 20), later requests only `cursor` (keeps the first page's size). The owner's current memberships (active or muted; banned excluded; owner role included) of verified communities — the set `counts.communities` counts; a rejected (taken-down) or pending community is not listed — newest join first (joinedAt, then communityId). `unavailable` with reasonCode PROFILE_COMMUNITIES_HIDDEN when the owner's privacy `visibility.communities` is not `everyone` (default `everyone` since Decision 0169; the owner always sees their own). Not found / not activated / blocked-by-the-target is 404 PROFILE_NOT_FOUND as for the profile. limit 1-50 (default 20); opaque cursor bound to the viewer and the profile (a bad or foreign cursor is 400 INVALID_REQUEST).",
+        tags: ["social"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: publicProfileIdParamsSchema,
+        querystring: communitiesQuerySchema,
+        response: { 200: communitiesResourceSchema, ...profileReadErrors },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const { publicProfileId } = request.params as {
+        readonly publicProfileId: string;
+      };
+      const query = request.query as {
+        readonly cursor?: unknown;
+        readonly limit?: unknown;
+      };
+      const resource = await service.getCommunities({
         principal: requireAuthenticatedLoopPrincipal(request),
         publicProfileId,
         cursor: query.cursor,

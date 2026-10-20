@@ -182,8 +182,9 @@ body：
 ## `GET /v2/profile/privacy`
 
 无 body/query。无行时返回 version 0 的默认值（不落库）。展示类开关 fail-closed
-（`discoverable=false`、`miningPower`/`communities` 为 `self`），但
-**`totalAssets` 与 `tradeHistory` 默认 `everyone`**（决策 0095，docs/09 B11
+（`discoverable=false`），但 **`totalAssets` 与 `tradeHistory` 默认 `everyone`**，
+`miningPower` 自决策 0148 起、`communities` 自决策 0169（S260，他人主页「社区」
+tab 开放）起也默认 `everyone`；已有隐私行里显式保存的值不变（决策 0095，docs/09 B11
 「主页持仓默认公开可关」；迁移 000046 已把存量 `self` 翻成 `everyone`）；
 三个社交开关**默认开启**（决策 0070，用户 2026-09-23 裁决）。隐私页
 「公开持仓与交易」单开关 = 同时写 `totalAssets` 与 `tradeHistory`
@@ -196,8 +197,8 @@ body：
     "anonymousMode": false,
     "visibility": {
       "totalAssets": "everyone",
-      "miningPower": "self",
-      "communities": "self",
+      "miningPower": "everyone",
+      "communities": "everyone",
       "tradeHistory": "everyone"
     },
     "friendRequests": "enabled",

@@ -9,15 +9,25 @@ import {
   PublicProfileIdempotencyConflictError,
   PublicProfileRepositoryUnavailableError,
   PublicProfileTargetNotFoundError,
+  type ListTradesByTimeInput,
   type ListTradesInput,
+  type ProfileCommunityCursorPosition,
+  type ProfileCommunityRecord,
   type ProfileWalletRecord,
   type PublicProfileLookup,
   type PublicProfileRecord,
   type PublicProfileRepository,
   type RecommendedCommunityRecord,
   type RemoveFriendInput,
+  type TimedTradeRow,
   type TradeRow,
 } from "../features/profile/public-profile-repository.js";
+import {
+  afterCursor,
+  cursorAt,
+  cursorValues,
+  micros,
+} from "./wallet-activity-merge-repository.js";
 
 /**
  * PostgreSQL public profile reads, friend removal, and recommended
@@ -61,6 +71,7 @@ const profileRowSchema = z
     blocked_by: z.boolean(),
     total_assets_visibility: visibilitySchema,
     trade_history_visibility: visibilitySchema,
+    communities_visibility: visibilitySchema,
   })
   .strict();
 
@@ -99,6 +110,34 @@ const communityRowSchema = z
   })
   .strict();
 
+const profileCommunityRowSchema = z
+  .object({
+    community_id: uuidSchema,
+    name: z.string().min(1),
+    slug: z.string().min(1),
+    logo_ref: z.string().min(1).nullable(),
+    verification_status: z.enum(["pending", "verified", "rejected"]),
+    member_count: countSchema,
+    joined_at: z.date(),
+    joined_at_micros: unsignedIntegerSchema,
+  })
+  .strict();
+
+function toProfileCommunity(row: unknown): ProfileCommunityRecord {
+  const parsed = profileCommunityRowSchema.parse(row);
+  return Object.freeze({
+    communityId: parsed.community_id,
+    name: parsed.name,
+    slug: parsed.slug,
+    logoRef: parsed.logo_ref,
+    memberCount: parsed.member_count,
+    verificationStatus:
+      parsed.verification_status === "verified" ? "verified" : "unverified",
+    joinedAt: parsed.joined_at.toISOString(),
+    joinedAtMicros: parsed.joined_at_micros,
+  });
+}
+
 function toProfileRecord(row: unknown): PublicProfileRecord {
   const parsed = profileRowSchema.parse(row);
   return Object.freeze({
@@ -130,6 +169,7 @@ function toProfileRecord(row: unknown): PublicProfileRecord {
     visibility: Object.freeze({
       totalAssets: parsed.total_assets_visibility,
       tradeHistory: parsed.trade_history_visibility,
+      communities: parsed.communities_visibility,
     }),
   });
 }
@@ -175,6 +215,168 @@ function toTradeRow(row: unknown): TradeRow {
     rawValue: parsed.raw_value,
   });
 }
+
+function toTimedTradeRow(row: Record<string, unknown>): TimedTradeRow {
+  const { at_micros: atMicros, ...rest } = row;
+  const parsed = unsignedIntegerSchema.parse(atMicros);
+  return Object.freeze({ ...toTradeRow(rest), atMicros: parsed });
+}
+
+/**
+ * Decision 0169: the wallet's swaps and transfers (the `listTrades` rule)
+ * with their merge time — the block time, else the observation time — in
+ * the Decision 0167 merged order. `$1` chain, `$2` address, `$3..$7` the
+ * cursor (`afterCursor`, first = 3), `$8` limit + 1.
+ */
+const tradesByTimeSql = `
+  with swaps as (
+    select
+      event.transaction_hash,
+      event.log_index,
+      event.block_number,
+      event.block_timestamp,
+      event.observed_at,
+      pool.token0_asset_id,
+      pool.token1_asset_id,
+      event.amount0,
+      event.amount1
+    from public.indexed_pool_events as event
+    join public.pools as pool on pool.pool_id = event.pool_id
+    where event.chain_id = $1
+      and event.event_kind = 'swap'
+      and not event.removed
+      and event.payload ->> 'recipient' = $2
+    union
+    select
+      event.transaction_hash,
+      event.log_index,
+      event.block_number,
+      event.block_timestamp,
+      event.observed_at,
+      pool.token0_asset_id,
+      pool.token1_asset_id,
+      event.amount0,
+      event.amount1
+    from public.indexed_pool_events as event
+    join public.pools as pool on pool.pool_id = event.pool_id
+    where event.chain_id = $1
+      and event.event_kind = 'swap'
+      and not event.removed
+      and event.payload ->> 'sender' = $2
+  ),
+  merged as (
+    select
+      'swap'::text as source,
+      swaps.transaction_hash,
+      swaps.log_index,
+      swaps.block_number,
+      swaps.block_timestamp,
+      coalesce(swaps.block_timestamp, swaps.observed_at) as at,
+      swaps.token0_asset_id,
+      swaps.token1_asset_id,
+      swaps.amount0::text as amount0,
+      swaps.amount1::text as amount1,
+      null::text as asset_id,
+      null::text as direction,
+      null::text as raw_value
+    from swaps
+    union all
+    select
+      'transfer'::text as source,
+      timed.transaction_hash,
+      timed.log_index,
+      timed.block_number,
+      timed.block_timestamp,
+      coalesce(timed.block_timestamp, timed.observed_at),
+      null::text,
+      null::text,
+      null::text,
+      null::text,
+      timed.asset_id,
+      timed.direction,
+      timed.raw_value
+    from (
+      select
+        transfer.transaction_hash,
+        transfer.log_index,
+        transfer.block_number,
+        transfer.observed_at,
+        (
+          select min(block_event.block_timestamp)
+          from public.indexed_pool_events as block_event
+          where block_event.chain_id = transfer.chain_id
+            and block_event.block_number = transfer.block_number
+        ) as block_timestamp,
+        transfer.asset_id,
+        case when transfer.to_address = $2 then 'in' else 'out' end
+          as direction,
+        transfer.raw_value::text as raw_value
+      from public.indexed_transfers as transfer
+      where transfer.chain_id = $1
+        and not transfer.removed
+        and (transfer.from_address = $2 or transfer.to_address = $2)
+        and transfer.from_address <> transfer.to_address
+        and not exists (
+          select 1 from swaps
+          where swaps.transaction_hash = transfer.transaction_hash
+        )
+    ) as timed
+  )
+  select
+    merged.source,
+    merged.transaction_hash,
+    merged.log_index,
+    merged.block_number::text as block_number,
+    merged.block_timestamp,
+    merged.token0_asset_id,
+    merged.token1_asset_id,
+    merged.amount0,
+    merged.amount1,
+    merged.asset_id,
+    merged.direction,
+    merged.raw_value,
+    ${micros("merged.at")} as at_micros
+  from merged
+  where ${afterCursor({
+    at: "merged.at",
+    block: "merged.block_number",
+    log: "merged.log_index",
+    source: "erc20",
+    hash: "merged.transaction_hash",
+    first: 3,
+  })}
+  order by merged.at desc, merged.block_number desc, merged.log_index desc,
+    merged.transaction_hash collate "C" desc
+  limit $8
+`;
+
+/**
+ * Decision 0169: the owner's current memberships (any non-banned row,
+ * owner role included) of verified communities, newest join first. `$1`
+ * owner, `$2` limit + 1, `$3` / `$4` the cursor (null on the first page).
+ */
+const profileCommunitiesSql = `
+  select
+    community.community_id,
+    community.name,
+    community.slug,
+    community.logo_ref,
+    community.verification_status,
+    community.member_count,
+    membership.joined_at,
+    ${micros("membership.joined_at")} as joined_at_micros
+  from public.community_memberships as membership
+  join public.communities as community
+    on community.community_id = membership.community_id
+  where membership.owner_user_id = $1
+    and membership.status <> 'banned'
+    and community.verification_status = 'verified'
+    and ($3::text is null
+      or (membership.joined_at, community.community_id)
+        < (${cursorAt("$3")}, $4::uuid))
+  order by membership.joined_at desc, community.community_id desc
+  limit $2
+`;
 
 const profileSelect = `
   select
@@ -227,7 +429,9 @@ const profileSelect = `
     coalesce(privacy.total_assets_visibility, 'everyone')
       as total_assets_visibility,
     coalesce(privacy.trade_history_visibility, 'everyone')
-      as trade_history_visibility
+      as trade_history_visibility,
+    coalesce(privacy.communities_visibility, 'everyone')
+      as communities_visibility
   from public.user_profiles as profile
   join public.loop_users as account on account.id = profile.owner_user_id
   left join public.privacy_preferences_v2 as privacy
@@ -460,6 +664,69 @@ export function createPostgresPublicProfileRepository(
           values,
         });
         const items = result.rows.slice(0, limit).map(toTradeRow);
+        return Object.freeze({
+          items: Object.freeze(items),
+          hasMore: result.rows.length > limit,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async listTradesByTime(input: ListTradesByTimeInput): Promise<{
+      readonly items: readonly TimedTradeRow[];
+      readonly hasMore: boolean;
+    }> {
+      try {
+        const address = addressSchema.parse(input.address);
+        const limit = z.number().int().min(1).max(50).parse(input.limit);
+        if (input.before !== undefined) {
+          unsignedIntegerSchema.parse(input.before.atMicros);
+          unsignedIntegerSchema.parse(input.before.blockNumber);
+          z.number().int().min(0).parse(input.before.logIndex);
+        }
+        const result = await pool.query<Record<string, unknown>>({
+          text: tradesByTimeSql,
+          values: [
+            input.chainId,
+            address,
+            ...cursorValues(input.before),
+            limit + 1,
+          ],
+        });
+        const items = result.rows.slice(0, limit).map(toTimedTradeRow);
+        return Object.freeze({
+          items: Object.freeze(items),
+          hasMore: result.rows.length > limit,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async listProfileCommunities(input: {
+      readonly ownerUserId: string;
+      readonly limit: number;
+      readonly before?: ProfileCommunityCursorPosition | undefined;
+    }): Promise<{
+      readonly items: readonly ProfileCommunityRecord[];
+      readonly hasMore: boolean;
+    }> {
+      try {
+        const ownerUserId = uuidSchema.parse(input.ownerUserId);
+        const limit = z.number().int().min(1).max(50).parse(input.limit);
+        const before =
+          input.before === undefined
+            ? [null, null]
+            : [
+                unsignedIntegerSchema.parse(input.before.joinedAtMicros),
+                uuidSchema.parse(input.before.communityId),
+              ];
+        const result = await pool.query<Record<string, unknown>>({
+          text: profileCommunitiesSql,
+          values: [ownerUserId, limit + 1, ...before],
+        });
+        const items = result.rows.slice(0, limit).map(toProfileCommunity);
         return Object.freeze({
           items: Object.freeze(items),
           hasMore: result.rows.length > limit,

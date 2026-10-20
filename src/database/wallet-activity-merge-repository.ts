@@ -69,18 +69,18 @@ function kindOf(value: unknown): WalletLaunch2ActivityKind {
 }
 
 /** `at` in microseconds since the epoch (exact: `extract` is numeric). */
-const micros = (column: string): string =>
+export const micros = (column: string): string =>
   `(extract(epoch from ${column}) * 1000000)::bigint::text`;
 
 /** The cursor timestamp rebuilt from microseconds without float rounding. */
-const cursorAt = (param: string): string =>
+export const cursorAt = (param: string): string =>
   `(timestamptz 'epoch' + ${param}::bigint * interval '1 microsecond')`;
 
 /**
  * `(at, block, log, source, hash) < cursor`, the strict "older than" of the
  * descending key. `$cursor` params are null on the first page.
  */
-function afterCursor(input: {
+export function afterCursor(input: {
   readonly at: string;
   readonly block: string;
   readonly log: string;
@@ -96,7 +96,7 @@ function afterCursor(input: {
       ${p(3)}::text collate "C", ${p(4)}::text collate "C"))`;
 }
 
-function cursorValues(
+export function cursorValues(
   before: WalletActivitySortKey | undefined,
 ): readonly (string | number | null)[] {
   return before === undefined
