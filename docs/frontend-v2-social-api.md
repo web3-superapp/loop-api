@@ -174,6 +174,108 @@ X-Loop-Client-Version: 1.0.0
 - 三态同上：`hidden`（对方关闭了交易公开）；`unavailable` 的 `reasonCode` ∈
   `WALLET_NOT_BOUND`、`BSC_INDEXER_NOT_STARTED`、`V2_CURSOR_NOT_CONFIGURED`。
 
+## S260（决策 0169）：他人主页社区列表与 Launch 链持仓 / 交易
+
+Base URL、headers、`404 PROFILE_NOT_FOUND`（不存在 / 未激活 / 对方拉黑你）规则同上；
+三个接口都是 Bearer 读，带 `Idempotency-Key` → `400 INVALID_REQUEST`。
+
+### `GET /v2/profiles/{publicProfileId}/communities?cursor&limit`（新路径，不受开关限制）
+
+- 首页 `limit` 1–50（不传 = 20）；后续页**只带** `cursor`（服务端沿用首页的页大小；
+  同时传 `limit` 则以 `limit` 为准）。`cursor` 与查看者、目标、本路由绑定，篡改 /
+  跨路由 → `400 INVALID_REQUEST`。
+- 列表 = 对方当前未被封禁（`active` / `muted`）、且社区为 verified 的成员关系（与
+  `counts.communities` 同一集合；pending 与被驳回 / 下架的社区不列），按 `joinedAt`
+  新到旧（并列按 `communityId`）。查看自己也走这里。
+
+可见：
+
+```json
+{
+  "status": "available",
+  "items": [
+    {
+      "communityId": "aaaaaaaa-0000-4000-8000-000000000003",
+      "name": "Wind Club",
+      "slug": "wind-club",
+      "logoRef": "avatar:preset/community-03",
+      "memberCount": 42,
+      "verificationStatus": "verified",
+      "joinedAt": "2026-10-03T00:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "contractVersion": "2.0"
+}
+```
+
+不可见（对方隐私 `visibility.communities` 不是 `everyone`；本人永远可见）：
+
+```json
+{
+  "status": "unavailable",
+  "reasonCode": "PROFILE_COMMUNITIES_HIDDEN",
+  "contractVersion": "2.0"
+}
+```
+
+- `verificationStatus` 只有 `verified` / `unverified`（目前只列 verified）。
+- `logoRef` 只会是 `avatar:preset/community-NN` 或 `logo:media/{mediaId}`（渲染同社区
+  资源），其他一律 `null`。
+- 隐私只有 `self` / `everyone` 两档（库约束 `self|everyone`，无 `friends` 档），
+  好友与否不影响结果。默认值自 0169 起为 `everyone`。
+- 错误码：`400 INVALID_REQUEST`、`401 AUTH_REQUIRED|AUTH_INVALID`、
+  `404 PROFILE_NOT_FOUND`、`409 ACCOUNT_BOOTSTRAP_REQUIRED`、`500 INTERNAL_ERROR`、
+  `503 CAPABILITY_UNAVAILABLE|PROVIDER_DISCONNECTED|REQUEST_TIMEOUT`（无数据库 / 未配
+  游标密钥 = 503，fail closed）。
+
+### `PROFILE_LAUNCH2_EMIT`（`off|on`，默认 `off`）：holdings / trades 合并 Launch 链
+
+`off`：两个接口与 S260 之前**逐字节一致**（快照测试），不读任何 launch2 数据。
+`on`：在 `items` 混入对方活跃钱包在 Launch 链（`eip155:97`，主网 Launch 时
+`eip155:56`）上的 MEME v2 事实，根上多可选键 `launch2`。**只在 build 34（S261 codec）
+成为最低支持版本后再开。**
+
+`launch2` 块（两种形状，同决策 0167；对方隐藏 / 未绑钱包 / 游标未配置时**不出现**）：
+
+```json
+{ "status": "available", "chainId": "eip155:97", "indexerBlockNumber": "52000050", "headBlockNumber": "52000100" }
+{ "status": "unavailable", "reasonCode": "LAUNCH2_INDEXER_NOT_STARTED" }
+```
+
+reasonCode：`LAUNCH2_INDEXER_NOT_STARTED`、`LAUNCH2_REPOSITORY_UNAVAILABLE`、holdings 的
+`LAUNCH2_HOLDINGS_READ_FAILED`、trades 的 `LAUNCH2_ACTIVITY_READ_FAILED`。launch2 腿
+失败只体现在这里，主网行照常返回，不是整页失败。
+
+**holdings**：主网行在前（形状不变），launch2 行在后（按最近活动新到旧，每个实例
+先 MEME 行后 NFT 行），10 个键全部必带：
+
+```json
+{ "kind": "launch2_meme", "chainId": "eip155:97", "instanceId": "…", "ticker": "WIND", "name": "Evening Wind", "logoUrl": "https://…", "amountMeme": "900", "nftCount": null, "stage": "public", "valueUsd1": "9.18" }
+{ "kind": "launch2_nft",  "chainId": "eip155:97", "instanceId": "…", "ticker": "WIND", "name": "Evening Wind", "logoUrl": "https://…", "amountMeme": null, "nftCount": 1, "stage": "public", "valueUsd1": null }
+```
+
+- `launch2_meme`：`amountMeme` 必为非空十进制字符串（> 0；毕业后 = 链上实时余额，
+  毕业前 = 曲线买入 − 卖出；毕业后余额读失败则**不出这一行**，绝不填 0），`nftCount`
+  为 `null`，`valueUsd1` = 数量 × 已索引最新价（毕业后池价，否则曲线价），无价为 `null`。
+- `launch2_nft`：`nftCount` 必为 ≥ 1 的整数，`amountMeme` / `valueUsd1` 为 `null`。
+- `stage` ∈ `upcoming|nft_sale|snapshot_pending|closed_no_holders|priority|public|graduated|paused`。
+- `status` / `reasonCode` / `totalUsd` / `observedAt` **只描述主网**；`totalUsd` 不含
+  launch2 的 USD1 价值。主网 `unavailable` 时 `items` 仍可能有 launch2 行。
+
+**trades**：主网行（带 `eventId`，9 键不变）与 launch2 行（**不带 `eventId`**，决策
+0167 的 14 键：kind / chainId / instanceId / ticker / name / logoUrl / amountMeme /
+amountUsd1 / taxUsd1 / transactionHash / logIndex / blockNumber / occurredAt /
+confirmations）混排，新到旧按 (时间 µs, blockNumber, logIndex, 来源, hash)；主网行
+时间 = `blockTimestamp`，为空时用索引观测时间。launch2 `kind` 七种：
+`launch2_curve_buy|curve_sell|pool_buy|pool_sell|nft_mint|reward_claim|buyback`
+（金额语义见 `docs/frontend-v2-wallet-api.md` 决策 0167 节）。
+
+- 游标换成合并游标：开关切换后旧游标 → `400 INVALID_REQUEST`，按既有规则从第一页重拉。
+- `tradeHistory` 隐私照旧：非本人且为 `self` → `hidden`，不读 launch2。
+- 主网转账车道未起（`BSC_INDEXER_NOT_STARTED`）时 `status: unavailable`，但 launch2
+  行仍会出现在 `items`。
+
 ## `DELETE /v2/friends/{publicProfileId}`
 
 写 header（含 `Idempotency-Key`），无 body/query。

@@ -51,7 +51,7 @@ import { watchlistV2MaximumNameCodePoints } from "../../features/watchlist/watch
  * properties and every amount is a canonical string, never a JSON number.
  */
 
-const blockNumberSchema = {
+export const blockNumberSchema = {
   type: "string",
   pattern: "^(0|[1-9][0-9]{0,19})$",
   description:
@@ -775,7 +775,7 @@ export const walletBalancesResourceSchema = {
 } as const;
 
 /** Decision 0167: a launch2 18-decimal amount (the launch2 route shape). */
-const launch2DecimalSchema = {
+export const launch2DecimalSchema = {
   type: "string",
   pattern: "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
 } as const;
@@ -833,7 +833,7 @@ const walletActivityTransferItemSchema = {
  * chain. Sent only with WALLET_ACTIVITY_LAUNCH2_EMIT=on (default off); a
  * client tells it from a transfer row by the `kind` key.
  */
-const walletActivityLaunch2ItemSchema = {
+export const walletActivityLaunch2ItemSchema = {
   type: "object",
   additionalProperties: false,
   required: [
