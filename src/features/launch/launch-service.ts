@@ -483,7 +483,10 @@ function translate(error: unknown): never {
     throw error;
   }
   if (error instanceof InvalidLaunchRequestError) {
-    throw V2ApiError.invalidRequest();
+    // Decision 0168: a visibility refusal names its reason and field.
+    throw error.textRejection === null
+      ? V2ApiError.invalidRequest()
+      : V2ApiError.fromCode("INVALID_REQUEST", { ...error.textRejection });
   }
   if (error instanceof InvalidV2CursorError) {
     throw V2ApiError.invalidRequest();

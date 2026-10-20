@@ -186,7 +186,10 @@ function projectConfigError(error: unknown): never {
     throw V2ApiError.versionConflict();
   }
   if (error instanceof InvalidHooksLaunchDraftError) {
-    throw V2ApiError.invalidRequest();
+    // Decision 0168: a visibility refusal names its reason and field.
+    throw error.textRejection === null
+      ? V2ApiError.invalidRequest()
+      : V2ApiError.fromCode("INVALID_REQUEST", { ...error.textRejection });
   }
   if (error instanceof HooksLaunchBuybackRecipientFixedError) {
     throw hooksRecipientFixed();

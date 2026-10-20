@@ -2,6 +2,7 @@ import {
   ConfigurationError,
   loadReconciliationWorkerConfig,
 } from "./config.js";
+import { assertLaunchTextUnicodeRuntime } from "./core/runtime/unicode-runtime.js";
 import { createReconciliationWorkerLogger } from "./reconciliation-worker-logger.js";
 import { runReconciliationWorker } from "./worker-runtime.js";
 
@@ -22,6 +23,8 @@ function safeErrorCode(error: unknown): string {
 }
 
 async function main(): Promise<void> {
+  // Decision 0168: refuse to start on Unicode tables older than 14.
+  assertLaunchTextUnicodeRuntime();
   const config = loadReconciliationWorkerConfig(process.env);
   const logger = createReconciliationWorkerLogger({
     level: config.logLevel,

@@ -1,6 +1,7 @@
 import { buildApp } from "./app.js";
 import { ConfigurationError, loadConfig } from "./config.js";
 import { configureOutboundKeepAlive } from "./core/http/outbound-keep-alive.js";
+import { assertLaunchTextUnicodeRuntime } from "./core/runtime/unicode-runtime.js";
 
 function safeErrorCode(error: unknown): string {
   if (
@@ -16,6 +17,8 @@ function safeErrorCode(error: unknown): string {
 }
 
 async function main(): Promise<void> {
+  // Decision 0168: refuse to start on Unicode tables older than 14.
+  assertLaunchTextUnicodeRuntime();
   const config = loadConfig(process.env);
   // Decision 0088: keep Provider connections warm between page loads.
   configureOutboundKeepAlive();

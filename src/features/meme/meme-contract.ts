@@ -2,6 +2,8 @@ import { keccak256, toHex } from "viem";
 
 import { canonicalJson } from "../../core/json/canonical-json.js";
 import {
+  launchTokenTextRejectionReason,
+  type LaunchTokenTextReasonCode,
   normalizeLaunchTokenName,
   normalizeLaunchTokenTicker,
 } from "../launch/launch-token-text.js";
@@ -165,7 +167,11 @@ export interface MemeTokenMetadata {
 export class MemeMetadataInvalidError extends Error {
   readonly code = "meme_metadata_invalid";
 
-  constructor(readonly field: string) {
+  constructor(
+    readonly field: string,
+    /** Decision 0168: set when only the visibility rule refused the text. */
+    readonly textReasonCode: LaunchTokenTextReasonCode | null = null,
+  ) {
     super("The MEME token metadata is invalid");
     this.name = "MemeMetadataInvalidError";
   }
@@ -217,7 +223,10 @@ export function parseMemeTokenMetadata(body: unknown): MemeTokenMetadata {
   }
   const name = normalizeLaunchTokenName(rawName);
   if (name === null) {
-    throw new MemeMetadataInvalidError("name");
+    throw new MemeMetadataInvalidError(
+      "name",
+      launchTokenTextRejectionReason(rawName),
+    );
   }
   const rawSymbol = value["symbol"];
   const symbol =
@@ -225,7 +234,10 @@ export function parseMemeTokenMetadata(body: unknown): MemeTokenMetadata {
       ? normalizeLaunchTokenTicker(rawSymbol)
       : null;
   if (symbol === null) {
-    throw new MemeMetadataInvalidError("symbol");
+    throw new MemeMetadataInvalidError(
+      "symbol",
+      launchTokenTextRejectionReason(rawSymbol),
+    );
   }
   const rawDescription = value["description"] ?? "";
   if (typeof rawDescription !== "string") {

@@ -2159,6 +2159,13 @@ export async function buildApp(
               expectedRuntimeCodeHash: hooksTargetFactory.codeHash,
               rpcUrls: config.launchChain.rpcUrls,
               chainReference: config.launchChain.chainReference,
+              // Decision 0168: an unknown text-rules generation fails closed.
+              onUnsupportedTextRulesVersion: (version) => {
+                app.log.warn(
+                  { launchTextRulesVersion: version },
+                  "Hooks launch factory text-rules version unsupported; failing closed",
+                );
+              },
               ...(config.hooksLaunch.hookKind === "loopDynamic"
                 ? { hookKind: "loopDynamic" as const }
                 : {}),

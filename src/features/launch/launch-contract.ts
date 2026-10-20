@@ -7,6 +7,8 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   launchTokenDescriptionMaxCodePoints,
   launchTokenTextMaxUtf16Units,
+  launchTokenTextRejectionReason,
+  type LaunchTokenTextReasonCode,
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
   normalizeLaunchTokenTicker,
@@ -258,10 +260,16 @@ export const sha256PatternSource = "^[0-9a-f]{64}$";
 const forbiddenTextCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
 const opaqueIdPattern = new RegExp(opaqueIdPatternSource);
 
+/** Decision 0168: which identity field broke the visibility rule, and how. */
+export interface LaunchTokenTextRejection {
+  readonly reasonCode: LaunchTokenTextReasonCode;
+  readonly field: "name" | "ticker";
+}
+
 export class InvalidLaunchRequestError extends Error {
   readonly code = "invalid_launch_request";
 
-  constructor() {
+  constructor(readonly textRejection: LaunchTokenTextRejection | null = null) {
     super("The V2 launch request is invalid");
     this.name = "InvalidLaunchRequestError";
   }
@@ -269,6 +277,35 @@ export class InvalidLaunchRequestError extends Error {
 
 function invalid(): never {
   throw new InvalidLaunchRequestError();
+}
+
+const textReasonParam = "launchTokenTextReasonCode";
+
+/** Decision 0168: an invalid request, naming a visibility refusal if any. */
+function invalidFrom(error: z.ZodError): never {
+  for (const issue of error.issues) {
+    const reasonCode = (
+      issue as { readonly params?: Readonly<Record<string, unknown>> }
+    ).params?.[textReasonParam];
+    const field = issue.path[issue.path.length - 1];
+    if (
+      typeof reasonCode === "string" &&
+      (field === "name" || field === "ticker")
+    ) {
+      throw new InvalidLaunchRequestError({
+        reasonCode: reasonCode as LaunchTokenTextReasonCode,
+        field,
+      });
+    }
+  }
+  return invalid();
+}
+
+function textIssue(value: string): Parameters<z.RefinementCtx["addIssue"]>[0] {
+  const reasonCode = launchTokenTextRejectionReason(value);
+  return reasonCode === null
+    ? { code: "custom" }
+    : { code: "custom", params: { [textReasonParam]: reasonCode } };
 }
 
 // Decision 0154 / 0164: name, ticker and narrative take any script; name
@@ -279,7 +316,7 @@ const projectNameSchema = z
   .transform((value, context) => {
     const name = normalizeLaunchTokenName(value);
     if (name === null) {
-      context.addIssue({ code: "custom" });
+      context.addIssue(textIssue(value));
       return z.NEVER;
     }
     return name;
@@ -291,7 +328,7 @@ const projectTickerSchema = z
   .transform((value, context) => {
     const ticker = normalizeLaunchTokenTicker(value);
     if (ticker === null) {
-      context.addIssue({ code: "custom" });
+      context.addIssue(textIssue(value));
       return z.NEVER;
     }
     return ticker;
@@ -418,7 +455,7 @@ export function parseLaunchProjectCreate(value: unknown): {
 export function parseLaunchProjectValues(value: unknown): LaunchProjectValues {
   const parsed = projectValuesSchema.safeParse(value);
   if (!parsed.success) {
-    return invalid();
+    return invalidFrom(parsed.error);
   }
   return Object.freeze({
     name: parsed.data.name,
@@ -436,7 +473,7 @@ export function parseReplaceLaunchProjectRequest(
 ): ReplaceLaunchProjectRequest {
   const parsed = replaceProjectRequestSchema.safeParse(value);
   if (!parsed.success) {
-    return invalid();
+    return invalidFrom(parsed.error);
   }
   return Object.freeze({
     expectedVersion: parsed.data.expectedVersion,

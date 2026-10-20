@@ -1,6 +1,8 @@
 import { encodeAbiParameters, keccak256, parseAbiParameters } from "viem";
 
 import {
+  launchTokenTextRejectionReason,
+  type LaunchTokenTextReasonCode,
   normalizeLaunchTokenDescription,
   normalizeLaunchTokenName,
   normalizeLaunchTokenTicker,
@@ -312,7 +314,13 @@ export interface HooksLaunchDraft {
 }
 
 export class InvalidHooksLaunchDraftError extends Error {
-  constructor() {
+  constructor(
+    /** Decision 0168: set when only the visibility rule refused the text. */
+    readonly textRejection: {
+      readonly reasonCode: LaunchTokenTextReasonCode;
+      readonly field: "name" | "ticker";
+    } | null = null,
+  ) {
     super("Invalid Hooks launch draft");
     this.name = "InvalidHooksLaunchDraftError";
   }
@@ -388,7 +396,17 @@ export function parseHooksLaunchDraft(
   const ticker = normalizeLaunchTokenTicker(input.ticker);
   const description = normalizeLaunchTokenDescription(input.description);
   if (name === null || ticker === null || description === null) {
-    throw new InvalidHooksLaunchDraftError();
+    const nameReason =
+      name === null ? launchTokenTextRejectionReason(input.name) : null;
+    const tickerReason =
+      ticker === null ? launchTokenTextRejectionReason(input.ticker) : null;
+    throw new InvalidHooksLaunchDraftError(
+      nameReason !== null
+        ? { reasonCode: nameReason, field: "name" }
+        : tickerReason !== null
+          ? { reasonCode: tickerReason, field: "ticker" }
+          : null,
+    );
   }
 
   const startAt = BigInt(input.nftSaleStartAt);

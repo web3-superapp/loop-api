@@ -397,7 +397,7 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 ```
 
 - `name` / `symbol`：决策 0164 同一规则——任何文字，NFC + 去首尾空格后 1–20 个 UTF-16 单元，
-  **不转大写**（`frog` 合法；详见 `frontend-v2-hooks-launch-api.md` §3.1）；`description` ≤ 500；
+  **不转大写**（`frog` 合法）；决策 0168 起须含可见字符（详见 `frontend-v2-hooks-launch-api.md` §3.1）；`description` ≤ 500；
   `links` 只收 https，空字符串视为未填；`imageMediaId` = 本人通过 `POST /v2/media/community-logos`
   （multipart `file`，512×512 WebP，S107 同一管线）上传得到的 `mediaId`，裁 1:1 在客户端做。
 - `201` = §4 的详情（`status: "draft"`，`tokenAddress: null`，`priceUsd1: null` + `quoteUnavailable`
@@ -406,7 +406,8 @@ Query：`tab`（默认 `new`）、`limit`（1–50，默认 30）、`cursor`；`
 - 同一 `Idempotency-Key` + 同一内容 = 同一草稿；同 key 不同内容 `409 IDEMPOTENCY_CONFLICT`。
 - 每账号滚动 24 小时最多 `3` 个草稿：`429 RATE_LIMITED`，`detailsSafe = { reasonCode: "MEME_CREATE_RATE_LIMITED", dailyLimit: 3 }`
   → 文案「今天的创建次数用完了，明天再来」。
-- `422 VALIDATION_FAILED`：`MEME_METADATA_INVALID`（`detailsSafe.field` = `name|symbol|description|imageMediaId|links|links.twitter|…`）、
+- `422 VALIDATION_FAILED`：`MEME_METADATA_INVALID`（`detailsSafe.field` = `name|symbol|description|imageMediaId|links|links.twitter|…`；
+  name / symbol 仅因决策 0168 可见字符规则被拒时另有 `detailsSafe.textReasonCode` = `TEXT_NOT_VISIBLE|TAG_OUTSIDE_FLAG|LEADING_COMBINING_MARK`）、
   `MEME_IMAGE_NOT_OWNED`。格式明显不对（如小写 symbol、未知字段）在 schema 层就是 `400 INVALID_REQUEST`。
 - 尾号盐保留 30 分钟；超时未发起创建会被回收，再准备 create Intent 时换一个（`predictedAddress` 可能变，以 Intent 返回为准）。
 

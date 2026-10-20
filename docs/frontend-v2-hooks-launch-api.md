@@ -157,10 +157,43 @@
   提交前**不要**自行转大写或再做规范化（以服务端返回的 `config.ticker` 为准、签名的就是它）。
 - 拒绝：空、> 20 单元、控制字符（换行 / 制表等）、双向覆写与零宽字符（U+202E、U+200B 等）、
   除半角 / 全角以外的空格（NBSP 等）、隐形填充字符、ZWJ 在首尾。
-- 错误：项目 `400 VALIDATION_FAILED`；本接口 `400 INVALID_REQUEST`；MEME `422 VALIDATION_FAILED`
-  `detailsSafe {reasonCode: "MEME_METADATA_INVALID", field: "name" | "symbol"}`。
+- **可见字符规则（决策 0168，S256，审计 S255 L-6）**，在上面各条之后再检，三条：
+  1. 至少含一个字母 / 数字 / 符号 / 标点（`[\p{L}\p{N}\p{S}\p{P}]`；emoji、`$`、`.` 都算）——
+     否则 `TEXT_NOT_VISIBLE`。例：单个标签字符 `U+E0041`、单个变体选择符 `U+FE0F` / `U+FE00` /
+     `U+E0100`、单个组合符 `U+0301`。
+  2. 标签字符 `U+E0020–U+E007F` 只能出现在 🏴（`U+1F3F4`）开头、`U+E007F` 结尾的旗帜序列内部
+     （🏴󠁧󠁢󠁥󠁮󠁧󠁿 英格兰旗、🏴󠁧󠁢󠁳󠁣󠁴󠁿 苏格兰旗合法）——否则 `TAG_OUTSIDE_FLAG`。例：`A` + `U+E0041`。
+  3. 不得以组合标记 `\p{M}`（含变体选择符）开头——否则 `LEADING_COMBINING_MARK`。例：`U+0301` + `abc`。
+     （`e` + `U+0301` 合法：NFC 后是 `é`。）
+     检查顺序即上面的顺序，一个值只报一个原因。
+- 错误：项目 `POST/PUT /v2/launch/projects` 与本接口都是 `400 INVALID_REQUEST`；其中仅因可见字符
+  规则被拒时 `detailsSafe = {reasonCode: "TEXT_NOT_VISIBLE" | "TAG_OUTSIDE_FLAG" |
+"LEADING_COMBINING_MARK", field: "name" | "ticker"}`，其余情况 `detailsSafe: null`（不变）。
+  MEME `422 VALIDATION_FAILED` `detailsSafe {reasonCode: "MEME_METADATA_INVALID", field: "name" | "symbol"}`，
+  仅因可见字符规则被拒时**另加** `textReasonCode`（同上三值；`reasonCode` 保持不变，旧 App 文案不受影响）。
+  示例（本接口）：
+
+  ```json
+  {
+    "code": "INVALID_REQUEST",
+    "category": "validation",
+    "retryable": false,
+    "userMessageKey": "errors.request.invalid",
+    "correlationId": "…",
+    "detailsSafe": { "reasonCode": "TEXT_NOT_VISIBLE", "field": "name" },
+    "providerReferenceSafe": null
+  }
+  ```
+
+  App 文案：三个原因统一「名称需包含可见字符」（代码字段同理「代码需包含可见字符」）。
+
+- 0168 之前保存的、只含不可见字符的旧草稿：取签名请求 / 提交部署时按同一规则校验，返回
+  `400 INVALID_REQUEST`（重新保存配置即可）。
 - 计数器建议「x/20」，按 `String.length` 计；前端只做提示，以服务端为准。
 - 旧规则（≤ 64 字）下保存的草稿仍可审批、签名、提交（签名请求按链上 80 字节底线校验）。
+- 代际判定（决策 0168，审计 S255 I-21）：服务端只认 `launchTextRulesVersion() == 2`；读到其他值（1、3…）
+  按「读不到」处理——非 `^[A-Z0-9]{2,12}$` 的代码保存 / 签名请求 / 提交返回
+  `503 CAPABILITY_UNAVAILABLE` `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`，服务端记 warn。前端无需判断，按 503 不可用展示。
 - 过渡门控（决策 0164 §10）：服务端配置的发射工厂若仍是 S242 之前的旧代际（服务端读工厂 `launchTextRulesVersion()` 判定，
   无需前端判断），代码不是 2–12 位大写字母或数字（`^[A-Z0-9]{2,12}$`）时，**保存本接口、取签名请求、
   提交部署**三处都返回：

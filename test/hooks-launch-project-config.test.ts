@@ -311,7 +311,11 @@ describe("Decision 0164: the ticker transition gate", () => {
     /** A reader whose eth_call answers `call` (throw = JSON-RPC error). */
     function readerAnswering(call: () => unknown) {
       let calls = 0;
+      const unsupported: number[] = [];
       const reader = createHooksLaunchFactoryReader({
+        onUnsupportedTextRulesVersion: (version) => {
+          unsupported.push(version);
+        },
         factoryAddress: "0x1111111111111111111111111111111111111111",
         expectedRuntimeCodeHash: keccak256(code),
         rpcUrls: [],
@@ -332,7 +336,7 @@ describe("Decision 0164: the ticker transition gate", () => {
           { retryCount: 0 },
         ),
       });
-      return { reader, calls: () => calls };
+      return { reader, calls: () => calls, unsupported };
     }
     const rpcError = (shape: Record<string, unknown>) => () => {
       throw Object.assign(new Error(String(shape["message"])), shape);
@@ -405,12 +409,67 @@ describe("Decision 0164: the ticker transition gate", () => {
       await expect(reader.tickerTextRule?.()).rejects.toThrow();
       expect(calls()).toBe(2);
     });
+
+    // Decision 0168 (S255 audit I-21): only version 2 is trusted.
+    it.each([1, 3, 255])(
+      "version %i → unreadable (fail closed) and reported",
+      async (version) => {
+        const { reader, unsupported } = readerAnswering(() =>
+          encodeAbiParameters([{ type: "uint8" }], [version]),
+        );
+        await expect(reader.tickerTextRule?.()).rejects.toThrow(
+          "Hooks launch factory text rules unreadable",
+        );
+        expect(unsupported).toEqual([version]);
+      },
+    );
+
+    it("version 2 → utf8 without a report; a revert → ascii without a report", async () => {
+      const v2 = readerAnswering(() =>
+        encodeAbiParameters([{ type: "uint8" }], [2]),
+      );
+      await expect(v2.reader.tickerTextRule?.()).resolves.toBe("utf8");
+      expect(v2.unsupported).toEqual([]);
+      const old = readerAnswering(
+        rpcError({ code: 3, message: "execution reverted", data: "0x" }),
+      );
+      await expect(old.reader.tickerTextRule?.()).resolves.toBe("ascii");
+      expect(old.unsupported).toEqual([]);
+    });
+
+    it("a version 3 Factory makes a non-legacy ticker save unavailable (503 path)", async () => {
+      const { reader } = readerAnswering(() =>
+        encodeAbiParameters([{ type: "uint8" }], [3]),
+      );
+      const harness = makeHarness();
+      const service = createHooksLaunchProjectConfigService({
+        fixedBuybackRecipient: body.buybackRecipient,
+        repository: harness.repository,
+        factory: {
+          nftSaleDuration: () =>
+            Promise.resolve({ seconds: 604_800, legacy: false }),
+          tickerTextRule: () =>
+            reader.tickerTextRule?.() ?? Promise.reject(new Error("no probe")),
+        },
+        minimumLeadSeconds: 86_400,
+        now: () => 1_790_000_000,
+      });
+      await expect(
+        service.saveDraft({
+          ownerUserId: "user-1",
+          projectId,
+          expectedVersion: 0,
+          body: { ...body, ticker: "狗狗币" },
+        }),
+      ).rejects.toBeInstanceOf(HooksLaunchProjectConfigUnavailableError);
+      expect(harness.getRecord()).toBeNull();
+    });
   });
 
-  it("reads launchTextRulesVersion(): >= 2 utf8, a missing function ascii, else unreadable", () => {
+  it("reads launchTextRulesVersion(): exactly 2 utf8, a missing function ascii, else unreadable", () => {
     expect(hooksLaunchTextRulesFromVersion(2)).toBe("utf8");
-    expect(hooksLaunchTextRulesFromVersion(3)).toBe("utf8");
-    for (const value of [0, 1, 256, 2.5, "2", 2n, null, undefined]) {
+    // Decision 0168: a newer (possibly stricter) generation fails closed.
+    for (const value of [0, 1, 3, 255, 256, 2.5, "2", 2n, null, undefined]) {
       expect(hooksLaunchTextRulesFromVersion(value)).toBeNull();
     }
     const wrap = (cause: BaseError) =>
