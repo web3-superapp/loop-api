@@ -16,6 +16,10 @@ import {
 import type { V2RouteDependencies } from "./index.js";
 import { createLaunch2CampaignPublicService } from "../../features/launch2/launch2-campaigns.js";
 import {
+  launch2CandlesQuerySchema,
+  launch2CandlesResourceSchema,
+} from "./launch2-candles-schemas.js";
+import {
   launch2BuybacksResourceSchema,
   launch2CommandErrors,
   launch2DetailQuerySchema,
@@ -210,6 +214,42 @@ export function registerV2Launch2Routes(
         ...(query["walletId"] === undefined
           ? {}
           : { walletId: query["walletId"] }),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/candles",
+    {
+      schema: {
+        operationId: "listV2Launch2Candles",
+        summary: "K-line of one MEME v2 instance (curve, then official pool)",
+        description: `Decision 0171. One price series in chain order, read from the launch2_event lane's tables only (never the chain): curve trades priced at the marginal price after the trade, launch2PriceAt(running sold supply), and after graduation the official-pool swaps (OfficialTax and LoopDynamic) at price_e18 after the swap (the pool_last_price_e18 basis). Removed (reorged) facts never count. interval 1m | 5m | 15m | 1h | 4h | 1d (default 5m), buckets UTC-aligned (floor(epoch / step) × step); limit 1..500 (default 200) newest buckets ending at the bucket of now, or the last bucket with t < before. o = the previous close (launch2PriceAt(0) before the first trade), h / l include o, c = price after the bucket's last fact; v = MEME (buys + sells), q = USD1 (curve usd1_net + pool usd1_amount), n = facts. Empty buckets are flat at the previous close (v = q = 0, n = 0), so the series has no holes from the first trade to now. No trade yet: candles [] and latest = the curve start price at activation. source curve | pool | mixed (the page's prices). 422 VALIDATION_FAILED / LAUNCH2_CANDLE_INTERVAL_INVALID | LAUNCH2_CANDLE_LIMIT_INVALID | LAUNCH2_CANDLE_BEFORE_INVALID; not activated / unknown: 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND (as the detail). ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2CandlesQuerySchema,
+        response: {
+          200: launch2CandlesResourceSchema,
+          ...launch2ReadErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.listCandles({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        instanceId: params.instanceId,
+        interval: query["interval"],
+        limit: query["limit"],
+        before: query["before"],
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

@@ -56,6 +56,10 @@ import {
   type Launch2IntentKind,
   type Launch2Stage,
 } from "./launch2-contract.js";
+import {
+  parseLaunch2CandleQuery,
+  readLaunch2Candles,
+} from "./launch2-candles.js";
 import { requireLaunch2Counterparties } from "./launch2-counterparty.js";
 import {
   launch2Max,
@@ -402,6 +406,14 @@ export interface Launch2Service {
     readonly interval?: unknown;
     readonly limit?: unknown;
     readonly signal?: AbortSignal;
+  }): Promise<Resource>;
+  /** Decision 0171: the App project page's curve / pool candles. */
+  listCandles(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly instanceId: string;
+    readonly interval?: unknown;
+    readonly limit?: unknown;
+    readonly before?: unknown;
   }): Promise<Resource>;
 }
 
@@ -1043,6 +1055,7 @@ export function createUnavailableLaunch2Service(
     listPublicMemes: fail,
     getPublicMeme: fail,
     listPublicMemeCandles: fail,
+    listCandles: fail,
   });
 }
 
@@ -3829,6 +3842,30 @@ export function createLaunch2Service(
     listPublicMemes,
     getPublicMeme,
     listPublicMemeCandles,
+
+    async listCandles(input) {
+      // Decision 0171: query rules first (422), then the detail's 404 / 503.
+      const query = parseLaunch2CandleQuery(input);
+      const record = await visibleInstance(input.instanceId);
+      const store = repository();
+      if (
+        store.readCandleBounds === undefined ||
+        store.readCandleWindow === undefined
+      ) {
+        return unavailableWith(launch2ReasonCodes.repositoryUnavailable);
+      }
+      return readLaunch2Candles({
+        instanceId: record.instanceId,
+        graduated: record.graduation !== null,
+        activatedAt: record.activatedAt,
+        store: {
+          readCandleBounds: store.readCandleBounds.bind(store),
+          readCandleWindow: store.readCandleWindow.bind(store),
+        },
+        query,
+        now: now(),
+      }).catch(translate);
+    },
 
     async listPoolTrades(input) {
       const record = await visibleInstance(input.instanceId);

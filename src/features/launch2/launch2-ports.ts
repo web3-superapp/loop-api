@@ -1,3 +1,4 @@
+import type { Launch2CandleStore } from "./launch2-candles.js";
 import type {
   Launch2MemeCoverageFacts,
   Launch2MemeCoverageVerdict,
@@ -1430,6 +1431,10 @@ export interface Launch2Repository {
     readonly source: Launch2PublicCandleSource;
     readonly limit: number;
   }): Promise<readonly Launch2PublicCandleRecord[]>;
+  /** Decision 0171: the App candles route's first / newest priced fact. */
+  readCandleBounds?: Launch2CandleStore["readCandleBounds"];
+  /** Decision 0171: the App candles route's bucket aggregates. */
+  readCandleWindow?: Launch2CandleStore["readCandleWindow"];
   // --- Intents ---
   createIntent(input: {
     readonly ownerUserId: string;
