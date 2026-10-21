@@ -19,6 +19,7 @@ import {
   launch2PoolPriceE18,
   launch2PoolSwapFacts,
 } from "../features/launch2/launch2-pool.js";
+import { createLaunch2CandleStore } from "./launch2-candles-repository.js";
 import {
   Launch2IdempotencyConflictError,
   Launch2RepositoryUnavailableError,
@@ -1966,7 +1967,13 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
     }
   }
 
+  // Decision 0171: the App candles route (src/database/launch2-candles-repository.ts).
+  const candles = createLaunch2CandleStore(query);
+
   return Object.freeze<Launch2Repository>({
+    readCandleBounds: (input) => candles.readCandleBounds(input),
+    readCandleWindow: (input) => candles.readCandleWindow(input),
+
     async registerActivatedInstances(input) {
       const rows = await query<{ instance_id: string }>(
         `

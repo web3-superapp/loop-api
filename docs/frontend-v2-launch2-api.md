@@ -1,4 +1,7 @@
-# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131, 0139)
+# Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131, 0139, 0171)
+
+> **S267 / 决策 0171 变化（给 App）**：新增只读路由 `GET /v2/launch2/instances/{instanceId}/candles`（§3.15）=
+> 项目页 K 线（内盘曲线成交 → 毕业后官方池 swap，一条连续序列，空桶已填平）。纯新增，现有路由与键集合不变。
 
 > **S181 / 决策 0139 变化（给 App）**：新增只读路由 `GET /v2/launch2/overview`（§3.13）= 发射台「实时流」
 > （跨实例最新 30 条：内盘 / 外盘买卖、NFT 铸造、毕业、回购、奖励轮次开启、奖励领取）+「战绩」计数。
@@ -1267,20 +1270,126 @@ is configured. Nothing in the wire format changes.
 - 空库：`activity: []`，计数全 0，`buybackUsd1Total: "0"`。
 - 错误：`400`（带 query）、`401`、`503` 同 §5。
 
+### 3.15 `GET /v2/launch2/instances/{instanceId}/candles?interval=&limit=&before=`（Decision 0171，S267）
+
+项目页 K 线。鉴权与 headers 同详情（§1：Bearer + `X-Loop-Client-Version` + `X-Loop-Contract-Version: 2.0`）；
+`Cache-Control: no-store`。只读已索引的读模型，**不读链**；可见范围与 404 同详情 §3.2。
+
+| query      | 规则                                                                                         | 错误                                  |
+| ---------- | -------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `interval` | `1m` / `5m` / `15m` / `1h` / `4h` / `1d`，默认 `5m`                                          | `422 LAUNCH2_CANDLE_INTERVAL_INVALID` |
+| `limit`    | 1..500，默认 200：返回最新的 `limit` 根                                                      | `422 LAUNCH2_CANDLE_LIMIT_INVALID`    |
+| `before`   | 可选，正整数 unix 秒：只返回 `t < before` 的桶（向左翻页：下一页 `before` = 本页第一根 `t`） | `422 LAUNCH2_CANDLE_BEFORE_INVALID`   |
+
+其他 query 键 → `400 INVALID_REQUEST`。
+
+200（真实响应，集成测试：曲线买入 2,000,000 MEME 后毕业，池子两笔 swap，`now` = t0 + 1000 s）：
+
+```json
+{
+  "instanceId": "2feeebbc-09ce-45a6-a48c-a7ae04cbdeb6",
+  "interval": "5m",
+  "quoteAsset": "USD1",
+  "source": "mixed",
+  "candles": [
+    {
+      "t": 1800000000,
+      "o": "0.00004166666625",
+      "h": "0.000041823356802771",
+      "l": "0.00004166666625",
+      "c": "0.000041823356802771",
+      "v": "2000000",
+      "q": "90",
+      "n": 1
+    },
+    {
+      "t": 1800000300,
+      "o": "0.000041823356802771",
+      "h": "0.00006",
+      "l": "0.000041823356802771",
+      "c": "0.000055",
+      "v": "250000",
+      "q": "13",
+      "n": 2
+    },
+    {
+      "t": 1800000600,
+      "o": "0.000055",
+      "h": "0.000055",
+      "l": "0.000055",
+      "c": "0.000055",
+      "v": "0",
+      "q": "0",
+      "n": 0
+    },
+    {
+      "t": 1800000900,
+      "o": "0.000055",
+      "h": "0.000055",
+      "l": "0.000055",
+      "c": "0.000055",
+      "v": "0",
+      "q": "0",
+      "n": 0
+    }
+  ],
+  "latest": { "price": "0.000055", "at": 1800000450 },
+  "contractVersion": "2.0"
+}
+```
+
+无成交（已激活）：
+
+```json
+{
+  "instanceId": "3f00e32f-7fc9-43be-bdb9-edeaee98a90d",
+  "interval": "5m",
+  "quoteAsset": "USD1",
+  "source": "curve",
+  "candles": [],
+  "latest": { "price": "0.00004166666625", "at": 1799913600 },
+  "contractVersion": "2.0"
+}
+```
+
+字段口径：
+
+- `t`：桶开始 unix 秒，`floor(epoch / 步长) × 步长`（UTC 对齐；`1d` 对齐 UTC 0 点）。`candles` 按 `t` 升序。
+- `o/h/l/c`：每枚 MEME 的 USD1 价格（十进制字符串，去尾零，同 `priceBeforeUsd1`）。点 = **每笔成交后的价格**：
+  内盘 = 曲线边际价 `launch2PriceAt(已售量)`；外盘 = 该笔 swap 后的池价（与 `instance.pool.lastPriceUsd1` 同源）。
+  `o` = 上一根的 `c`（第一根之前 = 曲线起始价 `launch2PriceAt(0)`），`h/l` 含 `o`，`c` = 桶内最后一笔后的价格。
+- `v`：桶内 MEME 成交量（买 + 卖）。`q`：桶内 USD1 成交额 = 内盘 `usd1_net`（买：扣 10 % 税后进储备的 USD1；
+  卖：扣税后到手的 USD1）+ 外盘 swap 的 USD1 腿（2 % Hook 税不扣）。`n`：笔数。回购 swap 计入外盘（真实池内成交）。
+  重组撤销（`removed`）的成交不计。
+- **空桶填平**：从第一笔成交所在桶一直到「现在」所在桶（带 `before` 时到 `before` 之前最后一桶），每一桶都有；
+  空桶 `o = h = l = c = 上一根 c`，`v = q = "0"`，`n = 0`。图上没有洞，App 不需要自己补。
+- 第一笔成交之前没有桶：`candles: []`，用 `latest` 画一条起始价线或显示「暂无成交」。
+- `latest`：全序列最新一笔成交的价格与时间（与 `before` 无关，翻页时不变）；无成交 = 起始价 + 激活时间；
+  无成交且实例从未激活（hold 中）= `null`。
+- `source`（本页）：`curve` = 只有内盘价格；`pool` = 只有外盘价格；`mixed` = 跨毕业（两者都有）。
+  填平桶算其收盘价的来源；空页：已毕业 `pool`，否则 `curve`。仅用于标注，不影响画法。
+- LoopDynamic 外盘与 OfficialTax 外盘同口径（都来自池子 swap），不读 Hook 的 5 分钟 `CandleClosed`（无高低 / 量）。
+
+错误：`400`（未知 query 键、缺头）、`401`、`404 LAUNCH2_INSTANCE_NOT_FOUND`、`422`（上表三个 reasonCode，先于
+404 判断）、`503`（同 §5；库不可读 = `LAUNCH2_REPOSITORY_UNAVAILABLE`，绝不以空数组冒充）。
+
+建议用法：首屏 `interval=5m`（默认 200 根）；切换粒度重拉；左滑到头用 `before=<第一根 t>` 拉更早一页，
+返回空数组即到头。轮询 ≥ 5 s（与详情一起），追加 / 替换最后一根即可。
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
-| HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                                                                                                                                                          |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2                                                                                                                                 |
-| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason; 0131: `LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND`                                                                                                                                                                                                                                                                                                         |
-| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                                                                           |
-| 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                                                                                                                                                |
-| 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                                                                                                                                                   |
-| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`; pool (0124): `POOL_NOT_GRADUATED` (`stage`), `POOL_QUOTE_UNAVAILABLE` (`revertReason`: contract error name, `UNKNOWN`, or `STATE_OVERRIDE_UNSUPPORTED`), `POOL_INSUFFICIENT_LIQUIDITY`, `POOL_QUOTE_ZERO`                                                                       |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED`; pool (0124): `POOL_ROUTER_NOT_CONFIGURED`, `POOL_ROUTER_CODE_MISMATCH`, `POOL_ROUTER_MANAGER_MISMATCH`, `POOL_KEY_MISMATCH` |
+| HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | — (bad query / body / cursor)                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 403  | `POLICY_BLOCKED`                 | `LAUNCH2_NOT_IN_SNAPSHOT`; `LAUNCH2_COUNTERPARTY_NOT_INSTANCE` (Decision 0117); canary: `ASSET_NOT_IN_CANARY_ALLOWLIST`, `CANARY_CEILING_EXCEEDED`, `CANARY_DAILY_CEILING_EXCEEDED` (as Decision 0065). The static `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST` no longer applies to launch2                                                                                                                                                                               |
+| 404  | `NOT_FOUND`                      | `LAUNCH2_INSTANCE_NOT_FOUND`; a foreign walletId has no reason; 0131: `LAUNCH2_DYNAMIC_CLAIM_INTENT_NOT_FOUND`                                                                                                                                                                                                                                                                                                                                                       |
+| 409  | `DATA_STALE`                     | `LAUNCH2_STAGE_MISMATCH` (`stage` = read-model stage; also when the chain is ahead of the lane, S143), `LAUNCH2_SELL_NOT_OPEN`, `LAUNCH2_SOLD_OUT`, `LAUNCH2_QUOTA_EXHAUSTED`, `LAUNCH2_INSTANCE_PAUSED` (`holdReason`), `LAUNCH2_NFT_ALREADY_MINTED`, `LAUNCH2_PRICE_MOVED`                                                                                                                                                                                         |
+| 409  | `QUOTE_EXPIRED`                  | `LAUNCH2_QUOTE_EXPIRED`                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                                                                                                                                                                                                 |
+| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`; pool (0124): `POOL_NOT_GRADUATED` (`stage`), `POOL_QUOTE_UNAVAILABLE` (`revertReason`: contract error name, `UNKNOWN`, or `STATE_OVERRIDE_UNSUPPORTED`), `POOL_INSUFFICIENT_LIQUIDITY`, `POOL_QUOTE_ZERO`; candles (0171): `LAUNCH2_CANDLE_INTERVAL_INVALID`, `LAUNCH2_CANDLE_LIMIT_INVALID`, `LAUNCH2_CANDLE_BEFORE_INVALID` |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED`; pool (0124): `POOL_ROUTER_NOT_CONFIGURED`, `POOL_ROUTER_CODE_MISMATCH`, `POOL_ROUTER_MANAGER_MISMATCH`, `POOL_KEY_MISMATCH`                                               |
 
 ### 4.1 `INSUFFICIENT_BALANCE` numbers (S157, Decision 0129 §1)
 
