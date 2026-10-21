@@ -105,8 +105,11 @@ describe("V2 launch2 routes (Decision 0114)", () => {
       readonly unconfigured?: boolean;
       readonly writes?: boolean;
       readonly nativeBalance?: bigint;
+      /** Decision 0170: collect the JSON log lines instead of silencing. */
+      readonly logs?: Record<string, unknown>[];
     } = {},
   ) {
+    const logs = options.logs;
     const repository = options.repository ?? createInMemoryLaunch2Repository();
     const chain = options.chain ?? defaultChainState();
     const app = await buildApp({
@@ -136,7 +139,17 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         }),
       ),
       walletIntentNow: () => new Date(Number(launch2NowSeconds) * 1000),
-      logger: false,
+      logger:
+        logs === undefined
+          ? false
+          : {
+              level: "info",
+              stream: {
+                write: (line: string) => {
+                  logs.push(JSON.parse(line) as Record<string, unknown>);
+                },
+              },
+            },
     });
     apps.push(app);
     return { app, repository, chain };
@@ -983,6 +996,155 @@ describe("V2 launch2 routes (Decision 0114)", () => {
         maxAmountIn: "5",
         balanceUsd1: "5",
       },
+    });
+  });
+
+  describe("an empty quote for want of balance (Decision 0170)", () => {
+    function buyQuoteUrl(instanceId: string, amount: string) {
+      return `/v2/launch2/instances/${instanceId}/quote?side=buy&amount=${amount}&walletId=${walletId}`;
+    }
+
+    async function priorityApp(
+      usd1Balance: bigint,
+      logs?: Record<string, unknown>[],
+    ) {
+      const repository = createInMemoryLaunch2Repository();
+      const instance = priorityInstance();
+      repository.instances.set(instance.instanceId, instance);
+      seedMember(repository, instance.instanceId);
+      const chain = defaultChainState({ usd1Balance });
+      const { app } = await createApp({
+        repository,
+        chain,
+        ...(logs === undefined ? {} : { logs }),
+      });
+      return { app, instance };
+    }
+
+    it("answers 409 INSUFFICIENT_BALANCE, not LAUNCH2_QUOTE_ZERO, for a wallet with 0 USD1", async () => {
+      const logs: Record<string, unknown>[] = [];
+      const { app, instance } = await priorityApp(0n, logs);
+      const response = await get(app, buyQuoteUrl(instance.instanceId, "10"));
+      expect(response.statusCode).toBe(409);
+      const body = response.json<Record<string, unknown>>();
+      expect(Object.keys(body).sort()).toEqual(errorKeys);
+      expect(body).toMatchObject({
+        code: "INSUFFICIENT_BALANCE",
+        detailsSafe: {
+          reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+          maxAmountIn: "0",
+          requiredAmountIn: "10",
+          balanceUsd1: "0",
+        },
+      });
+      const failed = logs.find((line) => line["msg"] === "Request failed");
+      expect(failed).toMatchObject({
+        responseCode: "INSUFFICIENT_BALANCE",
+        statusCode: 409,
+        reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+      });
+      // Amounts in detailsSafe never reach the log line.
+      expect(failed).not.toHaveProperty("balanceUsd1");
+      expect(failed).not.toHaveProperty("detailsSafe");
+    });
+
+    it("answers the same for a balance below one smallest unit's price", async () => {
+      const { app, instance } = await priorityApp(1n);
+      const response = await get(app, buyQuoteUrl(instance.instanceId, "10"));
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "INSUFFICIENT_BALANCE",
+        detailsSafe: {
+          reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+          maxAmountIn: "0.000000000000000001",
+          requiredAmountIn: "10",
+          balanceUsd1: "0.000000000000000001",
+        },
+      });
+    });
+
+    it("keeps LAUNCH2_QUOTE_ZERO for a request too small to price when the balance is not the reason", async () => {
+      const { app, instance } = await priorityApp(5n * wad);
+      const response = await get(
+        app,
+        buyQuoteUrl(instance.instanceId, "0.000000000000000001"),
+      );
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "DATA_STALE",
+        detailsSafe: { reasonCode: "LAUNCH2_QUOTE_ZERO", limitedBy: "balance" },
+      });
+    });
+
+    it("quotes normally when the balance covers the request", async () => {
+      const { app, instance } = await priorityApp(5n * wad);
+      const response = await get(app, buyQuoteUrl(instance.instanceId, "1"));
+      expect(response.statusCode, response.body).toBe(200);
+      expect(
+        response.json<{ quote: { max: { limitedBy: string } } }>().quote.max
+          .limitedBy,
+      ).toBe("balance");
+    });
+
+    it("refuses a sell with no MEME as LAUNCH2_MEME_BALANCE_INSUFFICIENT", async () => {
+      const repository = createInMemoryLaunch2Repository();
+      const openedAt = launch2NowSeconds - 30n;
+      const opened = instanceFixture({
+        nftSaleStart: iso(launch2NowSeconds - 604_800n - 60n),
+        nftMintedCount: "0",
+        stage: "public",
+        openedWithoutHolders: {
+          openedAt: iso(openedAt),
+          blockNumber: "456",
+          transactionHash: `0x${"ab".repeat(32)}`,
+        },
+      });
+      repository.instances.set(opened.instanceId, opened);
+      const chain = defaultChainState({ memeBalance: 0n });
+      const { app } = await createApp({ repository, chain });
+      chain.viewer.curve = {
+        earlyRoundEndsAt: openedAt,
+        soldSupply: 1_000_000n * wad,
+      };
+      const response = await get(
+        app,
+        `/v2/launch2/instances/${opened.instanceId}/quote?side=sell&amount=100&walletId=${walletId}`,
+      );
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "INSUFFICIENT_BALANCE",
+        detailsSafe: {
+          reasonCode: "LAUNCH2_MEME_BALANCE_INSUFFICIENT",
+          maxAmountIn: "0",
+          requiredAmountIn: "100",
+          balanceMeme: "0",
+        },
+      });
+    });
+
+    it("refuses the curve prepare with no USD1 as INSUFFICIENT_BALANCE, not sold out", async () => {
+      const { app, instance } = await priorityApp(0n);
+      const response = await post(
+        app,
+        `/v2/launch2/instances/${instance.instanceId}/trade/prepare`,
+        {
+          walletId,
+          side: "buy",
+          amount: "10",
+          minOut: "1",
+          deadline: iso(launch2NowSeconds + 60n),
+        },
+      );
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: "INSUFFICIENT_BALANCE",
+        detailsSafe: {
+          reasonCode: "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+          maxAmountIn: "0",
+          requiredAmountIn: "10",
+          balanceUsd1: "0",
+        },
+      });
     });
   });
 

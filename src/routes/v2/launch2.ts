@@ -47,6 +47,7 @@ import {
   launch2PositionsResourceSchema,
   launch2QuoteQuerySchema,
   launch2QuoteResourceSchema,
+  launch2QuoteErrors,
   launch2ReadErrors,
   launch2TradePrepareRequestSchema,
 } from "./launch2-schemas.js";
@@ -221,13 +222,13 @@ export function registerV2Launch2Routes(
       schema: {
         operationId: "getV2Launch2Quote",
         summary: "Quote a MEME v2 curve buy or sell with the executable MAX",
-        description: `Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining 0.5% quota, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale, snapshot_pending and closed_no_holders are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED; 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. ${unavailableNote} ${holdNote}`,
+        description: `Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining 0.5% quota, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale, snapshot_pending and closed_no_holders are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED | LAUNCH2_QUOTE_ZERO (the amount prices to 0 MEME / USD1); 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (buy) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (sell) when the balance-limited max is 0 or the request capped to the balance prices to 0 (detailsSafe.maxAmountIn = balance, requiredAmountIn = requested amount, balanceUsd1 | balanceMeme; Decision 0170); 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. ${unavailableNote} ${holdNote}`,
         tags: ["launch2"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
         params: launch2InstanceParamsSchema,
         querystring: launch2QuoteQuerySchema,
-        response: { 200: launch2QuoteResourceSchema, ...launch2ReadErrors },
+        response: { 200: launch2QuoteResourceSchema, ...launch2QuoteErrors },
       },
       onRequest: validateCommonHeaders,
       preValidation: assertNoBodyV2,

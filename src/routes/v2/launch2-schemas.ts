@@ -103,6 +103,20 @@ export const launch2ReadErrors = {
   ]),
 } as const;
 
+/**
+ * Decision 0170: the curve quote also answers 409 INSUFFICIENT_BALANCE when
+ * the wallet's balance is why nothing can be quoted.
+ */
+export const launch2QuoteErrors = {
+  ...launch2ReadErrors,
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "DATA_STALE",
+    "INSUFFICIENT_BALANCE",
+    "VERSION_CONFLICT",
+  ]),
+} as const;
+
 export const launch2CommandErrors = {
   ...launch2ReadErrors,
   403: v2ErrorResponseSchema(["PERMISSION_DENIED", "POLICY_BLOCKED"]),
