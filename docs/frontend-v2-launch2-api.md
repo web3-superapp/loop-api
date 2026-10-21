@@ -434,6 +434,32 @@ of the quote.
   computing MAX, so the App does not see `closed` in a 200).
 - `exceedsMax: true` → show "超出可买上限" with a one-tap fill of MAX; the quote numbers are
   for MAX.
+- **Empty for want of balance (Decision 0170, S266)**: when `max.limitedBy` would be `balance`
+  and nothing is executable (balance 0, or below the price of one smallest MEME unit), or the
+  request capped to the balance prices to 0, the quote answers `409 INSUFFICIENT_BALANCE`
+  with `LAUNCH2_USD1_BALANCE_INSUFFICIENT` (buy) / `LAUNCH2_MEME_BALANCE_INSUFFICIENT` (sell)
+  instead of `409 DATA_STALE / LAUNCH2_QUOTE_ZERO`. `detailsSafe`: `maxAmountIn` (= the
+  balance), `requiredAmountIn` (= the requested `amount`), `balanceUsd1` / `balanceMeme`. Show
+  「USD1 余额不足」 with the top-up / faucet entry, not 「报价已变化」. A request smaller than
+  the balance that still prices to 0 stays `DATA_STALE / LAUNCH2_QUOTE_ZERO`.
+
+  ```json
+  {
+    "code": "INSUFFICIENT_BALANCE",
+    "category": "conflict",
+    "retryable": false,
+    "userMessageKey": "errors.balance.insufficient",
+    "correlationId": "…",
+    "detailsSafe": {
+      "reasonCode": "LAUNCH2_USD1_BALANCE_INSUFFICIENT",
+      "maxAmountIn": "0",
+      "requiredAmountIn": "10",
+      "balanceUsd1": "0"
+    },
+    "providerReferenceSafe": null
+  }
+  ```
+
 - Pass `amount`, `minOut`, `deadline` unchanged to §3.5. Re-quote when `deadline` passes.
 - `eligibility.required` in the priority hour: `eligible: false` → grey the panel
   ("提前购仅限名单内持有人"); `reasonCode: LAUNCH2_SNAPSHOT_UNVERIFIED` → show unavailable.
@@ -1294,6 +1320,10 @@ keys are additive.
 - `POST …/trade/prepare` (curve), balance-bound: `maxAmountIn` (the executable max) plus
   `balanceUsd1` (buy, `LAUNCH2_USD1_BALANCE_INSUFFICIENT`) or `balanceMeme` (sell,
   `LAUNCH2_MEME_BALANCE_INSUFFICIENT`).
+- `GET …/quote` and `POST …/trade/prepare` (curve), nothing executable for want of balance
+  (Decision 0170): `maxAmountIn` (= the balance), `requiredAmountIn` (= the requested amount)
+  plus `balanceUsd1` (buy) or `balanceMeme` (sell). Before 0170 the quote said
+  `DATA_STALE / LAUNCH2_QUOTE_ZERO` and the prepare `DATA_STALE / LAUNCH2_SOLD_OUT` here.
 - `POST …/pool/prepare` (official pool): `maxAmountIn` (= the input-token balance),
   `requiredAmountIn` (the trade's maxIn) plus `balanceUsd1` (buy) or `balanceMeme` (sell).
 - `LAUNCH2_GAS_INSUFFICIENT` (every launch2 prepare): `requiredBnb` = the gas fee ceiling

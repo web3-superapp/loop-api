@@ -1457,6 +1457,45 @@ export function createLaunch2Service(
     };
   }
 
+  /**
+   * Decision 0170: a curve quote that comes out empty only because the
+   * wallet cannot pay is a balance refusal, not a stale quote. Applies when
+   * the executable MAX is balance-limited and either nothing is executable
+   * (balance 0, or below one smallest unit's price) or the request was
+   * capped to the balance and that still prices to 0. A request smaller
+   * than the balance that prices to 0 stays `LAUNCH2_QUOTE_ZERO`.
+   */
+  function refuseZeroForBalance(
+    side: "buy" | "sell",
+    state: Launch2ViewerChainState,
+    numbers: QuoteNumbers,
+    requested: bigint,
+  ): void {
+    if (numbers.max.limitedBy !== "balance") return;
+    const capped = numbers.amountIn === numbers.max.amountIn;
+    if (
+      numbers.max.amountIn !== 0n &&
+      !(numbers.expectedOut === 0n && capped)
+    ) {
+      return;
+    }
+    const balance =
+      (side === "buy" ? state.usd1Balance : state.memeBalance) ?? 0n;
+    refuse(
+      "INSUFFICIENT_BALANCE",
+      side === "buy"
+        ? launch2ReasonCodes.usd1Insufficient
+        : launch2ReasonCodes.memeInsufficient,
+      {
+        maxAmountIn: formatLaunch2Amount(balance),
+        requiredAmountIn: formatLaunch2Amount(requested),
+        ...(side === "buy"
+          ? { balanceUsd1: formatLaunch2Amount(balance) }
+          : { balanceMeme: formatLaunch2Amount(balance) }),
+      },
+    );
+  }
+
   async function eligibility(
     record: Launch2InstanceRecord,
     stage: Launch2Stage,
@@ -4155,6 +4194,7 @@ export function createLaunch2Service(
       const stage = requireTradable(record, state, side);
       const numbers = quoteNumbers(side, state, amount);
       if (numbers.max.amountIn === 0n || numbers.expectedOut === 0n) {
+        refuseZeroForBalance(side, state, numbers, amount);
         refuse(
           "DATA_STALE",
           numbers.max.limitedBy === "quota"
@@ -4567,6 +4607,9 @@ export function createLaunch2Service(
           const state = await viewerState(record, address);
           const stage = requireTradable(record, state, body.side);
           const numbers = quoteNumbers(body.side, state, body.amount);
+          if (numbers.max.amountIn === 0n || numbers.expectedOut === 0n) {
+            refuseZeroForBalance(body.side, state, numbers, body.amount);
+          }
           if (numbers.max.amountIn === 0n) {
             refuse(
               "DATA_STALE",

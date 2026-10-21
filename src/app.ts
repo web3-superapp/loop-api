@@ -3205,6 +3205,10 @@ export async function buildApp(
           // schema paths of a validation failure. Neither carries header or
           // body values, and nothing here reaches the response envelope.
           ...(failure.code === undefined ? {} : { errorCode: failure.code }),
+          // Decision 0170: the refusal's machine reason (and, when present,
+          // the non-sensitive limitedBy / stage) so a 4xx can be told apart
+          // without guessing. Amounts in detailsSafe are never logged.
+          ...v2RefusalLogFields(projection.response.detailsSafe),
           ...(typeof failure.code === "string" &&
           failure.code.startsWith("FST_ERR_CTP_")
             ? {
@@ -3286,6 +3290,22 @@ export async function buildApp(
   });
 
   return app;
+}
+
+/**
+ * Decision 0170: the allow-listed, non-amount keys of a v2 refusal's
+ * detailsSafe that the "Request failed" line carries.
+ */
+function v2RefusalLogFields(
+  detailsSafe: Readonly<Record<string, unknown>> | null | undefined,
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (detailsSafe === null || detailsSafe === undefined) return fields;
+  for (const key of ["reasonCode", "limitedBy", "stage"] as const) {
+    const value = detailsSafe[key];
+    if (typeof value === "string") fields[key] = value;
+  }
+  return fields;
 }
 
 /**
