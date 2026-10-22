@@ -16,6 +16,11 @@ export interface MediaObjectMetadata {
   readonly height: number;
   readonly sha256: string;
   readonly createdAt: string;
+  /**
+   * Decision 0173: the IPFS CID a `project_nft_image` was pinned under;
+   * null (or absent) when it was stored locally only.
+   */
+  readonly ipfsCid?: string | null;
 }
 
 export interface MediaObject extends MediaObjectMetadata {
@@ -33,6 +38,8 @@ export interface PutMediaObjectInput {
   readonly idempotencyKey: string;
   /** SHA-256 of the uploaded input bytes, bound to the idempotency key. */
   readonly requestSha256: string;
+  /** Decision 0173: only a pinned `project_nft_image` carries one. */
+  readonly ipfsCid?: string | null;
 }
 
 export interface MediaStorage {
@@ -51,6 +58,14 @@ export interface MediaStorage {
   >;
   get(mediaId: string): Promise<MediaObject | null>;
   getMetadata(mediaId: string): Promise<MediaObjectMetadata | null>;
+  /**
+   * Decision 0173: the owner's earliest `project_nft_image` pinned under
+   * `cid` (the same bytes always give the same CID), or null.
+   */
+  findProjectNftImageByCid(input: {
+    readonly ownerUserId: string;
+    readonly cid: string;
+  }): Promise<MediaObjectMetadata | null>;
 }
 
 export class MediaStorageUnavailableError extends Error {
@@ -79,5 +94,6 @@ export function createUnavailableMediaStorage(): MediaStorage {
     findByIdempotencyKey: unavailable,
     get: unavailable,
     getMetadata: unavailable,
+    findProjectNftImageByCid: unavailable,
   });
 }

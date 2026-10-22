@@ -148,6 +148,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/launch2/instances/{instanceId}/quote",
       "/v2/launch2/instances/{instanceId}/trade/prepare",
       "/v2/launch2/me/positions",
+      "/v2/launch2/nft/{launchId}/{tokenId}",
       "/v2/launch2/overview",
       "/v2/launches/{launchId}",
       "/v2/market/assets",
@@ -161,6 +162,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/market/smart-money",
       "/v2/media/avatars",
       "/v2/media/community-logos",
+      "/v2/media/project-nft-images",
       "/v2/media/{mediaId}.webp",
       "/v2/meme/best-trades",
       "/v2/meme/intents/{memeIntentId}",
@@ -248,7 +250,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(201);
+    expect(operationIds).toHaveLength(203);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

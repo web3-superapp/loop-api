@@ -54,7 +54,7 @@ describe("000057 admin login attempts", () => {
   });
 
   it("lists the new relation (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000095_friend_direct_channel_jobs");
+    expect(latestMigrationName).toBe("000096_launch2_nft_image");
     expect(requiredDatabaseRelations).toContain("public.admin_login_attempts");
   });
 });

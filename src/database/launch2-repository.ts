@@ -199,8 +199,9 @@ const instanceColumns = `
   instance_id::text, job_id::text, project_id::text, config_version,
   owner_user_id::text, chain_id, factory_address, factory_generation,
   launch_id, config_hash,
-  project_owner, name, ticker, logo_url, meme_address, hook_address,
-  nft_address, curve_address, gate_address, escrow_address,
+  project_owner, name, ticker, logo_url, nft_image_url, nft_image_cid,
+  meme_address,
+  hook_address, nft_address, curve_address, gate_address, escrow_address,
   snapshots_address, graduation_adapter_address, buyback_adapter_address,
   price_recorder_address, buyback_executor_address, buyback_recipient,
   nft_sale_start, deploy_block_number::text, activation_block_number::text,
@@ -399,6 +400,8 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     name: text(row, "name"),
     ticker: text(row, "ticker"),
     logoUrl: nullableText(row, "logo_url"),
+    nftImageUrl: nullableText(row, "nft_image_url"),
+    nftImageCid: nullableText(row, "nft_image_cid"),
     listing: row["listing"] === "hidden" ? "hidden" : "visible",
     projectProfile: projectProfileOf(row["project_profile"]),
     addresses: Object.freeze({
@@ -1981,7 +1984,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             instance_id, job_id, project_id, config_version, owner_user_id,
             chain_id, factory_address, factory_generation, launch_id,
             config_hash, project_owner,
-            name, ticker, logo_url, meme_address, hook_address, nft_address,
+            name, ticker, logo_url, nft_image_url, nft_image_cid,
+            meme_address, hook_address,
+            nft_address,
             curve_address, gate_address, escrow_address, snapshots_address,
             graduation_adapter_address, buyback_adapter_address,
             price_recorder_address, buyback_executor_address,
@@ -1993,6 +1998,14 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
             v.config_hash,
             t.project_owner, v.config ->> 'name', v.config ->> 'ticker',
             nullif(v.config ->> 'logoAssetUrl', ''),
+            -- Decision 0173: the optional project NFT picture and its CID
+            -- (guarded so a malformed value never fails the whole batch).
+            case when char_length(v.config ->> 'nftImageAssetUrl')
+                between 1 and 2048
+              then v.config ->> 'nftImageAssetUrl' end,
+            case when v.config ->> 'nftImageCid'
+                ~ '^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,100})$'
+              then v.config ->> 'nftImageCid' end,
             lower(t.deployed_addresses ->> 'meme'),
             lower(t.deployed_addresses ->> 'hook'),
             lower(t.deployed_addresses ->> 'nft'),
@@ -2540,6 +2553,14 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
       const rows = await query<Row>(
         `select ${instanceColumns} from public.launch2_instances where instance_id = $1`,
         [instanceId],
+      );
+      return rows[0] === undefined ? null : mapInstance(rows[0]);
+    },
+
+    async getInstanceByLaunchId(launchId) {
+      const rows = await query<Row>(
+        `select ${instanceColumns} from public.launch2_instances where launch_id = $1`,
+        [launchId.toLowerCase()],
       );
       return rows[0] === undefined ? null : mapInstance(rows[0]);
     },

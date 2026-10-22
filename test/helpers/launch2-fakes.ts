@@ -94,6 +94,8 @@ export function instanceFixture(
     name: "Frog Launch",
     ticker: "FROG",
     logoUrl: "https://example.com/frog.png",
+    nftImageUrl: null,
+    nftImageCid: null,
     listing: "visible",
     projectProfile: {
       description: "A frog launch.",
@@ -427,6 +429,12 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
     },
     getInstance: (instanceId) =>
       Promise.resolve(instances.get(instanceId) ?? null),
+    getInstanceByLaunchId: (launchId) =>
+      Promise.resolve(
+        [...instances.values()].find(
+          (row) => row.launchId.toLowerCase() === launchId.toLowerCase(),
+        ) ?? null,
+      ),
     listPositions: (input) =>
       Promise.resolve(
         positions.filter(

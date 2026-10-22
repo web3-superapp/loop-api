@@ -1,4 +1,4 @@
-export const latestMigrationName = "000095_friend_direct_channel_jobs";
+export const latestMigrationName = "000096_launch2_nft_image";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

@@ -5,7 +5,12 @@
  * is a path under this API, never a storage location.
  */
 
-export const mediaKinds = Object.freeze(["avatar", "community_logo"] as const);
+export const mediaKinds = Object.freeze([
+  "avatar",
+  "community_logo",
+  // Decision 0173: the project NFT picture (pinned to IPFS when configured).
+  "project_nft_image",
+] as const);
 export type MediaKind = (typeof mediaKinds)[number];
 /**
  * Decision 0140: every kind a stored object can have. `campaign_cover` is
@@ -45,6 +50,57 @@ const mediaIdBody =
   "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 export const avatarMediaRefPatternSource = `^avatar:media/${mediaIdBody}$`;
 export const logoMediaRefPatternSource = `^logo:media/${mediaIdBody}$`;
+/** Decision 0173: `nft:media/{mediaId}` (informational; drafts take the URL). */
+export const nftMediaRefPatternSource = `^nft:media/${mediaIdBody}$`;
+
+/**
+ * Decision 0173: an IPFS CID as Filebase / Kubo `add` returns it — CIDv0
+ * (`Qm` + 44 base58) or a base32 CIDv1 (`b…`).
+ */
+export const ipfsCidPatternSource =
+  "^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,100})$";
+const ipfsCidPattern = new RegExp(ipfsCidPatternSource);
+
+export function isIpfsCid(value: unknown): value is string {
+  return typeof value === "string" && ipfsCidPattern.test(value);
+}
+
+/** `<gateway base>/<cid>` (base with or without trailing slash). */
+export function ipfsGatewayUrl(gatewayBaseUrl: string, cid: string): string {
+  return `${gatewayBaseUrl.replace(/\/+$/u, "")}/${cid}`;
+}
+
+/**
+ * Decision 0173: which uploaded object a draft's `nftImageAssetUrl` names —
+ * `<IPFS_GATEWAY_BASE_URL>/<cid>` or `<PUBLIC_BASE_URL>/v2/media/<id>.webp`
+ * (exactly, no query or fragment). Null for any other URL.
+ */
+export type ProjectNftImageReference =
+  | { readonly kind: "cid"; readonly cid: string }
+  | { readonly kind: "media"; readonly mediaId: string };
+
+export function parseProjectNftImageReference(
+  value: unknown,
+  bases: {
+    readonly publicBaseUrl: string;
+    readonly ipfsGatewayBaseUrl: string | null;
+  },
+): ProjectNftImageReference | null {
+  if (typeof value !== "string" || value.length > 2_048) return null;
+  if (bases.ipfsGatewayBaseUrl !== null) {
+    const prefix = `${bases.ipfsGatewayBaseUrl.replace(/\/+$/u, "")}/`;
+    if (value.startsWith(prefix)) {
+      const cid = value.slice(prefix.length);
+      return isIpfsCid(cid) ? { kind: "cid", cid } : null;
+    }
+  }
+  const mediaPrefix = `${bases.publicBaseUrl.replace(/\/+$/u, "")}/v2/media/`;
+  if (value.startsWith(mediaPrefix) && value.endsWith(".webp")) {
+    const mediaId = value.slice(mediaPrefix.length, -".webp".length);
+    return mediaIdPattern.test(mediaId) ? { kind: "media", mediaId } : null;
+  }
+  return null;
+}
 
 const mediaIdPattern = new RegExp(mediaIdPatternSource);
 const avatarMediaRefPattern = new RegExp(`^avatar:media/(${mediaIdBody})$`);
@@ -83,7 +139,9 @@ export function logoRefMediaId(value: string | null): string | null {
 export function mediaRef(kind: MediaKind, mediaId: string): string {
   return kind === "avatar"
     ? `avatar:media/${mediaId}`
-    : `logo:media/${mediaId}`;
+    : kind === "project_nft_image"
+      ? `nft:media/${mediaId}`
+      : `logo:media/${mediaId}`;
 }
 
 /** The API-relative path of a media object; clients prefix their base URL. */

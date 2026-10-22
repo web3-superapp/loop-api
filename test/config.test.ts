@@ -719,6 +719,60 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses NFT_IMAGE_STORAGE / FILEBASE_RPC_* / IPFS_GATEWAY_BASE_URL fail-closed (Decision 0173)", () => {
+    const defaults = loadConfig(validEnvironment());
+    expect(defaults.nftImageStorage).toEqual({ mode: "local" });
+    expect(defaults.ipfsGatewayBaseUrl).toBe("https://ipfs.filebase.io/ipfs");
+    const filebase = validEnvironment();
+    filebase["NFT_IMAGE_STORAGE"] = "filebase";
+    filebase["FILEBASE_RPC_ENDPOINT"] = "https://rpc.example.test/";
+    filebase["FILEBASE_RPC_TOKEN"] = "token-value";
+    filebase["IPFS_GATEWAY_BASE_URL"] = "https://gw.example.test/ipfs/";
+    const parsed = loadConfig(filebase);
+    expect(parsed.nftImageStorage).toEqual({
+      mode: "filebase",
+      rpcEndpoint: "https://rpc.example.test",
+      rpcToken: "token-value",
+    });
+    expect(parsed.ipfsGatewayBaseUrl).toBe("https://gw.example.test/ipfs");
+    for (const [key, value, pattern] of [
+      ["FILEBASE_RPC_TOKEN", "", /FILEBASE_RPC_TOKEN/],
+      [
+        "FILEBASE_RPC_ENDPOINT",
+        "http://rpc.example.test",
+        /FILEBASE_RPC_ENDPOINT/,
+      ],
+      [
+        "IPFS_GATEWAY_BASE_URL",
+        "http://gw.example.test/ipfs",
+        /IPFS_GATEWAY_BASE_URL/,
+      ],
+      ["NFT_IMAGE_STORAGE", "s3", /NFT_IMAGE_STORAGE/],
+    ] as const) {
+      const environment = { ...filebase, [key]: value };
+      expect(() => loadConfig(environment), key).toThrow(pattern);
+    }
+  });
+
+  it("parses LAUNCH2_NFT_IMAGE_EMIT as off|on, default off, and refuses anything else (Decision 0173)", () => {
+    expect(loadConfig(validEnvironment()).launch2.nftImageEmit).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_NFT_IMAGE_EMIT"] = value;
+      expect(loadConfig(environment).launch2.nftImageEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_NFT_IMAGE_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /LAUNCH2_NFT_IMAGE_EMIT/,
+      );
+    }
+  });
+
   it("parses REFERRAL_CENTER_EMIT as off|on, default off, and refuses anything else (Decision 0166)", () => {
     expect(loadConfig(validEnvironment()).referralCenterEmit).toBe(false);
     for (const [value, enabled] of [

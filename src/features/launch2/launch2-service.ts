@@ -148,6 +148,12 @@ import {
 } from "../profile/wallet-account-directory.js";
 import { launch2ProjectProfileProjection } from "./launch2-project-profile.js";
 import {
+  launch2NftLaunchIdPatternSource,
+  launch2NftMetadataOf,
+  launch2NftTokenIdPatternSource,
+  type Launch2NftMetadata,
+} from "./launch2-nft-metadata.js";
+import {
   launch2PublicCandleIntervals,
   launch2PublicCandleMaximumLimit,
   launch2PublicChangePct,
@@ -257,6 +263,12 @@ export interface Launch2ServiceDependencies {
    * objects strictly and reject the extra key.
    */
   readonly traderAccountEmit?: boolean;
+  /**
+   * Decision 0173 (LAUNCH2_NFT_IMAGE_EMIT): whether the instance summary /
+   * detail and the position rows carry the `nftImageUrl` key at all. False
+   * (default) omits it — shipped clients decode those objects strictly.
+   */
+  readonly nftImageEmit?: boolean;
 }
 
 type Resource = Record<string, unknown>;
@@ -312,6 +324,15 @@ export interface Launch2Service {
   listMyPositions(input: {
     readonly principal: AuthenticatedLoopPrincipal;
   }): Promise<Resource>;
+  /**
+   * Decision 0173: the public ERC-721 metadata of one project NFT (no
+   * principal). 404 LAUNCH2_INSTANCE_NOT_FOUND for an unknown launch id,
+   * 404 LAUNCH2_NFT_NOT_MINTED for a token id above the minted count.
+   */
+  getNftMetadata(input: {
+    readonly launchId: string;
+    readonly tokenId: string;
+  }): Promise<Launch2NftMetadata>;
   /**
    * Decision 0169: what `address` holds on the Launch chain, per instance
    * (the `launch2_positions` rows of the address, hidden listings included
@@ -525,6 +546,8 @@ export function launch2NextOrderBlockedReason(input: {
 function summaryOf(
   record: Launch2InstanceRecord,
   nowSeconds: bigint,
+  /** Decision 0173: LAUNCH2_NFT_IMAGE_EMIT — false omits the key. */
+  nftImageEmit: boolean,
 ): Resource {
   const stage = stageOf(record, nowSeconds);
   const sold = BigInt(record.soldSupply);
@@ -539,6 +562,7 @@ function summaryOf(
     name: record.name,
     ticker: record.ticker,
     logoUrl: record.logoUrl,
+    ...(nftImageEmit ? { nftImageUrl: record.nftImageUrl } : {}),
     summary: profile.summary,
     links: profile.links,
     memeAddress: record.addresses.meme,
@@ -1041,6 +1065,7 @@ export function createUnavailableLaunch2Service(
     quote: fail,
     listBuybacks: fail,
     listMyPositions: fail,
+    getNftMetadata: fail,
     listAddressHoldings: fail,
     getOverview: fail,
     prepareNftMint: fail,
@@ -1070,6 +1095,8 @@ export function createLaunch2Service(
   const accounts = deps.accounts ?? createEmptyWalletAccountDirectory();
   // Decision 0166: off (default) = no `account` key and no lookup.
   const traderAccountEmit = deps.traderAccountEmit === true;
+  // Decision 0173: off (default) = no `nftImageUrl` key.
+  const nftImageEmit = deps.nftImageEmit === true;
   const tradeDeadlineSeconds = BigInt(
     Math.min(
       Math.max(
@@ -3980,7 +4007,7 @@ export function createLaunch2Service(
       const last = page.at(-1);
       const at = nowSeconds();
       return Object.freeze({
-        instances: page.map((row) => summaryOf(row, at)),
+        instances: page.map((row) => summaryOf(row, at, nftImageEmit)),
         nextCursor:
           rows.length > limit && last !== undefined
             ? cursorCodec().encode({
@@ -4067,7 +4094,7 @@ export function createLaunch2Service(
       const graduation = record.graduation;
       return Object.freeze({
         instance: Object.freeze({
-          ...summaryOf(record, at),
+          ...summaryOf(record, at, nftImageEmit),
           viewerIsProjectOwner: record.ownerUserId === input.principal.userId,
           projectOwnerAddress: record.projectOwner,
           configVersion: record.configVersion,
@@ -4476,6 +4503,7 @@ export function createLaunch2Service(
               name: record.name,
               ticker: record.ticker,
               logoUrl: record.logoUrl,
+              ...(nftImageEmit ? { nftImageUrl: record.nftImageUrl } : {}),
               memeAddress: record.addresses.meme,
               stage: stageOf(record, at).stage,
               walletId: wallet.walletId,
@@ -4493,6 +4521,38 @@ export function createLaunch2Service(
         }),
         contractVersion: v2ContractVersion,
       });
+    },
+
+    async getNftMetadata(input) {
+      if (
+        !new RegExp(launch2NftLaunchIdPatternSource).test(input.launchId) ||
+        !new RegExp(launch2NftTokenIdPatternSource).test(input.tokenId)
+      ) {
+        throw V2ApiError.notFound();
+      }
+      const record = await repository()
+        .getInstanceByLaunchId(input.launchId.toLowerCase())
+        .catch(translate);
+      if (
+        record === null ||
+        record.chainId !== deps.chainId ||
+        (record.activatedAt === null && record.holdReason === null)
+      ) {
+        throw V2ApiError.fromCode("NOT_FOUND", {
+          reasonCode: launch2ReasonCodes.instanceNotFound,
+        });
+      }
+      const tokenId = Number(input.tokenId);
+      if (BigInt(input.tokenId) > BigInt(record.nftMintedCount)) {
+        throw V2ApiError.fromCode("NOT_FOUND", {
+          reasonCode: launch2ReasonCodes.nftNotMinted,
+        });
+      }
+      return launch2NftMetadataOf(
+        record,
+        tokenId,
+        stageOf(record, nowSeconds()).stage,
+      );
     },
 
     async listAddressHoldings(input) {

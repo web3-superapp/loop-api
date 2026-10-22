@@ -621,6 +621,13 @@ export interface Launch2InstanceRecord {
   readonly ticker: string;
   readonly logoUrl: string | null;
   /**
+   * Decision 0173: the project NFT picture from the signed config
+   * (`nftImageAssetUrl`); null when the config has none.
+   */
+  readonly nftImageUrl: string | null;
+  /** Decision 0173: the IPFS CID of `nftImageUrl`; null = not pinned. */
+  readonly nftImageCid: string | null;
+  /**
    * Decision 0163: `hidden` keeps the instance out of every App list; the
    * detail by id still reads it.
    */
@@ -1310,6 +1317,10 @@ export interface Launch2Repository {
     readonly limit: number;
   }): Promise<readonly Launch2InstanceRecord[]>;
   getInstance(instanceId: string): Promise<Launch2InstanceRecord | null>;
+  /** Decision 0173: by the Factory launch id (`0x` + 64 hex, any case). */
+  getInstanceByLaunchId(
+    launchId: string,
+  ): Promise<Launch2InstanceRecord | null>;
   listPositions(input: {
     readonly holderAddresses: readonly string[];
     readonly instanceId: string | null;

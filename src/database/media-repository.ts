@@ -1,7 +1,10 @@
 import type { Pool } from "pg";
 import { z } from "zod";
 
-import { storedMediaKinds } from "../features/media/media-contract.js";
+import {
+  ipfsCidPatternSource,
+  storedMediaKinds,
+} from "../features/media/media-contract.js";
 import {
   MediaIdempotencyConflictError,
   MediaStorageUnavailableError,
@@ -34,12 +37,14 @@ const metadataRowSchema = z
     sha256: sha256Schema,
     request_sha256: sha256Schema,
     created_at: z.date(),
+    // Decision 0173.
+    ipfs_cid: z.string().regex(new RegExp(ipfsCidPatternSource)).nullable(),
   })
   .strict();
 
 const metadataColumns = `
   media_id, owner_user_id, kind, content_type, width, height, sha256,
-  request_sha256, created_at
+  request_sha256, created_at, ipfs_cid
 `;
 
 function toMetadata(row: unknown): MediaObjectMetadata & {
@@ -56,6 +61,7 @@ function toMetadata(row: unknown): MediaObjectMetadata & {
     sha256: parsed.sha256,
     requestSha256: parsed.request_sha256,
     createdAt: parsed.created_at.toISOString(),
+    ipfsCid: parsed.ipfs_cid,
   });
 }
 
@@ -70,6 +76,7 @@ function pickMetadata(row: Record<string, unknown>): Record<string, unknown> {
     sha256: row["sha256"],
     request_sha256: row["request_sha256"],
     created_at: row["created_at"],
+    ipfs_cid: row["ipfs_cid"],
   };
 }
 
@@ -101,9 +108,9 @@ export function createPostgresMediaRepository(pool: Pool): MediaStorage {
           text: `
             insert into public.media_objects (
               media_id, owner_user_id, kind, content_type, bytes, width,
-              height, sha256, idempotency_key, request_sha256
+              height, sha256, idempotency_key, request_sha256, ipfs_cid
             )
-            values ($1, $2, $3, 'image/webp', $4, $5, $6, $7, $8, $9)
+            values ($1, $2, $3, 'image/webp', $4, $5, $6, $7, $8, $9, $10)
             on conflict (owner_user_id, idempotency_key) do nothing
             returning ${metadataColumns}
           `,
@@ -117,6 +124,7 @@ export function createPostgresMediaRepository(pool: Pool): MediaStorage {
             sha256Schema.parse(input.sha256),
             uuidSchema.parse(input.idempotencyKey),
             sha256Schema.parse(input.requestSha256),
+            input.ipfsCid ?? null,
           ],
         });
         inserted = result.rows[0];
@@ -199,6 +207,28 @@ export function createPostgresMediaRepository(pool: Pool): MediaStorage {
             limit 1
           `,
           values: [uuidSchema.parse(mediaId)],
+        });
+        const row = result.rows[0];
+        return row === undefined ? null : toMetadata(row);
+      } catch {
+        throw new MediaStorageUnavailableError();
+      }
+    },
+    async findProjectNftImageByCid(input: {
+      readonly ownerUserId: string;
+      readonly cid: string;
+    }): Promise<MediaObjectMetadata | null> {
+      try {
+        const result = await pool.query<Record<string, unknown>>({
+          text: `
+            select ${metadataColumns}
+            from public.media_objects
+            where owner_user_id = $1 and kind = 'project_nft_image'
+              and ipfs_cid = $2
+            order by created_at, media_id
+            limit 1
+          `,
+          values: [uuidSchema.parse(input.ownerUserId), input.cid],
         });
         const row = result.rows[0];
         return row === undefined ? null : toMetadata(row);

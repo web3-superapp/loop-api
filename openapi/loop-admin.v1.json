@@ -31230,6 +31230,8 @@
                               "name",
                               "ticker",
                               "logoAssetUrl",
+                              "nftImageAssetUrl",
+                              "nftImageCid",
                               "description",
                               "links",
                               "nftSaleStartAt",
@@ -31241,6 +31243,14 @@
                               "name": { "type": ["null", "string"] },
                               "ticker": { "type": ["null", "string"] },
                               "logoAssetUrl": { "type": ["null", "string"] },
+                              "nftImageAssetUrl": {
+                                "type": ["null", "string"],
+                                "description": "Decision 0173: the project NFT picture (https; the IPFS gateway URL when pinned); null when the version has none (the App and the NFT metadata fall back to the logo)."
+                              },
+                              "nftImageCid": {
+                                "type": ["null", "string"],
+                                "description": "Decision 0173: the IPFS CID of the NFT picture; null when not pinned or none."
+                              },
                               "description": { "type": ["null", "string"] },
                               "links": {
                                 "type": ["null", "array"],
