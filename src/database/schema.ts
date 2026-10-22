@@ -1,4 +1,4 @@
-export const latestMigrationName = "000097_community_label";
+export const latestMigrationName = "000098_notification_inbox_producers";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

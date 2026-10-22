@@ -4,8 +4,10 @@ import { z } from "zod";
 import {
   defaultNotificationPreferences,
   notificationCategories,
+  notificationInboxEventTypes,
   optionalNotificationCategories,
   type NotificationCategory,
+  type NotificationInboxEventType,
   type OptionalNotificationCategory,
 } from "../features/alerts/notification-contract.js";
 import {
@@ -32,6 +34,7 @@ const notificationRowSchema = z
     notification_id: uuidSchema,
     owner_user_id: uuidSchema,
     type: z.enum(notificationCategories),
+    event_type: z.enum(notificationInboxEventTypes).nullable(),
     entity_ref: z.string().min(3).max(200),
     context_route: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
     context_params: z.record(z.string(), z.string()),
@@ -49,6 +52,8 @@ export interface NotificationRecord {
   readonly notificationId: string;
   readonly ownerUserId: string;
   readonly type: NotificationCategory;
+  /** Decision 0177: the fine inbox event, null for older producers. */
+  readonly eventType: NotificationInboxEventType | null;
   readonly entityRef: string;
   readonly contextRoute: string;
   readonly contextParams: Readonly<Record<string, string>>;
@@ -65,6 +70,11 @@ export interface NotificationRecord {
 export interface ListNotificationsInput {
   readonly ownerUserId: string;
   readonly limit: number;
+  /**
+   * Decision 0177: whether rows with a fine `event_type` are visible
+   * (`NOTIFICATION_INBOX_EMIT`). Absent = hidden.
+   */
+  readonly includeInboxEvents?: boolean;
   readonly before?: {
     readonly createdAt: string;
     readonly notificationId: string;
@@ -96,6 +106,8 @@ export interface ReplaceNotificationPreferencesV2Input {
 export interface RecordNotificationInput {
   readonly ownerUserId: string;
   readonly type: NotificationCategory;
+  /** Decision 0177: the fine inbox event; absent for older producers. */
+  readonly eventType?: NotificationInboxEventType | null;
   readonly entityRef: string;
   readonly contextRoute: string;
   readonly contextParams: Readonly<Record<string, string>>;
@@ -122,11 +134,25 @@ export interface NotificationRepository {
     readonly type: NotificationCategory;
     readonly limit: number;
   }): Promise<readonly NotificationRecord[]>;
-  /** Idempotent: an already-read notification is returned unchanged. */
+  /**
+   * Idempotent: an already-read notification is returned unchanged. A hidden
+   * fine-event row (`includeInboxEvents` false) reads as missing.
+   */
   markRead(
     ownerUserId: string,
     notificationId: string,
+    includeInboxEvents?: boolean,
   ): Promise<NotificationRecord | null>;
+  /** Decision 0177: unread rows visible under the emit switch. */
+  countUnread(input: {
+    readonly ownerUserId: string;
+    readonly includeInboxEvents: boolean;
+  }): Promise<number>;
+  /** Decision 0177: marks every visible unread row; returns the count. */
+  markAllRead(input: {
+    readonly ownerUserId: string;
+    readonly includeInboxEvents: boolean;
+  }): Promise<number>;
   getPreferences(ownerUserId: string): Promise<NotificationPreferencesV2Record>;
   replacePreferences(
     input: ReplaceNotificationPreferencesV2Input,
@@ -139,9 +165,20 @@ export interface NotificationRepository {
 }
 
 const notificationColumns = `
-  notification_id, owner_user_id, type, entity_ref, context_route,
+  notification_id, owner_user_id, type, event_type, entity_ref, context_route,
   context_params, payload, dedupe_key, source, observed_at, read_at, created_at,
   to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_cursor
+`;
+
+/**
+ * Unread rows of one owner (Decision 0177). Served by the partial index
+ * `notifications_owner_unread_idx (owner_user_id) where read_at is null`.
+ */
+const countUnreadSql = `
+  select count(*)::int as unread
+  from public.notifications
+  where owner_user_id = $1 and read_at is null
+    and ($2::boolean or event_type is null)
 `;
 
 function mapNotification(value: unknown): NotificationRecord {
@@ -150,6 +187,7 @@ function mapNotification(value: unknown): NotificationRecord {
     notificationId: row.notification_id,
     ownerUserId: row.owner_user_id,
     type: row.type,
+    eventType: row.event_type,
     entityRef: row.entity_ref,
     contextRoute: row.context_route,
     contextParams: Object.freeze({ ...row.context_params }),
@@ -161,6 +199,43 @@ function mapNotification(value: unknown): NotificationRecord {
     createdAt: row.created_at.toISOString(),
     createdAtCursor: row.created_at_cursor,
   });
+}
+
+/**
+ * Decision 0177: in-transaction producer write (friend requests, the
+ * notification inbox lane). Deduplicated on (owner, dedupeKey); returns the
+ * new row id, or `null` for a duplicate.
+ */
+export async function insertNotificationRow(
+  client: Pick<PoolClient, "query">,
+  input: RecordNotificationInput,
+): Promise<string | null> {
+  const result = await client.query<{ notification_id: string }>({
+    text: `
+      insert into public.notifications (
+        owner_user_id, type, entity_ref, context_route, context_params,
+        payload, dedupe_key, source, observed_at, event_type
+      )
+      values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz, $10)
+      on conflict (owner_user_id, dedupe_key) do nothing
+      returning notification_id::text
+    `,
+    values: [
+      uuidSchema.parse(input.ownerUserId),
+      z.enum(notificationCategories).parse(input.type),
+      input.entityRef,
+      input.contextRoute,
+      JSON.stringify(input.contextParams),
+      JSON.stringify(input.payload),
+      input.dedupeKey,
+      input.source,
+      input.observedAt,
+      input.eventType === undefined || input.eventType === null
+        ? null
+        : z.enum(notificationInboxEventTypes).parse(input.eventType),
+    ],
+  });
+  return result.rows[0]?.notification_id ?? null;
 }
 
 function normalizeValues(
@@ -285,6 +360,7 @@ export function createPostgresNotificationRepository(
               select ${notificationColumns}
               from public.notifications
               where owner_user_id = $1
+                and ($5::boolean or event_type is null)
                 and (
                   $2::timestamptz is null
                   or (created_at, notification_id) < ($2::timestamptz, $3::uuid)
@@ -297,15 +373,12 @@ export function createPostgresNotificationRepository(
               input.before?.createdAt ?? null,
               input.before?.notificationId ?? null,
               input.limit + 1,
+              input.includeInboxEvents === true,
             ],
           }),
           pool.query<{ unread: number }>({
-            text: `
-              select count(*)::int as unread
-              from public.notifications
-              where owner_user_id = $1 and read_at is null
-            `,
-            values: [ownerUserId],
+            text: countUnreadSql,
+            values: [ownerUserId, input.includeInboxEvents === true],
           }),
         ]);
         const rows = page.rows.map(mapNotification);
@@ -325,9 +398,9 @@ export function createPostgresNotificationRepository(
           text: `
             insert into public.notifications (
               owner_user_id, type, entity_ref, context_route, context_params,
-              payload, dedupe_key, source, observed_at
+              payload, dedupe_key, source, observed_at, event_type
             )
-            values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz)
+            values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz, $10)
             on conflict (owner_user_id, dedupe_key) do nothing
             returning ${notificationColumns}
           `,
@@ -341,6 +414,9 @@ export function createPostgresNotificationRepository(
             input.dedupeKey,
             input.source,
             input.observedAt,
+            input.eventType === undefined || input.eventType === null
+              ? null
+              : z.enum(notificationInboxEventTypes).parse(input.eventType),
           ],
         });
         const row = result.rows[0];
@@ -371,22 +447,63 @@ export function createPostgresNotificationRepository(
       }
     },
 
-    async markRead(ownerUserId, notificationId) {
+    async markRead(ownerUserId, notificationId, includeInboxEvents) {
       try {
         const result = await pool.query<Record<string, unknown>>({
           text: `
             update public.notifications
             set read_at = coalesce(read_at, clock_timestamp())
             where owner_user_id = $1 and notification_id = $2
+              and ($3::boolean or event_type is null)
             returning ${notificationColumns}
           `,
           values: [
             uuidSchema.parse(ownerUserId),
             uuidSchema.parse(notificationId),
+            includeInboxEvents === true,
           ],
         });
         const row = result.rows[0];
         return row === undefined ? null : mapNotification(row);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async countUnread(input) {
+      try {
+        const result = await pool.query<{ unread: number }>({
+          text: countUnreadSql,
+          values: [
+            uuidSchema.parse(input.ownerUserId),
+            input.includeInboxEvents,
+          ],
+        });
+        return z.number().int().min(0).parse(result.rows[0]?.unread);
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async markAllRead(input) {
+      try {
+        const result = await pool.query<{ marked: number }>({
+          text: `
+            with marked as (
+              update public.notifications
+              set read_at = clock_timestamp()
+              where owner_user_id = $1 and read_at is null
+                and ($2::boolean or event_type is null)
+              returning 1
+            )
+            select count(*)::int as marked from marked
+          `,
+          values: [
+            uuidSchema.parse(input.ownerUserId),
+            input.includeInboxEvents,
+          ],
+        });
+        return z.number().int().min(0).parse(result.rows[0]?.marked);
       } catch (error) {
         return translate(error);
       }
@@ -497,6 +614,8 @@ export function createUnavailableNotificationRepository(): NotificationRepositor
     record: unavailable,
     listRecentByType: unavailable,
     markRead: unavailable,
+    countUnread: unavailable,
+    markAllRead: unavailable,
     getPreferences: unavailable,
     replacePreferences: unavailable,
     isCategoryEnabled: unavailable,

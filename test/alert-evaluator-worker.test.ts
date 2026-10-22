@@ -153,6 +153,8 @@ function harness(options: {
     record: vi.fn(() => Promise.reject(new Error("not used"))),
     listRecentByType: vi.fn(() => Promise.reject(new Error("not used"))),
     markRead: vi.fn(() => Promise.reject(new Error("not used"))),
+    countUnread: vi.fn(() => Promise.reject(new Error("not used"))),
+    markAllRead: vi.fn(() => Promise.reject(new Error("not used"))),
     getPreferences: vi.fn(() => Promise.reject(new Error("not used"))),
     replacePreferences: vi.fn(() => Promise.reject(new Error("not used"))),
     isCategoryEnabled: vi.fn(() =>

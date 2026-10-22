@@ -4,8 +4,8 @@
 `openapi/loop-api.v2.json`。通用规则沿用 `docs/frontend-v2-session-api.md` 与
 `docs/api-v2-conventions.md`。
 
-覆盖页面：`alerts`、`notif-settings`，以及 Token 页 / alerts 页内的上下文通知入口。
-**没有独立通知中心。** 推送通道见 §7（决策 0067）：推送只是"指针"，
+覆盖页面：`alerts`、`notif-settings`，Token 页 / alerts 页内的上下文通知入口，
+以及（决策 0177，S287）统一通知收件箱：见 §8。推送通道见 §7（决策 0067）：推送只是"指针"，
 点击后必须重新认证并重新读取 feed，绝不能相信 payload 里的结论。
 
 ## 1. 启用条件与 capability
@@ -24,7 +24,7 @@
 | 接口                                                                | 必带                                                                                                    |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | 所有 GET                                                            | Bearer、`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`                                         |
-| `POST /v2/alerts`、`POST …/read`                                    | 以上 + `Idempotency-Key`（UUIDv4，每个逻辑操作一个）                                                    |
+| `POST /v2/alerts`、`POST …/read`、`POST /v2/notifications/read-all` | 以上 + `Idempotency-Key`（UUIDv4，每个逻辑操作一个）                                                    |
 | `PUT /v2/alerts/{id}`、`DELETE`、`PUT /v2/notification-preferences` | 以上，**不带** `Idempotency-Key`（带了 → `400`），靠 `expectedVersion` CAS                              |
 | 所有写操作（可选）                                                  | `X-Loop-Platform: ios\|android`、`X-Loop-Device-ID`（UUIDv4）；存在即校验，格式错 → `400`；读接口不接受 |
 
@@ -259,12 +259,12 @@ DELETE /v2/devices/push-token
 
 只有四个键，**没有金额、地址、ticker、余额、验证码、聊天正文、社区名**：
 
-| 键             | 值                                                                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`         | `price_alert_triggered` / `security_event` / `community_voice_room_started` / `community_application_verified` / `community_application_rejected` |
-| `entityRef`    | `<类型>:<UUID>`，如 `priceAlert:…`、`deviceSession:…`、`voiceRoom:…`、`community:…`                                                               |
-| `contextRoute` | `token` / `devices` / `voice-room` / `community-profile`                                                                                          |
-| `eventVersion` | `"1"`                                                                                                                                             |
+| 键             | 值                                                                                                                                                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`         | `price_alert_triggered` / `security_event` / `community_voice_room_started` / `community_application_verified` / `community_application_rejected`；决策 0177 新增（仅 `NOTIFICATION_INBOX_EMIT=on`）：`launch_graduated` / `launch_badge_minted` / `social_friend_request` / `social_friend_accepted` |
+| `entityRef`    | `<类型>:<UUID>`，如 `priceAlert:…`、`deviceSession:…`、`voiceRoom:…`、`community:…`；新增 `launch2Instance:…`、`friendRequest:…`                                                                                                                                                                      |
+| `contextRoute` | `token` / `devices` / `voice-room` / `community-profile`；新增 `launch2-instance` / `dm-requests` / `user-profile`                                                                                                                                                                                    |
+| `eventVersion` | `"1"`                                                                                                                                                                                                                                                                                                 |
 
 可见文案由客户端用本地化 key 渲染（`push.priceAlertTriggered.title/body`、
 `push.securityEvent.*`、`push.communityVoiceRoomStarted.*`），服务端不下发任何
@@ -277,13 +277,17 @@ DELETE /v2/devices/push-token
 
 ### 7.3 事件字典（第一批）
 
-| `type`                           | 触发                                                                                                    | 偏好类别                 | 可关 |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------ | ---- |
-| `price_alert_triggered`          | 价格提醒被评估器触发且写入了 feed 通知                                                                  | `trade.priceAlert`       | 是   |
-| `security_event`                 | 新设备登录、远程撤销设备会话                                                                            | `security.event`         | 否   |
-| `community_voice_room_started`   | 社区语音房开播（房主自己不收）                                                                          | `community.announcement` | 是   |
-| `community_application_verified` | 运营通过了你创建的社区申请（决策 0073）；`entityRef: community:<id>`，`contextRoute: community-profile` | `community.announcement` | 是   |
-| `community_application_rejected` | 运营驳回了你创建的社区申请（决策 0073）；原因只在 feed 行与社区详情里，不在推送里                       | `community.announcement` | 是   |
+| `type`                           | 触发                                                                                                        | 偏好类别                 | 可关 |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ | ---- |
+| `price_alert_triggered`          | 价格提醒被评估器触发且写入了 feed 通知                                                                      | `trade.priceAlert`       | 是   |
+| `security_event`                 | 新设备登录、远程撤销设备会话                                                                                | `security.event`         | 否   |
+| `community_voice_room_started`   | 社区语音房开播（房主自己不收）                                                                              | `community.announcement` | 是   |
+| `community_application_verified` | 运营通过了你创建的社区申请（决策 0073）；`entityRef: community:<id>`，`contextRoute: community-profile`     | `community.announcement` | 是   |
+| `community_application_rejected` | 运营驳回了你创建的社区申请（决策 0073）；原因只在 feed 行与社区详情里，不在推送里                           | `community.announcement` | 是   |
+| `launch_graduated`               | 决策 0177：你持有（曲线净买入或勋章）或发起的 MEME v2 项目毕业；`launch2Instance:<id>` → `launch2-instance` | `launch.graduation`      | 是   |
+| `launch_badge_minted`            | 决策 0177：你的共识勋章铸造上链；`launch2Instance:<id>` → `launch2-instance`                                | `launch.round`           | 是   |
+| `social_friend_request`          | 决策 0177：有人向你发送好友申请；`friendRequest:<id>` → `dm-requests`                                       | `community.mention`      | 是   |
+| `social_friend_accepted`         | 决策 0177：对方接受了你的好友申请；`friendRequest:<id>` → `user-profile`                                    | `community.mention`      | 是   |
 
 社区申请结果的 feed 行（`type: community.announcement`，`payload.event =
  community.application.verified|rejected`，含 `communityId`、`communityName`、`reviewedAt`、
@@ -321,3 +325,98 @@ DELETE /v2/devices/push-token
 | `POST` 返回 503                   | 不重试注册，不提示"已开启推送"；按 unavailable 处理                                                      |
 | 系统通知权限被拒                  | 不注册 token；引导系统设置，不伪造已注册状态                                                             |
 | 登出 / 会话被撤销                 | 本地丢弃 token，重新登录后重新注册                                                                       |
+
+## 8. 通知收件箱（决策 0177，S286 / 客户端 S287）
+
+Base URL、headers、模块开关与 capability（`notificationsFeed`）同 §1–§2。收件箱就是
+`GET /v2/notifications/feed`（分页、游标、`unreadCount`、`readAt` 都不变），加两条新路由与
+四种新事件。
+
+### 8.1 新事件（feed `type` 新值）
+
+| feed `type`              | 偏好类别（`notif-settings` 开关管推送） | `entityRef`                    | `contextRoute`     | `contextParams`       | `payload` 键                                                                                     |
+| ------------------------ | --------------------------------------- | ------------------------------ | ------------------ | --------------------- | ------------------------------------------------------------------------------------------------ |
+| `launch.graduated`       | `launch.graduation`                     | `launch2Instance:<instanceId>` | `launch2-instance` | `{ instanceId }`      | `event, title, body, instanceId, projectName, graduatedAt, officialPoolId`（后者可为 null）      |
+| `launch.badge_minted`    | `launch.round`                          | `launch2Instance:<instanceId>` | `launch2-instance` | `{ instanceId }`      | `event, title, body, instanceId, projectName, tokenId, mintedAt, transactionHash`                |
+| `social.friend_request`  | `community.mention`                     | `friendRequest:<id>`           | `dm-requests`      | `{ friendRequestId }` | `event, title, body, friendRequestId, publicProfileId（申请人）, alias（申请人昵称，可为 null）` |
+| `social.friend_accepted` | `community.mention`                     | `friendRequest:<id>`           | `user-profile`     | `{ publicProfileId }` | `event, title, body, friendRequestId, publicProfileId（接受人）, alias（可为 null）`             |
+
+- 行的键集合不变（十个键，`readAt` 照旧）；只是 `type` 多了四个值。**客户端 codec 必须先接受这四个值**，
+  未知 `type` 建议按"通用行"显示 `payload.title / payload.body` 而不是整页失败。
+- `title` / `body` 是服务端写好的中文展示文案，直接显示；其余键是事实（时间为 ISO 8601 UTC，
+  `tokenId` 为十进制字符串）。示例：
+
+```json
+{
+  "notificationId": "5c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+  "type": "launch.graduated",
+  "entityRef": "launch2Instance:3c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+  "contextRoute": "launch2-instance",
+  "contextParams": { "instanceId": "3c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f" },
+  "payload": {
+    "event": "launch.graduated",
+    "title": "Moon 已毕业",
+    "body": "Moon 已于 2026-10-22 14:05（北京时间）毕业，交易已迁入官方池 0xabab…abab。",
+    "instanceId": "3c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+    "projectName": "Moon",
+    "graduatedAt": "2026-10-22T06:05:00.000Z",
+    "officialPoolId": "0xabab…（66 字符）"
+  },
+  "source": "launch2_indexer",
+  "observedAt": "2026-10-22T06:05:00.000Z",
+  "readAt": null,
+  "createdAt": "2026-10-22T06:05:09.120Z"
+}
+```
+
+- 路由：`launch2-instance` → `/launch2/instance?id=<instanceId>`；`dm-requests` → `/chat/requests`；
+  `user-profile` → `/profile/user?id=<publicProfileId>`。
+- 谁会收到：毕业 = 该项目曲线净买入 > 0 或持有勋章的钱包对应账号 + 项目方；勋章 = 铸造者；
+  好友申请 = 被申请人；好友接受 = 申请人。拒绝不产生通知。只从上线后起算（不回填）；
+  超过 24 小时才被索引到的链上事实不产生通知。
+
+### 8.2 `GET /v2/notifications/unread-count`
+
+读头（Bearer、`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`；不得带
+`Idempotency-Key`、query、body）。
+
+```json
+{ "unread": 3, "observedAt": "2026-10-22T08:00:00.000Z" }
+```
+
+与 feed 的 `unreadCount` 同口径，适合 Tab 角标轮询。
+
+### 8.3 `POST /v2/notifications/read-all`
+
+写头（以上 + `Idempotency-Key` UUIDv4）；无 body、无 query。天然幂等：
+
+```json
+{ "marked": 3 }
+```
+
+重复调用返回 `{ "marked": 0 }`。单条已读仍用 `POST /v2/notifications/{id}/read`。
+
+### 8.4 错误码
+
+| HTTP | code                             | 出现位置                                                                         |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                | 读接口带 `Idempotency-Key` / query；read-all 缺或非法 `Idempotency-Key`、带 body |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | Bearer 缺失或无效                                                                |
+| 404  | `NOT_FOUND`                      | 模块未启用                                                                       |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | 尚未 bootstrap                                                                   |
+| 409  | `VERSION_CONFLICT`               | `X-Loop-Contract-Version` 不是 `2.0`                                             |
+| 503  | `CAPABILITY_UNAVAILABLE`         | 通知仓储不可用                                                                   |
+
+错误体只有 `code/category/retryable/userMessageKey/correlationId/detailsSafe/providerReferenceSafe`。
+
+### 8.5 开关与 unavailable 行为
+
+- 服务端 `NOTIFICATION_INBOX_EMIT`（默认 `off`）：`off` 时四种新事件照常写库，但 feed、`unreadCount`、
+  `unread-count`、`read-all`、单条已读都**看不见**它们（单条已读返回 404），也不推送。新客户端在
+  `off` 下照常工作（收件箱里只有老类型）。全部受支持版本能解码新 `type` 后服务端切 `on`，
+  已写入的行立即出现。
+- `notificationsFeed` ≠ `available`：收件箱入口显示不可用，不显示 0 角标。
+- 推送（§7）：四个新推送事件的设备端本地化键 `push.launchGraduated.*`、`push.launchBadgeMinted.*`、
+  `push.socialFriendRequest.*`、`push.socialFriendAccepted.*`（Android 下划线拼写）须在开关 `on` 前发版；
+  router 需新增四个 type ↔ route 配对（`launch2Instance` → `launch2-instance`，`friendRequest` →
+  `dm-requests` / `user-profile`）。推送仍是四键，点击后重读 feed 按 `type + entityRef` 找行。

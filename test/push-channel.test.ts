@@ -159,7 +159,24 @@ describe("push contract (Decision 0067)", () => {
       "community_voice_room_started",
       "community_application_verified",
       "community_application_rejected",
+      // Decision 0177: the notification inbox events.
+      "launch_graduated",
+      "launch_badge_minted",
+      "social_friend_request",
+      "social_friend_accepted",
     ]);
+    // Decision 0177: each inbox event is optional and gated by the category
+    // its feed row is stored under.
+    expect(pushPreferenceCategory("launch_graduated")).toBe(
+      "launch.graduation",
+    );
+    expect(pushPreferenceCategory("launch_badge_minted")).toBe("launch.round");
+    expect(pushPreferenceCategory("social_friend_request")).toBe(
+      "community.mention",
+    );
+    expect(pushPreferenceCategory("social_friend_accepted")).toBe(
+      "community.mention",
+    );
     // Decision 0073: both review outcomes are optional community events.
     expect(pushEventDictionary.community_application_verified).toMatchObject({
       category: "community.announcement",

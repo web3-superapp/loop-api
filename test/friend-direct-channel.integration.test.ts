@@ -106,6 +106,8 @@ describe("Decision 0172 friend direct channel guarantee (PostgreSQL)", () => {
       cascade
     `);
     const statements = [
+      // Decision 0177: friend requests / acceptances write inbox rows.
+      `delete from public.notifications where owner_user_id = any($1::uuid[])`,
       `delete from public.user_blocks where owner_user_id = any($1::uuid[])`,
       `delete from public.social_privacy_preferences where owner_user_id = any($1::uuid[])`,
       `delete from public.user_profiles where owner_user_id = any($1::uuid[])`,

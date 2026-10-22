@@ -2,7 +2,12 @@ import type { Pool, PoolClient, QueryResult } from "pg";
 import { z } from "zod";
 
 import { parseAliasSearchPrefix } from "../features/identity/alias-contract.js";
+import {
+  socialFriendAcceptedNotification,
+  socialFriendRequestNotification,
+} from "../features/notifications/notification-inbox-contract.js";
 import { enqueueFriendDirectChannelJob } from "./friend-direct-channel-job-repository.js";
+import { insertNotificationRow } from "./notification-repository.js";
 
 export type SocialFriendRequestsPreference = "enabled" | "disabled";
 export type SocialGroupInvitesPreference = "friends" | "disabled";
@@ -449,6 +454,80 @@ interface ClaimedCommand {
 interface TransactionCommandOutcome {
   readonly result: SocialCommandResult | null;
   readonly error: Error | null;
+}
+
+async function readInboxIdentity(
+  client: Pick<PoolClient, "query">,
+  ownerUserId: string,
+): Promise<{
+  readonly publicProfileId: string;
+  readonly alias: string | null;
+  readonly at: string;
+}> {
+  const result = await client.query<{
+    public_profile_id: string;
+    alias: string | null;
+    at: Date;
+  }>({
+    text: `
+      select public_profile_id::text, alias, clock_timestamp() as at
+      from public.user_profiles
+      where owner_user_id = $1
+      limit 1
+    `,
+    values: [ownerUserId],
+  });
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new SocialRepositoryUnavailableError();
+  }
+  return {
+    publicProfileId: row.public_profile_id,
+    alias: row.alias,
+    at: row.at.toISOString(),
+  };
+}
+
+async function recordFriendRequestNotification(
+  client: Pick<PoolClient, "query">,
+  input: {
+    readonly friendRequestId: string;
+    readonly requesterUserId: string;
+    readonly recipientUserId: string;
+  },
+): Promise<void> {
+  const requester = await readInboxIdentity(client, input.requesterUserId);
+  await insertNotificationRow(
+    client,
+    socialFriendRequestNotification({
+      ownerUserId: input.recipientUserId,
+      friendRequestId: input.friendRequestId,
+      requesterPublicProfileId: requester.publicProfileId,
+      requesterAlias: requester.alias,
+      requestedAt: requester.at,
+    }),
+  );
+}
+
+async function recordFriendAcceptedNotification(
+  client: Pick<PoolClient, "query">,
+  input: {
+    readonly friendRequestId: string;
+    readonly accepterUserId: string;
+    readonly requesterUserId: string;
+  },
+): Promise<void> {
+  const accepter = await readInboxIdentity(client, input.accepterUserId);
+  await insertNotificationRow(
+    client,
+    socialFriendAcceptedNotification({
+      ownerUserId: input.requesterUserId,
+      friendRequestId: input.friendRequestId,
+      accepterPublicProfileId: accepter.publicProfileId,
+      accepterAlias: accepter.alias,
+      acceptedAt: accepter.at,
+    }),
+  );
 }
 
 const friendRequestProjectionSql = `
@@ -1495,6 +1574,13 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
           if (friendRequestId === undefined) {
             throw new SocialRepositoryUnavailableError();
           }
+          // Decision 0177: the recipient's inbox row, in the same
+          // transaction (one row per request: dedupe on the request id).
+          await recordFriendRequestNotification(client, {
+            friendRequestId,
+            requesterUserId: input.ownerUserId,
+            recipientUserId: targetUserId,
+          });
           const request = await readFriendRequestForOwner(
             client,
             input.ownerUserId,
@@ -1736,6 +1822,13 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
               ownerUserId: input.ownerUserId,
               peerUserId: lockedRow.requester_user_id,
               source: "accept",
+            });
+            // Decision 0177: the requester's inbox row (a rejection
+            // writes none).
+            await recordFriendAcceptedNotification(client, {
+              friendRequestId: input.friendRequestId,
+              accepterUserId: input.ownerUserId,
+              requesterUserId: lockedRow.requester_user_id,
             });
           }
 

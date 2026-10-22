@@ -324,10 +324,16 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
   let values: NotificationPreferenceValues = {
     ...defaultNotificationPreferences,
   };
+  const visible = (row: NotificationRecord, includeInboxEvents?: boolean) =>
+    includeInboxEvents === true || row.eventType === null;
   const repository: NotificationRepository = {
     listFeed: (input) => {
       const owned = [...rows.values()]
-        .filter((row) => row.ownerUserId === input.ownerUserId)
+        .filter(
+          (row) =>
+            row.ownerUserId === input.ownerUserId &&
+            visible(row, input.includeInboxEvents),
+        )
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       return Promise.resolve({
         items: owned.slice(0, input.limit),
@@ -346,9 +352,13 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
           .slice(0, input.limit),
       ),
-    markRead: (ownerUserId, notificationId) => {
+    markRead: (ownerUserId, notificationId, includeInboxEvents) => {
       const row = rows.get(notificationId);
-      if (row === undefined || row.ownerUserId !== ownerUserId) {
+      if (
+        row === undefined ||
+        row.ownerUserId !== ownerUserId ||
+        !visible(row, includeInboxEvents)
+      ) {
         return Promise.resolve(null);
       }
       const read =
@@ -357,6 +367,32 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
           : row;
       rows.set(notificationId, read);
       return Promise.resolve(read);
+    },
+    countUnread: (input) =>
+      Promise.resolve(
+        [...rows.values()].filter(
+          (row) =>
+            row.ownerUserId === input.ownerUserId &&
+            row.readAt === null &&
+            visible(row, input.includeInboxEvents),
+        ).length,
+      ),
+    markAllRead: (input) => {
+      let marked = 0;
+      for (const row of rows.values()) {
+        if (
+          row.ownerUserId === input.ownerUserId &&
+          row.readAt === null &&
+          visible(row, input.includeInboxEvents)
+        ) {
+          rows.set(row.notificationId, {
+            ...row,
+            readAt: "2026-09-08T00:00:10.000Z",
+          });
+          marked += 1;
+        }
+      }
+      return Promise.resolve(marked);
     },
     getPreferences: () =>
       Promise.resolve({
@@ -388,6 +424,7 @@ function notificationRecord(
     notificationId: "1c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
     ownerUserId: accountId,
     type: "trade.priceAlert",
+    eventType: null,
     entityRef: "priceAlert:0b2c1d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
     contextRoute: "token",
     contextParams: { assetId: wbnbAssetId },
@@ -807,6 +844,215 @@ describe("LOOP API V2 notifications module", () => {
       headers: commandHeaders(),
     });
     expect(missing.statusCode).toBe(404);
+  });
+
+  describe("Decision 0177 inbox events", () => {
+    const instanceId = "3c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const friendRequestId = "4c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    function inboxSeed(): NotificationRecord[] {
+      return [
+        notificationRecord(),
+        notificationRecord({
+          notificationId: "5c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+          type: "launch.graduation",
+          eventType: "launch.graduated",
+          entityRef: `launch2Instance:${instanceId}`,
+          contextRoute: "launch2-instance",
+          contextParams: { instanceId },
+          payload: {
+            event: "launch.graduated",
+            title: "Moon 已毕业",
+            body: "Moon 已于 2026-09-08 08:00（北京时间）毕业，交易已迁入官方池。",
+          },
+          dedupeKey: `launch.graduated:${instanceId}`,
+          source: "launch2_indexer",
+          createdAt: "2026-09-08T00:00:01.000Z",
+        }),
+        notificationRecord({
+          notificationId: "6c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+          type: "community.mention",
+          eventType: "social.friend_request",
+          entityRef: `friendRequest:${friendRequestId}`,
+          contextRoute: "dm-requests",
+          contextParams: { friendRequestId },
+          payload: { event: "social.friend_request", title: "新的好友申请" },
+          dedupeKey: `social.friend_request:${friendRequestId}`,
+          source: "social_friend_request",
+          createdAt: "2026-09-08T00:00:02.000Z",
+        }),
+      ];
+    }
+
+    it("hides the fine events everywhere while NOTIFICATION_INBOX_EMIT is off", async () => {
+      const { app } = await createApp(fakes(inboxSeed()));
+      const feed = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/feed",
+        headers: commonHeaders(),
+      });
+      expect(feed.statusCode).toBe(200);
+      const body = feed.json<{
+        readonly items: readonly { readonly type: string }[];
+        readonly unreadCount: number;
+      }>();
+      expect(body.items.map((item) => item.type)).toEqual(["trade.priceAlert"]);
+      expect(body.unreadCount).toBe(1);
+      expect(feed.body).not.toContain("launch.graduated");
+
+      const count = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders(),
+      });
+      expect(count.statusCode).toBe(200);
+      expect(count.headers["cache-control"]).toBe("no-store");
+      expect(count.json()).toEqual({
+        unread: 1,
+        observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) as unknown,
+      });
+
+      const hiddenRead = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/5c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f/read",
+        headers: commandHeaders(),
+      });
+      expect(hiddenRead.statusCode).toBe(404);
+
+      const readAll = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+      });
+      expect(readAll.statusCode).toBe(200);
+      expect(readAll.json()).toEqual({ marked: 1 });
+
+      const after = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders(),
+      });
+      expect(after.json()).toMatchObject({ unread: 0 });
+    });
+
+    it("lists the fine events with their own type while NOTIFICATION_INBOX_EMIT is on", async () => {
+      const { app } = await createApp(fakes(inboxSeed()), {
+        NOTIFICATION_INBOX_EMIT: "on",
+      });
+      const feed = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/feed",
+        headers: commonHeaders(),
+      });
+      expect(feed.statusCode).toBe(200);
+      expect(feed.json()).toMatchObject({
+        items: [
+          {
+            type: "social.friend_request",
+            entityRef: `friendRequest:${friendRequestId}`,
+            contextRoute: "dm-requests",
+            contextParams: { friendRequestId },
+            readAt: null,
+          },
+          {
+            type: "launch.graduated",
+            contextRoute: "launch2-instance",
+            contextParams: { instanceId },
+            payload: { title: "Moon 已毕业" },
+          },
+          { type: "trade.priceAlert" },
+        ],
+        unreadCount: 3,
+      });
+
+      const count = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders(),
+      });
+      expect(count.json()).toMatchObject({ unread: 3 });
+
+      const read = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/5c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f/read",
+        headers: commandHeaders(),
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toMatchObject({
+        notification: { type: "launch.graduated" },
+      });
+
+      const readAll = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+      });
+      expect(readAll.json()).toEqual({ marked: 2 });
+      const again = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+      });
+      expect(again.json()).toEqual({ marked: 0 });
+    });
+
+    it("guards the two new routes with the V2 headers and a body-less shape", async () => {
+      const { app } = await createApp(fakes(inboxSeed()));
+      const withoutKey = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commonHeaders(),
+      });
+      expect(withoutKey.statusCode).toBe(400);
+      const badKey = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commonHeaders({ "idempotency-key": "not-a-uuid" }),
+      });
+      expect(badKey.statusCode).toBe(400);
+      const withBody = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+        payload: { all: true },
+      });
+      expect(withBody.statusCode).toBe(400);
+      const countWithKey = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commandHeaders(),
+      });
+      expect(countWithKey.statusCode).toBe(400);
+      const countWithQuery = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count?x=1",
+        headers: commonHeaders(),
+      });
+      expect(countWithQuery.statusCode).toBe(400);
+      const unauthenticated = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders({ authorization: undefined }),
+      });
+      expect(unauthenticated.statusCode).toBe(401);
+      const wrongContract = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders({ "x-loop-contract-version": "1.0" }),
+      });
+      expect(wrongContract.statusCode).toBe(409);
+      const errorBody = wrongContract.json<Record<string, unknown>>();
+      for (const key of Object.keys(errorBody)) {
+        expect([
+          "code",
+          "category",
+          "retryable",
+          "userMessageKey",
+          "correlationId",
+          "detailsSafe",
+          "providerReferenceSafe",
+        ]).toContain(key);
+      }
+    });
   });
 
   it("serves the ten-category preferences with a locked security category", async () => {

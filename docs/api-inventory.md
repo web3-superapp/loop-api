@@ -1011,8 +1011,19 @@ wallet prices, alerts and mining read (Decision 0089 §5, S93b).
 | `DELETE /v2/alerts/{alertId}?expectedVersion=` | —                                                               | `204` without enumeration                                                                | `implemented` | `implemented`                                                                                          |
 | `GET /v2/notifications/feed`                   | `cursor` or `limit` (1–50)                                      | Context notifications (`type`, `entityRef`, `contextRoute`, `payload`) plus unread count | `implemented` | `implemented`; `push` reports `available` or `unavailable` (`PUSH_RUNTIME_DEFERRED`) per Decision 0067 |
 | `POST /v2/notifications/{notificationId}/read` | `Idempotency-Key`; no body                                      | The notification with its first `readAt`                                                 | `implemented` | `implemented`                                                                                          |
+| `GET /v2/notifications/unread-count`           | — (no query, no body, no `Idempotency-Key`)                     | `{unread, observedAt}`; same rows as the feed's `unreadCount` (Decision 0177)            | `implemented` | `implemented`; one indexed count; fine inbox events counted only with `NOTIFICATION_INBOX_EMIT=on`     |
+| `POST /v2/notifications/read-all`              | `Idempotency-Key`; no body                                      | `{marked}`; naturally idempotent (repeat → `0`) (Decision 0177)                          | `implemented` | `implemented`; marks only rows visible under `NOTIFICATION_INBOX_EMIT`                                 |
 | `GET /v2/notification-preferences`             | —                                                               | Ten categories; `security.event` locked on                                               | `implemented` | `implemented`                                                                                          |
 | `PUT /v2/notification-preferences`             | No `Idempotency-Key`; `{expectedVersion, categories}` (all ten) | Committed preferences; `security.event: false` is `INVALID_REQUEST`                      | `implemented` | `implemented`; an optional category off also suppresses that event's push (Decision 0067)              |
+
+Decision 0177 (S286) adds four inbox producers: `launch.graduated` /
+`launch.badge_minted` (written by the default-on `notification_inbox` worker
+lane from the MEME v2 read model, categories `launch.graduation` /
+`launch.round`) and `social.friend_request` / `social.friend_accepted`
+(written inside the `/v1/friend-requests` transactions, category
+`community.mention`). The rows are always written; `NOTIFICATION_INBOX_EMIT`
+(default `off`) hides them from every read and from push until the clients
+decode the new feed `type` values. No historical backfill.
 
 V2 alerts share `price_alert_definitions` with the frozen V1 rows but never
 the namespace: V1 rows keep `asset_key` and stay `inactive`; V2 rows carry the

@@ -52,6 +52,10 @@ import {
   type AlertV2Repository,
 } from "./alert-v2-repository.js";
 import {
+  createPostgresNotificationInboxRepository,
+  type NotificationInboxRepository,
+} from "./notification-inbox-repository.js";
+import {
   createPostgresNotificationRepository,
   type NotificationRepository,
 } from "./notification-repository.js";
@@ -326,6 +330,8 @@ export interface PostgresDatabase extends Database {
   readonly streamUserIdentities: StreamUserIdentityRepository;
   /** `friend_direct_channel` lane outbox (Decision 0172). */
   readonly friendDirectChannelJobs: FriendDirectChannelJobRepository;
+  /** `notification_inbox` lane (Decision 0177). */
+  readonly notificationInbox: NotificationInboxRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -493,6 +499,7 @@ export function createPostgresDatabase(
   const memberBuyFeed = createPostgresMemberBuyFeedRepository(pool);
   const friendDirectChannelJobs =
     createPostgresFriendDirectChannelJobRepository(pool);
+  const notificationInbox = createPostgresNotificationInboxRepository(pool);
   const communityChannelPersonas =
     createPostgresCommunityChannelPersonaRepository(pool);
 
@@ -518,6 +525,7 @@ export function createPostgresDatabase(
     voiceRoomReaper,
     memberBuyFeed,
     friendDirectChannelJobs,
+    notificationInbox,
     communityChannelPersonas,
     watchlists,
     watchlistsV2,

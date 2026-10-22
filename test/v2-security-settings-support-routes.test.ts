@@ -108,6 +108,7 @@ function notification(
     notificationId: randomUUID(),
     ownerUserId: accountId,
     type: "security.event",
+    eventType: null,
     entityRef: `deviceSession:${otherSessionId}`,
     contextRoute: "devices",
     contextParams: {},
@@ -130,6 +131,7 @@ function notificationsFake(seed: readonly NotificationRecord[]) {
     }
     const row: NotificationRecord = {
       ...input,
+      eventType: input.eventType ?? null,
       notificationId: randomUUID(),
       readAt: null,
       createdAt: now.toISOString(),
@@ -151,6 +153,8 @@ function notificationsFake(seed: readonly NotificationRecord[]) {
           .slice(0, input.limit),
       ),
     markRead: () => Promise.reject(new Error("not used")),
+    countUnread: () => Promise.reject(new Error("not used")),
+    markAllRead: () => Promise.reject(new Error("not used")),
     getPreferences: () => Promise.reject(new Error("not used")),
     replacePreferences: () => Promise.reject(new Error("not used")),
     isCategoryEnabled: () => Promise.resolve(true),
