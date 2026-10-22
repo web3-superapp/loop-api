@@ -833,6 +833,20 @@ const environmentSchema = z
      * else refuses to start.
      */
     TOKEN_LOGO_URL_MODE: z.enum(["proxy", "upstream"]),
+    /**
+     * Decision 0173: where a project NFT picture goes. `local` (default)
+     * stores it like the other media; `filebase` also pins it to IPFS
+     * through the Filebase IPFS RPC API (FILEBASE_RPC_ENDPOINT +
+     * FILEBASE_RPC_TOKEN, both required then).
+     */
+    NFT_IMAGE_STORAGE: z.enum(["local", "filebase"]),
+    FILEBASE_RPC_ENDPOINT: z.preprocess(
+      blankStringToUndefined,
+      z.string().url().optional(),
+    ),
+    FILEBASE_RPC_TOKEN: optionalCredential(4_096),
+    /** Decision 0173: the public IPFS gateway, `<base>/<cid>`. */
+    IPFS_GATEWAY_BASE_URL: z.string().url(),
     API_DOCS_ENABLED: booleanString,
     TRUST_PROXY: booleanString,
     /** Decision 0147 revision S211: `/public/*` requests per minute per visitor. */
@@ -988,6 +1002,11 @@ const environmentSchema = z
     // activity and skips the wallet → account lookup; on emits it. Turn on
     // only once every supported client (build >= 31) decodes the key.
     LAUNCH2_TRADER_ACCOUNT_EMIT: z.enum(["off", "on"]),
+    // Decision 0173: off|on (default off). off omits the optional
+    // `nftImageUrl` key from the launch2 instance summary / detail and
+    // GET /v2/launch2/me/positions rows; on emits it (null when none). Turn
+    // on only once every supported client decodes the key.
+    LAUNCH2_NFT_IMAGE_EMIT: z.enum(["off", "on"]),
     // Decision 0166: off|on (default off). off keeps GET /v2/referral in its
     // pre-0162 shape (no inviteLink / stats, boost always unavailable); on
     // emits them. Turn on only once every supported client is at build >= 31.
@@ -1815,6 +1834,19 @@ export interface AppConfig {
   readonly publicBaseUrl: string;
   /** Which URL `logo.url` carries (Decision 0089 §8). */
   readonly tokenLogoUrlMode: "proxy" | "upstream";
+  /**
+   * Decision 0173: NFT_IMAGE_STORAGE. `filebase` carries the RPC endpoint
+   * and bearer token (a secret: never logged or returned).
+   */
+  readonly nftImageStorage:
+    | { readonly mode: "local" }
+    | {
+        readonly mode: "filebase";
+        readonly rpcEndpoint: string;
+        readonly rpcToken: string;
+      };
+  /** Decision 0173: IPFS_GATEWAY_BASE_URL without a trailing slash. */
+  readonly ipfsGatewayBaseUrl: string;
   readonly apiDocsEnabled: boolean;
   readonly trustProxy: boolean;
   /**
@@ -1908,6 +1940,11 @@ export interface AppConfig {
      * omits the trader `account` key and skips the directory lookup.
      */
     readonly traderAccountEmit: boolean;
+    /**
+     * Decision 0173: LAUNCH2_NFT_IMAGE_EMIT === "on". False (default) omits
+     * the `nftImageUrl` key from the instance / position projections.
+     */
+    readonly nftImageEmit: boolean;
     /**
      * Decision 0124: LAUNCH2_POOL_ROUTER_ADDRESS / _CODE_HASH (lower-case);
      * null keeps the official-pool quote / prepare unavailable.
@@ -4025,6 +4062,56 @@ export function parsePublicClientIpHeaders(
   return Object.freeze(names as PublicClientIpHeaderName[]);
 }
 
+/**
+ * Decision 0173: NFT_IMAGE_STORAGE / FILEBASE_RPC_* / IPFS_GATEWAY_BASE_URL.
+ * https only; `filebase` without both RPC values refuses to start.
+ */
+function parseNftImageStorage(data: {
+  readonly NFT_IMAGE_STORAGE: "local" | "filebase";
+  readonly FILEBASE_RPC_ENDPOINT?: string | undefined;
+  readonly FILEBASE_RPC_TOKEN?: string | undefined;
+  readonly IPFS_GATEWAY_BASE_URL: string;
+}): {
+  readonly storage: AppConfig["nftImageStorage"];
+  readonly gatewayBaseUrl: string;
+} {
+  const issues: string[] = [];
+  const gateway = new URL(data.IPFS_GATEWAY_BASE_URL);
+  if (gateway.protocol !== "https:" || gateway.username || gateway.password) {
+    issues.push("IPFS_GATEWAY_BASE_URL: must be https without credentials");
+  }
+  if (gateway.search !== "" || gateway.hash !== "") {
+    issues.push("IPFS_GATEWAY_BASE_URL: no query or fragment");
+  }
+  let storage: AppConfig["nftImageStorage"] = Object.freeze({
+    mode: "local" as const,
+  });
+  if (data.NFT_IMAGE_STORAGE === "filebase") {
+    const endpoint = data.FILEBASE_RPC_ENDPOINT;
+    const token = data.FILEBASE_RPC_TOKEN;
+    if (endpoint === undefined || token === undefined) {
+      issues.push(
+        "FILEBASE_RPC_ENDPOINT and FILEBASE_RPC_TOKEN: required when NFT_IMAGE_STORAGE=filebase",
+      );
+    } else {
+      const url = new URL(endpoint);
+      if (url.protocol !== "https:" || url.username || url.password) {
+        issues.push("FILEBASE_RPC_ENDPOINT: must be https without credentials");
+      }
+      storage = Object.freeze({
+        mode: "filebase" as const,
+        rpcEndpoint: endpoint.replace(/\/+$/u, ""),
+        rpcToken: token,
+      });
+    }
+  }
+  if (issues.length > 0) throw new ConfigurationError(issues);
+  return Object.freeze({
+    storage,
+    gatewayBaseUrl: data.IPFS_GATEWAY_BASE_URL.replace(/\/+$/u, ""),
+  });
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const rawNodeEnv = environment["NODE_ENV"] ?? "development";
   const parsed = environmentSchema.safeParse({
@@ -4033,6 +4120,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     PORT: environment["PORT"] ?? "3000",
     PUBLIC_BASE_URL: environment["PUBLIC_BASE_URL"] ?? "http://127.0.0.1:3000",
     TOKEN_LOGO_URL_MODE: environment["TOKEN_LOGO_URL_MODE"] ?? "proxy",
+    NFT_IMAGE_STORAGE: environment["NFT_IMAGE_STORAGE"] || "local",
+    FILEBASE_RPC_ENDPOINT: environment["FILEBASE_RPC_ENDPOINT"],
+    FILEBASE_RPC_TOKEN: environment["FILEBASE_RPC_TOKEN"],
+    IPFS_GATEWAY_BASE_URL:
+      environment["IPFS_GATEWAY_BASE_URL"] || "https://ipfs.filebase.io/ipfs",
     API_DOCS_ENABLED:
       environment["API_DOCS_ENABLED"] ??
       (rawNodeEnv === "production" ? "false" : "true"),
@@ -4180,6 +4272,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["LAUNCH2_POOL_TRADE_DEADLINE_SECONDS"] ?? "180",
     LAUNCH2_TRADER_ACCOUNT_EMIT:
       environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] ?? "off",
+    LAUNCH2_NFT_IMAGE_EMIT: environment["LAUNCH2_NFT_IMAGE_EMIT"] ?? "off",
     REFERRAL_CENTER_EMIT: environment["REFERRAL_CENTER_EMIT"] ?? "off",
     WALLET_ACTIVITY_LAUNCH2_EMIT:
       environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
@@ -4303,6 +4396,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
   }
 
   const bscChain = parseBscChainConfig(parsed.data);
+  const nftImage = parseNftImageStorage(parsed.data);
 
   const passkeyRelyingParty = parsePasskeyRelyingPartyConfig(parsed.data);
   return Object.freeze({
@@ -4311,6 +4405,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     port: parsed.data.PORT,
     publicBaseUrl: publicBaseUrl.toString(),
     tokenLogoUrlMode: parsed.data.TOKEN_LOGO_URL_MODE,
+    nftImageStorage: nftImage.storage,
+    ipfsGatewayBaseUrl: nftImage.gatewayBaseUrl,
     apiDocsEnabled: parsed.data.API_DOCS_ENABLED,
     trustProxy: parsed.data.TRUST_PROXY,
     publicRateLimit: Object.freeze({
@@ -4381,6 +4477,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       defaultSlippageBps: parsed.data.LAUNCH2_DEFAULT_SLIPPAGE_BPS,
       tradeDeadlineSeconds: parsed.data.LAUNCH2_POOL_TRADE_DEADLINE_SECONDS,
       traderAccountEmit: parsed.data.LAUNCH2_TRADER_ACCOUNT_EMIT === "on",
+      nftImageEmit: parsed.data.LAUNCH2_NFT_IMAGE_EMIT === "on",
       poolRouter:
         parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
         parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined

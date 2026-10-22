@@ -11,6 +11,11 @@ import {
   launch2Stages,
 } from "../../features/launch2/launch2-contract.js";
 import { launch2ActivityKinds } from "../../features/launch2/launch2-ports.js";
+import {
+  launch2NftFallbackDescription,
+  launch2NftLaunchIdPatternSource,
+  launch2NftTokenIdPatternSource,
+} from "../../features/launch2/launch2-nft-metadata.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { cursorSchema, nullableCursorSchema } from "./community-schemas.js";
 import { accountSchema as memeAccountSchema } from "./meme-schemas.js";
@@ -281,11 +286,22 @@ const summaryProperties = {
 } as const;
 const summaryRequired = Object.keys(summaryProperties);
 
+/**
+ * Decision 0173: the project NFT picture. OPTIONAL and outside `required`:
+ * sent only with LAUNCH2_NFT_IMAGE_EMIT=on (shipped clients decode these
+ * objects strictly). Never make it required.
+ */
+export const launch2NftImageUrlSchema = {
+  description:
+    "Decision 0173: OPTIONAL — present only while the server runs LAUNCH2_NFT_IMAGE_EMIT=on. The project NFT picture (https) the creator saved as nftImageAssetUrl; null when the project has none — fall back to logoUrl. Decode as an optional nullable key.",
+  anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }],
+} as const;
+
 const instanceSummarySchema = {
   type: "object",
   additionalProperties: false,
   required: summaryRequired,
-  properties: summaryProperties,
+  properties: { ...summaryProperties, nftImageUrl: launch2NftImageUrlSchema },
 } as const;
 
 const overviewActivitySchema = {
@@ -972,7 +988,11 @@ export const launch2InstanceDetailResourceSchema = {
       type: "object",
       additionalProperties: false,
       required: Object.keys(detailProperties),
-      properties: { ...detailProperties, pool: poolSummarySchema },
+      properties: {
+        ...detailProperties,
+        nftImageUrl: launch2NftImageUrlSchema,
+        pool: poolSummarySchema,
+      },
     },
     contractVersion: contractVersionSchema,
   },
@@ -1182,6 +1202,7 @@ export const launch2PositionsResourceSchema = {
           name: { type: "string" },
           ticker: { type: "string" },
           logoUrl: { anyOf: [{ type: "string" }, { type: "null" }] },
+          nftImageUrl: launch2NftImageUrlSchema,
           memeAddress: addressSchema,
           stage: stageSchema,
           walletId: opaqueIdSchema,
@@ -2151,5 +2172,78 @@ export const launch2DynamicClaimReportResourceSchema = {
       },
     },
     contractVersion: contractVersionSchema,
+  },
+} as const;
+
+/**
+ * Decision 0173: `GET /v2/launch2/nft/{launchId}/{tokenId}` — ERC-721
+ * metadata JSON (OpenSea / EIP-721 metadata keys, hence snake_case
+ * `trait_type`). A public resource like the logo proxy, not a v2 contract
+ * envelope: no `contractVersion`.
+ */
+export const launch2NftMetadataParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["launchId", "tokenId"],
+  properties: {
+    launchId: {
+      type: "string",
+      pattern: launch2NftLaunchIdPatternSource,
+      description:
+        "The Factory's bytes32 launch id (`launchId` on the instance summary), any case.",
+    },
+    tokenId: {
+      type: "string",
+      pattern: launch2NftTokenIdPatternSource,
+      description:
+        "The project NFT token id, a positive decimal integer (1..n, n = the instance's minted count).",
+    },
+  },
+} as const;
+
+export const launch2NftMetadataResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "description", "image", "image_gateway", "attributes"],
+  properties: {
+    name: {
+      type: "string",
+      description: "`<project name> #<tokenId>`.",
+    },
+    description: {
+      type: "string",
+      description: `The project description as saved; \`${launch2NftFallbackDescription}\` when it is empty.`,
+    },
+    image: {
+      description:
+        "`ipfs://<cid>` when the project NFT picture is pinned to IPFS; else its https URL (nftImageUrl), else the project logo (logoUrl), else null.",
+      anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }],
+    },
+    image_gateway: {
+      description:
+        "The same picture over https (the IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned, else nftImageUrl, else logoUrl), for clients that do not resolve ipfs://; null when there is no picture.",
+      anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }],
+    },
+    attributes: {
+      type: "array",
+      minItems: 3,
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["trait_type", "value"],
+        properties: {
+          trait_type: {
+            type: "string",
+            enum: ["Project", "Token ID", "Stage"],
+          },
+          value: {
+            description:
+              "Project: the ticker; Token ID: the token id (integer); Stage: the instance stage now.",
+            anyOf: [{ type: "string" }, { type: "integer", minimum: 1 }],
+          },
+        },
+      },
+    },
   },
 } as const;

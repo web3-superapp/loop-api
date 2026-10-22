@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +37,15 @@ async function migrate(
     ...(count === undefined ? {} : { count }),
   });
 }
+
+/**
+ * Migrations applied after 000094 (S272's 000095, S274's 000096, …):
+ * rolled back first so `down 1` reaches 000094 whatever the head is.
+ */
+const migrationsAfter000094 = readdirSync(migrationsDirectory).filter(
+  (file) =>
+    /^\d{6}_.*\.ts$/u.test(file) && file > "000094_launch_token_text_utf8.ts",
+).length;
 
 const constraints = [
   ["launch_projects", "launch_projects_ticker_check", "ticker"],
@@ -187,6 +197,9 @@ describe("PostgreSQL UTF-8 ticker floor (migration 000094, Decision 0164)", () =
   });
 
   it("refuses down while a row breaks the old pattern, then restores it", async () => {
+    if (migrationsAfter000094 > 0) {
+      await migrate(temporaryDatabaseUrl, "down", migrationsAfter000094);
+    }
     const projectId = await insertProject("doge");
     await expect(migrate(temporaryDatabaseUrl, "down", 1)).rejects.toThrow(
       /Decision 0164 down/u,

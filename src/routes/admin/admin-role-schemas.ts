@@ -624,6 +624,8 @@ const configSchema = {
     "name",
     "ticker",
     "logoAssetUrl",
+    "nftImageAssetUrl",
+    "nftImageCid",
     "description",
     "links",
     "nftSaleStartAt",
@@ -635,6 +637,16 @@ const configSchema = {
     name: { type: ["string", "null"] },
     ticker: { type: ["string", "null"] },
     logoAssetUrl: { type: ["string", "null"] },
+    nftImageAssetUrl: {
+      type: ["string", "null"],
+      description:
+        "Decision 0173: the project NFT picture (https; the IPFS gateway URL when pinned); null when the version has none (the App and the NFT metadata fall back to the logo).",
+    },
+    nftImageCid: {
+      type: ["string", "null"],
+      description:
+        "Decision 0173: the IPFS CID of the NFT picture; null when not pinned or none.",
+    },
     description: { type: ["string", "null"] },
     links: { type: ["array", "null"], items: { type: "string" } },
     nftSaleStartAt: {

@@ -7,12 +7,17 @@ import { emptyQueryStringSchema } from "../../core/http/schemas.js";
 import { V2ApiError, v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import { parseV2CommandMetadata } from "../../features/community/community-contract.js";
 import {
+  ipfsCidPatternSource,
   mediaIdPatternSource,
   mediaMaximumUploadBytes,
+  nftMediaRefPatternSource,
   mediaReasonCodes,
   type MediaKind,
 } from "../../features/media/media-contract.js";
-import { mediaRejected } from "../../features/media/media-service.js";
+import {
+  mediaIpfsUnavailableReason,
+  mediaRejected,
+} from "../../features/media/media-service.js";
 import { ifNoneMatchSatisfied } from "../../features/market/token-logo-proxy.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import {
@@ -47,6 +52,57 @@ const uploadResponseSchema = {
       pattern:
         "^/v2/media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.webp$",
       description: "API-relative path; the client prefixes its API base URL.",
+    },
+    width: { type: "integer", minimum: 1, maximum: 4096 },
+    height: { type: "integer", minimum: 1, maximum: 4096 },
+    contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/** Decision 0173: `POST /v2/media/project-nft-images`. */
+const nftUploadResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "mediaId",
+    "ref",
+    "url",
+    "mediaUrl",
+    "cid",
+    "ipfsUri",
+    "width",
+    "height",
+    "contractVersion",
+  ],
+  properties: {
+    mediaId: { type: "string", pattern: mediaIdPatternSource },
+    ref: {
+      type: "string",
+      pattern: nftMediaRefPatternSource,
+      description: "`nft:media/{mediaId}` (informational).",
+    },
+    url: {
+      type: "string",
+      maxLength: 2048,
+      description:
+        "The IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned; else the API-relative media path. Use it as the draft's nftImageAssetUrl (made absolute).",
+    },
+    mediaUrl: {
+      type: "string",
+      pattern:
+        "^/v2/media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.webp$",
+      description: "API-relative path of the local copy (fallback).",
+    },
+    cid: {
+      anyOf: [
+        { type: "string", pattern: ipfsCidPatternSource },
+        { type: "null" },
+      ],
+      description: "The IPFS CID; null when stored locally only.",
+    },
+    ipfsUri: {
+      anyOf: [{ type: "string", maxLength: 128 }, { type: "null" }],
+      description: "`ipfs://<cid>`; null when stored locally only.",
     },
     width: { type: "integer", minimum: 1, maximum: 4096 },
     height: { type: "integer", minimum: 1, maximum: 4096 },
@@ -216,6 +272,30 @@ export function registerV2MediaRoutes(
         upload(kind),
       );
     }
+
+    // Decision 0173: the project NFT picture — the community-logo rules,
+    // plus an IPFS pin (Filebase) when NFT_IMAGE_STORAGE=filebase.
+    scope.post(
+      "/v2/media/project-nft-images",
+      {
+        schema: {
+          operationId: "uploadV2ProjectNftImage",
+          summary: "Upload a MEME v2 project NFT picture",
+          description: `Decision 0173. multipart/form-data with one part \`file\`, the community-logo rules (Decision 0095): sniffed by content (JPEG/PNG/WebP/HEIC), <= 5 MiB, both sides >= 64 px, stored as a 512x512 cover WebP (quality 82, metadata stripped; a square picture is recommended). With NFT_IMAGE_STORAGE=filebase the stored WebP is also pinned to IPFS through Filebase before it is saved: \`cid\` / \`ipfsUri\` name the pin and \`url\` is the public gateway URL \`<IPFS_GATEWAY_BASE_URL>/<cid>\`; otherwise (local) \`cid\` / \`ipfsUri\` are null and \`url\` is the API-relative media path like the other uploads. \`mediaUrl\` is always the API-relative local copy (GET /v2/media/{mediaId}.webp), a fallback. Put \`url\` (absolute: prefix the API base URL when it is relative) into the Hooks launch draft's \`nftImageAssetUrl\`; the draft save accepts only the caller's own upload (422 VALIDATION_FAILED MEDIA_NOT_OWNED). 503 CAPABILITY_UNAVAILABLE / ${mediaIpfsUnavailableReason} when the pin fails (nothing is stored; retry with the same Idempotency-Key). 422 reason codes, idempotency and the shared six-per-minute limit as the other upload routes.`,
+          tags: ["profile"],
+          security: [{ privyBearer: [] }],
+          consumes: ["multipart/form-data"],
+          headers: v2CommandHeadersSchema,
+          querystring: emptyQueryStringSchema,
+          body: uploadBodySchema,
+          response: { 201: nftUploadResponseSchema, ...uploadErrors },
+        },
+        onRequest: validateCommandHeaders,
+        preValidation: prepareMultipartBody,
+        preHandler: authenticateLoopBearer,
+      },
+      upload("project_nft_image"),
+    );
   });
 
   app.get(

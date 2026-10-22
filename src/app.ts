@@ -340,6 +340,10 @@ import {
 } from "./features/media/media-service.js";
 import { createUnavailableMediaStorage } from "./features/media/media-storage.js";
 import {
+  createFilebaseRpcPinner,
+  type IpfsPinner,
+} from "./features/media/ipfs-pinner.js";
+import {
   createMediaUploadQuota,
   createUnavailableMediaUploadQuota,
 } from "./features/media/media-upload-quota.js";
@@ -644,6 +648,11 @@ export interface BuildAppOptions {
     readonly budgetsMs?: PublicMemeRouteOptions["budgetsMs"];
   };
   readonly launch2Chain?: Launch2Chain | null;
+  /**
+   * Decision 0173: test seam for the IPFS pinner of project NFT pictures.
+   * Absent = from NFT_IMAGE_STORAGE (filebase → Filebase RPC, local → none).
+   */
+  readonly ipfsPinner?: IpfsPinner | null;
   /** Decision 0124: test seam for the official-pool router reader. */
   readonly launch2PoolChain?: Launch2PoolChain | null;
   /** Decision 0131: test seam for the LoopDynamic (LoopRouter) reader. */
@@ -1415,6 +1424,20 @@ export async function buildApp(
     options.mediaService ??
     createMediaService({
       storage: database.media ?? createUnavailableMediaStorage(),
+      // Decision 0173: project NFT pictures are pinned to IPFS (Filebase)
+      // when NFT_IMAGE_STORAGE=filebase.
+      ipfsPinner:
+        options.ipfsPinner !== undefined
+          ? options.ipfsPinner
+          : config.nftImageStorage.mode === "filebase"
+            ? createFilebaseRpcPinner({
+                rpcEndpoint: config.nftImageStorage.rpcEndpoint,
+                rpcToken: config.nftImageStorage.rpcToken,
+                gatewayBaseUrl: config.ipfsGatewayBaseUrl,
+              })
+            : null,
+      ipfsGatewayBaseUrl: config.ipfsGatewayBaseUrl,
+      publicBaseUrl: config.publicBaseUrl,
       quota:
         config.streamTokenQuota === null
           ? createUnavailableMediaUploadQuota()
@@ -2206,6 +2229,11 @@ export async function buildApp(
         minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds,
         // Decision 0122: LAUNCH2_BUYBACK_RECIPIENT (null fails saves closed).
         fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
+        // Decision 0173: nftImageAssetUrl must be the owner's own upload.
+        nftImages:
+          options.mediaService !== undefined || mediaStorageComposed
+            ? mediaService
+            : null,
       })
     : undefined;
   const hooksLaunchDeploymentService = hooksLaunchEnabled
@@ -2435,6 +2463,8 @@ export async function buildApp(
           tradeDeadlineSeconds: config.launch2.tradeDeadlineSeconds,
           // Decision 0166: off (default) omits trader `account`, no lookup.
           traderAccountEmit: config.launch2.traderAccountEmit,
+          // Decision 0173: off (default) omits `nftImageUrl`.
+          nftImageEmit: config.launch2.nftImageEmit,
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,
@@ -3060,6 +3090,11 @@ export async function buildApp(
           repository: database.hooksLaunchReview ?? null,
           factory: hooksFactoryReader,
           fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
+          // Decision 0173: reads an operator config's nftImageAssetUrl.
+          nftImageBases: {
+            publicBaseUrl: config.publicBaseUrl,
+            ipfsGatewayBaseUrl: config.ipfsGatewayBaseUrl,
+          },
         }),
         audit: adminRepository,
         sessionSecret: adminConfig.sessionSecret,

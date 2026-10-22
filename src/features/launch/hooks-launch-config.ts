@@ -7,6 +7,7 @@ import {
   normalizeLaunchTokenName,
   normalizeLaunchTokenTicker,
 } from "./launch-token-text.js";
+import { isIpfsCid } from "../media/media-contract.js";
 
 /** Immutable economics for the user-approved LOOP Hooks launch template. */
 export const hooksLaunchTemplateVersion = "hooks_launch_v1" as const;
@@ -280,6 +281,8 @@ const allowedDraftKeys = new Set([
   "name",
   "ticker",
   "logoAssetUrl",
+  // Decision 0173: optional project NFT picture.
+  "nftImageAssetUrl",
   "description",
   "links",
   "nftSaleStartAt",
@@ -290,6 +293,11 @@ export interface HooksLaunchDraftInput {
   readonly name: string;
   readonly ticker: string;
   readonly logoAssetUrl: string;
+  /**
+   * Decision 0173: the project NFT picture (https, same rule as the logo).
+   * Optional — absent keeps the configHash byte-identical to before.
+   */
+  readonly nftImageAssetUrl?: string | undefined;
   readonly description: string;
   readonly links: readonly string[];
   readonly nftSaleStartAt: string;
@@ -304,6 +312,14 @@ export interface HooksLaunchDraft {
   readonly name: string;
   readonly ticker: string;
   readonly logoAssetUrl: string;
+  /** Decision 0173: present only when the draft carries one. */
+  readonly nftImageAssetUrl?: string;
+  /**
+   * Decision 0173: the IPFS CID the server resolved `nftImageAssetUrl` to
+   * (never client input; not part of the hash — the gateway URL that
+   * carries it is). Absent when not pinned.
+   */
+  readonly nftImageCid?: string;
   readonly description: string;
   readonly links: readonly string[];
   readonly nftSaleStartAt: string;
@@ -326,6 +342,26 @@ export class InvalidHooksLaunchDraftError extends Error {
   }
 }
 
+const configHashTuple =
+  "bytes32 templateHash, string name, string ticker, string logoAssetUrl, string description, bytes32 linksHash, uint64 nftSaleStartAt, address buybackRecipient, bytes32 fixedEconomicsHash";
+
+/** An https asset URL without credentials (the logo rule, Decision 0173). */
+function httpsAssetUrl(value: unknown): URL {
+  if (typeof value !== "string" || value.length > 2_048) {
+    throw new InvalidHooksLaunchDraftError();
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new InvalidHooksLaunchDraftError();
+  }
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new InvalidHooksLaunchDraftError();
+  }
+  return url;
+}
+
 /**
  * Validates the only project-editable on-chain values and produces a canonical
  * summary hash. The backend must still bind ownership and wallet signatures.
@@ -343,6 +379,11 @@ export function parseHooksLaunchDraft(
      * configHash are byte-for-byte unchanged.
      */
     readonly loopDynamic?: HooksLaunchLoopDynamicParams;
+    /**
+     * Decision 0173: the CID the caller resolved `nftImageAssetUrl` to
+     * (`MediaService.resolveProjectNftImage`); ignored without a picture.
+     */
+    readonly nftImageCid?: string | null;
   },
 ): HooksLaunchDraft {
   const officialEconomics = hooksLaunchFixedEconomicsFor(
@@ -419,15 +460,12 @@ export function parseHooksLaunchDraft(
     throw new InvalidHooksLaunchDraftError();
   }
 
-  let logoUrl: URL;
-  try {
-    logoUrl = new URL(input.logoAssetUrl);
-  } catch {
-    throw new InvalidHooksLaunchDraftError();
-  }
-  if (logoUrl.protocol !== "https:" || logoUrl.username || logoUrl.password) {
-    throw new InvalidHooksLaunchDraftError();
-  }
+  const logoUrl = httpsAssetUrl(input.logoAssetUrl);
+  // Decision 0173: the NFT picture follows the logo rule; absent stays absent.
+  const nftImageInput: unknown = (input as { nftImageAssetUrl?: unknown })
+    .nftImageAssetUrl;
+  const nftImageUrl =
+    nftImageInput === undefined ? null : httpsAssetUrl(nftImageInput);
 
   const links = linksInput.map((value) => {
     let url: URL;
@@ -451,6 +489,12 @@ export function parseHooksLaunchDraft(
     name,
     ticker,
     logoAssetUrl: logoUrl.toString(),
+    ...(nftImageUrl === null
+      ? {}
+      : { nftImageAssetUrl: nftImageUrl.toString() }),
+    ...(nftImageUrl === null || !isIpfsCid(policy.nftImageCid)
+      ? {}
+      : { nftImageCid: policy.nftImageCid }),
     description,
     links: [...new Set(links)].sort(),
     nftSaleStartAt: startAt.toString(),
@@ -458,22 +502,26 @@ export function parseHooksLaunchDraft(
     fixedEconomics,
   } as const;
 
-  const encoded = encodeAbiParameters(
-    parseAbiParameters(
-      "bytes32 templateHash, string name, string ticker, string logoAssetUrl, string description, bytes32 linksHash, uint64 nftSaleStartAt, address buybackRecipient, bytes32 fixedEconomicsHash",
-    ),
-    [
-      templateHash,
-      normalized.name,
-      normalized.ticker,
-      normalized.logoAssetUrl,
-      normalized.description,
-      keccak256(new TextEncoder().encode(JSON.stringify(normalized.links))),
-      startAt,
-      normalized.buybackRecipient as `0x${string}`,
-      keccak256(new TextEncoder().encode(JSON.stringify(fixedEconomics))),
-    ],
-  );
+  const baseValues = [
+    templateHash,
+    normalized.name,
+    normalized.ticker,
+    normalized.logoAssetUrl,
+    normalized.description,
+    keccak256(new TextEncoder().encode(JSON.stringify(normalized.links))),
+    startAt,
+    normalized.buybackRecipient as `0x${string}`,
+    keccak256(new TextEncoder().encode(JSON.stringify(fixedEconomics))),
+  ] as const;
+  // Decision 0173: a draft with an NFT picture appends it to the signed
+  // tuple; without one the encoding (and configHash) is byte-identical.
+  const encoded =
+    nftImageUrl === null
+      ? encodeAbiParameters(parseAbiParameters(configHashTuple), baseValues)
+      : encodeAbiParameters(
+          parseAbiParameters(`${configHashTuple}, string nftImageAssetUrl`),
+          [...baseValues, nftImageUrl.toString()],
+        );
 
   return Object.freeze({
     ...normalized,

@@ -1807,6 +1807,13 @@ const hooksLaunchDraftBodySchema = {
       maxLength: launchTokenTextMaxRawLength,
     },
     logoAssetUrl: { type: "string", format: "uri", maxLength: 2_048 },
+    nftImageAssetUrl: {
+      type: "string",
+      format: "uri",
+      maxLength: 2_048,
+      description:
+        "Decision 0173: optional project NFT picture — the `url` POST /v2/media/project-nft-images returned (the IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned), or the absolute `<PUBLIC_BASE_URL>/v2/media/<mediaId>.webp` of that upload. It must be the caller's own `project_nft_image` upload (422 VALIDATION_FAILED MEDIA_NOT_OWNED otherwise); the saved config keeps its canonical form (the gateway URL when the picture is pinned); the CID is kept server-side (never in this resource). Absent = no NFT picture: the App and the NFT metadata fall back to the logo, and the configHash stays byte-identical to a draft without the key. When present it is appended to the signed configHash tuple (`…, bytes32 fixedEconomicsHash, string nftImageAssetUrl`). Each save is a whole config: omitting it clears it.",
+    },
     description: {
       description: launchTokenTextDescription,
       type: "string",
@@ -1976,6 +1983,13 @@ export const hooksLaunchProjectConfigResourceSchema = {
         name: { type: "string" },
         ticker: { type: "string" },
         logoAssetUrl: { type: "string", format: "uri" },
+        nftImageAssetUrl: {
+          type: "string",
+          format: "uri",
+          description:
+            "Decision 0173: present only when the saved config carries a project NFT picture (canonical: the IPFS gateway URL when pinned).",
+        },
+
         description: { type: "string" },
         links: { type: "array", items: { type: "string", format: "uri" } },
         nftSaleStartAt: unixSecondsStringSchema,

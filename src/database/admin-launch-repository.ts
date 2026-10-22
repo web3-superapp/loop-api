@@ -267,6 +267,9 @@ const configKeys = [
   "name",
   "ticker",
   "logoAssetUrl",
+  // Decision 0173: null when the version has no project NFT picture.
+  "nftImageAssetUrl",
+  "nftImageCid",
   "description",
   "links",
   "nftSaleStartAt",

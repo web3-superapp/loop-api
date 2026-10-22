@@ -298,7 +298,7 @@ describe("Decision 0111 console follow-ups on PostgreSQL", () => {
   });
 
   it("migrates to the head migration", async () => {
-    expect(latestMigrationName).toBe("000095_friend_direct_channel_jobs");
+    expect(latestMigrationName).toBe("000096_launch2_nft_image");
     const head = await pool.query<{ name: string }>(
       "select name from public.pgmigrations order by run_on desc, id desc limit 1",
     );

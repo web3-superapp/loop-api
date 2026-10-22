@@ -5,13 +5,17 @@ import { V2ApiError } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   avatarRefMediaId,
+  ipfsGatewayUrl,
   isMediaId,
+  mediaAbsoluteUrl,
   mediaEtag,
   mediaPath,
   mediaReasonCodes,
   mediaRef,
+  parseProjectNftImageReference,
   type MediaKind,
 } from "./media-contract.js";
+import { IpfsPinUnavailableError, type IpfsPinner } from "./ipfs-pinner.js";
 import {
   MediaRejectedError,
   processMediaUpload,
@@ -40,7 +44,23 @@ export interface MediaUploadResource {
   readonly url: string;
   readonly width: number;
   readonly height: number;
+  /**
+   * Decision 0173, `project_nft_image` only: `url` is the IPFS gateway URL
+   * when pinned (else the API-relative media path, like the other kinds),
+   * `mediaUrl` the API-relative local copy, `cid` / `ipfsUri` the pin
+   * (null when stored locally only).
+   */
+  readonly mediaUrl?: string;
+  readonly cid?: string | null;
+  readonly ipfsUri?: string | null;
   readonly contractVersion: typeof v2ContractVersion;
+}
+
+/** Decision 0173: a draft's resolved project NFT picture. */
+export interface ResolvedProjectNftImage {
+  /** Canonical: the gateway URL when pinned, else the absolute media URL. */
+  readonly url: string;
+  readonly cid: string | null;
 }
 
 export interface MediaReadResult {
@@ -66,7 +86,21 @@ export interface MediaService {
     readonly ownerUserId: string;
     readonly avatarRef: string | null;
   }): Promise<void>;
+  /**
+   * Decision 0173: resolves a draft's `nftImageAssetUrl` — the `url` an
+   * upload to `POST /v2/media/project-nft-images` returned (gateway URL), or
+   * the absolute `<PUBLIC_BASE_URL>/v2/media/<id>.webp` — to the owner's
+   * `project_nft_image`. Anything else, another user's object or another
+   * kind is 422 `MEDIA_NOT_OWNED`.
+   */
+  resolveProjectNftImage(input: {
+    readonly ownerUserId: string;
+    readonly url: unknown;
+  }): Promise<ResolvedProjectNftImage>;
 }
+
+/** Decision 0173: 503 detailsSafe.reasonCode while the IPFS pin fails. */
+export const mediaIpfsUnavailableReason = "MEDIA_IPFS_UNAVAILABLE";
 
 export function mediaRejected(
   reasonCode: (typeof mediaReasonCodes)[keyof typeof mediaReasonCodes],
@@ -77,7 +111,25 @@ export function mediaRejected(
 function project(
   metadata: MediaObjectMetadata,
   kind: MediaKind,
+  ipfsGatewayBaseUrl: string | null,
 ): MediaUploadResource {
+  if (kind === "project_nft_image") {
+    const cid = metadata.ipfsCid ?? null;
+    return Object.freeze({
+      mediaId: metadata.mediaId,
+      ref: mediaRef(kind, metadata.mediaId),
+      url:
+        cid !== null && ipfsGatewayBaseUrl !== null
+          ? ipfsGatewayUrl(ipfsGatewayBaseUrl, cid)
+          : mediaPath(metadata.mediaId),
+      mediaUrl: mediaPath(metadata.mediaId),
+      cid,
+      ipfsUri: cid === null ? null : `ipfs://${cid}`,
+      width: metadata.width,
+      height: metadata.height,
+      contractVersion: v2ContractVersion,
+    });
+  }
   return Object.freeze({
     mediaId: metadata.mediaId,
     ref: mediaRef(kind, metadata.mediaId),
@@ -98,6 +150,11 @@ function mapFailure(error: unknown): never {
   if (error instanceof MediaIdempotencyConflictError) {
     throw V2ApiError.idempotencyConflict();
   }
+  if (error instanceof IpfsPinUnavailableError) {
+    throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+      reasonCode: mediaIpfsUnavailableReason,
+    });
+  }
   if (error instanceof MediaUploadRateLimitedError) {
     throw V2ApiError.rateLimited();
   }
@@ -114,8 +171,21 @@ export function createMediaService(options: {
   readonly storage: MediaStorage;
   readonly quota: MediaUploadQuota;
   readonly generateMediaId?: () => string;
+  /**
+   * Decision 0173: NFT_IMAGE_STORAGE=filebase pins every
+   * `project_nft_image` here before it is stored; null / absent (local)
+   * stores it like the other kinds, without a CID.
+   */
+  readonly ipfsPinner?: IpfsPinner | null;
+  /** IPFS_GATEWAY_BASE_URL; null = gateway URLs are not recognised. */
+  readonly ipfsGatewayBaseUrl?: string | null;
+  /** PUBLIC_BASE_URL, for absolute media URLs; absent = cannot resolve. */
+  readonly publicBaseUrl?: string | null;
 }): MediaService {
   const generateMediaId = options.generateMediaId ?? randomUUID;
+  const ipfsPinner = options.ipfsPinner ?? null;
+  const ipfsGatewayBaseUrl =
+    ipfsPinner?.gatewayBaseUrl ?? options.ipfsGatewayBaseUrl ?? null;
 
   return Object.freeze({
     async upload(input: {
@@ -138,12 +208,22 @@ export function createMediaService(options: {
           ) {
             throw new MediaIdempotencyConflictError();
           }
-          return project(earlier, input.kind);
+          return project(earlier, input.kind, ipfsGatewayBaseUrl);
         }
         await options.quota.consume(ownerUserId);
         const processed = await processMediaUpload(input.bytes);
+        const mediaId = generateMediaId();
+        // Decision 0173: pin the stored (re-encoded, metadata-stripped)
+        // bytes, so the CID names exactly what /v2/media serves.
+        const ipfsCid =
+          input.kind === "project_nft_image" && ipfsPinner !== null
+            ? await ipfsPinner.pin({
+                bytes: processed.bytes,
+                fileName: `${mediaId}.webp`,
+              })
+            : null;
         const stored = await options.storage.put({
-          mediaId: generateMediaId(),
+          mediaId,
           ownerUserId,
           kind: input.kind,
           bytes: processed.bytes,
@@ -152,8 +232,9 @@ export function createMediaService(options: {
           sha256: processed.sha256,
           idempotencyKey: input.idempotencyKey,
           requestSha256,
+          ...(ipfsCid === null ? {} : { ipfsCid }),
         });
-        return project(stored, input.kind);
+        return project(stored, input.kind, ipfsGatewayBaseUrl);
       } catch (error) {
         return mapFailure(error);
       }
@@ -198,6 +279,51 @@ export function createMediaService(options: {
       ) {
         throw mediaRejected(mediaReasonCodes.notOwned);
       }
+    },
+
+    async resolveProjectNftImage(input: {
+      readonly ownerUserId: string;
+      readonly url: unknown;
+    }): Promise<ResolvedProjectNftImage> {
+      const publicBaseUrl = options.publicBaseUrl ?? null;
+      if (publicBaseUrl === null) {
+        throw V2ApiError.capabilityUnavailable();
+      }
+      const reference = parseProjectNftImageReference(input.url, {
+        publicBaseUrl,
+        ipfsGatewayBaseUrl,
+      });
+      if (reference === null) {
+        throw mediaRejected(mediaReasonCodes.notOwned);
+      }
+      let metadata: MediaObjectMetadata | null;
+      try {
+        metadata =
+          reference.kind === "cid"
+            ? await options.storage.findProjectNftImageByCid({
+                ownerUserId: input.ownerUserId,
+                cid: reference.cid,
+              })
+            : await options.storage.getMetadata(reference.mediaId);
+      } catch (error) {
+        return mapFailure(error);
+      }
+      if (
+        metadata === null ||
+        metadata.kind !== "project_nft_image" ||
+        metadata.ownerUserId !== input.ownerUserId
+      ) {
+        throw mediaRejected(mediaReasonCodes.notOwned);
+      }
+      const cid = metadata.ipfsCid ?? null;
+      return Object.freeze(
+        cid !== null && ipfsGatewayBaseUrl !== null
+          ? { url: ipfsGatewayUrl(ipfsGatewayBaseUrl, cid), cid }
+          : {
+              url: mediaAbsoluteUrl(publicBaseUrl, metadata.mediaId),
+              cid: null,
+            },
+      );
     },
   });
 }

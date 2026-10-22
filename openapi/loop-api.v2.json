@@ -96099,6 +96099,11 @@
                                   "type": "string",
                                   "format": "uri"
                                 },
+                                "nftImageAssetUrl": {
+                                  "type": "string",
+                                  "format": "uri",
+                                  "description": "Decision 0173: present only when the saved config carries a project NFT picture (canonical: the IPFS gateway URL when pinned)."
+                                },
                                 "description": { "type": "string" },
                                 "links": {
                                   "type": "array",
@@ -97220,6 +97225,12 @@
                         "format": "uri",
                         "maxLength": 2048
                       },
+                      "nftImageAssetUrl": {
+                        "type": "string",
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "description": "Decision 0173: optional project NFT picture — the `url` POST /v2/media/project-nft-images returned (the IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned), or the absolute `<PUBLIC_BASE_URL>/v2/media/<mediaId>.webp` of that upload. It must be the caller's own `project_nft_image` upload (422 VALIDATION_FAILED MEDIA_NOT_OWNED otherwise); the saved config keeps its canonical form (the gateway URL when the picture is pinned); the CID is kept server-side (never in this resource). Absent = no NFT picture: the App and the NFT metadata fall back to the logo, and the configHash stays byte-identical to a draft without the key. When present it is appended to the signed configHash tuple (`…, bytes32 fixedEconomicsHash, string nftImageAssetUrl`). Each save is a whole config: omitting it clears it."
+                      },
                       "description": {
                         "description": "Decision 0154: any language or script; NFC-normalised, CRLF folded to LF, trimmed; at most 2000 characters; line feeds and tabs kept, other control and format characters refused except the emoji zero-width joiner and tag characters.",
                         "type": "string",
@@ -97337,6 +97348,11 @@
                         "name": { "type": "string" },
                         "ticker": { "type": "string" },
                         "logoAssetUrl": { "type": "string", "format": "uri" },
+                        "nftImageAssetUrl": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "Decision 0173: present only when the saved config carries a project NFT picture (canonical: the IPFS gateway URL when pinned)."
+                        },
                         "description": { "type": "string" },
                         "links": {
                           "type": "array",
@@ -157072,6 +157088,13 @@
                               { "type": "string", "format": "date-time" },
                               { "type": "null" }
                             ]
+                          },
+                          "nftImageUrl": {
+                            "description": "Decision 0173: OPTIONAL — present only while the server runs LAUNCH2_NFT_IMAGE_EMIT=on. The project NFT picture (https) the creator saved as nftImageAssetUrl; null when the project has none — fall back to logoUrl. Decode as an optional nullable key.",
+                            "anyOf": [
+                              { "type": "string", "maxLength": 2048 },
+                              { "type": "null" }
+                            ]
                           }
                         }
                       }
@@ -160122,6 +160145,13 @@
                         "projectedAt": {
                           "type": "string",
                           "format": "date-time"
+                        },
+                        "nftImageUrl": {
+                          "description": "Decision 0173: OPTIONAL — present only while the server runs LAUNCH2_NFT_IMAGE_EMIT=on. The project NFT picture (https) the creator saved as nftImageAssetUrl; null when the project has none — fall back to logoUrl. Decode as an optional nullable key.",
+                          "anyOf": [
+                            { "type": "string", "maxLength": 2048 },
+                            { "type": "null" }
+                          ]
                         },
                         "pool": {
                           "description": "Decision 0124 (optional in the schema, always present in answers): the official Uniswap v4 pool after graduation, from the PoolManager Swap logs of officialPoolId the launch2_event lane indexed (every swap of the pool: the in-App router, the buyback executor and any other caller). null before graduation. Volumes are the USD1 side (buy: USD1 in; sell: USD1 out before tax); taxUsd1 is the 2 % taken from sells, taxMeme from buys (exact-output swaps may be 1 wei off, see docs/frontend-v2-launch2-api.md §pool). lastPriceUsd1 = the pool price after the latest indexed swap (null until the first swap). router = LAUNCH2_POOL_ROUTER_ADDRESS (null when not configured: pool quote / prepare are then 503). Decision 0127: tradeCount / buyCount / sellCount / buyVolumeUsd1 / sellVolumeUsd1 keep counting every swap (buybacks included); userTradeCount / userBuyVolumeUsd1 / userSellVolumeUsd1 are the same totals without the swaps the instance's buyback adapter / executor sent (market trades only; tradeCount - userTradeCount = buyback swaps indexed in the pool). Decision 0158: also without a swap in a transaction that recorded one of the instance's buybacks (a LoopDynamic buyback reaches the PoolManager through the LoopRouter).",
@@ -171722,6 +171752,13 @@
                           "logoUrl": {
                             "anyOf": [{ "type": "string" }, { "type": "null" }]
                           },
+                          "nftImageUrl": {
+                            "description": "Decision 0173: OPTIONAL — present only while the server runs LAUNCH2_NFT_IMAGE_EMIT=on. The project NFT picture (https) the creator saved as nftImageAssetUrl; null when the project has none — fall back to logoUrl. Decode as an optional nullable key.",
+                            "anyOf": [
+                              { "type": "string", "maxLength": 2048 },
+                              { "type": "null" }
+                            ]
+                          },
                           "memeAddress": {
                             "type": "string",
                             "pattern": "^0x[0-9a-f]{40}$"
@@ -172149,6 +172186,385 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/launch2/nft/{launchId}/{tokenId}": {
+      "get": {
+        "operationId": "getV2Launch2NftMetadata",
+        "summary": "Get the ERC-721 metadata of one MEME v2 project NFT",
+        "tags": ["launch2"],
+        "description": "Decision 0173. Public JSON resource (ERC-721 / OpenSea metadata keys); no authentication and no LOOP headers, like the token logo proxy — the path is the stable target of a future on-chain `_baseURI` (`<base>/v2/launch2/nft/<launchId>/` + tokenId) and must not change. Body: {name: \"<project name> #<tokenId>\", description: the project description or a fixed LOOP sentence, image: `ipfs://<cid>` of the pinned project NFT picture, else its https URL, else the logo, else null, image_gateway: the same picture over https (IPFS gateway URL) for clients without ipfs://, attributes: [{trait_type: \"Project\", value: ticker}, {trait_type: \"Token ID\", value: tokenId}, {trait_type: \"Stage\", value: stage}]}. No external_url (LOOP has no public project page URL yet). 200 with `Cache-Control: public, max-age=300, stale-while-revalidate=3600` and `Access-Control-Allow-Origin: *`. 404 NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND for an unknown (or not yet activated) launch id, LAUNCH2_NFT_NOT_MINTED for a tokenId above the instance's minted count; a malformed launchId / tokenId is 400 INVALID_REQUEST. Errors are `no-store`. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+            "in": "path",
+            "name": "launchId",
+            "required": true,
+            "description": "The Factory's bytes32 launch id (`launchId` on the instance summary), any case."
+          },
+          {
+            "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$" },
+            "in": "path",
+            "name": "tokenId",
+            "required": true,
+            "description": "The project NFT token id, a positive decimal integer (1..n, n = the instance's minted count)."
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "description",
+                    "image",
+                    "image_gateway",
+                    "attributes"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "`<project name> #<tokenId>`."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "The project description as saved; `A project NFT of a MEME v2 launch on LOOP.` when it is empty."
+                    },
+                    "image": {
+                      "description": "`ipfs://<cid>` when the project NFT picture is pinned to IPFS; else its https URL (nftImageUrl), else the project logo (logoUrl), else null.",
+                      "anyOf": [
+                        { "type": "string", "maxLength": 2048 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "image_gateway": {
+                      "description": "The same picture over https (the IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned, else nftImageUrl, else logoUrl), for clients that do not resolve ipfs://; null when there is no picture.",
+                      "anyOf": [
+                        { "type": "string", "maxLength": 2048 },
+                        { "type": "null" }
+                      ]
+                    },
+                    "attributes": {
+                      "type": "array",
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["trait_type", "value"],
+                        "properties": {
+                          "trait_type": {
+                            "type": "string",
+                            "enum": ["Project", "Token ID", "Stage"]
+                          },
+                          "value": {
+                            "description": "Project: the ticker; Token ID: the token id (integer); Stage: the instance stage now.",
+                            "anyOf": [
+                              { "type": "string" },
+                              { "type": "integer", "minimum": 1 }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
                     "category": {
                       "type": "string",
                       "enum": [
@@ -178154,6 +178570,647 @@
                       "type": "string",
                       "pattern": "^/v2/media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.webp$",
                       "description": "API-relative path; the client prefixes its API base URL."
+                    },
+                    "width": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4096
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4096
+                    },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "IDEMPOTENCY_CONFLICT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["RATE_LIMITED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/media/project-nft-images": {
+      "post": {
+        "operationId": "uploadV2ProjectNftImage",
+        "summary": "Upload a MEME v2 project NFT picture",
+        "tags": ["profile"],
+        "description": "Decision 0173. multipart/form-data with one part `file`, the community-logo rules (Decision 0095): sniffed by content (JPEG/PNG/WebP/HEIC), <= 5 MiB, both sides >= 64 px, stored as a 512x512 cover WebP (quality 82, metadata stripped; a square picture is recommended). With NFT_IMAGE_STORAGE=filebase the stored WebP is also pinned to IPFS through Filebase before it is saved: `cid` / `ipfsUri` name the pin and `url` is the public gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>`; otherwise (local) `cid` / `ipfsUri` are null and `url` is the API-relative media path like the other uploads. `mediaUrl` is always the API-relative local copy (GET /v2/media/{mediaId}.webp), a fallback. Put `url` (absolute: prefix the API base URL when it is relative) into the Hooks launch draft's `nftImageAssetUrl`; the draft save accepts only the caller's own upload (422 VALIDATION_FAILED MEDIA_NOT_OWNED). 503 CAPABILITY_UNAVAILABLE / MEDIA_IPFS_UNAVAILABLE when the pin fails (nothing is stored; retry with the same Idempotency-Key). 422 reason codes, idempotency and the shared six-per-minute limit as the other upload routes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Required, the only part. JPEG, PNG, WebP or HEIC/HEIF by content (not by declared type), at most 5 MiB, both sides at least 64 px. Stored as 512x512 cover WebP."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mediaId",
+                    "ref",
+                    "url",
+                    "mediaUrl",
+                    "cid",
+                    "ipfsUri",
+                    "width",
+                    "height",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "mediaId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^nft:media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "description": "`nft:media/{mediaId}` (informational)."
+                    },
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "description": "The IPFS gateway URL `<IPFS_GATEWAY_BASE_URL>/<cid>` when pinned; else the API-relative media path. Use it as the draft's nftImageAssetUrl (made absolute)."
+                    },
+                    "mediaUrl": {
+                      "type": "string",
+                      "pattern": "^/v2/media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.webp$",
+                      "description": "API-relative path of the local copy (fallback)."
+                    },
+                    "cid": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,100})$"
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "The IPFS CID; null when stored locally only."
+                    },
+                    "ipfsUri": {
+                      "anyOf": [
+                        { "type": "string", "maxLength": 128 },
+                        { "type": "null" }
+                      ],
+                      "description": "`ipfs://<cid>`; null when stored locally only."
                     },
                     "width": {
                       "type": "integer",

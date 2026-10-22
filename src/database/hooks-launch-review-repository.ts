@@ -1,3 +1,7 @@
+import {
+  ipfsGatewayUrl,
+  mediaAbsoluteUrl,
+} from "../features/media/media-contract.js";
 import { randomUUID } from "node:crypto";
 
 import type { Pool, PoolClient } from "pg";
@@ -129,6 +133,8 @@ async function saveConfig(
   nftSaleDurationSeconds: number | undefined,
   /** Decision 0132: a LoopDynamic target Factory's Hook parameters. */
   loopDynamic: HooksLaunchLoopDynamicParams | undefined,
+  /** Decision 0173: the uploaded NFT picture the config names. */
+  nftImage: HooksLaunchReviewExecuteContext["nftImage"],
 ): Promise<unknown> {
   const projectId = command.target;
   const project = await lockApprovedProject(client, projectId, "update");
@@ -144,13 +150,48 @@ async function saveConfig(
   if (nftSaleDurationSeconds === undefined) {
     throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
   }
+  // Decision 0173: the picture must be the project owner's own upload.
+  let draftInput: Parameters<typeof parseHooksLaunchDraft>[0] =
+    command.payload.config;
+  let nftImageCid: string | null = null;
+  if (command.payload.config.nftImageAssetUrl !== undefined) {
+    if (nftImage === undefined) {
+      throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+    }
+    const media = (
+      await client.query<{ media_id: string; ipfs_cid: string | null }>(
+        `select media_id::text, ipfs_cid from public.media_objects
+         where kind = 'project_nft_image' and owner_user_id = $1
+           and ${nftImage.reference.kind === "cid" ? "ipfs_cid" : "media_id::text"} = $2
+         order by created_at, media_id limit 1`,
+        [
+          project.ownerUserId,
+          nftImage.reference.kind === "cid"
+            ? nftImage.reference.cid
+            : nftImage.reference.mediaId,
+        ],
+      )
+    ).rows[0];
+    if (media === undefined) {
+      throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
+    }
+    nftImageCid = media.ipfs_cid;
+    draftInput = {
+      ...command.payload.config,
+      nftImageAssetUrl:
+        media.ipfs_cid !== null && nftImage.ipfsGatewayBaseUrl !== null
+          ? ipfsGatewayUrl(nftImage.ipfsGatewayBaseUrl, media.ipfs_cid)
+          : mediaAbsoluteUrl(nftImage.publicBaseUrl, media.media_id),
+    };
+  }
   let config;
   try {
-    config = parseHooksLaunchDraft(command.payload.config, {
+    config = parseHooksLaunchDraft(draftInput, {
       nowUnixSeconds: String(nowUnixSeconds),
       minimumLeadSeconds,
       nftSaleDurationSeconds,
       ...(loopDynamic === undefined ? {} : { loopDynamic }),
+      nftImageCid,
     });
   } catch {
     throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
@@ -709,6 +750,7 @@ export function createPostgresHooksLaunchReviewRepository(
             minimumLeadSeconds,
             context?.nftSaleDurationSeconds,
             context?.loopDynamic,
+            context?.nftImage,
           );
         } else if (command.action === "launch.config.approve") {
           result = await approveConfig(client, actor, command);

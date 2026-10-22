@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { requireAuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
 import { emptyQueryStringSchema } from "../../core/http/schemas.js";
 import { parseV2CommandMetadata } from "../../features/community/community-contract.js";
 import { assertDecimalStringFields } from "./chain-schemas.js";
@@ -36,6 +37,8 @@ import {
   launch2InstanceDetailResourceSchema,
   launch2InstanceListResourceSchema,
   launch2InstanceParamsSchema,
+  launch2NftMetadataParamsSchema,
+  launch2NftMetadataResourceSchema,
   launch2IntentResourceSchema,
   launch2ListQuerySchema,
   launch2CampaignListResourceSchema,
@@ -74,6 +77,13 @@ const holdNote =
 function idempotencyKey(request: FastifyRequest): string {
   return parseV2CommandMetadata(request.raw.rawHeaders).idempotencyKey;
 }
+
+/**
+ * Decision 0173: NFT metadata may sit in a CDN / marketplace cache for five
+ * minutes (the stage attribute moves) and be served stale for an hour.
+ */
+export const launch2NftMetadataCacheControl =
+  "public, max-age=300, stale-while-revalidate=3600";
 
 interface InstanceParams {
   readonly instanceId: string;
@@ -669,6 +679,45 @@ export function registerV2Launch2Routes(
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
+    },
+  );
+  // Decision 0173: public ERC-721 metadata — the stable target of a future
+  // on-chain `_baseURI` (`<PUBLIC_BASE_URL>/v2/launch2/nft/<launchId>/`).
+  // Like the logo proxy: no Bearer, no LOOP headers, CDN-cacheable.
+  app.get(
+    "/v2/launch2/nft/:launchId/:tokenId",
+    {
+      schema: {
+        operationId: "getV2Launch2NftMetadata",
+        summary: "Get the ERC-721 metadata of one MEME v2 project NFT",
+        description: `Decision 0173. Public JSON resource (ERC-721 / OpenSea metadata keys); no authentication and no LOOP headers, like the token logo proxy — the path is the stable target of a future on-chain \`_baseURI\` (\`<base>/v2/launch2/nft/<launchId>/\` + tokenId) and must not change. Body: {name: "<project name> #<tokenId>", description: the project description or a fixed LOOP sentence, image: \`ipfs://<cid>\` of the pinned project NFT picture, else its https URL, else the logo, else null, image_gateway: the same picture over https (IPFS gateway URL) for clients without ipfs://, attributes: [{trait_type: "Project", value: ticker}, {trait_type: "Token ID", value: tokenId}, {trait_type: "Stage", value: stage}]}. No external_url (LOOP has no public project page URL yet). 200 with \`Cache-Control: ${launch2NftMetadataCacheControl}\` and \`Access-Control-Allow-Origin: *\`. 404 NOT_FOUND: LAUNCH2_INSTANCE_NOT_FOUND for an unknown (or not yet activated) launch id, LAUNCH2_NFT_NOT_MINTED for a tokenId above the instance's minted count; a malformed launchId / tokenId is 400 INVALID_REQUEST. Errors are \`no-store\`. ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [],
+        params: launch2NftMetadataParamsSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: launch2NftMetadataResourceSchema,
+          400: launch2ReadErrors[400],
+          404: launch2ReadErrors[404],
+          500: launch2ReadErrors[500],
+          503: launch2ReadErrors[503],
+        },
+      },
+      preValidation: assertNoBodyOrQuery,
+    },
+    async (request, reply) => {
+      const params = request.params as {
+        readonly launchId: string;
+        readonly tokenId: string;
+      };
+      reply.header("access-control-allow-origin", "*");
+      reply.header("cache-control", "no-store");
+      const metadata = await service.getNftMetadata({
+        launchId: params.launchId,
+        tokenId: params.tokenId,
+      });
+      reply.header("cache-control", launch2NftMetadataCacheControl);
+      return reply.code(200).send(metadata);
     },
   );
 }

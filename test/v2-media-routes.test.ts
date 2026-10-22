@@ -33,6 +33,12 @@ import type {
 } from "../src/features/profile/profile-v2-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import {
+  IpfsPinUnavailableError,
+  type IpfsPinner,
+} from "../src/features/media/ipfs-pinner.js";
+import { createMediaService } from "../src/features/media/media-service.js";
+import type { MediaUploadQuota } from "../src/features/media/media-upload-quota.js";
 
 /** Decision 0095: media upload/read routes and the avatarRef media rule. */
 
@@ -147,6 +153,7 @@ function memoryStorage(): MediaStorage & { readonly rows: MediaObject[] } {
         bytes: input.bytes,
         idempotencyKey: input.idempotencyKey,
         requestSha256: input.requestSha256,
+        ipfsCid: input.ipfsCid ?? null,
       };
       rows.push(row);
       return Promise.resolve(row);
@@ -166,6 +173,17 @@ function memoryStorage(): MediaStorage & { readonly rows: MediaObject[] } {
     ),
     getMetadata: vi.fn((mediaId: string) =>
       Promise.resolve(rows.find((row) => row.mediaId === mediaId) ?? null),
+    ),
+    findProjectNftImageByCid: vi.fn(
+      (input: { ownerUserId: string; cid: string }) =>
+        Promise.resolve(
+          rows.find(
+            (row) =>
+              row.ownerUserId === input.ownerUserId &&
+              row.kind === "project_nft_image" &&
+              row.ipfsCid === input.cid,
+          ) ?? null,
+        ),
     ),
   };
 }
@@ -286,8 +304,10 @@ describe("LOOP API V2 media (Decision 0095)", () => {
       readonly database: Database;
     } = fakes(),
     overrides: Readonly<Record<string, string>> = {},
+    seams: { readonly ipfsPinner?: IpfsPinner | null } = {},
   ) {
     const app = await buildApp({
+      ...seams,
       config: loadConfig({
         NODE_ENV: "test",
         API_DOCS_ENABLED: "false",
@@ -687,5 +707,200 @@ describe("LOOP API V2 media (Decision 0095)", () => {
       payload: fileBody(jpeg),
     });
     expectEnvelope(response, 400, "INVALID_REQUEST");
+  });
+
+  describe("project NFT pictures (Decision 0173)", () => {
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    const gateway = "https://ipfs.filebase.io/ipfs";
+
+    function fakePinner(fail = false) {
+      const pin = vi.fn<IpfsPinner["pin"]>(() =>
+        fail
+          ? Promise.reject(new IpfsPinUnavailableError("http"))
+          : Promise.resolve(cid),
+      );
+      return { pin, pinner: { gatewayBaseUrl: gateway, pin } };
+    }
+
+    const upload = (app: FastifyInstance, bytes: Buffer = png) =>
+      app.inject({
+        method: "POST",
+        url: "/v2/media/project-nft-images",
+        headers: headers(),
+        payload: fileBody(bytes),
+      });
+
+    it("stores locally without a CID when no pinner is configured (NFT_IMAGE_STORAGE=local)", async () => {
+      const { app, storage } = await createApp();
+      const response = await upload(app);
+      expect(response.statusCode).toBe(201);
+      const body = response.json<{ mediaId: string }>();
+      expect(body).toEqual({
+        mediaId: body.mediaId,
+        ref: `nft:media/${body.mediaId}`,
+        url: `/v2/media/${body.mediaId}.webp`,
+        mediaUrl: `/v2/media/${body.mediaId}.webp`,
+        cid: null,
+        ipfsUri: null,
+        width: 512,
+        height: 512,
+        contractVersion: "2.0",
+      });
+      expect(storage.rows[0]).toMatchObject({
+        kind: "project_nft_image",
+        ipfsCid: null,
+      });
+    });
+
+    it("pins the stored WebP and answers the gateway URL, the CID and ipfs://", async () => {
+      const { pin, pinner } = fakePinner();
+      const { app, storage } = await createApp(
+        fakes(),
+        {},
+        {
+          ipfsPinner: pinner,
+        },
+      );
+      const response = await upload(app);
+      expect(response.statusCode).toBe(201);
+      const body = response.json<{ mediaId: string }>();
+      expect(body).toMatchObject({
+        url: `${gateway}/${cid}`,
+        mediaUrl: `/v2/media/${body.mediaId}.webp`,
+        cid,
+        ipfsUri: `ipfs://${cid}`,
+      });
+      expect(pin).toHaveBeenCalledTimes(1);
+      const pinned = pin.mock.calls[0]?.[0];
+      expect(pinned?.fileName).toBe(`${body.mediaId}.webp`);
+      // Exactly the bytes /v2/media serves.
+      expect(
+        pinned?.bytes.equals(storage.rows[0]?.bytes ?? Buffer.alloc(0)),
+      ).toBe(true);
+      expect(storage.rows[0]?.ipfsCid).toBe(cid);
+      // The local copy stays readable.
+      const local = await app.inject({
+        method: "GET",
+        url: `/v2/media/${body.mediaId}.webp`,
+      });
+      expect(local.statusCode).toBe(200);
+      // A replay does not pin again.
+      const replay = await upload(app);
+      expect(replay.json()).toEqual(response.json());
+      expect(pin).toHaveBeenCalledTimes(1);
+    });
+
+    it("never pins the other kinds", async () => {
+      const { pin, pinner } = fakePinner();
+      const { app } = await createApp(fakes(), {}, { ipfsPinner: pinner });
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/media/community-logos",
+        headers: headers(),
+        payload: fileBody(png),
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).not.toHaveProperty("cid");
+      expect(pin).not.toHaveBeenCalled();
+    });
+
+    it("answers 503 MEDIA_IPFS_UNAVAILABLE and stores nothing when the pin fails", async () => {
+      const { pinner } = fakePinner(true);
+      const { app, storage } = await createApp(
+        fakes(),
+        {},
+        {
+          ipfsPinner: pinner,
+        },
+      );
+      const body = expectEnvelope(
+        await upload(app),
+        503,
+        "CAPABILITY_UNAVAILABLE",
+      );
+      expect(body["detailsSafe"]).toMatchObject({
+        reasonCode: "MEDIA_IPFS_UNAVAILABLE",
+      });
+      expect(storage.rows).toHaveLength(0);
+    });
+
+    it("resolves a draft URL only to the owner's own project NFT picture", async () => {
+      const storage = memoryStorage();
+      const quota: MediaUploadQuota = { consume: () => Promise.resolve() };
+      const service = createMediaService({
+        storage,
+        quota,
+        ipfsPinner: fakePinner().pinner,
+        publicBaseUrl: "https://api-dev.example.test/",
+      });
+      const principal = { userId: accountId } as never;
+      const pinned = await service.upload({
+        principal,
+        kind: "project_nft_image",
+        idempotencyKey,
+        bytes: png,
+      });
+      const logo = await service.upload({
+        principal,
+        kind: "community_logo",
+        idempotencyKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        bytes: jpeg,
+      });
+      const canonical = { url: `${gateway}/${cid}`, cid };
+      for (const url of [
+        `${gateway}/${cid}`,
+        `https://api-dev.example.test/v2/media/${pinned.mediaId}.webp`,
+      ]) {
+        await expect(
+          service.resolveProjectNftImage({ ownerUserId: accountId, url }),
+        ).resolves.toEqual(canonical);
+      }
+      for (const [ownerUserId, url] of [
+        [otherAccountId, `${gateway}/${cid}`],
+        [
+          otherAccountId,
+          `https://api-dev.example.test/v2/media/${pinned.mediaId}.webp`,
+        ],
+        [
+          accountId,
+          `https://api-dev.example.test/v2/media/${logo.mediaId}.webp`,
+        ],
+        [
+          accountId,
+          `https://elsewhere.example/v2/media/${pinned.mediaId}.webp`,
+        ],
+        [accountId, `${gateway}/${cid}?x=1`],
+        [accountId, "https://cdn.example.com/nft.png"],
+        [accountId, 42],
+      ] as const) {
+        await expect(
+          service.resolveProjectNftImage({ ownerUserId, url }),
+          String(url),
+        ).rejects.toMatchObject({
+          code: "VALIDATION_FAILED",
+          detailsSafe: { reasonCode: "MEDIA_NOT_OWNED" },
+        });
+      }
+    });
+
+    it("resolves a local-only picture to its absolute media URL without a CID", async () => {
+      const storage = memoryStorage();
+      const service = createMediaService({
+        storage,
+        quota: { consume: () => Promise.resolve() },
+        publicBaseUrl: "https://api-dev.example.test",
+        ipfsGatewayBaseUrl: gateway,
+      });
+      const local = await service.upload({
+        principal: { userId: accountId } as never,
+        kind: "project_nft_image",
+        idempotencyKey,
+        bytes: png,
+      });
+      const url = `https://api-dev.example.test/v2/media/${local.mediaId}.webp`;
+      await expect(
+        service.resolveProjectNftImage({ ownerUserId: accountId, url }),
+      ).resolves.toEqual({ url, cid: null });
+    });
   });
 });

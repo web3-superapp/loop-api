@@ -1,3 +1,5 @@
+import { V2ApiError } from "../../core/http/v2-error.js";
+import type { MediaService } from "../media/media-service.js";
 import {
   InvalidHooksLaunchDraftError,
   parseHooksLaunchDraft,
@@ -278,6 +280,12 @@ export function createHooksLaunchProjectConfigService(input: {
   /** Decision 0122: `LAUNCH2_BUYBACK_RECIPIENT`; null fails saves closed. */
   readonly fixedBuybackRecipient?: string | null;
   readonly now?: () => number;
+  /**
+   * Decision 0173: resolves a draft's `nftImageAssetUrl` to the owner's
+   * uploaded `project_nft_image` (422 MEDIA_NOT_OWNED otherwise). Null /
+   * absent: a draft carrying the key is 503 CAPABILITY_UNAVAILABLE.
+   */
+  readonly nftImages?: Pick<MediaService, "resolveProjectNftImage"> | null;
 }): HooksLaunchProjectConfigService {
   const fixedBuybackRecipient =
     input.fixedBuybackRecipient?.toLowerCase() ?? null;
@@ -341,13 +349,28 @@ export function createHooksLaunchProjectConfigService(input: {
         fixedBuybackRecipient,
         (request.body as Record<string, unknown>)["buybackRecipient"],
       );
+      // Decision 0173: the NFT picture must be the owner's own upload; the
+      // draft keeps its canonical URL (the IPFS gateway URL when pinned).
+      let body = request.body as Record<string, unknown>;
+      let nftImageCid: string | null = null;
+      if (body["nftImageAssetUrl"] !== undefined) {
+        const nftImages = input.nftImages ?? null;
+        if (nftImages === null) throw V2ApiError.capabilityUnavailable();
+        const resolved = await nftImages.resolveProjectNftImage({
+          ownerUserId: request.ownerUserId,
+          url: body["nftImageAssetUrl"],
+        });
+        body = { ...body, nftImageAssetUrl: resolved.url };
+        nftImageCid = resolved.cid;
+      }
       const config = parseHooksLaunchDraft(
-        request.body as Parameters<typeof parseHooksLaunchDraft>[0],
+        body as unknown as Parameters<typeof parseHooksLaunchDraft>[0],
         {
           nowUnixSeconds: String(now()),
           minimumLeadSeconds: input.minimumLeadSeconds,
           // Decision 0132: + the LoopDynamic Hook parameters, if any.
           ...(await hooksLaunchFactoryHashPolicy(input.factory)),
+          nftImageCid,
         },
       );
       // Decision 0164: refuse here, not at the deploy simulation, a ticker

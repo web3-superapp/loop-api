@@ -89,6 +89,8 @@ export const launch2ReasonCodes = Object.freeze({
   snapshotUnverified: "LAUNCH2_SNAPSHOT_UNVERIFIED",
   // Not found.
   instanceNotFound: "LAUNCH2_INSTANCE_NOT_FOUND",
+  /** Decision 0173: an NFT metadata token id above the minted count. */
+  nftNotMinted: "LAUNCH2_NFT_NOT_MINTED",
   // Stale (409 DATA_STALE / QUOTE_EXPIRED).
   stageMismatch: "LAUNCH2_STAGE_MISMATCH",
   instancePaused: "LAUNCH2_INSTANCE_PAUSED",

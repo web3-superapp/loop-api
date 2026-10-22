@@ -169,11 +169,15 @@ function hooksUnavailable(reasonCode: string): V2ApiError {
 }
 
 function projectConfigResource(record: HooksLaunchProjectConfigRecord) {
+  // Decision 0173: the server-derived `nftImageCid` stays internal — the
+  // App decodes `config` strictly (only nftImageAssetUrl is optional).
+  const { nftImageCid: _cid, ...config } = record.config;
+  void _cid;
   return {
     projectId: record.projectId,
     version: record.version,
     templateVersion: record.templateVersion,
-    config: record.config,
+    config,
     updatedAt: record.updatedAt,
   };
 }

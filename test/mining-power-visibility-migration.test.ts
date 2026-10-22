@@ -38,7 +38,7 @@ describe("000087 mining power visibility default migration contract (Decision 01
   });
 
   it("is the schema head and matches the contract default", () => {
-    expect(latestMigrationName).toBe("000095_friend_direct_channel_jobs");
+    expect(latestMigrationName).toBe("000096_launch2_nft_image");
     expect(defaultPrivacyV2Values.visibility.miningPower).toBe("everyone");
   });
 });

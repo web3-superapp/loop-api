@@ -1,3 +1,7 @@
+import {
+  parseProjectNftImageReference,
+  type ProjectNftImageReference,
+} from "../media/media-contract.js";
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
@@ -99,6 +103,8 @@ const hooksLaunchOperatorConfigSchema = z
     name: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
     ticker: z.string().trim().min(1).max(launchTokenTextMaxRawLength),
     logoAssetUrl: z.url().startsWith("https://"),
+    // Decision 0173: optional project NFT picture, the logo rule.
+    nftImageAssetUrl: z.url().startsWith("https://").max(2_048).optional(),
     // Decision 0154: characters, not UTF-16 units (an emoji is two).
     description: z
       .string()
@@ -322,6 +328,16 @@ export interface HooksLaunchReviewExecuteContext {
   readonly nftSaleDurationSeconds?: number;
   /** Decision 0132: a LoopDynamic target Factory's Hook parameters. */
   readonly loopDynamic?: HooksLaunchLoopDynamicParams;
+  /**
+   * Decision 0173: the uploaded object an operator config's
+   * `nftImageAssetUrl` names; the repository checks it is the project
+   * owner's `project_nft_image` and stores its canonical URL and CID.
+   */
+  readonly nftImage?: {
+    readonly reference: ProjectNftImageReference;
+    readonly publicBaseUrl: string;
+    readonly ipfsGatewayBaseUrl: string | null;
+  };
 }
 
 export interface HooksLaunchReviewService {
@@ -352,6 +368,15 @@ export function createHooksLaunchReviewService(input: {
    * `OPS_UNAVAILABLE`. Absent = not configured.
    */
   readonly fixedBuybackRecipient?: string | null;
+  /**
+   * Decision 0173: PUBLIC_BASE_URL / IPFS_GATEWAY_BASE_URL, to read an
+   * operator config's `nftImageAssetUrl`. Absent: a config carrying the
+   * key is OPS_UNAVAILABLE.
+   */
+  readonly nftImageBases?: {
+    readonly publicBaseUrl: string;
+    readonly ipfsGatewayBaseUrl: string | null;
+  } | null;
 }): HooksLaunchReviewService {
   function requireRepository(): HooksLaunchReviewRepository {
     if (input.repository === null) {
@@ -432,8 +457,22 @@ export function createHooksLaunchReviewService(input: {
           throw new HooksLaunchReviewError("OPS_TICKER_UNSUPPORTED_BY_FACTORY");
         }
       }
-      // OfficialTax: exactly the pre-0132 context (no loopDynamic key).
-      return repository.execute(operator, parsed.data, policy);
+      // Decision 0173: name the uploaded NFT picture, if any.
+      const nftImageUrl = parsed.data.payload.config.nftImageAssetUrl;
+      if (nftImageUrl === undefined) {
+        // OfficialTax: exactly the pre-0132 context (no loopDynamic key).
+        return repository.execute(operator, parsed.data, policy);
+      }
+      const bases = input.nftImageBases ?? null;
+      if (bases === null) throw new HooksLaunchReviewError("OPS_UNAVAILABLE");
+      const reference = parseProjectNftImageReference(nftImageUrl, bases);
+      if (reference === null) {
+        throw new HooksLaunchReviewError("OPS_INVALID_LAUNCH_CONFIG");
+      }
+      return repository.execute(operator, parsed.data, {
+        ...policy,
+        nftImage: { reference, ...bases },
+      });
     },
   } satisfies HooksLaunchReviewService);
 }
