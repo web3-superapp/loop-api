@@ -1533,6 +1533,9 @@ export async function buildApp(
         blockedTerms: config.v2AliasBlockedTerms,
       }),
       realIdentity: config.communityChatRealIdentity,
+      // Decision 0175: COMMUNITY_LABEL_EMIT off (default) keeps every
+      // community projection byte-identical; on adds `label`.
+      labelEmit: config.communityLabelEmit,
     });
   const streamCallGateway =
     options.streamCallGateway ??
@@ -1953,6 +1956,9 @@ export async function buildApp(
       recommendedCommunityIds: config.recommendedCommunityIds,
       recommendedCommunityIdsOverride: () =>
         adminSettingsReader.recommendedCommunityIds(),
+      // Decision 0175: COMMUNITY_LABEL_EMIT off (default) keeps the profile
+      // community rows and recommended communities byte-identical.
+      communityLabelEmit: config.communityLabelEmit,
       // Decision 0169: PROFILE_LAUNCH2_EMIT off (default) keeps holdings and
       // trades byte-identical; on merges the owner's Launch-chain launch2
       // holdings / activity (read model + graduated MEME balances).

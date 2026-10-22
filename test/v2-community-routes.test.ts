@@ -73,6 +73,7 @@ const community: CommunityDirectoryRecord = Object.freeze({
   description: null,
   logoRef: "avatar:preset/community-03",
   verificationStatus: "verified",
+  label: null,
   boundAssetKey: null,
   memberCount: 2,
   createdAt,
@@ -1769,6 +1770,122 @@ describe("LOOP API V2 community, social, and search modules", () => {
       resultType: "community",
       stableId: communityId,
       destination: { kind: "communityProfile" },
+    });
+  });
+
+  describe("custom community label (Decision 0175)", () => {
+    const labelled = Object.freeze({ ...community, label: "算力社区" });
+
+    async function labelledApp(emit: "unset" | "off" | "on") {
+      const dependencies = fakes();
+      const repository = dependencies.communityRepository;
+      dependencies.listCommunitiesMock.mockResolvedValue([labelled]);
+      Object.assign(repository, {
+        getCommunity: vi.fn(() =>
+          Promise.resolve({
+            community: labelled,
+            viewerMembership: ownerMembership,
+          }),
+        ),
+        searchCommunities: vi.fn(() =>
+          Promise.resolve([
+            {
+              community: labelled,
+              searchKey: "frog holders",
+              viewerJoined: true,
+            },
+          ]),
+        ),
+        getCommunityHome: vi.fn(() =>
+          Promise.resolve({
+            joined: [
+              {
+                community: labelled,
+                viewerMembership: {
+                  ...ownerMembership,
+                  role: "member" as const,
+                },
+              },
+            ],
+            joinedTruncated: false,
+            owned: [],
+            ownedTruncated: false,
+            discover: [labelled],
+            observedAt: createdAt,
+          }),
+        ),
+      } satisfies Partial<CommunityRepository>);
+      return createApp(
+        dependencies,
+        emit === "unset" ? {} : { COMMUNITY_LABEL_EMIT: emit },
+      );
+    }
+
+    async function read(app: FastifyInstance, url: string) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode, url).toBe(200);
+      return response.json<Record<string, unknown>>();
+    }
+
+    for (const emit of ["unset", "off"] as const) {
+      it(`omits label everywhere with COMMUNITY_LABEL_EMIT ${emit}`, async () => {
+        const { app } = await labelledApp(emit);
+        for (const url of [
+          `/v2/communities/${communityId}`,
+          "/v2/communities",
+          "/v2/community/home",
+          "/v2/search?domain=communities&q=frog",
+          "/v2/search?domain=users&q=frog",
+        ]) {
+          const body = await read(app, url);
+          expect(JSON.stringify(body), url).not.toContain('"label"');
+          expect(JSON.stringify(body), url).not.toContain("算力社区");
+        }
+      });
+    }
+
+    it("emits label next to an unchanged verificationStatus with COMMUNITY_LABEL_EMIT on", async () => {
+      const { app } = await labelledApp("on");
+      const detail = await read(app, `/v2/communities/${communityId}`);
+      expect(detail["community"]).toMatchObject({
+        label: "算力社区",
+        verificationStatus: "verified",
+      });
+      const list = await read(app, "/v2/communities");
+      expect(list["items"]).toEqual([
+        expect.objectContaining({
+          label: "算力社区",
+          verificationStatus: "verified",
+        }),
+      ]);
+      const home = await read(app, "/v2/community/home");
+      expect(home["discover"]).toEqual([
+        expect.objectContaining({ label: "算力社区" }),
+      ]);
+      expect(
+        (home["joined"] as { items: { community: unknown }[] }).items[0]
+          ?.community,
+      ).toMatchObject({ label: "算力社区" });
+      const search = await read(app, "/v2/search?domain=communities&q=frog");
+      expect(
+        (search["results"] as { displaySnapshot: unknown }[])[0]
+          ?.displaySnapshot,
+      ).toMatchObject({ label: "算力社区", verificationStatus: "verified" });
+      const users = await read(app, "/v2/search?domain=users&q=frog");
+      expect(
+        (users["results"] as { displaySnapshot: unknown }[])[0]
+          ?.displaySnapshot,
+      ).toMatchObject({ label: null, verificationStatus: null });
+    });
+
+    it("emits label: null for an unlabelled community with COMMUNITY_LABEL_EMIT on", async () => {
+      const { app } = await createApp(fakes(), { COMMUNITY_LABEL_EMIT: "on" });
+      const detail = await read(app, `/v2/communities/${communityId}`);
+      expect(detail["community"]).toMatchObject({ label: null });
     });
   });
 

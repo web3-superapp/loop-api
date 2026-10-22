@@ -64,6 +64,8 @@ export interface AdminCommunityRecord {
   readonly description: string | null;
   readonly logoRef: string | null;
   readonly verificationStatus: AdminCommunityStatus;
+  /** Decision 0175: the operator-set custom label; null = none. */
+  readonly label: string | null;
   readonly boundAssetId: string | null;
   readonly memberCount: number;
   readonly ownerUserId: string;
@@ -249,6 +251,22 @@ export interface AdminRepository {
     readonly note: CommunityReviewNoteRecord;
     readonly audit: AdminAuditRecord;
   }>;
+
+  /**
+   * Decision 0175: sets (string) or clears (null) the custom label under a
+   * row lock. Null = no such community. An unchanged label writes nothing
+   * (`changed: false`, `audit: null`); a change writes the
+   * `community.label.update` audit row in the same transaction.
+   */
+  setCommunityLabel(input: {
+    readonly communityId: string;
+    readonly label: string | null;
+    readonly audit: Omit<AdminAuditInput, "before" | "after">;
+  }): Promise<{
+    readonly community: AdminCommunityRecord;
+    readonly changed: boolean;
+    readonly audit: AdminAuditRecord | null;
+  } | null>;
 
   listMemeTokens(input: {
     readonly status: string | null;

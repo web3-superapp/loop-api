@@ -1029,6 +1029,12 @@ const environmentSchema = z
     // on the Launch chain into `items` and adds the optional `launch2` block.
     // Turn on only once every supported client decodes them (build >= 34).
     PROFILE_LAUNCH2_EMIT: z.enum(["off", "on"]),
+    // Decision 0175: off|on (default off). off keeps every /v2 community
+    // projection byte-identical; on adds the optional `label` key (the
+    // operator-set custom community label, or null) next to
+    // `verificationStatus`. Turn on only once every supported client decodes
+    // the key.
+    COMMUNITY_LABEL_EMIT: z.enum(["off", "on"]),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1923,6 +1929,8 @@ export interface AppConfig {
   readonly walletActivityLaunch2Emit: boolean;
   /** Decision 0169: PROFILE_LAUNCH2_EMIT === "on" (default off). */
   readonly profileLaunch2Emit: boolean;
+  /** Decision 0175: COMMUNITY_LABEL_EMIT === "on" (default off). */
+  readonly communityLabelEmit: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -4289,6 +4297,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     WALLET_ACTIVITY_LAUNCH2_EMIT:
       environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
     PROFILE_LAUNCH2_EMIT: environment["PROFILE_LAUNCH2_EMIT"] ?? "off",
+    COMMUNITY_LABEL_EMIT: environment["COMMUNITY_LABEL_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4462,6 +4471,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     walletActivityLaunch2Emit:
       parsed.data.WALLET_ACTIVITY_LAUNCH2_EMIT === "on",
     profileLaunch2Emit: parsed.data.PROFILE_LAUNCH2_EMIT === "on",
+    communityLabelEmit: parsed.data.COMMUNITY_LABEL_EMIT === "on",
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:

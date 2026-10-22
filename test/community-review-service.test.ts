@@ -46,6 +46,7 @@ function community(
     description: null,
     logoRef: null,
     verificationStatus: status,
+    label: null,
     boundAssetKey: null,
     memberCount: 1,
     createdAt: "2026-09-22T01:00:00.000Z",

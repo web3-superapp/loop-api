@@ -266,6 +266,17 @@ export const memberIdentitySchema = {
   },
 } as const;
 
+/**
+ * Decision 0175: the operator-set custom community label shown where the
+ * App used to show the "verified" mark. Optional: emitted only while
+ * COMMUNITY_LABEL_EMIT is on.
+ */
+export const communityLabelSchema = {
+  description:
+    "Decision 0175: OPTIONAL key — present only with COMMUNITY_LABEL_EMIT=on (default off). The custom label an operator set for this community (1–12 characters, shown where the verified mark used to be); null = none. Independent of verificationStatus, which still gates search and public visibility.",
+  anyOf: [{ type: "string", minLength: 1, maxLength: 12 }, { type: "null" }],
+} as const;
+
 export const communitySummarySchema = {
   type: "object",
   additionalProperties: false,
@@ -301,6 +312,7 @@ export const communitySummarySchema = {
       type: "string",
       enum: [...communityVerificationStatuses],
     },
+    label: communityLabelSchema,
     boundAssetKey: {
       anyOf: [
         {
@@ -1239,6 +1251,11 @@ export const searchResourceSchema = {
                   { type: "string", enum: [...communityVerificationStatuses] },
                   { type: "null" },
                 ],
+              },
+              label: {
+                ...communityLabelSchema,
+                description:
+                  "Decision 0175: OPTIONAL key — present only with COMMUNITY_LABEL_EMIT=on (default off). The operator-set custom label of a community result (1–12 characters) or null; always null for user and asset results.",
               },
             },
           },

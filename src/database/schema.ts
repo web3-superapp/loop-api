@@ -1,4 +1,4 @@
-export const latestMigrationName = "000096_launch2_nft_image";
+export const latestMigrationName = "000097_community_label";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

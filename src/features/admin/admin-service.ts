@@ -222,6 +222,32 @@ function auditReference(audit: AdminAuditRecord): AdminAuditReference {
   });
 }
 
+/** Decision 0175: the longest custom community label, in characters. */
+export const maximumCommunityLabelLength = 12;
+
+/**
+ * Decision 0175: a label is trimmed; empty after trim (or null) clears it;
+ * more than 12 characters (code points) is refused.
+ */
+export function normalizeCommunityLabel(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    refuse("INVALID_REQUEST");
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  if ([...trimmed].length > maximumCommunityLabelLength) {
+    refuse("VALIDATION_FAILED", adminReasonCodes.communityLabelTooLong, {
+      field: "label",
+    });
+  }
+  return trimmed;
+}
+
 function reasonText(value: unknown, required: boolean): string | null {
   if (value === undefined || value === null) {
     if (required) {
@@ -407,6 +433,12 @@ export interface AdminService {
       readonly reasonCode: unknown;
       readonly reasonText?: unknown;
     },
+  ): Promise<Record<string, unknown>>;
+  /** Decision 0175: set or clear the custom community label. */
+  setCommunityLabel(
+    context: AdminWriteContext,
+    communityId: string,
+    body: { readonly label: unknown },
   ): Promise<Record<string, unknown>>;
   listFormulaVersions(): Promise<Record<string, unknown>>;
   createFormulaDraft(
@@ -1693,6 +1725,37 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
           push: result.push,
           note: recorded.note,
           audit: auditReference(recorded.audit),
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async setCommunityLabel(context, communityId, body) {
+      const label = normalizeCommunityLabel(body.label);
+      if (!canonicalUuidPattern.test(communityId)) {
+        refuse("NOT_FOUND", adminReasonCodes.communityNotFound);
+      }
+      try {
+        const written = await repository.setCommunityLabel({
+          communityId,
+          label,
+          audit: {
+            actor: context.session.actor,
+            actorAccountId: context.session.accountId,
+            action: "community.label.update",
+            targetType: "community",
+            targetId: communityId,
+            requestId: context.requestId,
+          },
+        });
+        if (written === null) {
+          refuse("NOT_FOUND", adminReasonCodes.communityNotFound);
+        }
+        return Object.freeze({
+          community: projectCommunity(written.community),
+          changed: written.changed,
+          audit: written.audit === null ? null : auditReference(written.audit),
         });
       } catch (error) {
         return translate(error);

@@ -597,6 +597,8 @@ export interface SearchDisplaySnapshot {
   readonly logo: TokenLogoProjection | null;
   readonly memberCount: number | null;
   readonly verificationStatus: CommunitySummary["verificationStatus"] | null;
+  /** Decision 0175: only while COMMUNITY_LABEL_EMIT is on; null for users and assets. */
+  readonly label?: string | null;
 }
 
 export interface SearchResultProjection {
@@ -743,7 +745,14 @@ function ownerApplication(
     : null;
 }
 
-function summary(record: CommunityRecord): CommunitySummary {
+/**
+ * Decision 0175: `label` (the operator-set custom label) is emitted only
+ * while COMMUNITY_LABEL_EMIT is on; off keeps the summary byte-identical.
+ */
+function summary(
+  record: CommunityRecord,
+  emitLabel: boolean,
+): CommunitySummary {
   return Object.freeze({
     communityId: record.communityId,
     name: record.name,
@@ -751,6 +760,7 @@ function summary(record: CommunityRecord): CommunitySummary {
     description: record.description,
     logoRef: record.logoRef,
     verificationStatus: record.verificationStatus,
+    ...(emitLabel ? { label: record.label } : {}),
     boundAssetKey: record.boundAssetKey,
     memberCount: record.memberCount,
     createdAt: record.createdAt,
@@ -823,11 +833,12 @@ function discoverItem(
   basis: CommunityOrderingBasis,
   membershipFilter: CommunityMembershipFilter,
   tokenLogos: TokenLogoProjector,
+  emitLabel: boolean,
 ): CommunityDiscoverItem {
   // `membership=owned` rows are the viewer's own applications, so the
   // review state travels with them; no other list row carries it.
   const row = Object.freeze({
-    ...summary(record),
+    ...summary(record, emitLabel),
     viewerMembership: directoryViewerMembership(record),
     boundAsset: directoryBoundAsset(record, tokenLogos),
   });
@@ -1102,9 +1113,10 @@ function communityResource(
   miningPower: MiningPowerProjection,
   onlineCount: CommunityPresenceProjection,
   tokenLogos: TokenLogoProjector,
+  emitLabel: boolean,
 ): CommunityResource {
   return Object.freeze({
-    community: summary(record.community),
+    community: summary(record.community, emitLabel),
     viewer: viewerProjection(record.viewerMembership),
     application: ownerApplication(record),
     chat: chatProjection(channel),
@@ -1158,6 +1170,11 @@ export interface CommunityServiceOptions {
    * `chat.viewerPersona` is always null. Default false (Decision 0055).
    */
   readonly realIdentity?: boolean;
+  /**
+   * Decision 0175 (`COMMUNITY_LABEL_EMIT`): when true every community
+   * projection carries `label`. Default false (byte-identical to before).
+   */
+  readonly labelEmit?: boolean;
 }
 
 /** The one registry read the asset search domain needs. */
@@ -1195,6 +1212,7 @@ export function createCommunityService(
     }
   }
 
+  const emitLabel = options.labelEmit === true;
   const miningPowerReader = options.miningPower ?? null;
   const miningPowerUnavailable = unavailable(
     communityUnavailableReasonCodes.mining,
@@ -1494,7 +1512,7 @@ export function createCommunityService(
       items.map((item) => item.profile.publicProfileId),
     );
     return Object.freeze({
-      community: summary(record.community),
+      community: summary(record.community, emitLabel),
       viewer: viewerProjection(record.viewerMembership),
       counts: Object.freeze({
         all: record.counts.all,
@@ -1615,6 +1633,7 @@ export function createCommunityService(
                 asset.status === "verified"
                   ? ("verified" as const)
                   : ("pending" as const),
+              ...(emitLabel ? { label: null } : {}),
             }),
             destination: Object.freeze({
               kind: "assetDetail" as const,
@@ -1659,7 +1678,7 @@ export function createCommunityService(
                   ? []
                   : [
                       Object.freeze({
-                        community: summary(entry.community),
+                        community: summary(entry.community, emitLabel),
                         membership: current,
                         application: applicationProjection(entry.community),
                       }),
@@ -1676,7 +1695,7 @@ export function createCommunityService(
                   ? []
                   : [
                       Object.freeze({
-                        community: summary(entry.community),
+                        community: summary(entry.community, emitLabel),
                         membership: current,
                       }),
                     ];
@@ -1684,7 +1703,9 @@ export function createCommunityService(
             ),
             truncated: record.joinedTruncated,
           }),
-          discover: Object.freeze(record.discover.map(summary)),
+          discover: Object.freeze(
+            record.discover.map((entry) => summary(entry, emitLabel)),
+          ),
           unread: unavailable(communityUnavailableReasonCodes.unread),
           liveVoice: unavailable(communityUnavailableReasonCodes.liveVoice),
           freshness: Object.freeze({
@@ -1781,6 +1802,7 @@ export function createCommunityService(
                 basis.basis,
                 membershipFilter,
                 options.tokenLogos,
+                emitLabel,
               ),
             ),
           ),
@@ -1839,6 +1861,7 @@ export function createCommunityService(
           await communityMiningPower(record.community.communityId),
           communityPresenceNotObserved,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1870,6 +1893,7 @@ export function createCommunityService(
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1901,6 +1925,7 @@ export function createCommunityService(
           miningPower,
           presence,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1938,6 +1963,7 @@ export function createCommunityService(
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -1983,6 +2009,7 @@ export function createCommunityService(
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -2008,6 +2035,7 @@ export function createCommunityService(
           await communityMiningPower(communityId),
           communityPresenceNotObserved,
           options.tokenLogos,
+          emitLabel,
         );
       } catch (error) {
         return mapFailure(error);
@@ -2567,6 +2595,7 @@ export function createCommunityService(
                     logo: null,
                     memberCount: null,
                     verificationStatus: null,
+                    ...(emitLabel ? { label: null } : {}),
                   }),
                   destination: Object.freeze({
                     kind: "publicProfile" as const,
@@ -2621,6 +2650,7 @@ export function createCommunityService(
                   logo: null,
                   memberCount: item.community.memberCount,
                   verificationStatus: item.community.verificationStatus,
+                  ...(emitLabel ? { label: item.community.label } : {}),
                 }),
                 destination: Object.freeze({
                   kind: "communityProfile" as const,

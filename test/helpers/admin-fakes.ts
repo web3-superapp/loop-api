@@ -48,6 +48,7 @@ export function adminCommunityFixture(
     description: null,
     logoRef: null,
     verificationStatus: "verified",
+    label: null,
     boundAssetId: null,
     memberCount: 3,
     ownerUserId: randomUUID(),
@@ -304,6 +305,31 @@ export function createInMemoryAdminRepository(): InMemoryAdminRepository {
       };
       notes.push(note);
       return Promise.resolve({ note, audit: record });
+    },
+    setCommunityLabel: (input) => {
+      const current = communities.get(input.communityId);
+      if (current === undefined) {
+        return Promise.resolve(null);
+      }
+      if (current.label === input.label) {
+        return Promise.resolve({
+          community: current,
+          changed: false,
+          audit: null,
+        });
+      }
+      const community: AdminCommunityRecord = {
+        ...current,
+        label: input.label,
+        updatedAt: tick(),
+      };
+      communities.set(input.communityId, community);
+      const record = append({
+        ...input.audit,
+        before: { label: current.label },
+        after: { label: input.label },
+      });
+      return Promise.resolve({ community, changed: true, audit: record });
     },
     listMemeTokens: (input) =>
       Promise.resolve(

@@ -351,6 +351,30 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 
 **`GET /admin/v1/communities/{communityId}`** → `{ "community": {…同上}, "reviewNotes": [ReviewNote…] }`（最近 50 条，新在前）。
 
+**`PUT /admin/v1/communities/{communityId}/label`**（决策 0175，S282）
+
+```json
+{ "label": "算力社区" }
+```
+
+- 社区自定义标签：App 在原「已验证」位置显示它（`COMMUNITY_LABEL_EMIT=on` 后）。与审核无关：不改 `verificationStatus`，不影响搜索 / 公开。
+- `label`：字符串或 `null`，必填键。先 trim；trim 后为空或 `null` = 清空；1–12 个字符（按 Unicode code point），超长 → 422 `VALIDATION_FAILED`，`detailsSafe = {reasonCode: "ADMIN_COMMUNITY_LABEL_TOO_LONG", field: "label"}`。
+- 权限 `console.write`（platform_admin）；其他角色 403 `PERMISSION_DENIED`。不需要 `Idempotency-Key`（与审核接口相同）。
+- 社区不存在或 ID 不是 UUID → 404 `NOT_FOUND / ADMIN_COMMUNITY_NOT_FOUND`；缺键 / 多余字段 → 400 `INVALID_REQUEST`；数据库不可用 → 503 `CAPABILITY_UNAVAILABLE`。
+- 审计：值变化时同事务写 `community.label.update`（`before {label}`、`after {label}`）；值未变 → `changed: false`、`audit: null`，不写审计。
+
+200：
+
+```json
+{
+  "community": { "…": "同列表行，label 为新值（或 null）" },
+  "changed": true,
+  "audit": { "auditId": "…", "seq": 812, "at": "2026-10-22T10:00:00.000Z" }
+}
+```
+
+列表行与详情的 `community` 恒带 `label`（`string | null`）。
+
 **`POST /admin/v1/communities/{communityId}/review`**
 
 ```json
