@@ -116,6 +116,15 @@ describe("loadReconciliationWorkerConfig", () => {
           apiSecret: "not-for-this-process",
         },
       },
+      // Decision 0172: default on, 5 s, backfill off.
+      friendDirectChannel: {
+        intervalMs: 5_000,
+        backfillEnabled: false,
+        stream: {
+          apiKey: "not-for-this-lane",
+          apiSecret: "not-for-this-process",
+        },
+      },
       // Decision 0097: default on; the Stream pair is the lane's own.
       communityMemberBuyFeed: {
         intervalMs: 15_000,
@@ -183,6 +192,44 @@ describe("loadReconciliationWorkerConfig", () => {
       ["COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS", "600001"],
       ["COMMUNITY_MEMBER_BUY_FEED_ENABLED", "yes"],
       ["BSC_USD1_TOKEN_ADDRESS", "0x123"],
+    ])("refuses %s=%s", (key, value) => {
+      const environment = validEnvironment();
+      environment[key] = value;
+      expect(() => loadReconciliationWorkerConfig(environment)).toThrow(
+        ConfigurationError,
+      );
+    });
+  });
+
+  describe("friend_direct_channel lane (Decision 0172)", () => {
+    it("is on by default every 5 s with the backfill sweep off", () => {
+      expect(loadReconciliationWorkerConfig(validEnvironment())).toMatchObject({
+        friendDirectChannel: {
+          intervalMs: 5_000,
+          backfillEnabled: false,
+          stream: null,
+        },
+      });
+    });
+
+    it("turns the backfill on, reads the interval and can be switched off", () => {
+      const environment = validEnvironment();
+      environment["FRIEND_CHANNEL_BACKFILL_ENABLED"] = "true";
+      environment["FRIEND_DIRECT_CHANNEL_INTERVAL_MS"] = "2000";
+      expect(loadReconciliationWorkerConfig(environment)).toMatchObject({
+        friendDirectChannel: { intervalMs: 2_000, backfillEnabled: true },
+      });
+      environment["FRIEND_DIRECT_CHANNEL_ENABLED"] = "false";
+      expect(
+        loadReconciliationWorkerConfig(environment).friendDirectChannel,
+      ).toBeNull();
+    });
+
+    it.each([
+      ["FRIEND_DIRECT_CHANNEL_INTERVAL_MS", "999"],
+      ["FRIEND_DIRECT_CHANNEL_INTERVAL_MS", "600001"],
+      ["FRIEND_CHANNEL_BACKFILL_ENABLED", "yes"],
+      ["FRIEND_DIRECT_CHANNEL_ENABLED", "1"],
     ])("refuses %s=%s", (key, value) => {
       const environment = validEnvironment();
       environment[key] = value;

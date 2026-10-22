@@ -1,4 +1,4 @@
-export const latestMigrationName = "000094_launch_token_text_utf8";
+export const latestMigrationName = "000095_friend_direct_channel_jobs";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -58,6 +58,7 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.chat_operation_events",
   "public.communication_group_members",
   "public.direct_channels",
+  "public.friend_direct_channel_jobs",
   "public.watchlist_versions",
   "public.watchlist_groups",
   "public.watchlist_items",

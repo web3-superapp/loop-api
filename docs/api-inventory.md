@@ -1085,6 +1085,20 @@ first (audit `room_ended`, null actor, reason `voice_room_*_ended`), then one
 Stream end; an unconfirmed Stream end logs `STREAM_CALL_END_UNCONFIRMED` and is
 not retried. A reaped room reads exactly like a host-ended one.
 
+Accepting a friend request (`POST /v1/friend-requests/{id}/decision`) or
+a message request (`POST /v2/message-requests/{id}/decision`, `accept`)
+enqueues the pair in `friend_direct_channel_jobs` inside the accept transaction
+(Decision 0172, migration 000095). The default-on `friend_direct_channel`
+worker lane (`FRIEND_DIRECT_CHANNEL_ENABLED`, `FRIEND_DIRECT_CHANNEL_INTERVAL_MS`
+default 5 000, needs the Stream pair) runs the same idempotent
+`direct_get_or_create` chat operation as `POST /v2/chat/direct-channels`
+(accepter first, then the other direction), so the pair's channel exists even
+when the App never calls the route; the App's own call converges on the same
+CID. Refusals (no friendship, `directMessages` closed both ways) are skipped,
+never failing the accept. `FRIEND_CHANNEL_BACKFILL_ENABLED` (default off)
+enqueues up to 200 earlier friendship pairs with no direct channel per pass. No
+route, schema or response key changes.
+
 `GET /v2/communities/{communityId}` (the `community` module) additionally
 carries `chat: {status, channelCid, memberState, reasonCode}` and
 `voice: {status, currentRoomId, reasonCode}`. `chat.status` is

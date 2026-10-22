@@ -192,7 +192,21 @@ import {
   type CommunityChannelSyncWorker,
   type CreateCommunityChannelSyncWorkerOptions,
 } from "./community-channel-sync-worker.js";
-import { createStreamCommunityChannelGateway } from "./integrations/stream/channel-gateway.js";
+import {
+  createStreamChannelGateway,
+  createStreamCommunityChannelGateway,
+} from "./integrations/stream/channel-gateway.js";
+import type { ChatChannelRepository } from "./features/communication/chat-channel-repository.js";
+import { createChatChannelService } from "./features/communication/chat-channel-service.js";
+import {
+  createFriendDirectChannelService,
+  type FriendDirectChannelEvent,
+  type FriendDirectChannelJobRepository,
+} from "./features/communication/friend-direct-channel-service.js";
+import {
+  createFriendDirectChannelWorker,
+  type FriendDirectChannelWorker,
+} from "./friend-direct-channel-worker.js";
 import { createCommunityPersonaService } from "./features/communication/community-persona-service.js";
 import {
   createStreamUserIdentitySource,
@@ -320,6 +334,9 @@ export interface ReconciliationWorkerDatabase {
   readonly streamUserIdentities?: StreamUserIdentityRepository;
   /** `voice_room_reaper` lane (Decision 0094); absent keeps it off. */
   readonly voiceRoomReaper?: VoiceRoomReaperRepository;
+  /** `friend_direct_channel` lane (Decision 0172); both absent keeps it off. */
+  readonly chatChannels?: ChatChannelRepository;
+  readonly friendDirectChannelJobs?: FriendDirectChannelJobRepository;
   /** S169 `testnet_faucet_pending_sweep` lane; absent keeps it off. */
   readonly testnetFaucet?: TestnetFaucetRepository;
   /** Decision 0134 `chain_guard` lane and the signing lanes' hold; absent keeps both off. */
@@ -456,6 +473,9 @@ export interface RunReconciliationWorkerOptions {
   readonly createVoiceRoomReaperWorker?: VoiceRoomReaperWorkerFactory;
   /** Test seam for the reaper's Stream call gateway (Decision 0094). */
   readonly createVoiceRoomCallGateway?: typeof createStreamCallGateway;
+  /** Decision 0172 test seam: the friend direct channel lane's Stream gateway. */
+  readonly createFriendDirectChannelGateway?: typeof createStreamChannelGateway;
+  readonly createFriendDirectChannelWorker?: typeof createFriendDirectChannelWorker;
   readonly createMemberBuyFeedWorker?: MemberBuyFeedWorkerFactory;
   /** Test seam for the member buy feed's Stream gateway (Decision 0097). */
   readonly createMemberBuyFeedGateway?: typeof createStreamCommunityChannelGateway;
@@ -2707,6 +2727,119 @@ export async function runReconciliationWorker(
         });
       }
     }
+    // The `friend_direct_channel` lane (Decision 0172) is default-on. It
+    // creates Stream channels, so without the Stream pair it is left out and
+    // said so once.
+    const friendChannelConfig = options.config.friendDirectChannel;
+    let friendDirectChannelWorker: FriendDirectChannelWorker | null = null;
+    if (
+      friendChannelConfig !== null &&
+      database.chatChannels !== undefined &&
+      database.friendDirectChannelJobs !== undefined
+    ) {
+      const lane = "friend_direct_channel";
+      if (friendChannelConfig.stream === null) {
+        options.logger.warn(
+          {
+            ...logFields(),
+            lane,
+            reasonCode: "FRIEND_DIRECT_CHANNEL_STREAM_NOT_CONFIGURED",
+          },
+          "LOOP friend direct channel lane stays idle: Stream is not configured",
+        );
+      } else {
+        const friendChannelGateway = (
+          options.createFriendDirectChannelGateway ?? createStreamChannelGateway
+        )(friendChannelConfig.stream, {
+          identities:
+            database.streamUserIdentities === undefined
+              ? null
+              : createStreamUserIdentitySource({
+                  repository: database.streamUserIdentities,
+                  publicBaseUrl: options.config.publicBaseUrl,
+                }),
+        });
+        const onFriendChannelEvent = (
+          event: FriendDirectChannelEvent,
+        ): void => {
+          options.logger.warn(
+            {
+              ...logFields(),
+              lane,
+              reasonCode:
+                event.kind === "job_failed"
+                  ? "FRIEND_DIRECT_CHANNEL_JOB_FAILED"
+                  : "FRIEND_DIRECT_CHANNEL_JOB_RETRY",
+              detailReasonCode: event.errorCode,
+              attempts: event.attempts,
+              ...(event.kind === "job_retry"
+                ? { errorClass: event.errorClass }
+                : {}),
+            },
+            event.kind === "job_failed"
+              ? "LOOP friend direct channel job failed"
+              : "LOOP friend direct channel job retry scheduled",
+          );
+        };
+        const friendChannelService = createFriendDirectChannelService({
+          repository: database.friendDirectChannelJobs,
+          chat: createChatChannelService({
+            repository: database.chatChannels,
+            gateway: friendChannelGateway,
+          }),
+          backfillEnabled: friendChannelConfig.backfillEnabled,
+          onEvent: onFriendChannelEvent,
+        });
+        friendDirectChannelWorker = (
+          options.createFriendDirectChannelWorker ??
+          createFriendDirectChannelWorker
+        )({
+          service: Object.freeze({
+            async runOnce(signal: AbortSignal) {
+              const result = await friendChannelService.runOnce(signal);
+              if (
+                result.kind === "completed" &&
+                (result.claimed > 0 || (result.backfillEnqueued ?? 0) > 0)
+              ) {
+                options.logger.info(
+                  {
+                    ...logFields(),
+                    lane,
+                    ...(result.backfillEnqueued === null
+                      ? {}
+                      : { inserted: result.backfillEnqueued }),
+                    count: result.claimed,
+                    succeededCount: result.succeeded,
+                    skippedCount: result.skipped,
+                    failedCount: result.failed,
+                    retriedCount: result.retried,
+                  },
+                  "LOOP friend direct channel pass completed",
+                );
+              }
+              return result;
+            },
+          }),
+          intervalMs: friendChannelConfig.intervalMs,
+          onInfrastructureBackoff: (event) => {
+            options.logger.warn(
+              { ...logFields(), lane, ...event },
+              "LOOP reconciliation worker infrastructure retry scheduled",
+            );
+          },
+        });
+        if (friendChannelConfig.backfillEnabled) {
+          options.logger.info(
+            {
+              ...logFields(),
+              lane,
+              reasonCode: "FRIEND_CHANNEL_BACKFILL_ENABLED",
+            },
+            "LOOP friend direct channel backfill sweep is on",
+          );
+        }
+      }
+    }
     // The `community_member_buy_feed` lane (Decision 0097) is default-on.
     // It posts into Stream, so without the Stream pair it is left out and
     // said so once.
@@ -2917,6 +3050,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               memberBuyFeedWorker.run(controller.signal),
+            ),
+          ]),
+      ...(friendDirectChannelWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              friendDirectChannelWorker.run(controller.signal),
             ),
           ]),
     ];

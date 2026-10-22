@@ -129,6 +129,8 @@ import type {
   VoiceRoomReaperRepository,
 } from "../features/communication/communication-repository.js";
 import { createPostgresChatChannelRepository } from "./chat-channel-repository.js";
+import { createPostgresFriendDirectChannelJobRepository } from "./friend-direct-channel-job-repository.js";
+import type { FriendDirectChannelJobRepository } from "../features/communication/friend-direct-channel-service.js";
 import { createPostgresCommunityAiRepository } from "./community-ai-repository.js";
 import { createPostgresCommunityRepository } from "./community-repository.js";
 import {
@@ -322,6 +324,8 @@ export interface PostgresDatabase extends Database {
   /** Decision 0055 community chat personas. */
   readonly communityChannelPersonas: CommunityChannelPersonaRepository;
   readonly streamUserIdentities: StreamUserIdentityRepository;
+  /** `friend_direct_channel` lane outbox (Decision 0172). */
+  readonly friendDirectChannelJobs: FriendDirectChannelJobRepository;
 }
 
 export interface PostgresDatabaseConfig {
@@ -487,6 +491,8 @@ export function createPostgresDatabase(
     createPostgresCommunityChannelSyncRepository(pool);
   const voiceRoomReaper = createPostgresVoiceRoomReaperRepository(pool);
   const memberBuyFeed = createPostgresMemberBuyFeedRepository(pool);
+  const friendDirectChannelJobs =
+    createPostgresFriendDirectChannelJobRepository(pool);
   const communityChannelPersonas =
     createPostgresCommunityChannelPersonaRepository(pool);
 
@@ -511,6 +517,7 @@ export function createPostgresDatabase(
     communityChannelSync,
     voiceRoomReaper,
     memberBuyFeed,
+    friendDirectChannelJobs,
     communityChannelPersonas,
     watchlists,
     watchlistsV2,

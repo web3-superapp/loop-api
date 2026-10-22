@@ -150,6 +150,7 @@ const truncateAll = `
     public.communities,
     public.chat_operation_events,
     public.communication_group_members,
+    public.friend_direct_channel_jobs,
     public.direct_channels,
     public.social_operation_events,
     public.social_operations,

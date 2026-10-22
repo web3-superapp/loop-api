@@ -2,6 +2,7 @@ import type { Pool, PoolClient, QueryResult } from "pg";
 import { z } from "zod";
 
 import { parseAliasSearchPrefix } from "../features/identity/alias-contract.js";
+import { enqueueFriendDirectChannelJob } from "./friend-direct-channel-job-repository.js";
 
 export type SocialFriendRequestsPreference = "enabled" | "disabled";
 export type SocialGroupInvitesPreference = "friends" | "disabled";
@@ -1728,6 +1729,13 @@ export function createPostgresSocialRepository(pool: Pool): SocialRepository {
                 lockedRow.requester_user_id,
                 input.friendRequestId,
               ],
+            });
+            // Decision 0172: the pair's direct channel is guaranteed
+            // server-side; the worker lane runs the route's get-or-create.
+            await enqueueFriendDirectChannelJob(client, {
+              ownerUserId: input.ownerUserId,
+              peerUserId: lockedRow.requester_user_id,
+              source: "accept",
             });
           }
 

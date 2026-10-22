@@ -56,6 +56,8 @@ const indexerLanes = new Set([
   "fiat_fx_rate",
   // Decision 0161: the token logo pre-warm.
   "token_logo_prewarm",
+  // Decision 0172: the accepted-friend direct channel guarantee.
+  "friend_direct_channel",
 ]);
 const chainGuardKindSet: ReadonlySet<string> = new Set(chainGuardIncidentKinds);
 const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
@@ -149,6 +151,11 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP voice room reaper could not end a room"
   | "LOOP voice room reaper could not observe presence; the room is kept"
   | "LOOP voice room reaper lane stays idle: Stream is not configured"
+  | "LOOP friend direct channel lane stays idle: Stream is not configured"
+  | "LOOP friend direct channel backfill sweep is on"
+  | "LOOP friend direct channel pass completed"
+  | "LOOP friend direct channel job failed"
+  | "LOOP friend direct channel job retry scheduled"
   | "LOOP member buy feed lane stays idle: Stream is not configured"
   | "LOOP member buy feed cursor initialized at the indexer checkpoint"
   | "LOOP member buy feed posted a message"
@@ -323,6 +330,14 @@ export interface ReconciliationWorkerLogFields {
   readonly manualCount?: number;
   readonly degradedCount?: number;
   readonly hotCount?: number;
+  /**
+   * Decision 0172 friend_direct_channel lane: per-pass outcome counts (the
+   * claimed jobs go in `count`, backfill-enqueued pairs in `inserted`,
+   * failures in `failedCount`). Counts only, never an account ID.
+   */
+  readonly succeededCount?: number;
+  readonly skippedCount?: number;
+  readonly retriedCount?: number;
 }
 
 export interface ReconciliationWorkerLogger {
@@ -502,6 +517,9 @@ function sanitizeFields(
         "manualCount",
         "degradedCount",
         "hotCount",
+        "succeededCount",
+        "skippedCount",
+        "retriedCount",
       ] as const
     ).flatMap((key) => {
       const value = fields[key];

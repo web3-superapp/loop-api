@@ -38,7 +38,7 @@ describe("000087 mining power visibility default migration contract (Decision 01
   });
 
   it("is the schema head and matches the contract default", () => {
-    expect(latestMigrationName).toBe("000094_launch_token_text_utf8");
+    expect(latestMigrationName).toBe("000095_friend_direct_channel_jobs");
     expect(defaultPrivacyV2Values.visibility.miningPower).toBe("everyone");
   });
 });
