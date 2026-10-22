@@ -259,6 +259,11 @@ export interface CommunitySummary {
   readonly description: string | null;
   readonly logoRef: string | null;
   readonly verificationStatus: CommunityVerificationStatus;
+  /**
+   * Decision 0175: the operator-set custom label (1–12 characters) or null.
+   * Present only while COMMUNITY_LABEL_EMIT is on.
+   */
+  readonly label?: string | null;
   readonly boundAssetKey: string | null;
   readonly memberCount: number;
   readonly createdAt: string;

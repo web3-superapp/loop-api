@@ -63,6 +63,8 @@ import {
   communityDetailResourceSchema,
   communityIdParamsSchema,
   communityListResourceSchema,
+  communityLabelRequestSchema,
+  communityLabelResourceSchema,
   communityReviewRequestSchema,
   communityReviewResourceSchema,
   configVersionParamsSchema,
@@ -600,6 +602,46 @@ export function registerAdminRoutes(
         readonly reasonText?: unknown;
       };
       const resource = await service.reviewCommunity(
+        context(request),
+        communityId,
+        body,
+      );
+      noStore(reply);
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.put(
+    `${adminApiPrefix}/communities/:communityId/label`,
+    {
+      schema: {
+        operationId: "putAdminCommunityLabel",
+        summary: "Set or clear a community's custom label",
+        description:
+          "Decision 0175: the operator-set custom label the App shows where the verified mark used to be (any text, 1–12 characters after trim). `label` is trimmed; empty or null clears it; longer is 422 VALIDATION_FAILED (ADMIN_COMMUNITY_LABEL_TOO_LONG). Independent of the review: verificationStatus and search/public visibility do not change. A change writes `community.label.update` (before/after label) to admin_audit_log in the same transaction; the current value again is 200 with `changed: false` and `audit: null`. The /v2 community projections publish it as `label` only with COMMUNITY_LABEL_EMIT=on.",
+        tags: ["admin-communities"],
+        security: adminSecurity,
+        params: communityIdParamsSchema,
+        querystring: emptyQuerySchema,
+        body: communityLabelRequestSchema,
+        response: {
+          200: communityLabelResourceSchema,
+          ...adminErrors(
+            ...guardedSessionErrors,
+            "NOT_FOUND",
+            "VALIDATION_FAILED",
+            "CAPABILITY_UNAVAILABLE",
+          ),
+        },
+      },
+      ...guard("console.write"),
+    },
+    async (request, reply) => {
+      const { communityId } = request.params as {
+        readonly communityId: string;
+      };
+      const body = request.body as { readonly label: unknown };
+      const resource = await service.setCommunityLabel(
         context(request),
         communityId,
         body,

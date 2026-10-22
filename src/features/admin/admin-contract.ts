@@ -263,6 +263,8 @@ export const adminReasonCodes = Object.freeze({
   communityNotVerified: "ADMIN_COMMUNITY_NOT_VERIFIED",
   communityNotFound: "ADMIN_COMMUNITY_NOT_FOUND",
   communityAlreadyVerified: "ADMIN_COMMUNITY_ALREADY_VERIFIED",
+  /** Decision 0175: the custom label is longer than 12 characters. */
+  communityLabelTooLong: "ADMIN_COMMUNITY_LABEL_TOO_LONG",
   promotionInvalid: "ADMIN_PROMOTION_INVALID",
   formulaExists: "ADMIN_FORMULA_VERSION_EXISTS",
   formulaNotFound: "ADMIN_FORMULA_VERSION_NOT_FOUND",

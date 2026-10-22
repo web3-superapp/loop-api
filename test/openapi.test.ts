@@ -1386,6 +1386,7 @@ describe("committed OpenAPI artifact", () => {
       "POST /admin/v1/square/posts",
       "POST /admin/v1/square/posts/{postId}/archive",
       "POST /admin/v1/square/posts/{postId}/publish",
+      "PUT /admin/v1/communities/{communityId}/label",
       "PUT /admin/v1/launch2/instances/{instanceId}/listing",
       "PUT /admin/v1/settings/intel-promotions",
       "PUT /admin/v1/settings/recommended-communities",

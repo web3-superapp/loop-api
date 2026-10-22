@@ -207,6 +207,7 @@ const communityRecordSchema = {
     "description",
     "logoRef",
     "verificationStatus",
+    "label",
     "boundAssetId",
     "memberCount",
     "ownerUserId",
@@ -227,6 +228,14 @@ const communityRecordSchema = {
     verificationStatus: {
       type: "string",
       enum: ["pending", "verified", "rejected"],
+    },
+    label: {
+      anyOf: [
+        { type: "string", minLength: 1, maxLength: 12 },
+        { type: "null" },
+      ],
+      description:
+        "Decision 0175: the operator-set custom label (shown in the App where the verified mark used to be); null = none.",
     },
     boundAssetId: nullableStringSchema,
     memberCount: { type: "integer", minimum: 0 },
@@ -617,6 +626,40 @@ export const communityReviewRequestSchema = {
       ...reasonTextSchema,
       description:
         "Required for `reject` (stored on the community; the applicant reads it in the App). Optional for `verify`.",
+    },
+  },
+} as const;
+
+export const communityLabelRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["label"],
+  properties: {
+    label: {
+      type: ["string", "null"],
+      maxLength: 256,
+      description:
+        "Decision 0175: the custom label. Trimmed; empty after trim or null clears it; more than 12 characters is 422 VALIDATION_FAILED (ADMIN_COMMUNITY_LABEL_TOO_LONG).",
+    },
+  },
+} as const;
+
+export const communityLabelResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["community", "changed", "audit"],
+  properties: {
+    community: communityRecordSchema,
+    changed: {
+      type: "boolean",
+      description:
+        "False when the label already had this value (nothing written).",
+    },
+    audit: {
+      anyOf: [auditReferenceSchema, { type: "null" }],
+      description:
+        "The `community.label.update` audit row; null when unchanged.",
     },
   },
 } as const;

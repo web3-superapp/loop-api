@@ -118,6 +118,8 @@ export interface ProfileCommunityRecord {
   readonly logoRef: string | null;
   readonly memberCount: number;
   readonly verificationStatus: "verified" | "unverified";
+  /** Decision 0175: the operator-set custom label; null = none. */
+  readonly label: string | null;
   readonly joinedAt: string;
   /** `joined_at` in microseconds (the cursor key; ISO keeps ms only). */
   readonly joinedAtMicros: string;
@@ -143,6 +145,8 @@ export interface RecommendedCommunityRecord {
   readonly description: string | null;
   readonly logoRef: string | null;
   readonly verificationStatus: "verified";
+  /** Decision 0175: the operator-set custom label; null = none. */
+  readonly label: string | null;
   readonly boundAssetKey: string | null;
   readonly memberCount: number;
   readonly createdAt: string;

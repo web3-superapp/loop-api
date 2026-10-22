@@ -257,6 +257,7 @@ function fakes() {
           description: null,
           logoRef: null,
           verificationStatus: "verified" as const,
+          label: null,
           boundAssetKey: null,
           memberCount: index,
           createdAt: "2026-09-01T00:00:00.000Z",
@@ -767,6 +768,46 @@ describe("LOOP API V2 public profiles (Decision 0095)", () => {
       defaultSelectedIds: [],
       contractVersion: "2.0",
     });
+  });
+
+  it("adds label to recommended communities only with COMMUNITY_LABEL_EMIT on (Decision 0175)", async () => {
+    const id = "00000001-0000-4000-8000-000000000000";
+    for (const emit of ["unset", "off", "on"] as const) {
+      const dependencies = fakes();
+      dependencies.repository.listVerifiedCommunitiesByIds.mockResolvedValue([
+        {
+          communityId: id,
+          name: "Alpha",
+          slug: "alpha",
+          description: null,
+          logoRef: null,
+          verificationStatus: "verified",
+          label: "精选社区",
+          boundAssetKey: null,
+          memberCount: 3,
+          createdAt: "2026-09-01T00:00:00.000Z",
+          configVersion: "communityV1",
+        },
+      ]);
+      const { app } = await createApp(dependencies, {
+        RECOMMENDED_COMMUNITY_IDS: id,
+        ...(emit === "unset" ? {} : { COMMUNITY_LABEL_EMIT: emit }),
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/communities/recommended",
+        headers: headers(),
+      });
+      expect(response.statusCode).toBe(200);
+      if (emit === "on") {
+        expect(response.json()).toMatchObject({
+          items: [{ communityId: id, label: "精选社区" }],
+        });
+      } else {
+        expect(response.body).not.toContain('"label"');
+        expect(response.body).not.toContain("精选社区");
+      }
+    }
   });
 
   it("requires the bearer and the contract headers on every read", async () => {

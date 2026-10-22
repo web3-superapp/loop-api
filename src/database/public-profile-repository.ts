@@ -103,6 +103,7 @@ const communityRowSchema = z
     description: z.string().min(1).nullable(),
     logo_ref: z.string().min(1).nullable(),
     verification_status: z.literal("verified"),
+    label: z.string().min(1).nullable(),
     bound_asset_key: z.string().min(1).nullable(),
     member_count: countSchema,
     created_at: z.date(),
@@ -117,6 +118,7 @@ const profileCommunityRowSchema = z
     slug: z.string().min(1),
     logo_ref: z.string().min(1).nullable(),
     verification_status: z.enum(["pending", "verified", "rejected"]),
+    label: z.string().min(1).nullable(),
     member_count: countSchema,
     joined_at: z.date(),
     joined_at_micros: unsignedIntegerSchema,
@@ -133,6 +135,7 @@ function toProfileCommunity(row: unknown): ProfileCommunityRecord {
     memberCount: parsed.member_count,
     verificationStatus:
       parsed.verification_status === "verified" ? "verified" : "unverified",
+    label: parsed.label,
     joinedAt: parsed.joined_at.toISOString(),
     joinedAtMicros: parsed.joined_at_micros,
   });
@@ -362,6 +365,7 @@ const profileCommunitiesSql = `
     community.slug,
     community.logo_ref,
     community.verification_status,
+    community.label,
     community.member_count,
     membership.joined_at,
     ${micros("membership.joined_at")} as joined_at_micros
@@ -869,6 +873,7 @@ export function createPostgresPublicProfileRepository(
               community.description,
               community.logo_ref,
               community.verification_status,
+              community.label,
               community.bound_asset_key,
               community.member_count,
               community.created_at,
@@ -891,6 +896,7 @@ export function createPostgresPublicProfileRepository(
               description: parsed.description,
               logoRef: parsed.logo_ref,
               verificationStatus: parsed.verification_status,
+              label: parsed.label,
               boundAssetKey: parsed.bound_asset_key,
               memberCount: parsed.member_count,
               createdAt: parsed.created_at.toISOString(),

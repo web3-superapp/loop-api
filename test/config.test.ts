@@ -832,6 +832,25 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses COMMUNITY_LABEL_EMIT as off|on, default off, and refuses anything else (Decision 0175)", () => {
+    expect(loadConfig(validEnvironment()).communityLabelEmit).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["COMMUNITY_LABEL_EMIT"] = value;
+      expect(loadConfig(environment).communityLabelEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["COMMUNITY_LABEL_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /COMMUNITY_LABEL_EMIT/,
+      );
+    }
+  });
+
   it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
     expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
       enabled: false,

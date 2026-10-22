@@ -1390,3 +1390,73 @@ CDN / Android 验证器）或浏览器直接访问。Base URL 就是 API 主机�
 - 索引器没跑（无 `pool_event` 检查点）：lane 空转（`MEMBER_BUY_FEED_INDEXER_NOT_STARTED`）。
 - Stream 暂时不可用：本轮停在出错的那笔，下一轮用同一个消息 id 重发，不会重复。
 - 已发出的消息在链重组后不撤回（索引器只提交已确认区块，见决策 0097）。
+
+## 社区自定义标签（决策 0175，S282）
+
+需求方 2026-10-22：前台「已验证」标识**全部去掉**，改为显示后台管理员给社区填的一个自定义文字标签（如「算力社区」「精选社区」「共识社区」）。后台审核保留，只决定能否被搜到 / 是否公开，`verificationStatus` 的值和过滤逻辑都不变。
+
+### 接口与 headers
+
+无新 App 接口。Base URL、读 header（`Authorization: Bearer <Privy token>`、`X-Loop-Contract-Version: 2.0`、`X-Loop-Client-Version`）与各接口原文档相同。以下响应新增**可选**键 `label`，紧随 `verificationStatus`：
+
+| 位置                                                                                                                                                                                                                               | 键                      |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| 社区摘要：`GET /v2/communities` 行、`GET /v2/communities/{id}` 与所有社区命令响应的 `community`、`GET /v2/community/home` 的 `joined` / `owned` / `discover`、成员列表的 `community`、`GET /v2/communities/recommended` 的 `items` | `label`                 |
+| `GET /v2/search`（每个结果）                                                                                                                                                                                                       | `displaySnapshot.label` |
+| `GET /v2/profiles/{id}/communities`（个人主页社区栏）                                                                                                                                                                              | `items[].label`         |
+
+- 类型 `string | null`：字符串为 1–12 个字符（按 Unicode code point），null = 未设置。搜索里用户 / 资产结果恒为 `null`。
+- **只在服务端 `COMMUNITY_LABEL_EMIT=on` 时下发**（默认 `off`：响应与之前逐字节相同，不带键）。客户端 codec 必须把 `label` 当作可选键（缺失 = null），并容忍 null；先发版，服务端再开开关。
+
+示例（`COMMUNITY_LABEL_EMIT=on`，`GET /v2/communities/{id}` 片段）：
+
+```json
+{
+  "community": {
+    "communityId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "name": "Frog Holders",
+    "slug": "frog-holders",
+    "description": null,
+    "logoRef": "avatar:preset/community-03",
+    "verificationStatus": "verified",
+    "label": "算力社区",
+    "boundAssetKey": null,
+    "memberCount": 128,
+    "createdAt": "2026-09-01T00:00:00.000Z",
+    "configVersion": "communityV1"
+  }
+}
+```
+
+搜索结果片段：
+
+```json
+{
+  "resultType": "community",
+  "stableId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "displaySnapshot": {
+    "title": "Frog Holders",
+    "subtitle": "frog-holders",
+    "avatarRef": "avatar:preset/community-03",
+    "logo": null,
+    "memberCount": 128,
+    "verificationStatus": "verified",
+    "label": "算力社区"
+  },
+  "destination": { "kind": "communityProfile" }
+}
+```
+
+### 渲染规则
+
+- 原来显示「已验证」的每个位置：不再根据 `verificationStatus == verified` 显示任何标识；改为 `label` 非 null 时显示该文字（原样，不翻译、不截断——服务端已保证 ≤ 12 字），null / 缺失时什么都不显示。
+- `verificationStatus` 仍用于原有的非标识逻辑（例如 owner 的申请状态 `pending` / `rejected` 提示），不要删除这些分支。
+
+### 错误码
+
+无新 App 错误码；各接口错误语义不变。（后台写接口的错误见 `docs/admin-v1-api.md`：`ADMIN_COMMUNITY_LABEL_TOO_LONG`、`ADMIN_COMMUNITY_NOT_FOUND`。）
+
+### unavailable 行为
+
+- 开关关闭：键不出现，等同所有社区都没有标签。
+- 无新 Provider；数据库不可用时各接口沿用原有的 unavailable / 503 语义，不会返回伪造的标签。

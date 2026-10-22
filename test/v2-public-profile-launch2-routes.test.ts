@@ -262,6 +262,7 @@ const communities: ProfileCommunityRecord[] = [
     logoRef: "avatar:preset/community-03",
     memberCount: 42,
     verificationStatus: "verified",
+    label: null,
     joinedAt: "2026-10-03T00:00:00.000Z",
     joinedAtMicros: micros("2026-10-03T00:00:00.000Z"),
   },
@@ -272,6 +273,7 @@ const communities: ProfileCommunityRecord[] = [
     logoRef: null,
     memberCount: 7,
     verificationStatus: "verified",
+    label: null,
     joinedAt: "2026-10-02T00:00:00.000Z",
     joinedAtMicros: micros("2026-10-02T00:00:00.000Z"),
   },
@@ -282,6 +284,7 @@ const communities: ProfileCommunityRecord[] = [
     logoRef: "logo:media/22222222-2222-4222-8222-222222222222",
     memberCount: 1,
     verificationStatus: "verified",
+    label: null,
     joinedAt: "2026-10-01T00:00:00.000Z",
     joinedAtMicros: micros("2026-10-01T00:00:00.000Z"),
   },
@@ -595,7 +598,10 @@ describe("LOOP API V2 public profile communities and launch2 merge (Decision 016
   async function createApp(
     dependencies = fakes(),
     emit: "on" | "off" | "unset" = "unset",
-    options: { readonly withWallet?: boolean } = {},
+    options: {
+      readonly withWallet?: boolean;
+      readonly env?: Readonly<Record<string, string>>;
+    } = {},
   ) {
     const app = await buildApp({
       config: loadConfig({
@@ -611,6 +617,7 @@ describe("LOOP API V2 public profile communities and launch2 merge (Decision 016
         DATABASE_URL:
           "postgres://loop_api:local-password@127.0.0.1:5432/loop_api_test",
         ...(emit === "unset" ? {} : { PROFILE_LAUNCH2_EMIT: emit }),
+        ...options.env,
       }),
       contractSurface: "v2",
       database: dependencies.database,
@@ -1199,6 +1206,38 @@ describe("LOOP API V2 public profile communities and launch2 merge (Decision 016
   });
 
   describe("GET /v2/profiles/{id}/communities", () => {
+    it("adds label to every row only with COMMUNITY_LABEL_EMIT on (Decision 0175)", async () => {
+      const labelled = communities.map((item, index) => ({
+        ...item,
+        label: index === 0 ? "共识社区" : null,
+      }));
+      for (const emit of ["off", "on"] as const) {
+        const dependencies = fakes();
+        dependencies.repository.listProfileCommunities.mockResolvedValue({
+          items: labelled,
+          hasMore: false,
+        });
+        const { app } = await createApp(dependencies, "unset", {
+          env: { COMMUNITY_LABEL_EMIT: emit },
+        });
+        const response = await get(app, "/communities");
+        expect(response.statusCode).toBe(200);
+        const items = response.json<{ items: Record<string, unknown>[] }>()
+          .items;
+        if (emit === "off") {
+          expect(response.body).not.toContain('"label"');
+          expect(response.body).not.toContain("共识社区");
+        } else {
+          expect(items.map((item) => item["label"])).toEqual([
+            "共识社区",
+            null,
+            null,
+          ]);
+          expect(items[0]).toMatchObject({ verificationStatus: "verified" });
+        }
+      }
+    });
+
     it("lists the joined communities newest first with an opaque cursor", async () => {
       const dependencies = fakes();
       const { app } = await createApp(dependencies);

@@ -184,6 +184,7 @@ const communityRowSchema = z
     description: z.string().nullable(),
     logo_ref: z.string().nullable(),
     verification_status: z.enum(["pending", "verified", "rejected"]),
+    label: z.string().nullable(),
     bound_asset_key: z.string().nullable(),
     member_count: z.number().int(),
     created_by_user_id: uuidSchema,
@@ -199,7 +200,7 @@ const communityRowSchema = z
 
 const communityColumns = `
   c.community_id, c.name, c.slug, c.description, c.logo_ref,
-  c.verification_status, c.bound_asset_key, c.member_count,
+  c.verification_status, c.label, c.bound_asset_key, c.member_count,
   c.created_by_user_id, u.loop_id as owner_loop_id,
   c.application_submitted_at, c.reviewed_at, c.verified_at,
   c.rejected_reason, c.created_at, c.updated_at
@@ -218,6 +219,7 @@ function mapCommunity(raw: unknown): AdminCommunityRecord {
     description: row.description,
     logoRef: row.logo_ref,
     verificationStatus: row.verification_status,
+    label: row.label,
     boundAssetId: row.bound_asset_key,
     memberCount: row.member_count,
     ownerUserId: row.created_by_user_id,
@@ -893,6 +895,55 @@ export function createPostgresAdminRepository(pool: Pool): AdminRepository {
       }
     },
 
+    async setCommunityLabel(input) {
+      try {
+        return await withV2Transaction(pool, unavailable, async (client) => {
+          const communityId = uuidSchema.parse(input.communityId);
+          const locked = await client.query({
+            text: `
+              select label from public.communities
+              where community_id = $1
+              for update
+            `,
+            values: [communityId],
+          });
+          if (locked.rows.length === 0) {
+            return null;
+          }
+          const before = z
+            .object({ label: z.string().nullable() })
+            .parse(locked.rows[0]).label;
+          let audit: AdminAuditRecord | null = null;
+          if (before !== input.label) {
+            await client.query({
+              text: `
+                update public.communities
+                set label = $2, updated_at = now()
+                where community_id = $1
+              `,
+              values: [communityId, input.label],
+            });
+            audit = await insertAudit(client, {
+              ...input.audit,
+              before: { label: before },
+              after: { label: input.label },
+            });
+          }
+          const current = await client.query({
+            text: `select ${communityColumns} from ${communityFrom} where c.community_id = $1`,
+            values: [communityId],
+          });
+          return Object.freeze({
+            community: mapCommunity(current.rows[0]),
+            changed: audit !== null,
+            audit,
+          });
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
     async listMemeTokens(input) {
       try {
         const result = await pool.query({
@@ -1403,6 +1454,7 @@ export function createUnavailableAdminRepository(): AdminRepository {
     getCommunitiesByIds: fail,
     listCommunityReviewNotes: fail,
     recordCommunityReview: fail,
+    setCommunityLabel: fail,
     listMemeTokens: fail,
     getMemeToken: fail,
     setMemeListing: fail,

@@ -151,6 +151,8 @@ export interface ProfileCommunityItem {
   readonly logoRef: string | null;
   readonly memberCount: number;
   readonly verificationStatus: "verified" | "unverified";
+  /** Decision 0175: present only while COMMUNITY_LABEL_EMIT is on. */
+  readonly label?: string | null;
   readonly joinedAt: string;
 }
 
@@ -175,7 +177,10 @@ export interface RemoveFriendResource {
 }
 
 export interface RecommendedCommunitiesResource {
-  readonly items: readonly RecommendedCommunityRecord[];
+  /** Decision 0175: `label` is present only while COMMUNITY_LABEL_EMIT is on. */
+  readonly items: readonly (Omit<RecommendedCommunityRecord, "label"> & {
+    readonly label?: string | null;
+  })[];
   readonly defaultSelectedIds: readonly string[];
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -237,6 +242,11 @@ export interface CreatePublicProfileServiceInput {
    * both routes byte-identical and reads nothing new.
    */
   readonly launch2?: ProfileLaunch2Sources | null;
+  /**
+   * Decision 0175 (COMMUNITY_LABEL_EMIT): when true the profile community
+   * rows and the recommended communities carry `label`. Default false.
+   */
+  readonly communityLabelEmit?: boolean;
   readonly logger?: {
     warn(object: Record<string, unknown>, message: string): void;
   };
@@ -299,6 +309,7 @@ function parseLimit(
 export function createPublicProfileService(
   input: CreatePublicProfileServiceInput,
 ): PublicProfileService {
+  const communityLabelEmit = input.communityLabelEmit === true;
   const { quoteAssetIds, stableAssetIds } = swapQuoteSets(
     input.chainId,
     input.usd1Address,
@@ -534,6 +545,7 @@ export function createPublicProfileService(
                     : null,
                 memberCount: item.memberCount,
                 verificationStatus: item.verificationStatus,
+                ...(communityLabelEmit ? { label: item.label } : {}),
                 joinedAt: item.joinedAt,
               }),
             ),
@@ -593,7 +605,12 @@ export function createPublicProfileService(
           override ?? input.recommendedCommunityIds,
         );
         return Object.freeze({
-          items,
+          // Decision 0175: `label` only while COMMUNITY_LABEL_EMIT is on.
+          items: Object.freeze(
+            items.map(({ label, ...rest }) =>
+              Object.freeze(communityLabelEmit ? { ...rest, label } : rest),
+            ),
+          ),
           defaultSelectedIds: Object.freeze(
             items
               .slice(0, recommendedDefaultSelectedCount)

@@ -32,6 +32,7 @@ import {
   assertNoBodyOrQueryV2,
   assertNoBodyV2,
   commandErrors,
+  communityLabelSchema,
   communitySummarySchema,
   publicProfileIdParamsSchema,
   v2CommandHeadersSchema,
@@ -418,6 +419,7 @@ const communitiesResourceSchema = {
                 description:
                   "Only verified communities are listed today (the set counts.communities counts); `unverified` is reserved.",
               },
+              label: communityLabelSchema,
               joinedAt: { type: "string", format: "date-time" },
             },
           },

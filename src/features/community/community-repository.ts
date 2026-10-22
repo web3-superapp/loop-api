@@ -32,6 +32,8 @@ export interface CommunityRecord {
   readonly description: string | null;
   readonly logoRef: string | null;
   readonly verificationStatus: CommunityVerificationStatus;
+  /** Decision 0175: the operator-set custom label; null = none. */
+  readonly label: string | null;
   readonly boundAssetKey: string | null;
   readonly memberCount: number;
   readonly createdAt: string;

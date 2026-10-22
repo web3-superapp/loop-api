@@ -731,6 +731,111 @@ describe("Operator console routes (Decision 0102)", () => {
     });
   });
 
+  it("sets, keeps and clears a community's custom label with one audit row per change (Decision 0175)", async () => {
+    const { app, repository } = await createApp();
+    const community = adminCommunityFixture({ verificationStatus: "pending" });
+    repository.communities.set(community.communityId, community);
+    const cookie = await login(app);
+    const put = (communityId: string, payload: unknown) =>
+      app.inject({
+        method: "PUT",
+        url: `/admin/v1/communities/${communityId}/label`,
+        headers: { cookie },
+        payload: payload as Record<string, unknown>,
+      });
+    const auditBefore = repository.audit.length;
+
+    const set = await put(community.communityId, { label: "  算力社区 " });
+    expect(set.statusCode).toBe(200);
+    expect(set.headers["cache-control"]).toBe("no-store");
+    const body = set.json<Record<string, unknown>>();
+    expect(Object.keys(body).sort()).toEqual(["audit", "changed", "community"]);
+    expect(body).toMatchObject({
+      changed: true,
+      community: {
+        communityId: community.communityId,
+        label: "算力社区",
+        // The label does not touch the review state (search gating).
+        verificationStatus: "pending",
+      },
+      audit: { seq: auditBefore + 1 },
+    });
+    expect(repository.audit.at(-1)).toMatchObject({
+      action: "community.label.update",
+      targetType: "community",
+      targetId: community.communityId,
+      before: { label: null },
+      after: { label: "算力社区" },
+    });
+
+    const same = await put(community.communityId, { label: "算力社区" });
+    expect(same.statusCode).toBe(200);
+    expect(same.json()).toMatchObject({ changed: false, audit: null });
+    expect(repository.audit.length).toBe(auditBefore + 1);
+
+    // Exactly 12 characters (code points) is accepted; 13 is refused.
+    const twelve = "一二三四五六七八九十😀A";
+    expect([...twelve]).toHaveLength(12);
+    expect(
+      (await put(community.communityId, { label: twelve })).json(),
+    ).toMatchObject({
+      community: { label: twelve },
+    });
+    const tooLong = await put(community.communityId, {
+      label: "一二三四五六七八九十甲乙丙",
+    });
+    expect(
+      expectError(tooLong, 422, "VALIDATION_FAILED")["detailsSafe"],
+    ).toEqual({ reasonCode: "ADMIN_COMMUNITY_LABEL_TOO_LONG", field: "label" });
+    expect(repository.communities.get(community.communityId)?.label).toBe(
+      twelve,
+    );
+
+    const cleared = await put(community.communityId, { label: "   " });
+    expect(cleared.json()).toMatchObject({
+      changed: true,
+      community: { label: null },
+    });
+    expect(repository.audit.at(-1)).toMatchObject({
+      before: { label: twelve },
+      after: { label: null },
+    });
+    expect(
+      (await put(community.communityId, { label: null })).json(),
+    ).toMatchObject({ changed: false, audit: null });
+
+    expectError(await put(community.communityId, {}), 400, "INVALID_REQUEST");
+    expectError(
+      await put(community.communityId, { label: "a", extra: true }),
+      400,
+      "INVALID_REQUEST",
+    );
+    expectError(
+      await put(randomUUID(), { label: "精选社区" }),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(
+      await put("not-a-uuid", { label: "精选社区" }),
+      404,
+      "NOT_FOUND",
+    );
+
+    const anonymous = await app.inject({
+      method: "PUT",
+      url: `/admin/v1/communities/${community.communityId}/label`,
+      payload: { label: "精选社区" },
+    });
+    expectError(anonymous, 401, "ADMIN_SESSION_REQUIRED");
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/admin/v1/communities/${community.communityId}`,
+      headers: { cookie },
+    });
+    expect(detail.json()).toMatchObject({ community: { label: null } });
+  });
+
   it("drafts and withdraws mining formula versions; the platform administrator cannot approve (Decision 0110)", async () => {
     const { app, repository } = await createApp();
     const base = adminFormulaFixture();
