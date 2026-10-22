@@ -78,6 +78,7 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     chat_group_membership_events: "user",
     group_alias_reservations: "user",
     direct_channels: "user",
+    friend_direct_channel_jobs: "user",
     // Communities
     communities: "mixed",
     community_channels: "mixed",
@@ -573,6 +574,11 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     "social_graph_events",
     `${ownedBy("actor_user_id")} or ${ownedBy("target_user_id")}
       or idempotency_record_id in ${ownedIdempotency}`,
+  ),
+  del(
+    "friend_direct_channel_jobs",
+    `${ownedBy("user_id_low")} or ${ownedBy("user_id_high")}
+      or ${ownedBy("owner_user_id")}`,
   ),
   del("friendships", `${ownedBy("user_id_low")} or ${ownedBy("user_id_high")}`),
   del(

@@ -46,7 +46,12 @@ import type { CreateMarketSparklineWarmWorkerOptions } from "../src/market-spark
 import type { CreateVoiceRoomReaperWorkerOptions } from "../src/voice-room-reaper-worker.js";
 import { createUnavailableStreamCallGateway } from "../src/integrations/stream/call-gateway.js";
 import type { CreateMemberBuyFeedWorkerOptions } from "../src/community-member-buy-feed-worker.js";
-import { createUnavailableStreamCommunityChannelGateway } from "../src/integrations/stream/channel-gateway.js";
+import {
+  createUnavailableStreamChannelGateway,
+  createUnavailableStreamCommunityChannelGateway,
+} from "../src/integrations/stream/channel-gateway.js";
+import { createUnavailableChatChannelRepository } from "../src/features/communication/chat-channel-repository.js";
+import type { createFriendDirectChannelWorker as createFriendDirectChannelWorkerType } from "../src/friend-direct-channel-worker.js";
 import type {
   HooksLaunchExecutor,
   HooksLaunchExecutorChain,
@@ -1268,6 +1273,105 @@ describe("voice_room_reaper lane composition (Decision 0094)", () => {
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ lane: "voice_room_reaper" }),
       expect.anything(),
+    );
+    expect(events).toEqual(["ping", "close"]);
+  });
+
+  it("runs the friend_direct_channel lane (Decision 0172) and logs a pass summary", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const friendJobs = {
+      enqueueBackfill: vi.fn(() => Promise.resolve(7)),
+      claimDueJobs: vi.fn(() => Promise.resolve([])),
+      readParticipants: vi.fn(),
+      hasActiveDirectChannel: vi.fn(),
+      recordOperation: vi.fn(),
+      completeJob: vi.fn(),
+      retryJob: vi.fn(),
+    };
+    const database = {
+      ...fakeDatabase(events),
+      chatChannels: createUnavailableChatChannelRepository(),
+      friendDirectChannelJobs: friendJobs,
+    } satisfies ReconciliationWorkerDatabase;
+    const createFriendDirectChannelGateway = vi.fn(
+      createUnavailableStreamChannelGateway,
+    );
+    const createFriendDirectChannelWorker = vi.fn(
+      (options: Parameters<typeof createFriendDirectChannelWorkerType>[0]) => {
+        expect(options.intervalMs).toBe(2_000);
+        return {
+          runOnce: (signal: AbortSignal) => options.service.runOnce(signal),
+          run: async (signal: AbortSignal) => {
+            await options.service.runOnce(signal);
+            events.push("run-friend-direct-channel");
+          },
+        };
+      },
+    );
+
+    await runReconciliationWorker({
+      config: laneConfig({
+        ...streamPair,
+        VOICE_ROOM_REAPER_ENABLED: "false",
+        FRIEND_DIRECT_CHANNEL_INTERVAL_MS: "2000",
+        FRIEND_CHANNEL_BACKFILL_ENABLED: "true",
+      }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => database,
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createFriendDirectChannelGateway,
+      createFriendDirectChannelWorker,
+    });
+
+    expect(createFriendDirectChannelGateway).toHaveBeenCalledWith(
+      { apiKey: "stream-key-for-test", apiSecret: "stream-secret-for-test" },
+      expect.anything(),
+    );
+    expect(friendJobs.enqueueBackfill).toHaveBeenCalledWith({ limit: 200 });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: "friend_direct_channel",
+        inserted: 7,
+        count: 0,
+      }),
+      "LOOP friend direct channel pass completed",
+    );
+    expect(events).toEqual(["ping", "run-friend-direct-channel", "close"]);
+  });
+
+  it("leaves the friend_direct_channel lane out without the Stream pair", async () => {
+    const events: string[] = [];
+    const logger = fakeLogger();
+    const createFriendDirectChannelWorker = vi.fn();
+    await runReconciliationWorker({
+      config: laneConfig({ VOICE_ROOM_REAPER_ENABLED: "false" }),
+      logger,
+      signalSource: fakeSignalSource(),
+      createDatabase: () => ({
+        ...fakeDatabase(events),
+        chatChannels: createUnavailableChatChannelRepository(),
+        friendDirectChannelJobs: {
+          enqueueBackfill: vi.fn(),
+          claimDueJobs: vi.fn(),
+          readParticipants: vi.fn(),
+          hasActiveDirectChannel: vi.fn(),
+          recordOperation: vi.fn(),
+          completeJob: vi.fn(),
+          retryJob: vi.fn(),
+        },
+      }),
+      createWorker: () => fakeWorker(vi.fn(() => Promise.resolve())),
+      createFriendDirectChannelWorker,
+    });
+    expect(createFriendDirectChannelWorker).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        lane: "friend_direct_channel",
+        reasonCode: "FRIEND_DIRECT_CHANNEL_STREAM_NOT_CONFIGURED",
+      },
+      "LOOP friend direct channel lane stays idle: Stream is not configured",
     );
     expect(events).toEqual(["ping", "close"]);
   });

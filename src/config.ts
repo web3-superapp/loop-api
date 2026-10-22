@@ -1333,6 +1333,11 @@ const reconciliationWorkerEnvironmentSchema = z
     VOICE_ROOM_REAPER_INTERVAL_MS: positiveIntegerString(5_000, 3_600_000),
     VOICE_ROOM_IDLE_END_MINUTES: positiveIntegerString(1, 1_440),
     VOICE_ROOM_MAX_LIVE_HOURS: positiveIntegerString(1, 168),
+    // Decision 0172: the friend_direct_channel lane (default on) and its
+    // one-time backfill sweep (default off).
+    FRIEND_DIRECT_CHANNEL_ENABLED: booleanString,
+    FRIEND_DIRECT_CHANNEL_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
+    FRIEND_CHANNEL_BACKFILL_ENABLED: booleanString,
     COMMUNITY_MEMBER_BUY_FEED_ENABLED: booleanString,
     COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS: positiveIntegerString(
       5_000,
@@ -2214,6 +2219,20 @@ export interface ReconciliationWorkerConfig {
     readonly intervalMs: number;
     readonly idleEndMinutes: number;
     readonly maxLiveHours: number;
+    readonly stream: StreamConfig | null;
+  } | null;
+  /**
+   * `friend_direct_channel` lane (Decision 0172); default on
+   * (`FRIEND_DIRECT_CHANNEL_ENABLED`). It runs the `direct_get_or_create`
+   * chat operation for every accepted friend pair in
+   * `friend_direct_channel_jobs`. `backfillEnabled`
+   * (`FRIEND_CHANNEL_BACKFILL_ENABLED`, default off) also enqueues, each
+   * tick, up to 200 friendship pairs that have no direct channel. `stream`
+   * is the Stream credential pair; without it the lane stays off.
+   */
+  readonly friendDirectChannel: {
+    readonly intervalMs: number;
+    readonly backfillEnabled: boolean;
     readonly stream: StreamConfig | null;
   } | null;
   /**
@@ -4558,6 +4577,12 @@ export function loadReconciliationWorkerConfig(
     VOICE_ROOM_IDLE_END_MINUTES:
       environment["VOICE_ROOM_IDLE_END_MINUTES"] ?? "10",
     VOICE_ROOM_MAX_LIVE_HOURS: environment["VOICE_ROOM_MAX_LIVE_HOURS"] ?? "12",
+    FRIEND_DIRECT_CHANNEL_ENABLED:
+      environment["FRIEND_DIRECT_CHANNEL_ENABLED"] ?? "true",
+    FRIEND_DIRECT_CHANNEL_INTERVAL_MS:
+      environment["FRIEND_DIRECT_CHANNEL_INTERVAL_MS"] ?? "5000",
+    FRIEND_CHANNEL_BACKFILL_ENABLED:
+      environment["FRIEND_CHANNEL_BACKFILL_ENABLED"] ?? "false",
     SQUARE_FEED_INGEST_ENABLED:
       environment["SQUARE_FEED_INGEST_ENABLED"] ?? "true",
     SQUARE_FEED_INGEST_INTERVAL_MS:
@@ -4784,6 +4809,20 @@ export function loadReconciliationWorkerConfig(
           intervalMs: parsed.data.VOICE_ROOM_REAPER_INTERVAL_MS,
           idleEndMinutes: parsed.data.VOICE_ROOM_IDLE_END_MINUTES,
           maxLiveHours: parsed.data.VOICE_ROOM_MAX_LIVE_HOURS,
+          stream:
+            parsed.data.STREAM_API_KEY !== undefined &&
+            parsed.data.STREAM_API_SECRET !== undefined
+              ? Object.freeze({
+                  apiKey: parsed.data.STREAM_API_KEY,
+                  apiSecret: parsed.data.STREAM_API_SECRET,
+                })
+              : null,
+        })
+      : null,
+    friendDirectChannel: parsed.data.FRIEND_DIRECT_CHANNEL_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.FRIEND_DIRECT_CHANNEL_INTERVAL_MS,
+          backfillEnabled: parsed.data.FRIEND_CHANNEL_BACKFILL_ENABLED,
           stream:
             parsed.data.STREAM_API_KEY !== undefined &&
             parsed.data.STREAM_API_SECRET !== undefined

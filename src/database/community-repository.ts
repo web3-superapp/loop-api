@@ -19,6 +19,7 @@ import {
 import { deriveStreamUserId } from "../features/identity/loop-identifiers.js";
 import { logoRefMediaId } from "../features/media/media-contract.js";
 import { loopIdSearchPatternSource } from "../features/identity/loop-id.js";
+import { enqueueFriendDirectChannelJob } from "./friend-direct-channel-job-repository.js";
 import {
   canPerformSelfAction,
   canPerformTargetAction,
@@ -3327,6 +3328,13 @@ export function createPostgresCommunityRepository(
                 on conflict do nothing
               `,
               values: [ownerUserId, requesterUserId, messageRequestId],
+            });
+            // Decision 0172: the pair's direct channel is guaranteed
+            // server-side; the worker lane runs the route's get-or-create.
+            await enqueueFriendDirectChannelJob(client, {
+              ownerUserId,
+              peerUserId: requesterUserId,
+              source: "accept",
             });
           } else {
             await client.query({

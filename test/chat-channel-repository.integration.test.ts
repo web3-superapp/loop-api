@@ -83,6 +83,7 @@ describe("PostgreSQL Chat channel repository", () => {
         public.chat_operation_events,
         public.communication_group_members,
         public.group_alias_reservations,
+        public.friend_direct_channel_jobs,
         public.direct_channels,
         public.communication_groups,
         public.chat_operations,
