@@ -342,6 +342,31 @@ beforeAll(async () => {
     wallet: "0x9999999999999999999999999999999999999999",
     removed: true,
   });
+  // S284: keep the pool projection consistent with these facts so suites
+  // that recompute it over every graduated instance (000091 in
+  // launch2-dynamic) never trip launch2_instances_pool_user_shape.
+  await pool.query(
+    `update public.launch2_instances i set
+       pool_trade_count = f.n, pool_buy_count = f.buys,
+       pool_sell_count = f.n - f.buys, pool_buy_volume_usd1 = f.buy_usd1,
+       pool_sell_volume_usd1 = f.sell_usd1, pool_last_price_e18 = f.price,
+       pool_last_trade_at = f.last, pool_user_trade_count = f.user_n,
+       pool_user_buy_volume_usd1 = f.user_buy, pool_user_sell_volume_usd1 = f.user_sell
+     from (
+       select count(*) as n,
+         count(*) filter (where s.side = 'buy') as buys,
+         coalesce(sum(s.usd1_amount) filter (where s.side = 'buy'), 0) as buy_usd1,
+         coalesce(sum(s.usd1_amount) filter (where s.side = 'sell'), 0) as sell_usd1,
+         max(s.price_e18) as price, max(s.swapped_at) as last,
+         count(*) filter (where s.caller_address <> $2) as user_n,
+         coalesce(sum(s.usd1_amount) filter (where s.side = 'buy' and s.caller_address <> $2), 0) as user_buy,
+         coalesce(sum(s.usd1_amount) filter (where s.side = 'sell' and s.caller_address <> $2), 0) as user_sell
+       from public.launch2_pool_swaps s
+       where s.instance_id = $1 and not s.removed
+     ) f
+     where i.instance_id = $1`,
+    [traded.instanceId, traded.buybackAdapter],
+  );
 });
 
 afterAll(async () => {

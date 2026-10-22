@@ -44,6 +44,7 @@ import {
   type Launch2PublicCandleRecord,
   type Launch2PublicMemeFacts,
   type Launch2PublicPoolTradeRecord,
+  type Launch2CostTradeRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
 } from "../features/launch2/launch2-ports.js";
@@ -2766,6 +2767,64 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           transactionHash: text(row, "transaction_hash"),
           logIndex: Number(row["log_index"]),
           blockNumber: text(row, "block_number"),
+        }),
+      );
+    },
+
+    async listCostTrades(input) {
+      // Decision 0176: the wallets' curve trades and attributed pool user
+      // swaps (Decision 0127 / 0158 rule, no reorged rows), chain order.
+      // Pool amounts are the router's (what the wallet paid / received,
+      // fees included / deducted) — the wallet activity feed's rule.
+      if (input.holderAddresses.length === 0) return [];
+      const rows = await query<Row>(
+        `
+          select * from (
+            select t.instance_id::text, t.trader_address as holder,
+              'curve' as source, t.side, t.meme_amount::text as meme,
+              (case when t.side = 'buy' then t.usd1_gross
+                else t.usd1_net end)::text as usd1,
+              t.block_number, t.log_index
+            from public.launch2_trades t
+            where t.trader_address = any($1::text[]) and not t.removed
+              and ($2::uuid is null or t.instance_id = $2::uuid)
+            union all
+            select s.instance_id::text, s.wallet_address, 'pool', s.side,
+              (case when s.side = 'buy' then coalesce(s.router_amount_out,
+                  case when s.tax_token = 'meme'
+                    then greatest(s.meme_amount - s.tax_amount, 0)
+                    else s.meme_amount end)
+                else coalesce(s.router_amount_in, s.meme_amount) end)::text,
+              (case when s.side = 'buy'
+                  then coalesce(s.router_amount_in, s.usd1_amount)
+                else coalesce(s.router_amount_out,
+                  case when s.tax_token = 'usd1'
+                    then greatest(s.usd1_amount - s.tax_amount, 0)
+                    else s.usd1_amount end) end)::text,
+              s.block_number, s.log_index
+            from public.launch2_pool_swaps s
+            join public.launch2_instances i on i.instance_id = s.instance_id
+            where s.wallet_address = any($1::text[]) and not s.removed
+              and ($2::uuid is null or s.instance_id = $2::uuid)
+              and ${userSwap("s")}
+          ) trades
+          order by instance_id, holder, block_number, log_index
+        `,
+        [
+          input.holderAddresses.map((address) => address.toLowerCase()),
+          input.instanceId,
+        ],
+      );
+      return rows.map((row): Launch2CostTradeRecord =>
+        Object.freeze({
+          instanceId: text(row, "instance_id"),
+          holderAddress: text(row, "holder"),
+          source: text(row, "source") === "pool" ? "pool" : "curve",
+          side: text(row, "side") === "sell" ? "sell" : "buy",
+          memeAmount: text(row, "meme"),
+          usd1Amount: text(row, "usd1"),
+          blockNumber: String(row["block_number"]),
+          logIndex: Number(row["log_index"]),
         }),
       );
     },

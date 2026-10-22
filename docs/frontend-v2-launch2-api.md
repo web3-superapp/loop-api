@@ -1,5 +1,11 @@
 # Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131, 0139, 0171)
 
+> **S284 / 决策 0176 变化（给 App）**：`GET /v2/launch2/me/positions` 每行与详情 `instance.viewer` 各新增 5 个
+> **可选可空**键 `avgCostUsd1` / `costBasisUsd1` / `realizedPnlUsd1` / `unrealizedPnlUsd1` / `costCoverage`
+> （§3.7 末「Decision 0176」），= K 线页「买入成本价 / 盈亏」。**服务端默认不下发**（`LAUNCH2_PNL_EMIT=off`）；
+> App 须先在 positions 行与详情 viewer 的 codec 里把五键加为可选键并发版，全部受支持版本能解码后服务端才切 `on`。
+> 两个盈亏键可为负（带 `-`），codec 不要用无符号十进制正则。
+
 > **S280 / 决策 0174 变化（给 App）**：① `GET /v2/launch2/me/positions` 每行新增**可选可空**键
 > `priceUsd1` / `valueUsd1` / `priceSource`（§3.7 末），**服务端默认不下发**（`LAUNCH2_POSITION_VALUE_EMIT=off`）。
 > App 须先在 positions 行 codec 里把三键加为可选键并发版，全部受支持版本能解码后服务端才切 `on`。
@@ -708,6 +714,49 @@ Decision 0174 — price and value (**optional keys**, present only while the ser
   `valueUsd1` is `null` — show the price and 「余额暂不可用」.
 - Amounts follow §1 (decimal strings, ≤ 18 decimals). Sum `valueUsd1` across rows with decimal
   arithmetic for a wallet total; rows with `null` are excluded and the total should say so.
+
+Decision 0176 — buy cost and profit / loss (**optional keys**, present only while the server runs
+`LAUNCH2_PNL_EMIT=on`; absent by default — decode them as optional nullable keys). The same five
+keys are on each positions row **and** on the detail's `instance.viewer` (§3.2; the K-line page):
+
+```json
+{
+  "avgCostUsd1": "0.000637755102040816",
+  "costBasisUsd1": "10",
+  "realizedPnlUsd1": "0.05",
+  "unrealizedPnlUsd1": "-0.19999999999999488",
+  "costCoverage": "full"
+}
+```
+
+Method: moving-average cost over the wallet's own trades in chain order — curve buys / sells, then
+its official-pool swaps (buybacks and reorged rows never count). A buy adds the USD1 actually paid
+(taxes / fees included) and the MEME received; a sell removes MEME at the current average and
+realizes `USD1 actually received (after tax) − average × sold`.
+
+| key                 | meaning                                                                                        | `null` when                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `avgCostUsd1`       | 买入成本价, USD1 per MEME                                                                      | no trade; or everything bought has been sold                      |
+| `costBasisUsd1`     | USD1 cost of what is still held (`"0"` after selling everything)                               | no trade                                                          |
+| `realizedPnlUsd1`   | 已实现盈亏, **signed** (`"-1.5"` = loss)                                                       | no trade                                                          |
+| `unrealizedPnlUsd1` | 未实现盈亏 = (current price − `avgCostUsd1`) × holding, **signed**; `"0"` when nothing is held | no trade; no price; `balanceStatus: "unavailable"`; avg is `null` |
+| `costCoverage`      | `full` = the trades explain the whole holding; `partial` = MEME also moved by plain transfers  | no trade; `balanceStatus: "unavailable"`                          |
+
+- Price and holding are exactly S280's: before graduation the curve price (detail `curve.priceUsd1`,
+  row `priceUsd1`) × `curve.net`; after graduation the pool's last price (`pool.lastPriceUsd1`) ×
+  `memeBalance`. Nothing new to poll.
+- All five `null` = the wallet never traded this instance (e.g. only holds the NFT or only received
+  MEME): hide the cost / PnL block, do not show `0`.
+- `costCoverage: "partial"`: MEME arrived by transfer (no cost, not in the average) or left by
+  transfer (cost reduced at the average, no PnL). Show the numbers with a hint such as
+  「含转入 / 转出，成本仅按交易计算」. In this case `valueUsd1 − costBasisUsd1` may differ from
+  `unrealizedPnlUsd1`; show the server's `unrealizedPnlUsd1`.
+- Total PnL for display = `realizedPnlUsd1 + unrealizedPnlUsd1` with decimal arithmetic (skip when
+  either is `null`). Colour by sign; a leading `-` is a loss.
+- Encoding: decimal strings like `curve.usd1Spent` (≤ 18 decimals, no trailing zeros); the two PnL
+  keys match `^-?(0|[1-9][0-9]{0,40})(\.[0-9]{1,18})?$`.
+- No new errors and no new route: the row / detail answers or fails exactly as before (`503
+CAPABILITY_UNAVAILABLE` per §5 when the launch2 store is unavailable).
 
 ### 3.8 `GET /v2/launch2/instances/{instanceId}/pool/quote?side=&mode=&amount=&walletId=&slippageBps=` (Decision 0124)
 
