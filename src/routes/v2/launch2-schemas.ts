@@ -297,6 +297,29 @@ export const launch2NftImageUrlSchema = {
   anyOf: [{ type: "string", maxLength: 2048 }, { type: "null" }],
 } as const;
 
+/**
+ * Decision 0174: a position row's price and value. OPTIONAL and outside
+ * `required`: sent only with LAUNCH2_POSITION_VALUE_EMIT=on (shipped
+ * clients decode the rows strictly). Never make them required.
+ */
+export const launch2PositionValueProperties = {
+  priceUsd1: {
+    description:
+      "Decision 0174: OPTIONAL — present only while the server runs LAUNCH2_POSITION_VALUE_EMIT=on. USD1 per MEME, decimal string (same encoding as curve.usd1Spent). Before graduation the curve's current price (= the detail's curve.priceUsd1); after graduation the official pool's last trade price (= the detail's pool.lastPriceUsd1). null when there is no price (e.g. graduated, no pool trade yet). Decode as an optional nullable key.",
+    anyOf: [decimalSchema, { type: "null" }],
+  },
+  valueUsd1: {
+    description:
+      "Decision 0174: OPTIONAL (LAUNCH2_POSITION_VALUE_EMIT=on). floor(quantity × priceUsd1), decimal string; quantity = curve.net before graduation, memeBalance after. null when priceUsd1 is null or memeBalance could not be read (balanceStatus unavailable). Never estimated.",
+    anyOf: [decimalSchema, { type: "null" }],
+  },
+  priceSource: {
+    description:
+      "Decision 0174: OPTIONAL (LAUNCH2_POSITION_VALUE_EMIT=on). curve | pool — where priceUsd1 comes from; null with a null price.",
+    anyOf: [{ type: "string", enum: ["curve", "pool"] }, { type: "null" }],
+  },
+} as const;
+
 const instanceSummarySchema = {
   type: "object",
   additionalProperties: false,
@@ -1210,6 +1233,7 @@ export const launch2PositionsResourceSchema = {
           snapshotMember: { type: "boolean" },
           curve: positionCurveSchema,
           lastActivityAt: nullableDateTimeSchema,
+          ...launch2PositionValueProperties,
         },
       },
     },
@@ -1702,6 +1726,89 @@ export const launch2PoolTradesResourceSchema = {
     poolTradeCount: uintStringSchema,
     lastPoolTradeAt: nullableDateTimeSchema,
     trades: { type: "array", maxItems: 50, items: poolTradeItemSchema },
+    contractVersion: contractVersionSchema,
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Decision 0174: public official-pool trades of an instance.
+// ---------------------------------------------------------------------------
+
+export const launch2RecentPoolTradesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    limit: {
+      type: "string",
+      pattern: "^[1-9][0-9]?$",
+      description: "1–50, default 20; above 50 is 400 INVALID_REQUEST.",
+    },
+  },
+} as const;
+
+/** Decision 0174: the public route's errors (no 401 / 409 / 422; 429). */
+export const launch2RecentPoolTradesErrors = {
+  400: launch2ReadErrors[400],
+  404: launch2ReadErrors[404],
+  429: v2ErrorResponseSchema(["RATE_LIMITED"]),
+  500: launch2ReadErrors[500],
+  503: launch2ReadErrors[503],
+} as const;
+
+const recentPoolTradeItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "txHash",
+    "blockNumber",
+    "at",
+    "side",
+    "memeAmount",
+    "usd1Amount",
+    "priceUsd1",
+    "wallet",
+  ],
+  properties: {
+    txHash: txHashSchema,
+    blockNumber: uintStringSchema,
+    at: dateTimeSchema,
+    side: { type: "string", enum: ["buy", "sell"] },
+    memeAmount: {
+      ...decimalSchema,
+      description: "MEME of the swap (PoolManager side).",
+    },
+    usd1Amount: {
+      ...decimalSchema,
+      description:
+        "USD1 the trader paid (buy) or received (sell, net of a USD1 pool fee) — the launchpad activity feed's rule.",
+    },
+    priceUsd1: {
+      ...decimalSchema,
+      description: "USD1 per MEME at the pool after the swap.",
+    },
+    wallet: {
+      description:
+        "The attributed trader, masked 0x + 4 hex … 4 hex (e.g. 0x1234…abcd); null when the swap is anonymous (not through a router LOOP attributes).",
+      anyOf: [
+        { type: "string", pattern: "^0x[0-9a-f]{4}…[0-9a-f]{4}$" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+export const launch2RecentPoolTradesResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["instanceId", "items", "observedAt", "contractVersion"],
+  properties: {
+    instanceId: opaqueIdSchema,
+    items: { type: "array", maxItems: 50, items: recentPoolTradeItemSchema },
+    observedAt: {
+      ...dateTimeSchema,
+      description:
+        "When the server read the trades (an answer is reused for up to 10 s).",
+    },
     contractVersion: contractVersionSchema,
   },
 } as const;

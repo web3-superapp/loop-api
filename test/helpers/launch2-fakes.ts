@@ -26,6 +26,7 @@ import {
   type Launch2PositionRecord,
   type Launch2PublicCandleRecord,
   type Launch2PublicMemeFacts,
+  type Launch2PublicPoolTradeRecord,
   type Launch2Repository,
   type Launch2SnapshotMemberRecord,
   type Launch2TradeRecord,
@@ -201,6 +202,10 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly activity: Launch2ActivityRecord[];
   /** Decision 0126: attributed pool trades keyed `instanceId|wallet`. */
   readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
+  /** Decision 0174: public pool trades keyed by instance, newest first. */
+  readonly recentPoolTrades: Map<string, Launch2PublicPoolTradeRecord[]>;
+  /** Decision 0174: the id lists getInstances was asked for. */
+  readonly getInstancesCalls: (readonly string[])[];
   /** Decision 0131: LoopDynamic projections keyed `instanceId|wallet`. */
   readonly dynamicRewards: Map<string, Launch2DynamicRewardRecord[]>;
   /** Decision 0146: round buyers keyed `instanceId|roundId`, heaviest first. */
@@ -247,6 +252,8 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const builds = { count: 0 };
   const activity: Launch2ActivityRecord[] = [];
   const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
+  const recentPoolTrades = new Map<string, Launch2PublicPoolTradeRecord[]>();
+  const getInstancesCalls: (readonly string[])[] = [];
   const dynamicRewards = new Map<string, Launch2DynamicRewardRecord[]>();
   const dynamicRoundBuyers = new Map<
     string,
@@ -292,6 +299,8 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
         ).slice(-input.limit),
       ),
     poolTrades,
+    recentPoolTrades,
+    getInstancesCalls,
     dynamicRewards,
     dynamicRoundBuyers,
     dynamicSummaries,
@@ -429,6 +438,19 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
     },
     getInstance: (instanceId) =>
       Promise.resolve(instances.get(instanceId) ?? null),
+    getInstances: (instanceIds) => {
+      getInstancesCalls.push(instanceIds);
+      return Promise.resolve(
+        [...new Set(instanceIds)].flatMap((id) => {
+          const row = instances.get(id);
+          return row === undefined ? [] : [row];
+        }),
+      );
+    },
+    listRecentPoolTrades: (input) =>
+      Promise.resolve(
+        (recentPoolTrades.get(input.instanceId) ?? []).slice(0, input.limit),
+      ),
     getInstanceByLaunchId: (launchId) =>
       Promise.resolve(
         [...instances.values()].find(

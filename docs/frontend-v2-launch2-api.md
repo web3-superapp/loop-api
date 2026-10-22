@@ -1,5 +1,11 @@
 # Frontend contract: MEME v2 (`launch2`) — Decision 0114 (+ 0117, 0118, 0121, 0122, 0124, 0126, 0127, 0131, 0139, 0171)
 
+> **S280 / 决策 0174 变化（给 App）**：① `GET /v2/launch2/me/positions` 每行新增**可选可空**键
+> `priceUsd1` / `valueUsd1` / `priceSource`（§3.7 末），**服务端默认不下发**（`LAUNCH2_POSITION_VALUE_EMIT=off`）。
+> App 须先在 positions 行 codec 里把三键加为可选键并发版，全部受支持版本能解码后服务端才切 `on`。
+> ② 新增公开只读路由 `GET /v2/launch2/instances/{instanceId}/pool/recent-trades`（§3.16）= 毕业后项目页
+> 「最新成交」（全体钱包的外盘用户成交，钱包脱敏）。纯新增，不需要开关。
+
 > **S267 / 决策 0171 变化（给 App）**：新增只读路由 `GET /v2/launch2/instances/{instanceId}/candles`（§3.15）=
 > 项目页 K 线（内盘曲线成交 → 毕业后官方池 swap，一条连续序列，空桶已填平）。纯新增，现有路由与键集合不变。
 
@@ -678,6 +684,30 @@ Decision 0126 — wallet balances and own pool trades (same seven keys on the de
 - A wallet whose only activity is pool trades (through the router) is listed (curve zeros, no
   NFT). A wallet that only received MEME by transfer is not listed (open the detail with its
   `walletId` to see its balance).
+
+Decision 0174 — price and value (**optional keys**, present only while the server runs
+`LAUNCH2_POSITION_VALUE_EMIT=on`; absent by default — decode them as optional nullable keys):
+
+```json
+{
+  "priceUsd1": "0.000625",
+  "valueUsd1": "9.8",
+  "priceSource": "pool"
+}
+```
+
+| key           | before graduation                                      | graduated                                                   |
+| ------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
+| `priceUsd1`   | the curve's current price (= detail `curve.priceUsd1`) | the pool's last trade price (= detail `pool.lastPriceUsd1`) |
+| `valueUsd1`   | floor(`curve.net` × `priceUsd1`)                       | floor(`memeBalance` × `priceUsd1`)                          |
+| `priceSource` | `curve`                                                | `pool`                                                      |
+
+- All three `null` = no price (e.g. graduated but no pool trade yet): show 「暂无价格」, never `0`
+  and never compute your own estimate.
+- Graduated with `balanceStatus: "unavailable"`: `priceUsd1` / `priceSource` are set,
+  `valueUsd1` is `null` — show the price and 「余额暂不可用」.
+- Amounts follow §1 (decimal strings, ≤ 18 decimals). Sum `valueUsd1` across rows with decimal
+  arithmetic for a wallet total; rows with `null` are excluded and the total should say so.
 
 ### 3.8 `GET /v2/launch2/instances/{instanceId}/pool/quote?side=&mode=&amount=&walletId=&slippageBps=` (Decision 0124)
 
@@ -1402,6 +1432,57 @@ is configured. Nothing in the wire format changes.
 建议用法：首屏 `interval=5m`（默认 200 根）；切换粒度重拉；左滑到头用 `before=<第一根 t>` 拉更早一页，
 返回空数组即到头。轮询 ≥ 5 s（与详情一起），追加 / 替换最后一根即可。
 
+### 3.16 `GET /v2/launch2/instances/{instanceId}/pool/recent-trades?limit=`（Decision 0174，S280）
+
+毕业后项目页的「最新成交」：本实例官方池（外盘）**全体钱包**的最新用户成交。
+
+- **公开**：不需要 `Authorization`（带了也忽略）；仍需 `X-Loop-Client-Version` 与
+  `X-Loop-Contract-Version: 2.0`（缺头 `400`），不得带 `Idempotency-Key`。
+- `limit` 1–50，默认 20；`51` / `0` / 非数字 → `400 INVALID_REQUEST`。无 cursor（只看最新）。
+- 口径同 `pool.userTradeCount` 与发射台活动流：不含回购成交、不含重组掉的成交；按区块、日志序号倒序。
+
+```json
+{
+  "instanceId": "8a0c…",
+  "items": [
+    {
+      "txHash": "0xabab…",
+      "blockNumber": "136098447",
+      "at": "2027-01-15T08:00:40.000Z",
+      "side": "buy",
+      "memeAmount": "16000",
+      "usd1Amount": "10",
+      "priceUsd1": "0.000625",
+      "wallet": "0x1234…abcd"
+    },
+    {
+      "txHash": "0xcdcd…",
+      "blockNumber": "136098440",
+      "at": "2027-01-15T08:00:19.000Z",
+      "side": "sell",
+      "memeAmount": "80400",
+      "usd1Amount": "49",
+      "priceUsd1": "0.000611",
+      "wallet": null
+    }
+  ],
+  "observedAt": "2027-01-15T08:00:45.000Z",
+  "contractVersion": "2.0"
+}
+```
+
+- 编码与 `instance.recentTrades`（§3.2）相同：金额十进制字符串、`blockNumber` 整数字符串、`at` ISO-8601 UTC、
+  `txHash` 小写 `0x` + 64 hex（可拼浏览器链接）。键名不同（`txHash` / `at` / `wallet`），codec 单独声明。
+- `usd1Amount`：买 = 付出的 USD1；卖 = 实际收到的 USD1（扣除 USD1 计的池税后）。`priceUsd1` = 该笔成交后的池价。
+- `wallet`：交易者地址脱敏 `0x` + 前 4 + `…` + 后 4（小写）；`null` = 未归属（没走 LOOP 识别的路由），显示「匿名」。
+  完整地址不下发；列表项不可点到个人主页。列表 key 用 `txHash + blockNumber + 序号`（同一交易可有多笔）。
+- 未毕业：`200`，`items: []`（直接显示内盘 `recentTrades`）。
+- 缓存：服务端同一 `(instanceId, limit)` 10 秒内返回同一份（`observedAt` 不变）；`Cache-Control: public, max-age=10`。
+  轮询 ≥ 10 s（随详情一起）。
+- 错误：`400 INVALID_REQUEST`（缺头、坏 `limit`、未知 query 键）、`404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND`、
+  `429 RATE_LIMITED`（`Retry-After` 秒；每访客每分钟 `PUBLIC_RATE_LIMIT_PER_MINUTE`，默认 120）、`503` 同 §5。
+  没有 `401`。
+
 ## 4. Errors (seven-field envelope; `detailsSafe.reasonCode` names the rule)
 
 | HTTP | code                             | reasonCode                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -1415,6 +1496,7 @@ is configured. Nothing in the wire format changes.
 | 409  | `INSUFFICIENT_BALANCE`           | `LAUNCH2_USD1_BALANCE_INSUFFICIENT`, `LAUNCH2_MEME_BALANCE_INSUFFICIENT`, `LAUNCH2_GAS_INSUFFICIENT`                                                                                                                                                                                                                                                                                                                                                                 |
 | 409  | `IDEMPOTENCY_CONFLICT`           | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 422  | `VALIDATION_FAILED`              | `LAUNCH2_AMOUNT_INVALID`, `LAUNCH2_AMOUNT_ABOVE_MAX`, `LAUNCH2_DEADLINE_TOO_FAR`, `LAUNCH2_QUOTE_ZERO`, `LAUNCH2_WALLET_NOT_EMBEDDED`; pool (0124): `POOL_NOT_GRADUATED` (`stage`), `POOL_QUOTE_UNAVAILABLE` (`revertReason`: contract error name, `UNKNOWN`, or `STATE_OVERRIDE_UNSUPPORTED`), `POOL_INSUFFICIENT_LIQUIDITY`, `POOL_QUOTE_ZERO`; candles (0171): `LAUNCH2_CANDLE_INTERVAL_INVALID`, `LAUNCH2_CANDLE_LIMIT_INVALID`, `LAUNCH2_CANDLE_BEFORE_INVALID` |
+| 429  | `RATE_LIMITED`                   | — (0174: `…/pool/recent-trades` per-visitor ceiling; `Retry-After` seconds)                                                                                                                                                                                                                                                                                                                                                                                          |
 | 503  | `CAPABILITY_UNAVAILABLE`         | `LAUNCH2_FACTORY_NOT_CONFIGURED`, `LAUNCH2_CHAIN_NOT_CONFIGURED`, `LAUNCH2_REPOSITORY_UNAVAILABLE`, `LAUNCH2_RUNTIME_UNAVAILABLE`, `LAUNCH2_CHAIN_READ_FAILED`, `LAUNCH2_WALLETS_UNAVAILABLE`, `LAUNCH2_WRITES_DISABLED`, `LAUNCH2_MAINNET_SIGNING_CLOSED`, `LAUNCH2_SNAPSHOT_UNVERIFIED`; pool (0124): `POOL_ROUTER_NOT_CONFIGURED`, `POOL_ROUTER_CODE_MISMATCH`, `POOL_ROUTER_MANAGER_MISMATCH`, `POOL_KEY_MISMATCH`                                               |
 
 ### 4.1 `INSUFFICIENT_BALANCE` numbers (S157, Decision 0129 §1)

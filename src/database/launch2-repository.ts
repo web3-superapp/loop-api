@@ -43,6 +43,7 @@ import {
   type Launch2PositionRecord,
   type Launch2PublicCandleRecord,
   type Launch2PublicMemeFacts,
+  type Launch2PublicPoolTradeRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
 } from "../features/launch2/launch2-ports.js";
@@ -2557,6 +2558,15 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
       return rows[0] === undefined ? null : mapInstance(rows[0]);
     },
 
+    async getInstances(instanceIds) {
+      if (instanceIds.length === 0) return [];
+      const rows = await query<Row>(
+        `select ${instanceColumns} from public.launch2_instances where instance_id = any($1::uuid[])`,
+        [[...new Set(instanceIds)]],
+      );
+      return rows.map(mapInstance);
+    },
+
     async getInstanceByLaunchId(launchId) {
       const rows = await query<Row>(
         `select ${instanceColumns} from public.launch2_instances where launch_id = $1`,
@@ -2717,6 +2727,41 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
           taxToken: text(row, "tax_token") === "usd1" ? "usd1" : "meme",
           priceE18: text(row, "price_e18"),
           recipientAddress: text(row, "recipient_address"),
+          tradedAt: iso(row, "swapped_at"),
+          transactionHash: text(row, "transaction_hash"),
+          logIndex: Number(row["log_index"]),
+          blockNumber: text(row, "block_number"),
+        }),
+      );
+    },
+
+    async listRecentPoolTrades(input) {
+      // Decision 0174: user swaps only (the activity feed's rule), every
+      // wallet; the (instance, block desc, log desc) index serves it.
+      const rows = await query<Row>(
+        `
+          select s.side, s.meme_amount::text,
+            (case when s.side = 'buy' then s.usd1_amount
+              when s.tax_token = 'usd1'
+                then greatest(s.usd1_amount - s.tax_amount, 0)
+              else s.usd1_amount end)::text as usd1_amount,
+            s.price_e18::text, s.wallet_address, s.swapped_at,
+            s.transaction_hash, s.log_index, s.block_number::text
+          from public.launch2_pool_swaps s
+          join public.launch2_instances i on i.instance_id = s.instance_id
+          where s.instance_id = $1 and not s.removed and ${userSwap("s")}
+          order by s.block_number desc, s.log_index desc
+          limit $2
+        `,
+        [input.instanceId, input.limit],
+      );
+      return rows.map((row): Launch2PublicPoolTradeRecord =>
+        Object.freeze({
+          side: text(row, "side") === "sell" ? "sell" : "buy",
+          memeAmount: text(row, "meme_amount"),
+          usd1Amount: text(row, "usd1_amount"),
+          priceE18: text(row, "price_e18"),
+          walletAddress: nullableText(row, "wallet_address"),
           tradedAt: iso(row, "swapped_at"),
           transactionHash: text(row, "transaction_hash"),
           logIndex: Number(row["log_index"]),

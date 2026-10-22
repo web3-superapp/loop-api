@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { requireAuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
+import { publicClientKey } from "../../core/http/client-ip.js";
+import { createFixedWindowRateLimiter } from "../../core/http/fixed-window-rate-limiter.js";
 import { assertNoBodyOrQuery } from "../../core/http/request-input.js";
+import { V2ApiError } from "../../core/http/v2-error.js";
 import { emptyQueryStringSchema } from "../../core/http/schemas.js";
 import { parseV2CommandMetadata } from "../../features/community/community-contract.js";
 import { assertDecimalStringFields } from "./chain-schemas.js";
@@ -16,6 +19,7 @@ import {
 } from "./community-schemas.js";
 import type { V2RouteDependencies } from "./index.js";
 import { createLaunch2CampaignPublicService } from "../../features/launch2/launch2-campaigns.js";
+import { launch2RecentPoolTradesCacheMs } from "../../features/launch2/launch2-service.js";
 import {
   launch2CandlesQuerySchema,
   launch2CandlesResourceSchema,
@@ -56,6 +60,9 @@ import {
   launch2QuoteResourceSchema,
   launch2QuoteErrors,
   launch2ReadErrors,
+  launch2RecentPoolTradesErrors,
+  launch2RecentPoolTradesQuerySchema,
+  launch2RecentPoolTradesResourceSchema,
   launch2TradePrepareRequestSchema,
 } from "./launch2-schemas.js";
 
@@ -94,6 +101,11 @@ export function registerV2Launch2Routes(
   dependencies: V2RouteDependencies,
 ): void {
   const { authenticateLoopBearer, launch2Service: service } = dependencies;
+  // Decision 0174: the public recent-trades read keeps a per-visitor
+  // ceiling (PUBLIC_RATE_LIMIT_PER_MINUTE, the public MEME surface's rule).
+  const recentTradesLimiter = createFixedWindowRateLimiter({
+    perWindow: dependencies.config.publicRateLimit.perMinute,
+  });
 
   app.get(
     "/v2/launch2/instances",
@@ -477,6 +489,54 @@ export function registerV2Launch2Routes(
         ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
       });
       reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/launch2/instances/:instanceId/pool/recent-trades",
+    {
+      schema: {
+        operationId: "listV2Launch2RecentPoolTrades",
+        summary:
+          "List the newest public official-pool trades of a MEME v2 instance",
+        description: `Decision 0174. Public: no Bearer (the LOOP read headers stay required, no Idempotency-Key). The instance's newest official-pool user swaps of every wallet (the Decision 0127 / 0158 rule: never the buyback adapter / executor or a buyback transaction), newest first by block and log index; limit 1–50 (default 20, above 50 is 400 INVALID_REQUEST). Each item: txHash, blockNumber, at (swap time), side, memeAmount, usd1Amount (buy = USD1 paid; sell = USD1 received net of a USD1 pool fee), priceUsd1 (pool price after the swap), wallet = the Decision 0126 / 0132 attributed trader masked as 0x1234…abcd, null when anonymous. Before graduation items is []. One answer per (instance, limit) is reused for ${String(launch2RecentPoolTradesCacheMs / 1000)} s (observedAt = when it was read); 200 is Cache-Control: public, max-age=${String(launch2RecentPoolTradesCacheMs / 1000)}. 404 NOT_FOUND / LAUNCH2_INSTANCE_NOT_FOUND. 429 RATE_LIMITED (Retry-After seconds) above PUBLIC_RATE_LIMIT_PER_MINUTE requests per visitor per minute (TRUST_PROXY / PUBLIC_CLIENT_IP_HEADERS name the visitor). ${unavailableNote}`,
+        tags: ["launch2"],
+        security: [],
+        headers: v2CommonHeadersSchema,
+        params: launch2InstanceParamsSchema,
+        querystring: launch2RecentPoolTradesQuerySchema,
+        response: {
+          200: launch2RecentPoolTradesResourceSchema,
+          ...launch2RecentPoolTradesErrors,
+        },
+      },
+      onRequest: validateCommonHeaders,
+      preValidation: assertNoBodyV2,
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      const retryAfter = recentTradesLimiter.admit(
+        publicClientKey(
+          request,
+          dependencies.config.trustProxy,
+          dependencies.config.publicRateLimit.clientIpHeaders,
+        ),
+      );
+      if (retryAfter !== null) {
+        reply.header("retry-after", String(retryAfter));
+        throw V2ApiError.rateLimited();
+      }
+      const params = request.params as InstanceParams;
+      const query = request.query as Record<string, unknown>;
+      const resource = await service.listRecentPoolTrades({
+        instanceId: params.instanceId,
+        ...(query["limit"] === undefined ? {} : { limit: query["limit"] }),
+      });
+      reply.header(
+        "cache-control",
+        `public, max-age=${String(launch2RecentPoolTradesCacheMs / 1000)}`,
+      );
       return reply.code(200).send(resource);
     },
   );

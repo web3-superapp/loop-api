@@ -2465,6 +2465,8 @@ export async function buildApp(
           traderAccountEmit: config.launch2.traderAccountEmit,
           // Decision 0173: off (default) omits `nftImageUrl`.
           nftImageEmit: config.launch2.nftImageEmit,
+          // Decision 0174: off (default) omits position price / value.
+          positionValueEmit: config.launch2.positionValueEmit,
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,
