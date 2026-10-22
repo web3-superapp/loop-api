@@ -320,6 +320,46 @@ export const launch2PositionValueProperties = {
   },
 } as const;
 
+/** Decision 0176: a signed decimal string (PnL may be negative). */
+const signedDecimalSchema = {
+  type: "string",
+  pattern: "^-?(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+} as const;
+
+/**
+ * Decision 0176: a position's moving-average cost and profit / loss.
+ * OPTIONAL and outside `required`: sent only with LAUNCH2_PNL_EMIT=on
+ * (shipped clients decode these objects strictly). Never make them
+ * required.
+ */
+export const launch2PositionPnlProperties = {
+  avgCostUsd1: {
+    description:
+      "Decision 0176: OPTIONAL — present only while the server runs LAUNCH2_PNL_EMIT=on. Moving-average buy cost, USD1 per MEME, decimal string (same encoding as curve.usd1Spent): the USD1 the wallet actually paid for its traded MEME (curve and official-pool buys, taxes and fees included), reduced at the average on each sell. null when the wallet has no trade, or nothing it bought is still held (all sold). Decode as an optional nullable key.",
+    anyOf: [decimalSchema, { type: "null" }],
+  },
+  costBasisUsd1: {
+    description:
+      "Decision 0176: OPTIONAL (LAUNCH2_PNL_EMIT=on). USD1 cost of the MEME still held = avgCost × min(holding, traded quantity); MEME received by plain transfer adds no cost. '0' after everything was sold; null without a trade.",
+    anyOf: [decimalSchema, { type: "null" }],
+  },
+  realizedPnlUsd1: {
+    description:
+      "Decision 0176: OPTIONAL (LAUNCH2_PNL_EMIT=on). Σ over sells of (USD1 actually received, net of taxes / fees − average cost of the MEME sold). Signed decimal string ('-' when a loss). null without a trade.",
+    anyOf: [signedDecimalSchema, { type: "null" }],
+  },
+  unrealizedPnlUsd1: {
+    description:
+      "Decision 0176: OPTIONAL (LAUNCH2_PNL_EMIT=on). (current price − avgCost) × holding, truncated toward zero. Price and holding are those of priceUsd1 / valueUsd1 (curve price × curve.net before graduation, pool last price × memeBalance after). Signed decimal string. '0' when nothing is held; null without a trade, without a price, when memeBalance could not be read, or when avgCost is null.",
+    anyOf: [signedDecimalSchema, { type: "null" }],
+  },
+  costCoverage: {
+    description:
+      "Decision 0176: OPTIONAL (LAUNCH2_PNL_EMIT=on). full = the wallet's trades explain its whole holding; partial = MEME moved by plain transfers (holding ≠ traded quantity, or more sold than bought), so the cost covers only the traded part; null without a trade or when memeBalance could not be read.",
+    anyOf: [{ type: "string", enum: ["full", "partial"] }, { type: "null" }],
+  },
+} as const;
+
 const instanceSummarySchema = {
   type: "object",
   additionalProperties: false,
@@ -912,6 +952,7 @@ const viewerSchema = {
           },
         },
         curve: positionCurveSchema,
+        ...launch2PositionPnlProperties,
       },
     },
     { type: "null" },
@@ -1234,6 +1275,7 @@ export const launch2PositionsResourceSchema = {
           curve: positionCurveSchema,
           lastActivityAt: nullableDateTimeSchema,
           ...launch2PositionValueProperties,
+          ...launch2PositionPnlProperties,
         },
       },
     },

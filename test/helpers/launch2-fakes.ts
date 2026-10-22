@@ -27,6 +27,7 @@ import {
   type Launch2PublicCandleRecord,
   type Launch2PublicMemeFacts,
   type Launch2PublicPoolTradeRecord,
+  type Launch2CostTradeRecord,
   type Launch2Repository,
   type Launch2SnapshotMemberRecord,
   type Launch2TradeRecord,
@@ -202,6 +203,13 @@ export interface InMemoryLaunch2Repository extends Launch2Repository {
   readonly activity: Launch2ActivityRecord[];
   /** Decision 0126: attributed pool trades keyed `instanceId|wallet`. */
   readonly poolTrades: Map<string, Launch2PoolTradeRecord[]>;
+  /** Decision 0176: cost-replay trades (any order; the fake sorts). */
+  readonly costTrades: Launch2CostTradeRecord[];
+  /** Decision 0176: the inputs listCostTrades was called with. */
+  readonly listCostTradesCalls: {
+    readonly holderAddresses: readonly string[];
+    readonly instanceId: string | null;
+  }[];
   /** Decision 0174: public pool trades keyed by instance, newest first. */
   readonly recentPoolTrades: Map<string, Launch2PublicPoolTradeRecord[]>;
   /** Decision 0174: the id lists getInstances was asked for. */
@@ -252,6 +260,11 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
   const builds = { count: 0 };
   const activity: Launch2ActivityRecord[] = [];
   const poolTrades = new Map<string, Launch2PoolTradeRecord[]>();
+  const costTrades: Launch2CostTradeRecord[] = [];
+  const listCostTradesCalls: {
+    readonly holderAddresses: readonly string[];
+    readonly instanceId: string | null;
+  }[] = [];
   const recentPoolTrades = new Map<string, Launch2PublicPoolTradeRecord[]>();
   const getInstancesCalls: (readonly string[])[] = [];
   const dynamicRewards = new Map<string, Launch2DynamicRewardRecord[]>();
@@ -299,6 +312,8 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
         ).slice(-input.limit),
       ),
     poolTrades,
+    costTrades,
+    listCostTradesCalls,
     recentPoolTrades,
     getInstancesCalls,
     dynamicRewards,
@@ -486,6 +501,25 @@ export function createInMemoryLaunch2Repository(): InMemoryLaunch2Repository {
       Promise.resolve(
         (trades.get(input.instanceId) ?? []).slice(0, input.limit),
       ),
+    listCostTrades: (input) => {
+      listCostTradesCalls.push(input);
+      const holders = new Set(
+        input.holderAddresses.map((address) => address.toLowerCase()),
+      );
+      return Promise.resolve(
+        costTrades
+          .filter(
+            (trade) =>
+              holders.has(trade.holderAddress) &&
+              (input.instanceId === null ||
+                trade.instanceId === input.instanceId),
+          )
+          .sort((a, b) => {
+            const block = BigInt(a.blockNumber) - BigInt(b.blockNumber);
+            return block === 0n ? a.logIndex - b.logIndex : block < 0n ? -1 : 1;
+          }),
+      );
+    },
     listPoolTrades: (input) =>
       Promise.resolve(
         (

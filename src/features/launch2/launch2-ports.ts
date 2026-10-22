@@ -1042,6 +1042,24 @@ export interface Launch2PublicPoolTradeRecord {
   readonly blockNumber: string;
 }
 
+/**
+ * Decision 0176: one trade of a wallet for the cost replay — a curve
+ * `CurveBought` / `CurveSold` (`source = curve`) or an attributed
+ * official-pool user swap (`source = pool`). `usd1Amount` = USD1 paid
+ * (buy, taxes included) or received (sell, net of taxes / fees);
+ * `memeAmount` = MEME received (buy, net) or given (sell).
+ */
+export interface Launch2CostTradeRecord {
+  readonly instanceId: string;
+  readonly holderAddress: string;
+  readonly source: "curve" | "pool";
+  readonly side: "buy" | "sell";
+  readonly memeAmount: string;
+  readonly usd1Amount: string;
+  readonly blockNumber: string;
+  readonly logIndex: number;
+}
+
 /** Decision 0126: a wallet's attributed pool trades of one instance. */
 export interface Launch2PoolTradeStats {
   readonly instanceId: string;
@@ -1373,6 +1391,15 @@ export interface Launch2Repository {
     readonly walletAddress: string;
     readonly limit: number;
   }): Promise<readonly Launch2PoolTradeRecord[]>;
+  /**
+   * Decision 0176: every non-reorged curve trade and attributed pool user
+   * swap of the wallets (one instance, or all when null), in chain order
+   * (block, log index) — one read for the cost replay.
+   */
+  listCostTrades(input: {
+    readonly holderAddresses: readonly string[];
+    readonly instanceId: string | null;
+  }): Promise<readonly Launch2CostTradeRecord[]>;
   /**
    * Decision 0174: the instance's newest `limit` public pool trades (user
    * swaps of every wallet, attributed or not), newest first.

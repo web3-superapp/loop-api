@@ -2473,6 +2473,8 @@ export async function buildApp(
           nftImageEmit: config.launch2.nftImageEmit,
           // Decision 0174: off (default) omits position price / value.
           positionValueEmit: config.launch2.positionValueEmit,
+          // Decision 0176: off (default) omits position cost / PnL.
+          pnlEmit: config.launch2.pnlEmit,
           poolChain: launch2PoolChain,
           dynamicChain: launch2DynamicChain,
           dynamicRouterRegistry: config.launch2.dynamicRouterRegistry,

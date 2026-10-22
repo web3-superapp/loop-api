@@ -1012,6 +1012,12 @@ const environmentSchema = z
     // GET /v2/launch2/me/positions rows; on emits them (null when there is
     // no price). Turn on only once every supported client decodes them.
     LAUNCH2_POSITION_VALUE_EMIT: z.enum(["off", "on"]),
+    // Decision 0176: off|on (default off). off omits the optional
+    // `avgCostUsd1` / `costBasisUsd1` / `realizedPnlUsd1` /
+    // `unrealizedPnlUsd1` / `costCoverage` keys from the
+    // GET /v2/launch2/me/positions rows and the instance detail's `viewer`;
+    // on emits them. Turn on only once every supported client decodes them.
+    LAUNCH2_PNL_EMIT: z.enum(["off", "on"]),
     // Decision 0166: off|on (default off). off keeps GET /v2/referral in its
     // pre-0162 shape (no inviteLink / stats, boost always unavailable); on
     // emits them. Turn on only once every supported client is at build >= 31.
@@ -1963,6 +1969,11 @@ export interface AppConfig {
      * omits the price / value keys from the position rows.
      */
     readonly positionValueEmit: boolean;
+    /**
+     * Decision 0176: LAUNCH2_PNL_EMIT === "on". False (default) omits the
+     * cost / PnL keys from the position rows and the detail's viewer.
+     */
+    readonly pnlEmit: boolean;
     /**
      * Decision 0124: LAUNCH2_POOL_ROUTER_ADDRESS / _CODE_HASH (lower-case);
      * null keeps the official-pool quote / prepare unavailable.
@@ -4293,6 +4304,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_NFT_IMAGE_EMIT: environment["LAUNCH2_NFT_IMAGE_EMIT"] ?? "off",
     LAUNCH2_POSITION_VALUE_EMIT:
       environment["LAUNCH2_POSITION_VALUE_EMIT"] ?? "off",
+    LAUNCH2_PNL_EMIT: environment["LAUNCH2_PNL_EMIT"] ?? "off",
     REFERRAL_CENTER_EMIT: environment["REFERRAL_CENTER_EMIT"] ?? "off",
     WALLET_ACTIVITY_LAUNCH2_EMIT:
       environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
@@ -4501,6 +4513,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       traderAccountEmit: parsed.data.LAUNCH2_TRADER_ACCOUNT_EMIT === "on",
       nftImageEmit: parsed.data.LAUNCH2_NFT_IMAGE_EMIT === "on",
       positionValueEmit: parsed.data.LAUNCH2_POSITION_VALUE_EMIT === "on",
+      pnlEmit: parsed.data.LAUNCH2_PNL_EMIT === "on",
       poolRouter:
         parsed.data.LAUNCH2_POOL_ROUTER_ADDRESS === undefined ||
         parsed.data.LAUNCH2_POOL_ROUTER_CODE_HASH === undefined

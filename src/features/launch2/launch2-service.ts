@@ -63,6 +63,11 @@ import {
 } from "./launch2-candles.js";
 import { requireLaunch2Counterparties } from "./launch2-counterparty.js";
 import {
+  launch2EmptyPositionPnl,
+  launch2PositionPnlOf,
+  replayLaunch2CostBasis,
+} from "./launch2-cost-basis.js";
+import {
   launch2Max,
   launch2PriceAt,
   launch2QuoteBuy,
@@ -89,6 +94,7 @@ import {
   type Launch2PositionRecord,
   type Launch2PublicMemeFacts,
   type Launch2PublicPoolTradeRecord,
+  type Launch2CostTradeRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
   type Launch2ViewerChainState,
@@ -277,6 +283,12 @@ export interface Launch2ServiceDependencies {
    * omits the three keys — shipped clients decode the rows strictly.
    */
   readonly positionValueEmit?: boolean;
+  /**
+   * Decision 0176 (LAUNCH2_PNL_EMIT): whether the position rows and the
+   * detail's `viewer` carry the cost / PnL keys at all. False (default)
+   * omits them — shipped clients decode those objects strictly.
+   */
+  readonly pnlEmit?: boolean;
 }
 
 type Resource = Record<string, unknown>;
@@ -1101,32 +1113,82 @@ function publicPoolTradeOf(record: Launch2PublicPoolTradeRecord): Resource {
  * zero price, or a balance that could not be read, is null — never
  * estimated. Value = floor(quantity × price / 1e18).
  */
-function positionValueOf(
+/**
+ * Decision 0174 / 0176: the price (0 = none) and the held quantity (null =
+ * unreadable) a position is valued with — the curve price × `curve.net`
+ * before graduation, the pool's last price × the live `memeBalance` after.
+ */
+function positionQuantityAndPrice(
   record: Launch2InstanceRecord,
-  position: Launch2PositionRecord,
+  position: Launch2PositionRecord | null,
   balances: Resource,
-): Resource {
+): { readonly price: bigint; readonly quantity: bigint | null } {
   const graduated = record.graduation !== null;
   const rawPrice = graduated ? record.pool.lastPriceE18 : record.priceE18;
   const price =
     rawPrice !== null && /^[0-9]{1,78}$/u.test(rawPrice)
       ? BigInt(rawPrice)
       : 0n;
+  let quantity: bigint | null;
+  if (graduated) {
+    const balance = balances["memeBalance"];
+    quantity = typeof balance === "string" ? parseLaunch2Amount(balance) : null;
+  } else if (position === null) {
+    quantity = 0n;
+  } else {
+    const bought = BigInt(position.curveBought);
+    const sold = BigInt(position.curveSold);
+    quantity = bought > sold ? bought - sold : 0n;
+  }
+  return { price, quantity };
+}
+
+/**
+ * Decision 0176: the cost / PnL keys of a position from the wallet's
+ * trades of the instance (chain order; empty = all null).
+ */
+function positionPnlOf(
+  record: Launch2InstanceRecord,
+  position: Launch2PositionRecord | null,
+  balances: Resource,
+  trades: readonly Launch2CostTradeRecord[],
+): Resource {
+  if (trades.length === 0) return launch2EmptyPositionPnl;
+  const { price, quantity } = positionQuantityAndPrice(
+    record,
+    position,
+    balances,
+  );
+  return launch2PositionPnlOf({
+    replay: replayLaunch2CostBasis(
+      trades.map((trade) => ({
+        side: trade.side,
+        memeAmount: BigInt(trade.memeAmount),
+        usd1Amount: BigInt(trade.usd1Amount),
+      })),
+    ),
+    holding: quantity,
+    priceE18: price === 0n ? null : price,
+  });
+}
+
+function positionValueOf(
+  record: Launch2InstanceRecord,
+  position: Launch2PositionRecord,
+  balances: Resource,
+): Resource {
+  const graduated = record.graduation !== null;
+  const { price, quantity } = positionQuantityAndPrice(
+    record,
+    position,
+    balances,
+  );
   if (price === 0n) {
     return Object.freeze({
       priceUsd1: null,
       valueUsd1: null,
       priceSource: null,
     });
-  }
-  let quantity: bigint | null;
-  if (graduated) {
-    const balance = balances["memeBalance"];
-    quantity = typeof balance === "string" ? parseLaunch2Amount(balance) : null;
-  } else {
-    const bought = BigInt(position.curveBought);
-    const sold = BigInt(position.curveSold);
-    quantity = bought > sold ? bought - sold : 0n;
   }
   return Object.freeze({
     priceUsd1: formatLaunch2Amount(price),
@@ -1189,6 +1251,8 @@ export function createLaunch2Service(
   const nftImageEmit = deps.nftImageEmit === true;
   // Decision 0174: off (default) = no price / value keys on position rows.
   const positionValueEmit = deps.positionValueEmit === true;
+  // Decision 0176: off (default) = no cost / PnL keys.
+  const pnlEmit = deps.pnlEmit === true;
   const tradeDeadlineSeconds = BigInt(
     Math.min(
       Math.max(
@@ -4167,6 +4231,7 @@ export function createLaunch2Service(
         balances,
         tradingHold,
         dynamicRouter,
+        costTrades,
       ] = await Promise.all([
         store
           .listBuybacks({
@@ -4207,6 +4272,15 @@ export function createLaunch2Service(
           : walletBalancesOf(record, wallet.address),
         tradingHoldForView(),
         dynamicRouterForView(record),
+        // Decision 0176: the viewer's trades (one read), only when emitted.
+        !pnlEmit || wallet === null
+          ? Promise.resolve([] as readonly Launch2CostTradeRecord[])
+          : store
+              .listCostTrades({
+                holderAddresses: [wallet.address],
+                instanceId: record.instanceId,
+              })
+              .catch(translate),
       ]);
       // Decision 0162: one batched (cached) lookup for the 20 traders.
       // Decision 0166: skipped (and no key) while the emit gate is off.
@@ -4349,6 +4423,9 @@ export function createLaunch2Service(
                   curve: positionCurveOf(position, curvePurchaseCapOf(record)),
                   ...balances,
                   ...poolTradeStatsOf(poolStats[0]),
+                  ...(pnlEmit
+                    ? positionPnlOf(record, position, balances, costTrades)
+                    : {}),
                 }),
           tradingHold,
           projectedAt: record.projectedAt,
@@ -4598,6 +4675,23 @@ export function createLaunch2Service(
           walletAddresses: [...byAddress.keys()],
         })
         .catch(translate);
+      // Decision 0176: every trade of the wallets in one read, replayed in
+      // memory per (instance, wallet).
+      const costTradesOf = new Map<string, Launch2CostTradeRecord[]>();
+      if (pnlEmit && positions.length > 0) {
+        const costTrades = await store
+          .listCostTrades({
+            holderAddresses: [...byAddress.keys()],
+            instanceId: null,
+          })
+          .catch(translate);
+        for (const trade of costTrades) {
+          const key = `${trade.instanceId}|${trade.holderAddress}`;
+          const list = costTradesOf.get(key) ?? [];
+          list.push(trade);
+          costTradesOf.set(key, list);
+        }
+      }
       const statsOf = new Map(
         stats.map((row) => [`${row.instanceId}|${row.walletAddress}`, row]),
       );
@@ -4650,6 +4744,14 @@ export function createLaunch2Service(
               ...poolTradeStatsOf(statsOf.get(key)),
               ...(positionValueEmit
                 ? positionValueOf(record, position, balances)
+                : {}),
+              ...(pnlEmit
+                ? positionPnlOf(
+                    record,
+                    position,
+                    balances,
+                    costTradesOf.get(key) ?? [],
+                  )
                 : {}),
             }),
           ];
