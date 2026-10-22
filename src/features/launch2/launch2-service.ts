@@ -52,6 +52,7 @@ import {
   launch2ReasonCodes,
   launch2Template,
   launch2TemplateProjection,
+  launch2Wad,
   parseLaunch2Amount,
   type Launch2IntentKind,
   type Launch2Stage,
@@ -87,6 +88,7 @@ import {
   type Launch2PoolTradeStats,
   type Launch2PositionRecord,
   type Launch2PublicMemeFacts,
+  type Launch2PublicPoolTradeRecord,
   type Launch2Repository,
   type Launch2TradeRecord,
   type Launch2ViewerChainState,
@@ -269,6 +271,12 @@ export interface Launch2ServiceDependencies {
    * (default) omits it — shipped clients decode those objects strictly.
    */
   readonly nftImageEmit?: boolean;
+  /**
+   * Decision 0174 (LAUNCH2_POSITION_VALUE_EMIT): whether the position rows
+   * carry `priceUsd1` / `valueUsd1` / `priceSource` at all. False (default)
+   * omits the three keys — shipped clients decode the rows strictly.
+   */
+  readonly positionValueEmit?: boolean;
 }
 
 type Resource = Record<string, unknown>;
@@ -380,6 +388,14 @@ export interface Launch2Service {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly instanceId: string;
     readonly walletId?: unknown;
+    readonly limit?: unknown;
+  }): Promise<Resource>;
+  /**
+   * Decision 0174: the instance's newest public official-pool trades (no
+   * principal; wallets masked). Empty before graduation.
+   */
+  listRecentPoolTrades(input: {
+    readonly instanceId: string;
     readonly limit?: unknown;
   }): Promise<Resource>;
   /** Decision 0131: the LoopDynamic pool / round state (hookKind for all). */
@@ -1052,6 +1068,76 @@ function poolTradeOf(
   });
 }
 
+/**
+ * Decision 0174: a wallet address shown publicly — `0x` + the first four
+ * and the last four hex digits (`0x1234…abcd`).
+ */
+export function maskLaunch2Wallet(address: string): string {
+  const lower = address.toLowerCase();
+  return `${lower.slice(0, 6)}…${lower.slice(-4)}`;
+}
+
+function publicPoolTradeOf(record: Launch2PublicPoolTradeRecord): Resource {
+  return Object.freeze({
+    txHash: record.transactionHash,
+    blockNumber: record.blockNumber,
+    at: record.tradedAt,
+    side: record.side,
+    memeAmount: formatLaunch2Amount(BigInt(record.memeAmount)),
+    usd1Amount: formatLaunch2Amount(BigInt(record.usd1Amount)),
+    priceUsd1: formatLaunch2Amount(BigInt(record.priceE18)),
+    wallet:
+      record.walletAddress === null
+        ? null
+        : maskLaunch2Wallet(record.walletAddress),
+  });
+}
+
+/**
+ * Decision 0174: the price and value of one position row. Before
+ * graduation the curve's current price (`priceE18`, the detail's
+ * `curve.priceUsd1`) × `curve.net`; after graduation the official pool's
+ * last price (`pool.lastPriceUsd1`) × the live `memeBalance`. A missing or
+ * zero price, or a balance that could not be read, is null — never
+ * estimated. Value = floor(quantity × price / 1e18).
+ */
+function positionValueOf(
+  record: Launch2InstanceRecord,
+  position: Launch2PositionRecord,
+  balances: Resource,
+): Resource {
+  const graduated = record.graduation !== null;
+  const rawPrice = graduated ? record.pool.lastPriceE18 : record.priceE18;
+  const price =
+    rawPrice !== null && /^[0-9]{1,78}$/u.test(rawPrice)
+      ? BigInt(rawPrice)
+      : 0n;
+  if (price === 0n) {
+    return Object.freeze({
+      priceUsd1: null,
+      valueUsd1: null,
+      priceSource: null,
+    });
+  }
+  let quantity: bigint | null;
+  if (graduated) {
+    const balance = balances["memeBalance"];
+    quantity = typeof balance === "string" ? parseLaunch2Amount(balance) : null;
+  } else {
+    const bought = BigInt(position.curveBought);
+    const sold = BigInt(position.curveSold);
+    quantity = bought > sold ? bought - sold : 0n;
+  }
+  return Object.freeze({
+    priceUsd1: formatLaunch2Amount(price),
+    valueUsd1:
+      quantity === null
+        ? null
+        : formatLaunch2Amount((quantity * price) / launch2Wad),
+    priceSource: graduated ? "pool" : "curve",
+  });
+}
+
 export function createUnavailableLaunch2Service(
   reasonCode: string = launch2ReasonCodes.runtimeUnavailable,
 ): Launch2Service {
@@ -1073,6 +1159,7 @@ export function createUnavailableLaunch2Service(
     poolQuote: fail,
     preparePoolTrade: fail,
     listPoolTrades: fail,
+    listRecentPoolTrades: fail,
     getDynamicPool: fail,
     listDynamicRewards: fail,
     prepareDynamicClaim: fail,
@@ -1083,6 +1170,9 @@ export function createUnavailableLaunch2Service(
     listCandles: fail,
   });
 }
+
+/** Decision 0174: how long one public pool-trades answer is reused. */
+export const launch2RecentPoolTradesCacheMs = 10_000;
 
 /** Decision 0146: addresses listed in dynamic-pool currentRoundBuyers. */
 const dynamicRoundBuyersLimit = 20;
@@ -1097,6 +1187,8 @@ export function createLaunch2Service(
   const traderAccountEmit = deps.traderAccountEmit === true;
   // Decision 0173: off (default) = no `nftImageUrl` key.
   const nftImageEmit = deps.nftImageEmit === true;
+  // Decision 0174: off (default) = no price / value keys on position rows.
+  const positionValueEmit = deps.positionValueEmit === true;
   const tradeDeadlineSeconds = BigInt(
     Math.min(
       Math.max(
@@ -1135,6 +1227,11 @@ export function createLaunch2Service(
     Math.max(deps.balanceCacheMs ?? maximumBalanceCacheMs, 0),
     maximumBalanceCacheMs,
   );
+  /** Decision 0174: (instance|limit) → the public pool trades answer. */
+  const recentPoolTradesCache = new Map<
+    string,
+    { readonly at: number; readonly value: Resource }
+  >();
   /** Decision 0126: (meme|wallet) → balances read at one block. */
   const balanceCache = new Map<
     string,
@@ -3934,6 +4031,37 @@ export function createLaunch2Service(
       });
     },
 
+    async listRecentPoolTrades(input) {
+      const limit = parseLimit(input.limit, 20, 50);
+      // Decision 0174: one answer per (instance, limit) for 10 s; only
+      // successes are kept, so an unknown id never enters the cache.
+      const cacheKey = `${input.instanceId}|${String(limit)}`;
+      const nowMs = now().getTime();
+      const cached = recentPoolTradesCache.get(cacheKey);
+      if (
+        cached !== undefined &&
+        nowMs - cached.at < launch2RecentPoolTradesCacheMs
+      ) {
+        return cached.value;
+      }
+      const record = await visibleInstance(input.instanceId);
+      const rows =
+        record.graduation === null
+          ? []
+          : await repository()
+              .listRecentPoolTrades({ instanceId: record.instanceId, limit })
+              .catch(translate);
+      const value = Object.freeze({
+        instanceId: record.instanceId,
+        items: rows.map(publicPoolTradeOf),
+        observedAt: now().toISOString(),
+        contractVersion: v2ContractVersion,
+      });
+      if (recentPoolTradesCache.size > 500) recentPoolTradesCache.clear();
+      recentPoolTradesCache.set(cacheKey, { at: nowMs, value });
+      return value;
+    },
+
     async getOverview(input) {
       const store = repository();
       const [activity, facts] = await Promise.all([
@@ -4451,15 +4579,18 @@ export function createLaunch2Service(
           instanceId: null,
         })
         .catch(translate);
-      const instances = new Map<string, Launch2InstanceRecord>();
-      for (const position of positions) {
-        if (!instances.has(position.instanceId)) {
-          const record = await store
-            .getInstance(position.instanceId)
-            .catch(translate);
-          if (record !== null) instances.set(position.instanceId, record);
-        }
-      }
+      // Decision 0174: every instance (and so every price) in one read.
+      const instances = new Map<string, Launch2InstanceRecord>(
+        positions.length === 0
+          ? []
+          : (
+              await store
+                .getInstances([
+                  ...new Set(positions.map((position) => position.instanceId)),
+                ])
+                .catch(translate)
+            ).map((record) => [record.instanceId, record] as const),
+      );
       const at = nowSeconds();
       const stats = await store
         .poolTradeStats({
@@ -4497,6 +4628,7 @@ export function createLaunch2Service(
           const wallet = byAddress.get(position.holderAddress);
           if (record === undefined || wallet === undefined) return [];
           const key = `${position.instanceId}|${position.holderAddress}`;
+          const balances = balancesOf.get(key) ?? notGraduatedBalances;
           return [
             Object.freeze({
               instanceId: record.instanceId,
@@ -4514,8 +4646,11 @@ export function createLaunch2Service(
               snapshotMember: position.snapshotMember,
               curve: positionCurveOf(position, curvePurchaseCapOf(record)),
               lastActivityAt: position.lastActivityAt,
-              ...(balancesOf.get(key) ?? notGraduatedBalances),
+              ...balances,
               ...poolTradeStatsOf(statsOf.get(key)),
+              ...(positionValueEmit
+                ? positionValueOf(record, position, balances)
+                : {}),
             }),
           ];
         }),

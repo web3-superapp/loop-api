@@ -1023,6 +1023,25 @@ export interface Launch2PoolTradeRecord {
   readonly blockNumber: string;
 }
 
+/**
+ * Decision 0174: one public official-pool trade of an instance (a user
+ * swap — Decision 0127 / 0158 rule, never a buyback). `walletAddress` =
+ * the Decision 0126 / 0132 attributed trader, null when anonymous. USD1 =
+ * what the trader paid (buy) or received (sell, net of a USD1 fee), the
+ * activity feed's rule.
+ */
+export interface Launch2PublicPoolTradeRecord {
+  readonly side: "buy" | "sell";
+  readonly memeAmount: string;
+  readonly usd1Amount: string;
+  readonly priceE18: string;
+  readonly walletAddress: string | null;
+  readonly tradedAt: string;
+  readonly transactionHash: string;
+  readonly logIndex: number;
+  readonly blockNumber: string;
+}
+
 /** Decision 0126: a wallet's attributed pool trades of one instance. */
 export interface Launch2PoolTradeStats {
   readonly instanceId: string;
@@ -1317,6 +1336,13 @@ export interface Launch2Repository {
     readonly limit: number;
   }): Promise<readonly Launch2InstanceRecord[]>;
   getInstance(instanceId: string): Promise<Launch2InstanceRecord | null>;
+  /**
+   * Decision 0174: several instances in one read (unknown ids are absent;
+   * order unspecified).
+   */
+  getInstances(
+    instanceIds: readonly string[],
+  ): Promise<readonly Launch2InstanceRecord[]>;
   /** Decision 0173: by the Factory launch id (`0x` + 64 hex, any case). */
   getInstanceByLaunchId(
     launchId: string,
@@ -1347,6 +1373,14 @@ export interface Launch2Repository {
     readonly walletAddress: string;
     readonly limit: number;
   }): Promise<readonly Launch2PoolTradeRecord[]>;
+  /**
+   * Decision 0174: the instance's newest `limit` public pool trades (user
+   * swaps of every wallet, attributed or not), newest first.
+   */
+  listRecentPoolTrades(input: {
+    readonly instanceId: string;
+    readonly limit: number;
+  }): Promise<readonly Launch2PublicPoolTradeRecord[]>;
   /**
    * Decision 0126: count / newest of the attributed pool swaps per
    * (instance, wallet) — every instance when `instanceId` is null; only

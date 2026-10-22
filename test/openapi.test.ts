@@ -143,6 +143,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/launch2/instances/{instanceId}/dynamic-pool/rewards",
       "/v2/launch2/instances/{instanceId}/nft/prepare",
       "/v2/launch2/instances/{instanceId}/pool/quote",
+      "/v2/launch2/instances/{instanceId}/pool/recent-trades",
       "/v2/launch2/instances/{instanceId}/pool/trade/prepare",
       "/v2/launch2/instances/{instanceId}/pool/trades",
       "/v2/launch2/instances/{instanceId}/quote",
@@ -250,7 +251,23 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(203);
+    expect(operationIds).toHaveLength(204);
+    // Decision 0174: the public recent pool trades — no Bearer, 429 listed,
+    // no 401 / 409 / 422.
+    const recentTrades =
+      document.paths["/v2/launch2/instances/{instanceId}/pool/recent-trades"]?.[
+        "get"
+      ];
+    expect(recentTrades?.operationId).toBe("listV2Launch2RecentPoolTrades");
+    expect(recentTrades?.security).toEqual([]);
+    expect(Object.keys(recentTrades?.responses ?? {}).sort()).toEqual([
+      "200",
+      "400",
+      "404",
+      "429",
+      "500",
+      "503",
+    ]);
     expect(new Set(operationIds).size).toBe(operationIds.length);
     expect(bootstrap).toMatchObject({
       operationId: "bootstrapV2Session",

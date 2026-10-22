@@ -773,6 +773,27 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses LAUNCH2_POSITION_VALUE_EMIT as off|on, default off, and refuses anything else (Decision 0174)", () => {
+    expect(loadConfig(validEnvironment()).launch2.positionValueEmit).toBe(
+      false,
+    );
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_POSITION_VALUE_EMIT"] = value;
+      expect(loadConfig(environment).launch2.positionValueEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["LAUNCH2_POSITION_VALUE_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /LAUNCH2_POSITION_VALUE_EMIT/,
+      );
+    }
+  });
+
   it("parses REFERRAL_CENTER_EMIT as off|on, default off, and refuses anything else (Decision 0166)", () => {
     expect(loadConfig(validEnvironment()).referralCenterEmit).toBe(false);
     for (const [value, enabled] of [
