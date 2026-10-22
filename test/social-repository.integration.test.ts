@@ -92,6 +92,11 @@ describe("PostgreSQL social repository", () => {
     if (ids.length === 0) {
       return;
     }
+    // Decision 0177: friend requests / acceptances write inbox rows.
+    await pool.query({
+      text: `delete from public.notifications where owner_user_id = any($1::uuid[])`,
+      values: [ids],
+    });
     await pool.query({
       text: `
         delete from public.user_blocks

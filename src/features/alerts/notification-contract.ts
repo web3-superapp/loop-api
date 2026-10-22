@@ -80,3 +80,60 @@ export function isNotificationCategory(
     (notificationCategories as readonly string[]).includes(value)
   );
 }
+
+/**
+ * Decision 0177: fine-grained inbox events. Each one is stored with its
+ * preference category in `type` (the ten categories are unchanged) and the
+ * fine event in `event_type`; the feed projects the fine event as `type`.
+ *
+ * `NOTIFICATION_INBOX_EMIT` (default off) gates their visibility: while off
+ * the rows are still written but the feed, the unread count, read-all and
+ * push never surface them, because a released client decodes `type`
+ * against the ten categories and would reject the whole page.
+ */
+export const notificationInboxEventTypes = Object.freeze([
+  "launch.graduated",
+  "launch.badge_minted",
+  "social.friend_request",
+  "social.friend_accepted",
+] as const);
+export type NotificationInboxEventType =
+  (typeof notificationInboxEventTypes)[number];
+
+/** The category whose preference gates each fine event's push. */
+export const notificationInboxEventCategory: Readonly<
+  Record<NotificationInboxEventType, OptionalNotificationCategory>
+> = Object.freeze({
+  "launch.graduated": "launch.graduation",
+  // The badge is the snapshot-eligibility credential of a MEME v2 round.
+  "launch.badge_minted": "launch.round",
+  // A request / acceptance is addressed to the reader personally.
+  "social.friend_request": "community.mention",
+  "social.friend_accepted": "community.mention",
+});
+
+/** Client route slugs (loop-mobile `LoopRouteManifest`). */
+export const notificationInboxContextRoutes = Object.freeze({
+  "launch.graduated": "launch2-instance",
+  "launch.badge_minted": "launch2-instance",
+  "social.friend_request": "dm-requests",
+  "social.friend_accepted": "user-profile",
+} as const satisfies Record<NotificationInboxEventType, string>);
+
+/** The feed `type` of a row: the fine event when set, else the category. */
+export type NotificationFeedType =
+  NotificationCategory | NotificationInboxEventType;
+
+export const notificationFeedTypes = Object.freeze([
+  ...notificationCategories,
+  ...notificationInboxEventTypes,
+] as const);
+
+export function isNotificationInboxEventType(
+  value: unknown,
+): value is NotificationInboxEventType {
+  return (
+    typeof value === "string" &&
+    (notificationInboxEventTypes as readonly string[]).includes(value)
+  );
+}

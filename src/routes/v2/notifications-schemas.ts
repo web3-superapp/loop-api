@@ -17,6 +17,7 @@ import {
   mandatoryNotificationCategory,
   notificationCategories,
   notificationFeedLimits,
+  notificationFeedTypes,
   optionalNotificationCategories,
   priceAlertListLimits,
 } from "../../features/alerts/notification-contract.js";
@@ -234,7 +235,12 @@ const notificationSchema = {
   ],
   properties: {
     notificationId: { type: "string", pattern: opaqueIdPatternSource },
-    type: { type: "string", enum: [...notificationCategories] },
+    type: {
+      type: "string",
+      enum: [...notificationFeedTypes],
+      description:
+        "The preference category, or (Decision 0177, only while the server's NOTIFICATION_INBOX_EMIT is on) the fine inbox event: launch.graduated, launch.badge_minted (categories launch.graduation / launch.round), social.friend_request, social.friend_accepted (category community.mention).",
+    },
     entityRef: {
       type: "string",
       pattern: "^[a-z][A-Za-z0-9]{0,31}:[A-Za-z0-9._:-]{1,160}$",
@@ -298,6 +304,29 @@ export const notificationEnvelopeSchema = {
   properties: {
     notification: notificationSchema,
     contractVersion: { type: "string", const: v2ContractVersion },
+  },
+} as const;
+
+/** Decision 0177: `GET /v2/notifications/unread-count`. */
+export const notificationUnreadCountResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["unread", "observedAt"],
+  properties: {
+    unread: { type: "integer", minimum: 0 },
+    observedAt: dateTimeSchema,
+  },
+} as const;
+
+/** Decision 0177: `POST /v2/notifications/read-all`. */
+export const notificationReadAllResourceSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["marked"],
+  properties: {
+    marked: { type: "integer", minimum: 0 },
   },
 } as const;
 

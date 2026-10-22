@@ -193,6 +193,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/mining/summary",
       "/v2/notification-preferences",
       "/v2/notifications/feed",
+      "/v2/notifications/read-all",
+      "/v2/notifications/unread-count",
       "/v2/notifications/{notificationId}/read",
       "/v2/profile",
       "/v2/profile/avatars",
@@ -251,7 +253,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(204);
+    expect(operationIds).toHaveLength(206);
     // Decision 0174: the public recent pool trades — no Bearer, 429 listed,
     // no 401 / 409 / 422.
     const recentTrades =

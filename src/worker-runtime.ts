@@ -40,6 +40,12 @@ import {
 } from "./integrations/launch/hooks-launch-executor-chain.js";
 import type { HooksLaunchExecutorRepository } from "./features/launch/hooks-launch-executor.js";
 import { createHooksLaunchExecutorLane } from "./hooks-launch-executor-worker.js";
+import type { NotificationInboxRepository } from "./database/notification-inbox-repository.js";
+import { createNotificationInboxService } from "./features/notifications/notification-inbox-service.js";
+import {
+  createNotificationInboxWorker,
+  type NotificationInboxWorker,
+} from "./notification-inbox-worker.js";
 import { createLaunch2Lane } from "./launch2-indexer-worker.js";
 import { launch2IndexerFactories } from "./features/launch2/launch2-generation.js";
 import type { Launch2Repository } from "./features/launch2/launch2-ports.js";
@@ -337,6 +343,8 @@ export interface ReconciliationWorkerDatabase {
   /** `friend_direct_channel` lane (Decision 0172); both absent keeps it off. */
   readonly chatChannels?: ChatChannelRepository;
   readonly friendDirectChannelJobs?: FriendDirectChannelJobRepository;
+  /** `notification_inbox` lane (Decision 0177); absent keeps it off. */
+  readonly notificationInbox?: NotificationInboxRepository;
   /** S169 `testnet_faucet_pending_sweep` lane; absent keeps it off. */
   readonly testnetFaucet?: TestnetFaucetRepository;
   /** Decision 0134 `chain_guard` lane and the signing lanes' hold; absent keeps both off. */
@@ -476,6 +484,8 @@ export interface RunReconciliationWorkerOptions {
   /** Decision 0172 test seam: the friend direct channel lane's Stream gateway. */
   readonly createFriendDirectChannelGateway?: typeof createStreamChannelGateway;
   readonly createFriendDirectChannelWorker?: typeof createFriendDirectChannelWorker;
+  /** Decision 0177 test seam: the notification inbox lane's push sender. */
+  readonly notificationInboxPush?: PushDispatchService | null;
   readonly createMemberBuyFeedWorker?: MemberBuyFeedWorkerFactory;
   /** Test seam for the member buy feed's Stream gateway (Decision 0097). */
   readonly createMemberBuyFeedGateway?: typeof createStreamCommunityChannelGateway;
@@ -2840,6 +2850,79 @@ export async function runReconciliationWorker(
         }
       }
     }
+    // The `notification_inbox` lane (Decision 0177) is default-on. It
+    // writes the MEME v2 graduation / badge-minted rows always, and pushes
+    // the fine inbox events only while NOTIFICATION_INBOX_EMIT is on.
+    const inboxConfig = options.config.notificationInbox;
+    let notificationInboxWorker: NotificationInboxWorker | null = null;
+    if (inboxConfig !== null && database.notificationInbox !== undefined) {
+      const lane = "notification_inbox";
+      const inboxPush =
+        options.notificationInboxPush === undefined
+          ? pushDispatchService
+          : options.notificationInboxPush;
+      const inboxService = createNotificationInboxService({
+        repository: database.notificationInbox,
+        push: inboxPush,
+        emit: inboxConfig.emit,
+        logger: {
+          warn: (context) => {
+            const reasonCode = context["reasonCode"];
+            options.logger.warn(
+              {
+                ...logFields(),
+                lane,
+                ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+              },
+              "LOOP notification inbox push was not dispatched",
+            );
+          },
+        },
+      });
+      notificationInboxWorker = createNotificationInboxWorker({
+        service: Object.freeze({
+          async runOnce(signal: AbortSignal) {
+            const result = await inboxService.runOnce(signal);
+            if (
+              result.kind === "completed" &&
+              (result.produced.notifications > 0 ||
+                result.produced.skipped > 0 ||
+                (result.pushClaimed ?? 0) > 0)
+            ) {
+              options.logger.info(
+                {
+                  ...logFields(),
+                  lane,
+                  inserted: result.produced.graduations + result.produced.mints,
+                  count: result.produced.notifications,
+                  skippedCount: result.produced.skipped,
+                  succeededCount: result.pushSent,
+                },
+                "LOOP notification inbox pass completed",
+              );
+            }
+            return result;
+          },
+        }),
+        intervalMs: inboxConfig.intervalMs,
+        onInfrastructureBackoff: (event) => {
+          options.logger.warn(
+            { ...logFields(), lane, ...event },
+            "LOOP reconciliation worker infrastructure retry scheduled",
+          );
+        },
+      });
+      if (!inboxConfig.emit) {
+        options.logger.info(
+          {
+            ...logFields(),
+            lane,
+            reasonCode: "NOTIFICATION_INBOX_EMIT_OFF",
+          },
+          "LOOP notification inbox lane writes rows without push",
+        );
+      }
+    }
     // The `community_member_buy_feed` lane (Decision 0097) is default-on.
     // It posts into Stream, so without the Stream pair it is left out and
     // said so once.
@@ -3057,6 +3140,13 @@ export async function runReconciliationWorker(
         : [
             Promise.resolve().then(() =>
               friendDirectChannelWorker.run(controller.signal),
+            ),
+          ]),
+      ...(notificationInboxWorker === null
+        ? []
+        : [
+            Promise.resolve().then(() =>
+              notificationInboxWorker.run(controller.signal),
             ),
           ]),
     ];

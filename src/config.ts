@@ -1035,6 +1035,12 @@ const environmentSchema = z
     // `verificationStatus`. Turn on only once every supported client decodes
     // the key.
     COMMUNITY_LABEL_EMIT: z.enum(["off", "on"]),
+    // Decision 0177: off|on (default off). off hides the four fine inbox
+    // events (launch.graduated, launch.badge_minted, social.friend_request,
+    // social.friend_accepted) from the feed, unread counts and read-all
+    // (rows are still written). Turn on only once every supported client
+    // decodes the new feed `type` values.
+    NOTIFICATION_INBOX_EMIT: z.enum(["off", "on"]),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1368,6 +1374,11 @@ const reconciliationWorkerEnvironmentSchema = z
     FRIEND_DIRECT_CHANNEL_ENABLED: booleanString,
     FRIEND_DIRECT_CHANNEL_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
     FRIEND_CHANNEL_BACKFILL_ENABLED: booleanString,
+    // Decision 0177: the notification_inbox lane (default on) and the emit
+    // switch that lets it push the four fine inbox events (default off).
+    NOTIFICATION_INBOX_ENABLED: booleanString,
+    NOTIFICATION_INBOX_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
+    NOTIFICATION_INBOX_EMIT: z.enum(["off", "on"]),
     COMMUNITY_MEMBER_BUY_FEED_ENABLED: booleanString,
     COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS: positiveIntegerString(
       5_000,
@@ -1931,6 +1942,8 @@ export interface AppConfig {
   readonly profileLaunch2Emit: boolean;
   /** Decision 0175: COMMUNITY_LABEL_EMIT === "on" (default off). */
   readonly communityLabelEmit: boolean;
+  /** Decision 0177: NOTIFICATION_INBOX_EMIT === "on" (default off). */
+  readonly notificationInboxEmit: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -2289,6 +2302,16 @@ export interface ReconciliationWorkerConfig {
     readonly intervalMs: number;
     readonly backfillEnabled: boolean;
     readonly stream: StreamConfig | null;
+  } | null;
+  /**
+   * `notification_inbox` lane (Decision 0177); default on
+   * (`NOTIFICATION_INBOX_ENABLED`). It writes the MEME v2 graduation and
+   * badge-minted notifications from the read model, and — only while
+   * `NOTIFICATION_INBOX_EMIT` is on — pushes the fresh fine inbox events.
+   */
+  readonly notificationInbox: {
+    readonly intervalMs: number;
+    readonly emit: boolean;
   } | null;
   /**
    * `community_member_buy_feed` lane (Decision 0097); default on. It turns
@@ -4298,6 +4321,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
     PROFILE_LAUNCH2_EMIT: environment["PROFILE_LAUNCH2_EMIT"] ?? "off",
     COMMUNITY_LABEL_EMIT: environment["COMMUNITY_LABEL_EMIT"] ?? "off",
+    NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4472,6 +4496,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       parsed.data.WALLET_ACTIVITY_LAUNCH2_EMIT === "on",
     profileLaunch2Emit: parsed.data.PROFILE_LAUNCH2_EMIT === "on",
     communityLabelEmit: parsed.data.COMMUNITY_LABEL_EMIT === "on",
+    notificationInboxEmit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:
@@ -4699,6 +4724,11 @@ export function loadReconciliationWorkerConfig(
     VOICE_ROOM_MAX_LIVE_HOURS: environment["VOICE_ROOM_MAX_LIVE_HOURS"] ?? "12",
     FRIEND_DIRECT_CHANNEL_ENABLED:
       environment["FRIEND_DIRECT_CHANNEL_ENABLED"] ?? "true",
+    NOTIFICATION_INBOX_ENABLED:
+      environment["NOTIFICATION_INBOX_ENABLED"] ?? "true",
+    NOTIFICATION_INBOX_INTERVAL_MS:
+      environment["NOTIFICATION_INBOX_INTERVAL_MS"] ?? "10000",
+    NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
     FRIEND_DIRECT_CHANNEL_INTERVAL_MS:
       environment["FRIEND_DIRECT_CHANNEL_INTERVAL_MS"] ?? "5000",
     FRIEND_CHANNEL_BACKFILL_ENABLED:
@@ -4937,6 +4967,12 @@ export function loadReconciliationWorkerConfig(
                   apiSecret: parsed.data.STREAM_API_SECRET,
                 })
               : null,
+        })
+      : null,
+    notificationInbox: parsed.data.NOTIFICATION_INBOX_ENABLED
+      ? Object.freeze({
+          intervalMs: parsed.data.NOTIFICATION_INBOX_INTERVAL_MS,
+          emit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
         })
       : null,
     friendDirectChannel: parsed.data.FRIEND_DIRECT_CHANNEL_ENABLED

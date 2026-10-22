@@ -35,6 +35,12 @@ export const pushEventTypes = Object.freeze([
   "community_voice_room_started",
   "community_application_verified",
   "community_application_rejected",
+  // Decision 0177: the notification inbox events (sent only while
+  // NOTIFICATION_INBOX_EMIT is on).
+  "launch_graduated",
+  "launch_badge_minted",
+  "social_friend_request",
+  "social_friend_accepted",
 ] as const);
 export type PushEventType = (typeof pushEventTypes)[number];
 
@@ -89,6 +95,39 @@ export const pushEventDictionary = Object.freeze({
     mandatory: false,
     titleLocKey: "push.communityApplicationRejected.title",
     bodyLocKey: "push.communityApplicationRejected.body",
+  }),
+  /**
+   * Decision 0177: the inbox events. Each is gated by the category its feed
+   * row is stored under; the pointer names the instance or the friend
+   * request, the facts stay in the feed row.
+   */
+  launch_graduated: Object.freeze({
+    eventType: "launch_graduated",
+    category: "launch.graduation",
+    mandatory: false,
+    titleLocKey: "push.launchGraduated.title",
+    bodyLocKey: "push.launchGraduated.body",
+  }),
+  launch_badge_minted: Object.freeze({
+    eventType: "launch_badge_minted",
+    category: "launch.round",
+    mandatory: false,
+    titleLocKey: "push.launchBadgeMinted.title",
+    bodyLocKey: "push.launchBadgeMinted.body",
+  }),
+  social_friend_request: Object.freeze({
+    eventType: "social_friend_request",
+    category: "community.mention",
+    mandatory: false,
+    titleLocKey: "push.socialFriendRequest.title",
+    bodyLocKey: "push.socialFriendRequest.body",
+  }),
+  social_friend_accepted: Object.freeze({
+    eventType: "social_friend_accepted",
+    category: "community.mention",
+    mandatory: false,
+    titleLocKey: "push.socialFriendAccepted.title",
+    bodyLocKey: "push.socialFriendAccepted.body",
   }),
 } as const satisfies Readonly<Record<PushEventType, PushEventDefinition>>);
 

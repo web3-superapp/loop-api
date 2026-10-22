@@ -150,6 +150,8 @@ describe("loadReconciliationWorkerConfig", () => {
       // Decision 0095: real identity in community chat by default.
       communityChatRealIdentity: true,
       publicBaseUrl: "http://127.0.0.1:3000/",
+      // Decision 0177: the notification inbox lane is on, its push off.
+      notificationInbox: { intervalMs: 10_000, emit: false },
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });

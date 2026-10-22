@@ -75,6 +75,7 @@ function notificationsFake(
   record: NotificationRepository["record"] = (input) =>
     Promise.resolve({
       ...input,
+      eventType: input.eventType ?? null,
       notificationId: randomUUID(),
       readAt: null,
       createdAt: reviewedAt,
@@ -87,6 +88,8 @@ function notificationsFake(
     record: recordMock,
     listRecentByType: () => Promise.resolve([]),
     markRead: () => Promise.reject(new Error("not used")),
+    countUnread: () => Promise.reject(new Error("not used")),
+    markAllRead: () => Promise.reject(new Error("not used")),
     getPreferences: () => Promise.reject(new Error("not used")),
     replacePreferences: () => Promise.reject(new Error("not used")),
     isCategoryEnabled: () => Promise.resolve(true),

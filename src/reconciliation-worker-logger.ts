@@ -58,6 +58,8 @@ const indexerLanes = new Set([
   "token_logo_prewarm",
   // Decision 0172: the accepted-friend direct channel guarantee.
   "friend_direct_channel",
+  // Decision 0177: the notification inbox producers and push.
+  "notification_inbox",
 ]);
 const chainGuardKindSet: ReadonlySet<string> = new Set(chainGuardIncidentKinds);
 const testnetFaucetSweepStatuses = new Set(["unknown", "failed"]);
@@ -156,6 +158,9 @@ export type ReconciliationWorkerLogMessage =
   | "LOOP friend direct channel pass completed"
   | "LOOP friend direct channel job failed"
   | "LOOP friend direct channel job retry scheduled"
+  | "LOOP notification inbox pass completed"
+  | "LOOP notification inbox lane writes rows without push"
+  | "LOOP notification inbox push was not dispatched"
   | "LOOP member buy feed lane stays idle: Stream is not configured"
   | "LOOP member buy feed cursor initialized at the indexer checkpoint"
   | "LOOP member buy feed posted a message"
@@ -334,6 +339,9 @@ export interface ReconciliationWorkerLogFields {
    * Decision 0172 friend_direct_channel lane: per-pass outcome counts (the
    * claimed jobs go in `count`, backfill-enqueued pairs in `inserted`,
    * failures in `failedCount`). Counts only, never an account ID.
+   * Decision 0177 notification_inbox lane: facts handled in `inserted`,
+   * feed rows written in `count`, skipped facts in `skippedCount`, pushes
+   * sent in `succeededCount`.
    */
   readonly succeededCount?: number;
   readonly skippedCount?: number;

@@ -32,6 +32,10 @@ X-Loop-Client-Version: 1.0.0
 - 决策 0096（S107b）起，加好友（`POST /v1/friend-requests` 与 `POST /v2/message-requests`）和关注
   （`POST /v2/connections/follow/{id}`）都**不看**对方的 `discoverable`：只要对方已激活、未关闭
   `friendRequests`（关注不看此项）、双方无拉黑即可；否则仍是同一个非枚举 404。
+- 决策 0177（S286）起，`POST /v1/friend-requests` 新建申请时给被申请人、
+  `POST /v1/friend-requests/{id}/decision` 接受时给申请人，在同一事务里各写一条收件箱通知
+  （`social.friend_request` / `social.friend_accepted`，拒绝不写）；接口响应不变。收件箱契约见
+  `docs/frontend-v2-notifications-api.md` §8。
 - 看自己也返回 200（`relationship` 全 false / `none`）；客户端按需求直接跳 Me。
 - 钱包地址永不下发。
 

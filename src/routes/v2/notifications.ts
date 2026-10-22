@@ -25,7 +25,9 @@ import {
   notificationFeedResourceSchema,
   notificationIdParamsSchema,
   notificationPreferencesResourceSchema,
+  notificationReadAllResourceSchema,
   notificationReadErrors,
+  notificationUnreadCountResourceSchema,
   priceAlertEnvelopeSchema,
   priceAlertListResourceSchema,
   replaceNotificationPreferencesRequestSchema,
@@ -232,7 +234,7 @@ export function registerV2NotificationRoutes(
         operationId: "getV2NotificationFeed",
         summary: "List context notifications",
         description:
-          "Newest first with an opaque cursor and the unread count. Each row names its entity and the client route to open; there is no separate notification centre and no push delivery.",
+          "Newest first with an opaque cursor and the unread count. Each row names its entity and the client route to open. Decision 0177: rows of the fine inbox events (launch.graduated, launch.badge_minted, social.friend_request, social.friend_accepted) are listed only while the server's NOTIFICATION_INBOX_EMIT is on; while off they are hidden here, from unreadCount, from unread-count and from read-all.",
         tags: ["notifications"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -288,6 +290,66 @@ export function registerV2NotificationRoutes(
       const resource = await notificationService.markRead({
         principal: requireAuthenticatedLoopPrincipal(request),
         notificationId: params.notificationId,
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.get(
+    "/v2/notifications/unread-count",
+    {
+      schema: {
+        operationId: "getV2NotificationUnreadCount",
+        summary: "Count the caller's unread notifications",
+        description:
+          "Decision 0177: one indexed count for the inbox badge; the same rows the feed's unreadCount counts (fine inbox events only while NOTIFICATION_INBOX_EMIT is on). observedAt is the server time of the count.",
+        tags: ["notifications"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: notificationUnreadCountResourceSchema,
+          ...notificationReadErrors,
+        },
+      },
+      onRequest: validateNoIdempotencyHeaders,
+      preValidation: assertNoBodyOrQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await notificationService.unreadCount({
+        principal: requireAuthenticatedLoopPrincipal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
+  app.post(
+    "/v2/notifications/read-all",
+    {
+      schema: {
+        operationId: "readAllV2Notifications",
+        summary: "Acknowledge every unread notification as read",
+        description:
+          "Decision 0177: marks every visible unread row of the caller and returns how many changed. Naturally idempotent (a repeat returns marked: 0); the Idempotency-Key is required by the V2 write convention and is not bound to a durable command. Rows hidden by NOTIFICATION_INBOX_EMIT off are left unread.",
+        tags: ["notifications"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: {
+          200: notificationReadAllResourceSchema,
+          ...notificationCommandErrors,
+        },
+      },
+      onRequest: validateCommandHeaders,
+      preValidation: assertNoBodyOrQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await notificationService.readAll({
+        principal: requireAuthenticatedLoopPrincipal(request),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);

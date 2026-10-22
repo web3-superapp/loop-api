@@ -22,6 +22,7 @@ import {
   notificationReasonCodes,
   optionalNotificationCategories,
   type NotificationCategory,
+  type NotificationFeedType,
 } from "./notification-contract.js";
 
 /**
@@ -38,7 +39,11 @@ import {
 
 export interface NotificationProjection {
   readonly notificationId: string;
-  readonly type: NotificationCategory;
+  /**
+   * The preference category, or (Decision 0177, only while
+   * `NOTIFICATION_INBOX_EMIT` is on) the fine inbox event.
+   */
+  readonly type: NotificationFeedType;
   readonly entityRef: string;
   readonly contextRoute: string;
   readonly contextParams: Readonly<Record<string, string>>;
@@ -67,6 +72,17 @@ export interface NotificationEnvelope {
   readonly contractVersion: typeof v2ContractVersion;
 }
 
+/** Decision 0177: `GET /v2/notifications/unread-count`. */
+export interface NotificationUnreadCountResource {
+  readonly unread: number;
+  readonly observedAt: string;
+}
+
+/** Decision 0177: `POST /v2/notifications/read-all`. */
+export interface NotificationReadAllResource {
+  readonly marked: number;
+}
+
 export interface NotificationPreferenceCategoryProjection {
   readonly enabled: boolean;
   /** `true` only for `security.event`, which cannot be disabled. */
@@ -93,6 +109,12 @@ export interface NotificationService {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly notificationId: string;
   }): Promise<NotificationEnvelope>;
+  unreadCount(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+  }): Promise<NotificationUnreadCountResource>;
+  readAll(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+  }): Promise<NotificationReadAllResource>;
   getPreferences(input: {
     readonly principal: AuthenticatedLoopPrincipal;
   }): Promise<NotificationPreferencesResource>;
@@ -107,6 +129,13 @@ export interface CreateNotificationServiceInput {
   readonly cursorCodec: V2CursorCodec | null;
   /** Decision 0067; defaults to closed so an uncomposed app never claims it. */
   readonly pushRuntimeAvailable?: boolean;
+  /**
+   * Decision 0177: `NOTIFICATION_INBOX_EMIT`. Off (default): rows with a
+   * fine inbox event are hidden from the feed, the unread count, read and
+   * read-all.
+   */
+  readonly inboxEmit?: boolean;
+  readonly now?: () => Date;
 }
 
 const feedCursorRoute = "notificationsFeed";
@@ -125,7 +154,7 @@ const pushAvailable: DeliveryProjection = Object.freeze({
 function project(record: NotificationRecord): NotificationProjection {
   return Object.freeze({
     notificationId: record.notificationId,
-    type: record.type,
+    type: record.eventType ?? record.type,
     entityRef: record.entityRef,
     contextRoute: record.contextRoute,
     contextParams: record.contextParams,
@@ -233,6 +262,8 @@ export function createNotificationService(
 ): NotificationService {
   const push =
     input.pushRuntimeAvailable === true ? pushAvailable : pushUnavailable;
+  const includeInboxEvents = input.inboxEmit === true;
+  const now = input.now ?? (() => new Date());
   const service: NotificationService = {
     async listFeed({ principal, cursor, limit }) {
       const codec = input.cursorCodec;
@@ -291,6 +322,7 @@ export function createNotificationService(
         page = await input.repository.listFeed({
           ownerUserId: principal.userId,
           limit: pageSize,
+          includeInboxEvents,
           ...(before === undefined ? {} : { before }),
         });
       } catch (error) {
@@ -327,6 +359,7 @@ export function createNotificationService(
         record = await input.repository.markRead(
           principal.userId,
           notificationId,
+          includeInboxEvents,
         );
       } catch (error) {
         return translate(error);
@@ -338,6 +371,32 @@ export function createNotificationService(
         notification: project(record),
         contractVersion: v2ContractVersion,
       });
+    },
+
+    async unreadCount({ principal }) {
+      let unread;
+      try {
+        unread = await input.repository.countUnread({
+          ownerUserId: principal.userId,
+          includeInboxEvents,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+      return Object.freeze({ unread, observedAt: now().toISOString() });
+    },
+
+    async readAll({ principal }) {
+      let marked;
+      try {
+        marked = await input.repository.markAllRead({
+          ownerUserId: principal.userId,
+          includeInboxEvents,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+      return Object.freeze({ marked });
     },
 
     async getPreferences({ principal }) {

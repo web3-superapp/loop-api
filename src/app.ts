@@ -2011,6 +2011,9 @@ export async function buildApp(
         database.notifications ?? createUnavailableNotificationRepository(),
       cursorCodec: v2CursorCodec,
       pushRuntimeAvailable,
+      // Decision 0177: NOTIFICATION_INBOX_EMIT off (default) hides the four
+      // fine inbox events from every read.
+      inboxEmit: config.notificationInboxEmit,
     });
   const priceAlertsRuntimeAvailable =
     registeredModuleIds.includes("notifications") &&
