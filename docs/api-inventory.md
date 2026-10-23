@@ -1025,6 +1025,14 @@ lane from the MEME v2 read model, categories `launch.graduation` /
 (default `off`) hides them from every read and from push until the clients
 decode the new feed `type` values. No historical backfill.
 
+Decision 0178 (S291) adds the project owner's launch progress events, all
+category `launch.round`: `launch.review_approved` / `launch.review_rejected`
+(written inside the Hooks review command transaction), `launch.deploy_failed`
+(inside the executor's final `failed` transition) and `launch.activated`
+(the `notification_inbox` lane, once per registered instance). Same
+always-write rule, gated by their own switch `LAUNCH_REVIEW_INBOX_EMIT`
+(default `off`, independent of `NOTIFICATION_INBOX_EMIT`). No backfill.
+
 V2 alerts share `price_alert_definitions` with the frozen V1 rows but never
 the namespace: V1 rows keep `asset_key` and stay `inactive`; V2 rows carry the
 canonical `asset_id` and move `active → triggered` when the default-off

@@ -1,4 +1,4 @@
-export const latestMigrationName = "000098_notification_inbox_producers";
+export const latestMigrationName = "000099_launch_review_inbox";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

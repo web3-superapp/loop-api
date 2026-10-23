@@ -694,6 +694,12 @@ describe("Decision 0143 square timeline on PostgreSQL", () => {
       migrations.length - migrations.indexOf("000084_square_feed.ts");
     expect(stepsThrough000084).toBeGreaterThanOrEqual(1);
     await pool.query("truncate public.square_post_likes, public.square_posts");
+    // Decisions 0177 / 0178: the later inbox migrations refuse to roll back
+    // while fine-event notifications exist; other suites leave some behind
+    // (every config approval now writes a launch.review_approved row).
+    await pool.query(
+      "delete from public.notifications where event_type is not null",
+    );
     await runner({
       databaseUrl: url,
       dir: migrationsDirectory,

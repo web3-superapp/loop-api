@@ -234,7 +234,7 @@ export function registerV2NotificationRoutes(
         operationId: "getV2NotificationFeed",
         summary: "List context notifications",
         description:
-          "Newest first with an opaque cursor and the unread count. Each row names its entity and the client route to open. Decision 0177: rows of the fine inbox events (launch.graduated, launch.badge_minted, social.friend_request, social.friend_accepted) are listed only while the server's NOTIFICATION_INBOX_EMIT is on; while off they are hidden here, from unreadCount, from unread-count and from read-all.",
+          "Newest first with an opaque cursor and the unread count. Each row names its entity and the client route to open. Decision 0177: rows of the fine inbox events (launch.graduated, launch.badge_minted, social.friend_request, social.friend_accepted) are listed only while the server's NOTIFICATION_INBOX_EMIT is on; while off they are hidden here, from unreadCount, from unread-count and from read-all. Decision 0178: the same for the project owner's launch progress events (launch.review_approved, launch.review_rejected, launch.activated, launch.deploy_failed) under LAUNCH_REVIEW_INBOX_EMIT.",
         tags: ["notifications"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

@@ -30,8 +30,10 @@ function approvalRepo(input: {
   const statements: string[] = [];
   const client = {
     query<T extends Record<string, unknown>>(
-      sql: string,
+      statement: string | { readonly text: string },
     ): Promise<QueryResult<T>> {
+      // Decision 0178: the notification insert passes a query config.
+      const sql = typeof statement === "string" ? statement : statement.text;
       statements.push(sql);
       let rows: Record<string, unknown>[] = [];
       if (sql.includes("from public.ops_operators"))
@@ -42,6 +44,10 @@ function approvalRepo(input: {
           {
             owner_user_id: input.configOwner ?? owner,
             review_status: "approved",
+            // Decision 0178: the owner notification reads the project.
+            name: "Project",
+            ticker: "MEME",
+            at: new Date("2026-10-23T00:00:00.000Z"),
           },
         ];
       else if (
@@ -111,6 +117,12 @@ describe("Hooks launch approval separation of duties", () => {
       replayed: false,
     });
     expect(approvalInserted(statements)).toBe(true);
+    // Decision 0178: the owner's launch.review_approved row, same transaction.
+    expect(
+      statements.some((sql) =>
+        sql.includes("insert into public.notifications"),
+      ),
+    ).toBe(true);
     expect(
       statements.some((sql) =>
         sql.includes(

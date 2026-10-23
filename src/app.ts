@@ -2014,6 +2014,9 @@ export async function buildApp(
       // Decision 0177: NOTIFICATION_INBOX_EMIT off (default) hides the four
       // fine inbox events from every read.
       inboxEmit: config.notificationInboxEmit,
+      // Decision 0178: LAUNCH_REVIEW_INBOX_EMIT off (default) hides the four
+      // launch review / deployment progress events from every read.
+      launchReviewEmit: config.launchReviewInboxEmit,
     });
   const priceAlertsRuntimeAvailable =
     registeredModuleIds.includes("notifications") &&

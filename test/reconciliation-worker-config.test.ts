@@ -151,7 +151,11 @@ describe("loadReconciliationWorkerConfig", () => {
       communityChatRealIdentity: true,
       publicBaseUrl: "http://127.0.0.1:3000/",
       // Decision 0177: the notification inbox lane is on, its push off.
-      notificationInbox: { intervalMs: 10_000, emit: false },
+      notificationInbox: {
+        intervalMs: 10_000,
+        emit: false,
+        launchReviewEmit: false,
+      },
       serviceName: "loop-reconciliation-worker",
       serviceVersion: "0.1.0",
     });

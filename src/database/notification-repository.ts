@@ -9,6 +9,7 @@ import {
   type NotificationCategory,
   type NotificationInboxEventType,
   type OptionalNotificationCategory,
+  visibleNotificationInboxEventTypes,
 } from "../features/alerts/notification-contract.js";
 import {
   AlertRepositoryUnavailableError,
@@ -75,6 +76,11 @@ export interface ListNotificationsInput {
    * (`NOTIFICATION_INBOX_EMIT`). Absent = hidden.
    */
   readonly includeInboxEvents?: boolean;
+  /**
+   * Decision 0178: whether the launch review / deployment progress events
+   * are visible (`LAUNCH_REVIEW_INBOX_EMIT`). Absent = hidden.
+   */
+  readonly includeLaunchReviewEvents?: boolean;
   readonly before?: {
     readonly createdAt: string;
     readonly notificationId: string;
@@ -142,16 +148,20 @@ export interface NotificationRepository {
     ownerUserId: string,
     notificationId: string,
     includeInboxEvents?: boolean,
+    /** Decision 0178: `LAUNCH_REVIEW_INBOX_EMIT`; absent = hidden. */
+    includeLaunchReviewEvents?: boolean,
   ): Promise<NotificationRecord | null>;
   /** Decision 0177: unread rows visible under the emit switch. */
   countUnread(input: {
     readonly ownerUserId: string;
     readonly includeInboxEvents: boolean;
+    readonly includeLaunchReviewEvents?: boolean;
   }): Promise<number>;
   /** Decision 0177: marks every visible unread row; returns the count. */
   markAllRead(input: {
     readonly ownerUserId: string;
     readonly includeInboxEvents: boolean;
+    readonly includeLaunchReviewEvents?: boolean;
   }): Promise<number>;
   getPreferences(ownerUserId: string): Promise<NotificationPreferencesV2Record>;
   replacePreferences(
@@ -178,8 +188,24 @@ const countUnreadSql = `
   select count(*)::int as unread
   from public.notifications
   where owner_user_id = $1 and read_at is null
-    and ($2::boolean or event_type is null)
+    and (event_type is null or event_type = any($2::text[]))
 `;
+
+/**
+ * Decision 0177 / 0178: the fine events a read may surface under the two
+ * emit switches (rows with a null `event_type` are always visible).
+ */
+function visibleEventTypes(
+  includeInboxEvents: boolean | undefined,
+  includeLaunchReviewEvents: boolean | undefined,
+): string[] {
+  return [
+    ...visibleNotificationInboxEventTypes({
+      inboxEmit: includeInboxEvents === true,
+      launchReviewEmit: includeLaunchReviewEvents === true,
+    }),
+  ];
+}
 
 function mapNotification(value: unknown): NotificationRecord {
   const row = notificationRowSchema.parse(value);
@@ -360,7 +386,7 @@ export function createPostgresNotificationRepository(
               select ${notificationColumns}
               from public.notifications
               where owner_user_id = $1
-                and ($5::boolean or event_type is null)
+                and (event_type is null or event_type = any($5::text[]))
                 and (
                   $2::timestamptz is null
                   or (created_at, notification_id) < ($2::timestamptz, $3::uuid)
@@ -373,12 +399,21 @@ export function createPostgresNotificationRepository(
               input.before?.createdAt ?? null,
               input.before?.notificationId ?? null,
               input.limit + 1,
-              input.includeInboxEvents === true,
+              visibleEventTypes(
+                input.includeInboxEvents,
+                input.includeLaunchReviewEvents,
+              ),
             ],
           }),
           pool.query<{ unread: number }>({
             text: countUnreadSql,
-            values: [ownerUserId, input.includeInboxEvents === true],
+            values: [
+              ownerUserId,
+              visibleEventTypes(
+                input.includeInboxEvents,
+                input.includeLaunchReviewEvents,
+              ),
+            ],
           }),
         ]);
         const rows = page.rows.map(mapNotification);
@@ -447,20 +482,25 @@ export function createPostgresNotificationRepository(
       }
     },
 
-    async markRead(ownerUserId, notificationId, includeInboxEvents) {
+    async markRead(
+      ownerUserId,
+      notificationId,
+      includeInboxEvents,
+      includeLaunchReviewEvents,
+    ) {
       try {
         const result = await pool.query<Record<string, unknown>>({
           text: `
             update public.notifications
             set read_at = coalesce(read_at, clock_timestamp())
             where owner_user_id = $1 and notification_id = $2
-              and ($3::boolean or event_type is null)
+              and (event_type is null or event_type = any($3::text[]))
             returning ${notificationColumns}
           `,
           values: [
             uuidSchema.parse(ownerUserId),
             uuidSchema.parse(notificationId),
-            includeInboxEvents === true,
+            visibleEventTypes(includeInboxEvents, includeLaunchReviewEvents),
           ],
         });
         const row = result.rows[0];
@@ -476,7 +516,10 @@ export function createPostgresNotificationRepository(
           text: countUnreadSql,
           values: [
             uuidSchema.parse(input.ownerUserId),
-            input.includeInboxEvents,
+            visibleEventTypes(
+              input.includeInboxEvents,
+              input.includeLaunchReviewEvents,
+            ),
           ],
         });
         return z.number().int().min(0).parse(result.rows[0]?.unread);
@@ -493,14 +536,17 @@ export function createPostgresNotificationRepository(
               update public.notifications
               set read_at = clock_timestamp()
               where owner_user_id = $1 and read_at is null
-                and ($2::boolean or event_type is null)
+                and (event_type is null or event_type = any($2::text[]))
               returning 1
             )
             select count(*)::int as marked from marked
           `,
           values: [
             uuidSchema.parse(input.ownerUserId),
-            input.includeInboxEvents,
+            visibleEventTypes(
+              input.includeInboxEvents,
+              input.includeLaunchReviewEvents,
+            ),
           ],
         });
         return z.number().int().min(0).parse(result.rows[0]?.marked);

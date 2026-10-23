@@ -30,7 +30,10 @@ import { createUnavailablePerpIntentRepository } from "../src/database/perp-inte
 import { createUnavailablePerpWalletBindingRepository } from "../src/database/perp-wallet-binding-repository.js";
 import { createUnavailableProfileRepository } from "../src/database/profile-repository.js";
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
-import { defaultNotificationPreferences } from "../src/features/alerts/notification-contract.js";
+import {
+  defaultNotificationPreferences,
+  visibleNotificationInboxEventTypes,
+} from "../src/features/alerts/notification-contract.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
@@ -324,15 +327,27 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
   let values: NotificationPreferenceValues = {
     ...defaultNotificationPreferences,
   };
-  const visible = (row: NotificationRecord, includeInboxEvents?: boolean) =>
-    includeInboxEvents === true || row.eventType === null;
+  const visible = (
+    row: NotificationRecord,
+    includeInboxEvents?: boolean,
+    includeLaunchReviewEvents?: boolean,
+  ) =>
+    row.eventType === null ||
+    visibleNotificationInboxEventTypes({
+      inboxEmit: includeInboxEvents === true,
+      launchReviewEmit: includeLaunchReviewEvents === true,
+    }).includes(row.eventType);
   const repository: NotificationRepository = {
     listFeed: (input) => {
       const owned = [...rows.values()]
         .filter(
           (row) =>
             row.ownerUserId === input.ownerUserId &&
-            visible(row, input.includeInboxEvents),
+            visible(
+              row,
+              input.includeInboxEvents,
+              input.includeLaunchReviewEvents,
+            ),
         )
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       return Promise.resolve({
@@ -352,12 +367,17 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
           .slice(0, input.limit),
       ),
-    markRead: (ownerUserId, notificationId, includeInboxEvents) => {
+    markRead: (
+      ownerUserId,
+      notificationId,
+      includeInboxEvents,
+      includeLaunchReviewEvents,
+    ) => {
       const row = rows.get(notificationId);
       if (
         row === undefined ||
         row.ownerUserId !== ownerUserId ||
-        !visible(row, includeInboxEvents)
+        !visible(row, includeInboxEvents, includeLaunchReviewEvents)
       ) {
         return Promise.resolve(null);
       }
@@ -374,7 +394,11 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
           (row) =>
             row.ownerUserId === input.ownerUserId &&
             row.readAt === null &&
-            visible(row, input.includeInboxEvents),
+            visible(
+              row,
+              input.includeInboxEvents,
+              input.includeLaunchReviewEvents,
+            ),
         ).length,
       ),
     markAllRead: (input) => {
@@ -383,7 +407,11 @@ function notificationsFake(seed: readonly NotificationRecord[] = []) {
         if (
           row.ownerUserId === input.ownerUserId &&
           row.readAt === null &&
-          visible(row, input.includeInboxEvents)
+          visible(
+            row,
+            input.includeInboxEvents,
+            input.includeLaunchReviewEvents,
+          )
         ) {
           rows.set(row.notificationId, {
             ...row,
@@ -1052,6 +1080,167 @@ describe("LOOP API V2 notifications module", () => {
           "providerReferenceSafe",
         ]).toContain(key);
       }
+    });
+  });
+
+  describe("Decision 0178 launch review inbox events", () => {
+    const projectId = "7c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const instanceId = "8c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const approvedId = "9c3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const activatedId = "ac3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    const graduatedId = "bc3d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    function launchSeed(): NotificationRecord[] {
+      return [
+        notificationRecord(),
+        notificationRecord({
+          notificationId: approvedId,
+          type: "launch.round",
+          eventType: "launch.review_approved",
+          entityRef: `launchProject:${projectId}`,
+          contextRoute: "launch2-project-sign",
+          contextParams: { projectId },
+          payload: {
+            event: "launch.review_approved",
+            title: "Moon 审核已通过",
+            body: "请完成签名，发射才会部署",
+            projectName: "Moon",
+            symbol: "MOON",
+            taskId: projectId,
+          },
+          dedupeKey: `launch.review_approved:${projectId}:v1`,
+          source: "launch_review",
+          createdAt: "2026-09-08T00:00:01.000Z",
+        }),
+        notificationRecord({
+          notificationId: activatedId,
+          type: "launch.round",
+          eventType: "launch.activated",
+          entityRef: `launch2Instance:${instanceId}`,
+          contextRoute: "launch2-instance",
+          contextParams: { instanceId },
+          payload: {
+            event: "launch.activated",
+            title: "Moon 已上链",
+            body: "已开售",
+            instanceId,
+          },
+          dedupeKey: `launch.activated:${instanceId}`,
+          source: "launch2_indexer",
+          createdAt: "2026-09-08T00:00:02.000Z",
+        }),
+        // A Decision 0177 row: governed by NOTIFICATION_INBOX_EMIT only.
+        notificationRecord({
+          notificationId: graduatedId,
+          type: "launch.graduation",
+          eventType: "launch.graduated",
+          entityRef: `launch2Instance:${instanceId}`,
+          contextRoute: "launch2-instance",
+          contextParams: { instanceId },
+          payload: { event: "launch.graduated", title: "Moon 已毕业" },
+          dedupeKey: `launch.graduated:${instanceId}`,
+          source: "launch2_indexer",
+          createdAt: "2026-09-08T00:00:03.000Z",
+        }),
+      ];
+    }
+
+    it("hides the four events everywhere while LAUNCH_REVIEW_INBOX_EMIT is off, even with NOTIFICATION_INBOX_EMIT on", async () => {
+      const { app } = await createApp(fakes(launchSeed()), {
+        NOTIFICATION_INBOX_EMIT: "on",
+      });
+      const feed = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/feed",
+        headers: commonHeaders(),
+      });
+      expect(feed.statusCode).toBe(200);
+      const body = feed.json<{
+        readonly items: readonly { readonly type: string }[];
+        readonly unreadCount: number;
+      }>();
+      expect(body.items.map((item) => item.type)).toEqual([
+        "launch.graduated",
+        "trade.priceAlert",
+      ]);
+      expect(body.unreadCount).toBe(2);
+      expect(feed.body).not.toContain("launch.review_approved");
+      expect(feed.body).not.toContain("launch.activated");
+
+      const count = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders(),
+      });
+      expect(count.json()).toMatchObject({ unread: 2 });
+
+      const hiddenRead = await app.inject({
+        method: "POST",
+        url: `/v2/notifications/${approvedId}/read`,
+        headers: commandHeaders(),
+      });
+      expect(hiddenRead.statusCode).toBe(404);
+
+      const readAll = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+      });
+      expect(readAll.json()).toEqual({ marked: 2 });
+    });
+
+    it("lists the four events with their own type while LAUNCH_REVIEW_INBOX_EMIT is on", async () => {
+      const { app } = await createApp(fakes(launchSeed()), {
+        LAUNCH_REVIEW_INBOX_EMIT: "on",
+      });
+      const feed = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/feed",
+        headers: commonHeaders(),
+      });
+      expect(feed.statusCode).toBe(200);
+      expect(feed.json()).toMatchObject({
+        items: [
+          {
+            type: "launch.activated",
+            entityRef: `launch2Instance:${instanceId}`,
+            contextRoute: "launch2-instance",
+            contextParams: { instanceId },
+          },
+          {
+            type: "launch.review_approved",
+            entityRef: `launchProject:${projectId}`,
+            contextRoute: "launch2-project-sign",
+            contextParams: { projectId },
+            payload: { title: "Moon 审核已通过", taskId: projectId },
+          },
+          { type: "trade.priceAlert" },
+        ],
+        unreadCount: 3,
+      });
+      // The Decision 0177 row stays hidden (its own switch is off).
+      expect(feed.body).not.toContain("launch.graduated");
+
+      const read = await app.inject({
+        method: "POST",
+        url: `/v2/notifications/${approvedId}/read`,
+        headers: commandHeaders(),
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toMatchObject({
+        notification: { type: "launch.review_approved" },
+      });
+      const count = await app.inject({
+        method: "GET",
+        url: "/v2/notifications/unread-count",
+        headers: commonHeaders(),
+      });
+      expect(count.json()).toMatchObject({ unread: 2 });
+      const readAll = await app.inject({
+        method: "POST",
+        url: "/v2/notifications/read-all",
+        headers: commandHeaders(),
+      });
+      expect(readAll.json()).toEqual({ marked: 2 });
     });
   });
 
