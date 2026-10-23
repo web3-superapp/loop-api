@@ -301,6 +301,20 @@ export function registerWellKnownRoutes(
       },
     },
     async (request, reply) => {
+      // Decision 0179: with WEB_BASE_URL set the website owns the invite
+      // page; the code travels as given (percent-encoded as one path
+      // segment, so it can never leave `${WEB_BASE_URL}/i/`). The Universal
+      // Link / App Link host is still this API, so with the app installed
+      // the OS opens the app before this route is reached.
+      const webBaseUrl = config.web.baseUrl;
+      if (webBaseUrl !== null) {
+        reply.header("cache-control", "no-store");
+        reply.header("referrer-policy", "no-referrer");
+        return reply.redirect(
+          `${webBaseUrl}/i/${encodeURIComponent(request.params.code)}`,
+          302,
+        );
+      }
       setLandingHeaders(reply, inviteLandingContentSecurityPolicy);
       let code: string;
       try {

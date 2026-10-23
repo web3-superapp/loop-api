@@ -119,6 +119,8 @@ import type { HooksLaunchReviewRepository } from "../features/launch/hooks-launc
 import type { HooksLaunchSubmissionRepository } from "../features/launch/hooks-launch-submission.js";
 import { createPostgresMiningRepository } from "./mining-repository.js";
 import { createPostgresReferralRepository } from "./referral-repository.js";
+import { createPostgresWebRegistrationRepository } from "./web-registration-repository.js";
+import type { WebRegistrationRepository } from "../features/web/web-registration-repository.js";
 import { createPostgresWalletAccountLookup } from "./wallet-account-directory-repository.js";
 import type { LaunchRepository } from "../features/launch/launch-repository.js";
 import type { LaunchChainRepository } from "../features/launch/launch-chain-repository.js";
@@ -275,6 +277,8 @@ export interface Database {
   readonly mining?: MiningRepository;
   /** Invite codes and referral edges (Decision 0036). */
   readonly referral?: ReferralRepository;
+  /** Decision 0179: read side of the web registration surface. */
+  readonly webRegistration?: WebRegistrationRepository;
   /** Decision 0162: wallet address → account for trade feeds. */
   readonly walletAccounts?: WalletAccountLookup;
   /** MEME curve launchpad: tokens, lane, salts, Intents (Decision 0101). */
@@ -483,6 +487,7 @@ export function createPostgresDatabase(
         } as const);
   const mining = createPostgresMiningRepository(pool);
   const referral = createPostgresReferralRepository(pool);
+  const webRegistration = createPostgresWebRegistrationRepository(pool);
   const aliasDirectory = createPostgresAliasDirectoryRepository(pool);
   const social = createPostgresSocialRepository(pool);
   const chatChannels = createPostgresChatChannelRepository(pool);
@@ -594,6 +599,7 @@ export function createPostgresDatabase(
     adminLoginAttempts: createPostgresAdminLoginAttemptStore(pool),
     mining,
     referral,
+    webRegistration,
     walletAccounts: createPostgresWalletAccountLookup(pool),
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({

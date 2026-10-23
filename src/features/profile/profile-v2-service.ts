@@ -54,7 +54,14 @@ export interface ProfileV2WriteInput extends ProfileV2ReadInput {
 }
 
 export interface ProfileV2ActivateInput extends ProfileV2WriteInput {
-  readonly metadata: V2SessionWriteMetadata;
+  /**
+   * Only the Idempotency-Key and contract version are read (Decision 0179:
+   * the web surface activates without App device headers).
+   */
+  readonly metadata: Pick<
+    V2SessionWriteMetadata,
+    "idempotencyKey" | "contractVersion"
+  >;
   readonly requestId: string;
 }
 

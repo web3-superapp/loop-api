@@ -7,11 +7,13 @@ prototype routes, and unassigned product ideas are not LOOP APIs.
 
 The committed implemented contracts are `openapi/loop-api.v1.json`,
 `openapi/loop-api.v2.json`, the operator console surface
-`openapi/loop-admin.v1.json` (Decision 0102), and the public MEME page read
-surface `openapi/loop-public.v1.json` (Decision 0147). They are generated
+`openapi/loop-admin.v1.json` (Decision 0102), the public MEME page read
+surface `openapi/loop-public.v1.json` (Decision 0147), and the website
+registration surface `openapi/loop-web.v2.json` (Decision 0179). They are generated
 independently from route schemas by `pnpm openapi:generate` and checked for
 drift by `pnpm openapi:check`. V1 is the frozen compatibility surface; new
-product modules use V2; the console and public surfaces are never part of V2.
+product modules use V2; the console, public, and web surfaces are never part of
+the App's V2 artifact.
 
 `openapi/loop-api.v2.json` is the single source of truth for every count in this
 repository's documentation. It currently publishes **185** V2 operations across
@@ -1472,6 +1474,34 @@ owner, buyer, or trader field appears anywhere. Evidence:
 | `GET /public/v1/meme`                      | `stage` `all` (default) / `graduated` / `curve`, `limit` 1–50 (default 50) | `items[]` newest first: `instanceId`, `name`, `symbol`, `logoUrl`, derived `stage`, `memeTokenAddress`, `communityName` (bound, non-rejected), indexed `lastPriceUsd1`, `dynamic {armed, currentDynamicTaxBps}` (graduated LoopDynamic only, live Hook read), `dynamicReasonCode` (the 503 reason when that row's Hook read is unavailable; `dynamic` then null); `generatedAt`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `implemented` | needs `V2_MODULES_ENABLED=launch2`; else 503 `V2_LAUNCH2_MODULE_DEFERRED`                                                                                                                           |
 | `GET /public/v1/meme/{instanceId}`         | No input                                                                   | `instance` (identity, derived stage, contracts, `perAddressCurveCapMeme` — 0152: the curve's `maxCumulativeBuy()` / pre-S209 `MAX_CUMULATIVE_BUY()` read from the chain, the verified value when unreachable — `explorerBaseUrl`, `socials` from the saved links), `community` (`name`, `slogan` = first line of the description ≤ 60, `description`, `memberCount`, `verified`, `avatarUrl` null), `price` (`lastPriceUsd1`, `change24hPct` vs the 24 h reference, `asOf`), `dynamic` (graduated LoopDynamic: Hook at one block — `armed`, `currentRound`, `currentDynamicTaxBps`, cap, base fees, `buyFeeToken` (0152: `usd1` = S209 Hook, fee from the USD1 input; `meme` before), `pendingPotUsd1` = carry + round dynamic fees, `lastClosedRound`, `asOfBlock`; null for OfficialTax / before graduation), `totals` (curve tax, pool base buy fee MEME (`poolBaseBuyFeeMeme`, OfficialTax / pre-S209 Hooks) / buy fee USD1 (`poolBaseBuyFeeUsd1`, 0152: S209 Hooks) / sell fee USD1, dynamic fees, USD1 equivalent (both buy fees included), rewards allocated / claimed, buyback ledger) | `implemented` | Hook / registry failures 503 as `/v2/launch2/.../dynamic-pool` (`LAUNCH2_DYNAMIC_*`; 0153: incl. `_FACTORY_UNKNOWN` / `_ROUTER_MISMATCH`, legacy-Factory instances answer through their own router) |
 | `GET /public/v1/meme/{instanceId}/candles` | `interval` `5m` only (else 400), `limit` 1–300 (default 300)               | `interval`, `source` `pool` / `curve`, `candles[] {t,o,h,l,c,v}` oldest first (USD1 per MEME): graduated LoopDynamic = the Hook's `CandleClosed` (high / low widened to the bucket's swaps, `v` = swap USD1), else indexed pool swaps; not graduated = curve trades at the marginal price after each trade, `v` = USD1 gross                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `implemented` | same gate                                                                                                                                                                                           |
+
+## Website registration surface `/v2/web/*` (Decision 0179)
+
+For the LOOP website (`loop-web`, same Privy App). Own artifact
+`openapi/loop-web.v2.json` (contract surface `web`); mounted at runtime only
+when `WEB_ORIGINS` is non-empty (default empty = 404). CORS only inside this
+prefix and only for an `Origin` listed in `WEB_ORIGINS` (echoed, never `*`;
+`Vary: Origin`; `Cross-Origin-Resource-Policy: cross-origin`; preflight 204 with
+`GET, POST, PUT, OPTIONS` and `authorization, content-type, idempotency-key,
+x-loop-contract-version`). Writes: Privy Bearer + `X-Loop-Contract-Version: 2.0`
+
+- lower-case UUIDv4 `Idempotency-Key`; no App device / platform / client-version
+  header and no device session. Errors are the seven-field V2 envelope with
+  `detailsSafe.reasonCode`. No migration. Front-end contract:
+  `docs/frontend-web-registration-api.md`. Evidence:
+  `test/web-registration.test.ts`, `test/web-registration.integration.test.ts`.
+
+| Method and path                      | Request                                 | Success projection                                                                                                                                 | Interface     | Capability                                                                                                                    |
+| ------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v2/web/session`               | Bearer + write headers; no body or `{}` | `{loopId, username, usernameRequired, walletAddress, invite {bound, windowEndsAt, canClaim}, observedAt}`; get-or-create (same account as the App) | `implemented` | needs `V2_SESSION_ENABLED` (else 503 `WEB_SESSION_DISABLED`); Privy missing → 503 `PROVIDER_DISCONNECTED`                     |
+| `PUT /v2/web/profile/username`       | Bearer + write headers; `{username}`    | `{username}`; pending → App activation command (starts the 7-day claim window), active → alias CAS replace                                         | `implemented` | needs `profile` module (else 503 `V2_PROFILE_MODULE_DEFERRED`); App alias rules (1–40 code points, reserved / blocked)        |
+| `POST /v2/web/referral/claim`        | Bearer + write headers; `{code}`        | `{status: bound \| already_bound, inviterLoopId?}` via the App claim service                                                                       | `implemented` | needs `referral` module (else 503 `V2_REFERRAL_MODULE_DEFERRED`); refusals carry `REFERRAL_*` / `PROFILE_ACTIVATION_REQUIRED` |
+| `GET /v2/web/referral/preview?code=` | Public; no headers                      | `{valid, inviter: {username, loopId} \| null}`; per-visitor 1-minute window (`PUBLIC_RATE_LIMIT_PER_MINUTE`), 429 `WEB_RATE_LIMITED`               | `implemented` | needs `referral` module                                                                                                       |
+| `GET /v2/web/meta`                   | Public; no headers                      | `{appStore {ios, android, testflight}, observedAt}` from `WEB_APP_LINKS_*` (null when unset)                                                       | `implemented` | `implemented`                                                                                                                 |
+
+`GET /i/{code}` (Decision 0162 landing page) answers `302` to
+`${WEB_BASE_URL}/i/{code}` when `WEB_BASE_URL` is set; blank keeps the API's
+own page. The Universal Link / App Link host is unchanged (the API domain).
 
 ## Personalization and inactive alert routes
 
