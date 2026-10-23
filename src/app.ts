@@ -486,6 +486,13 @@ import {
 } from "./features/testnet-faucet/testnet-faucet-service.js";
 import { registerV2TestnetFaucetRoutes } from "./routes/v2/testnet-faucet.js";
 import { registerV2SquareRoutes } from "./routes/v2/square.js";
+import { registerV2WebRoutes } from "./routes/v2/web.js";
+import {
+  createWebRegistrationService,
+  type WebRegistrationService,
+} from "./features/web/web-registration-service.js";
+import { createUnavailableWebRegistrationRepository } from "./features/web/web-registration-repository.js";
+import { createWebRateLimiter } from "./features/web/web-rate-limit.js";
 import { createSquareService } from "./features/square/square-service.js";
 import { createAdminSquarePostService } from "./features/admin/admin-square-posts.js";
 import { createMemePoolPriceReaders } from "./features/meme/meme-pool-price.js";
@@ -538,7 +545,12 @@ function sendFrameworkJson(
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
-  readonly contractSurface?: "runtime" | "v1" | "v2" | "admin" | "public";
+  readonly contractSurface?:
+    "runtime" | "v1" | "v2" | "admin" | "public" | "web";
+  /** Decision 0179: test seam of the web registration surface. */
+  readonly webRegistrationService?: WebRegistrationService;
+  /** Decision 0179: test seam of the web preview limiter clock (ms). */
+  readonly webNowMs?: () => number;
   readonly database?: Database;
   /** Decision 0102: test seam for the console's MEME pause signer. */
   readonly memePauseSender?: MemePauseSender | null;
@@ -817,6 +829,11 @@ export async function buildApp(
   // (the V1 artifact is frozen byte-for-byte).
   const includePublic =
     contractSurface === "runtime" || contractSurface === "public";
+  // Decision 0179: the web registration surface has its own artifact and
+  // mounts at runtime only with a non-empty WEB_ORIGINS allowlist.
+  const includeWeb =
+    contractSurface === "web" ||
+    (contractSurface === "runtime" && config.web.origins.length > 0);
   // Decision 0102: the console mounts only with all three ADMIN_* values.
   const adminMounted =
     (contractSurface === "runtime" || contractSurface === "admin") &&
@@ -1073,10 +1090,19 @@ export async function buildApp(
         "Decision 0147: unauthenticated, cross-origin read-only MEME page facts (no wallet, user, or viewer field)",
     },
   ] as const;
+  const webOpenApiTags = [
+    { name: "health", description: "Process and dependency health" },
+    {
+      name: "web",
+      description:
+        "Decision 0179: the LOOP website's registration flow (Privy Bearer, CORS allowlist WEB_ORIGINS)",
+    },
+  ] as const;
   const runtimeOpenApiTags = [
     ...v1OpenApiTags,
     v2OpenApiTags[1],
     publicOpenApiTags[1],
+    webOpenApiTags[1],
   ] as const;
 
   const adminOpenApiTags = [
@@ -1130,19 +1156,26 @@ export async function buildApp(
                 "Operator console management surface (Decisions 0102, 0109). Mounted only when ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and ADMIN_SESSION_SECRET are configured; every route except POST /admin/v1/session needs the loop_admin_session cookie. Decision 0109: individual accounts with one role each (platform_admin, reviewer, testnet_acceptor, auditor); every protected route checks the role's permission server-side (403 PERMISSION_DENIED); the ADMIN_USERNAME bootstrap administrator is a platform_admin and cannot approve or accept.",
               version: config.serviceVersion,
             }
-          : contractSurface === "public"
+          : contractSurface === "web"
             ? {
-                title: "LOOP Public API",
+                title: "LOOP Web API",
                 description:
-                  "Decision 0147: unauthenticated, cross-origin, read-only facts for the public MEME web page. No Bearer token, no contract headers; Access-Control-Allow-Origin: * and Cache-Control: public, max-age=15 on a 200; per-IP rate limit; failures are { code, reasonCode }.",
+                  "Decision 0179: the LOOP website's registration surface /v2/web/*. Same Privy App and Bearer verification as the App; no App device-session or client-version header. Writes need X-Loop-Contract-Version: 2.0 and a lower-case UUIDv4 Idempotency-Key. CORS only for the origins in WEB_ORIGINS (echoed, never *); errors are the seven-field V2 envelope with detailsSafe.reasonCode.",
                 version: config.serviceVersion,
               }
-            : {
-                title: "LOOP API",
-                description:
-                  "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
-                version: config.serviceVersion,
-              },
+            : contractSurface === "public"
+              ? {
+                  title: "LOOP Public API",
+                  description:
+                    "Decision 0147: unauthenticated, cross-origin, read-only facts for the public MEME web page. No Bearer token, no contract headers; Access-Control-Allow-Origin: * and Cache-Control: public, max-age=15 on a 200; per-IP rate limit; failures are { code, reasonCode }.",
+                  version: config.serviceVersion,
+                }
+              : {
+                  title: "LOOP API",
+                  description:
+                    "Private Backend-for-Frontend for LOOP. Provider routes fail closed until configured and verified.",
+                  version: config.serviceVersion,
+                },
       servers: [{ url: config.publicBaseUrl.replace(/\/$/, "") }],
       tags:
         contractSurface === "v1"
@@ -1153,7 +1186,9 @@ export async function buildApp(
               ? [...adminOpenApiTags]
               : contractSurface === "public"
                 ? [...publicOpenApiTags]
-                : [...runtimeOpenApiTags],
+                : contractSurface === "web"
+                  ? [...webOpenApiTags]
+                  : [...runtimeOpenApiTags],
       components: {
         securitySchemes: {
           ...(contractSurface === "admin" || contractSurface === "public"
@@ -2803,6 +2838,34 @@ export async function buildApp(
       ...(options.publicMeme?.budgetsMs === undefined
         ? {}
         : { budgetsMs: options.publicMeme.budgetsMs }),
+    });
+  }
+  if (includeWeb) {
+    // Decision 0179: the website's registration surface (CORS allowlist).
+    registerV2WebRoutes(app, {
+      service:
+        options.webRegistrationService ??
+        createWebRegistrationService({
+          sessionEnabled: config.v2SessionEnabled,
+          internalUsers: database.internalUsers,
+          repository:
+            database.webRegistration ??
+            createUnavailableWebRegistrationRepository(),
+          profileService: profileV2Service,
+          profileAvailable: profileV2RuntimeAvailable,
+          referralService,
+          referralAvailable: referralRuntimeAvailable,
+          appLinks: config.web.appLinks,
+        }),
+      origins: config.web.origins,
+      authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
+      authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
+      previewLimiter: createWebRateLimiter({
+        perWindow: config.publicRateLimit.perMinute,
+        ...(options.webNowMs === undefined ? {} : { nowMs: options.webNowMs }),
+      }),
+      trustProxy: config.trustProxy,
+      clientIpHeaders: config.publicRateLimit.clientIpHeaders,
     });
   }
   if (includeV1) {

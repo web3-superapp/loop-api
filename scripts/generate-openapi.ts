@@ -35,6 +35,14 @@ export const openApiPublicArtifactPath = resolve(
   repositoryRoot,
   "openapi/loop-public.v1.json",
 );
+/**
+ * Decision 0179: the website's registration surface (`/v2/web/*`), outside
+ * the App's V2 artifact.
+ */
+export const openApiWebArtifactPath = resolve(
+  repositoryRoot,
+  "openapi/loop-web.v2.json",
+);
 /** Decision 0102: the operator console surface, never part of the V2 artifact. */
 export const openApiAdminArtifactPath = resolve(
   repositoryRoot,
@@ -77,7 +85,7 @@ function createSchemaOnlyDatabase(): Database {
 }
 
 async function renderContractSurface(
-  contractSurface: "v1" | "v2" | "admin" | "public",
+  contractSurface: "v1" | "v2" | "admin" | "public" | "web",
 ): Promise<string> {
   const config = loadConfig({
     NODE_ENV: "production",
@@ -123,6 +131,10 @@ export function renderOpenApiAdminArtifact(): Promise<string> {
 
 export function renderOpenApiPublicArtifact(): Promise<string> {
   return renderContractSurface("public");
+}
+
+export function renderOpenApiWebArtifact(): Promise<string> {
+  return renderContractSurface("web");
 }
 
 async function writeArtifact(path: string, contents: string): Promise<void> {
@@ -180,12 +192,13 @@ async function main(): Promise<void> {
     throw new Error("Unexpected OpenAPI generator arguments");
   }
 
-  const [v1Contents, v2Contents, adminContents, publicContents] =
+  const [v1Contents, v2Contents, adminContents, publicContents, webContents] =
     await Promise.all([
       renderOpenApiArtifact(),
       renderOpenApiV2Artifact(),
       renderOpenApiAdminArtifact(),
       renderOpenApiPublicArtifact(),
+      renderOpenApiWebArtifact(),
     ]);
 
   if (mode === "--write") {
@@ -194,9 +207,10 @@ async function main(): Promise<void> {
       writeArtifact(openApiV2ArtifactPath, v2Contents),
       writeArtifact(openApiAdminArtifactPath, adminContents),
       writeArtifact(openApiPublicArtifactPath, publicContents),
+      writeArtifact(openApiWebArtifactPath, webContents),
     ]);
     process.stdout.write(
-      "Generated openapi/loop-api.v1.json, openapi/loop-api.v2.json, openapi/loop-admin.v1.json, and openapi/loop-public.v1.json\n",
+      "Generated openapi/loop-api.v1.json, openapi/loop-api.v2.json, openapi/loop-admin.v1.json, openapi/loop-public.v1.json, and openapi/loop-web.v2.json\n",
     );
     return;
   }
@@ -206,6 +220,7 @@ async function main(): Promise<void> {
     checkArtifact(openApiV2ArtifactPath, v2Contents),
     checkArtifact(openApiAdminArtifactPath, adminContents),
     checkArtifact(openApiPublicArtifactPath, publicContents),
+    checkArtifact(openApiWebArtifactPath, webContents),
   ]);
   process.stdout.write("OpenAPI artifacts are current\n");
 }

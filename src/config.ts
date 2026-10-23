@@ -1747,6 +1747,23 @@ export interface AppLinksConfig {
   readonly androidStoreUrl: string | null;
 }
 
+/**
+ * Decision 0179: the cross-origin web registration surface `/v2/web/*`.
+ * `origins` empty (default) = the surface is not mounted at all.
+ */
+export interface WebSurfaceConfig {
+  /** `WEB_ORIGINS`: normalised origins (`URL.origin`), unique, in order. */
+  readonly origins: readonly string[];
+  /** `WEB_BASE_URL` without a trailing slash; null keeps `/i/{code}` local. */
+  readonly baseUrl: string | null;
+  /** `WEB_APP_LINKS_IOS` / `_ANDROID` / `_TESTFLIGHT` (https or null). */
+  readonly appLinks: {
+    readonly ios: string | null;
+    readonly android: string | null;
+    readonly testflight: string | null;
+  };
+}
+
 export interface BscIndexerConfig {
   readonly startBlockNumber: number | null;
   /**
@@ -2055,6 +2072,8 @@ export interface AppConfig {
   readonly passkeyRelyingParty: PasskeyRelyingPartyConfig;
   /** Universal Links / App Links for `/u/{loopId}` (Decision 0090). */
   readonly appLinks: AppLinksConfig;
+  /** Decision 0179: web registration surface (CORS allowlist, links). */
+  readonly web: WebSurfaceConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
   readonly market: MarketConfig;
@@ -4106,6 +4125,126 @@ function assertDatabaseUrl(url: URL): void {
   }
 }
 
+const maximumWebOrigins = 16;
+const localWebOriginHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Decision 0179: one `WEB_ORIGINS` entry. Like the Provider origins
+ * (`parseCommunityAiBaseUrl`): no credentials, path, query, or fragment; a
+ * trailing slash is normalised away and `URL.origin` lower-cases the host and
+ * drops a default port. https only — except `http://localhost` /
+ * `127.0.0.1` / `[::1]` outside production, for a local Next.js dev server.
+ */
+function parseWebOrigin(value: string, nodeEnv: AppConfig["nodeEnv"]): string {
+  const url = parseUrl("WEB_ORIGINS", value);
+  const localHttp =
+    url.protocol === "http:" &&
+    nodeEnv !== "production" &&
+    localWebOriginHosts.has(url.hostname);
+  if (url.protocol !== "https:" && !localHttp) {
+    throw new ConfigurationError([
+      "WEB_ORIGINS: protocol must be https (http only for localhost outside production)",
+    ]);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigurationError(["WEB_ORIGINS: credentials are not allowed"]);
+  }
+  if (url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new ConfigurationError([
+      "WEB_ORIGINS: entries must be origins without path, query, or fragment",
+    ]);
+  }
+  return url.origin;
+}
+
+function parseWebHttpsUrl(
+  name: string,
+  raw: string | undefined,
+): string | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") return null;
+  if (value.length > 2_048) {
+    throw new ConfigurationError([`${name}: at most 2048 characters`]);
+  }
+  const url = parseUrl(name, value);
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") {
+    throw new ConfigurationError([
+      `${name}: must be an https URL without credentials`,
+    ]);
+  }
+  return url.toString();
+}
+
+/**
+ * Decision 0179: `WEB_ORIGINS` (comma list, empty = surface not mounted),
+ * `WEB_BASE_URL` (the website root; `/i/{code}` redirects there when set),
+ * and the three store links `GET /v2/web/meta` publishes.
+ */
+export function parseWebSurfaceConfig(
+  environment: NodeJS.ProcessEnv,
+  nodeEnv: AppConfig["nodeEnv"],
+): WebSurfaceConfig {
+  const rawOrigins = environment["WEB_ORIGINS"]?.trim() ?? "";
+  const origins: string[] = [];
+  if (rawOrigins !== "") {
+    for (const entry of rawOrigins.split(",")) {
+      const trimmed = entry.trim();
+      if (trimmed === "") {
+        throw new ConfigurationError(["WEB_ORIGINS: empty entry"]);
+      }
+      const origin = parseWebOrigin(trimmed, nodeEnv);
+      if (origins.includes(origin)) {
+        throw new ConfigurationError(["WEB_ORIGINS: entries must be unique"]);
+      }
+      origins.push(origin);
+    }
+  }
+  if (origins.length > maximumWebOrigins) {
+    throw new ConfigurationError([
+      `WEB_ORIGINS: at most ${maximumWebOrigins.toString(10)} origins`,
+    ]);
+  }
+  const rawBase = environment["WEB_BASE_URL"]?.trim() ?? "";
+  let baseUrl: string | null = null;
+  if (rawBase !== "") {
+    const url = parseUrl("WEB_BASE_URL", rawBase);
+    const localHttp =
+      url.protocol === "http:" &&
+      nodeEnv !== "production" &&
+      localWebOriginHosts.has(url.hostname);
+    if (
+      (url.protocol !== "https:" && !localHttp) ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      throw new ConfigurationError([
+        "WEB_BASE_URL: must be an https URL without credentials, query, or fragment",
+      ]);
+    }
+    baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/u, "");
+  }
+  return Object.freeze({
+    origins: Object.freeze(origins),
+    baseUrl,
+    appLinks: Object.freeze({
+      ios: parseWebHttpsUrl(
+        "WEB_APP_LINKS_IOS",
+        environment["WEB_APP_LINKS_IOS"],
+      ),
+      android: parseWebHttpsUrl(
+        "WEB_APP_LINKS_ANDROID",
+        environment["WEB_APP_LINKS_ANDROID"],
+      ),
+      testflight: parseWebHttpsUrl(
+        "WEB_APP_LINKS_TESTFLIGHT",
+        environment["WEB_APP_LINKS_TESTFLIGHT"],
+      ),
+    }),
+  });
+}
+
 /**
  * Decision 0147 revision S211: `none`, or a comma list of distinct names
  * from `publicClientIpHeaderNames`, read in the order given.
@@ -4599,6 +4738,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     walletGasReserve: parseWalletGasReserve(parsed.data.WALLET_GAS_RESERVE_BNB),
     passkeyRelyingParty,
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
+    web: parseWebSurfaceConfig(environment, parsed.data.NODE_ENV),
     bscWrites: parseBscWriteConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),

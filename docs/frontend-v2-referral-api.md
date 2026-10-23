@@ -179,6 +179,9 @@
   App 可在用户确认后读剪贴板里的 `LOOP-XXXXC` 预填（docs/09：不接第三方延迟深链 SDK）。
 - 无效码（校验位错 / 格式错）→ 404「链接无效」页。页面不读库，不告诉访问者这个码是否真的存在。
 - 服务端 env：`APP_STORE_URL_IOS`、`APP_STORE_URL_ANDROID`（https，可不配；不配就不显示该商店链接）。
+- **决策 0179**：服务端配了 `WEB_BASE_URL`（官网根地址）时，未安装 App 的访问改为 `302` 到
+  `${WEB_BASE_URL}/i/{code}`（官网注册页，见 `docs/frontend-web-registration-api.md`），上面的 API 自有页面不再出现；
+  App 侧的 Universal Link / App Link 行为不变（host 仍是 API 域名）。
 
 ## 7. unavailable 行为汇总
 
