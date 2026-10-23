@@ -41,6 +41,12 @@ export const pushEventTypes = Object.freeze([
   "launch_badge_minted",
   "social_friend_request",
   "social_friend_accepted",
+  // Decision 0178: the project owner's launch review / deployment progress
+  // (sent only while LAUNCH_REVIEW_INBOX_EMIT is on).
+  "launch_review_approved",
+  "launch_review_rejected",
+  "launch_activated",
+  "launch_deploy_failed",
 ] as const);
 export type PushEventType = (typeof pushEventTypes)[number];
 
@@ -128,6 +134,39 @@ export const pushEventDictionary = Object.freeze({
     mandatory: false,
     titleLocKey: "push.socialFriendAccepted.title",
     bodyLocKey: "push.socialFriendAccepted.body",
+  }),
+  /**
+   * Decision 0178: the project owner's launch progress, all under
+   * `launch.round`. The pointer names the project (review, failure) or the
+   * instance (activation); the facts stay in the feed row.
+   */
+  launch_review_approved: Object.freeze({
+    eventType: "launch_review_approved",
+    category: "launch.round",
+    mandatory: false,
+    titleLocKey: "push.launchReviewApproved.title",
+    bodyLocKey: "push.launchReviewApproved.body",
+  }),
+  launch_review_rejected: Object.freeze({
+    eventType: "launch_review_rejected",
+    category: "launch.round",
+    mandatory: false,
+    titleLocKey: "push.launchReviewRejected.title",
+    bodyLocKey: "push.launchReviewRejected.body",
+  }),
+  launch_activated: Object.freeze({
+    eventType: "launch_activated",
+    category: "launch.round",
+    mandatory: false,
+    titleLocKey: "push.launchActivated.title",
+    bodyLocKey: "push.launchActivated.body",
+  }),
+  launch_deploy_failed: Object.freeze({
+    eventType: "launch_deploy_failed",
+    category: "launch.round",
+    mandatory: false,
+    titleLocKey: "push.launchDeployFailed.title",
+    bodyLocKey: "push.launchDeployFailed.body",
   }),
 } as const satisfies Readonly<Record<PushEventType, PushEventDefinition>>);
 

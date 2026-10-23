@@ -5,6 +5,7 @@ import {
 } from "./launch2-snapshot-publication-repository.js";
 
 import type { HooksLaunchDeploymentStatus } from "../features/launch/hooks-launch-deployment-status.js";
+import { recordLaunchDeployFailedNotification } from "./launch-review-inbox-repository.js";
 import type {
   HooksLaunchExecutorContext,
   HooksLaunchExecutorEventInput,
@@ -408,7 +409,15 @@ export function createPostgresHooksLaunchExecutorRepository(
             event: input.event,
           });
         }
-        return mapTask(updated.rows[0]!);
+        const next = updated.rows[0]!;
+        // Decision 0178: a final failure (no retry left) tells the owner, in
+        // this transaction; the dedupe key keeps it to one row per task.
+        if (next.status === "failed" && next.failure_retryable === false) {
+          await recordLaunchDeployFailedNotification(client, {
+            jobId: input.jobId,
+          });
+        }
+        return mapTask(next);
       });
     },
 

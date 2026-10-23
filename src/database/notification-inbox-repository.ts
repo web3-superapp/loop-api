@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
 import {
+  notificationInboxCoreEventTypes,
   notificationInboxEventTypes,
   type NotificationInboxEventType,
 } from "../features/alerts/notification-contract.js";
@@ -9,6 +10,10 @@ import {
   launchBadgeMintedNotification,
   launchGraduatedNotification,
 } from "../features/notifications/notification-inbox-contract.js";
+import {
+  launchActivatedNotification,
+  launchActivationBatch,
+} from "../features/notifications/launch-review-inbox-contract.js";
 import { insertNotificationRow } from "./notification-repository.js";
 import { withV2Transaction } from "./v2-command-support.js";
 
@@ -41,6 +46,11 @@ export interface NotificationInboxProduceResult {
   readonly graduations: number;
   /** Mints whose rows were written this pass. */
   readonly mints: number;
+  /**
+   * Decision 0178: activated instances whose owner row was written this
+   * pass (absent in fakes that predate it).
+   */
+  readonly activations?: number;
   /** Facts marked without rows (stale, hidden instance, no account). */
   readonly skipped: number;
   /** Feed rows inserted (duplicates excluded). */
@@ -69,11 +79,16 @@ export interface NotificationInboxRepository {
    * Marks up to `limit` fresh unsettled fine-event rows as settled and
    * returns them: the push is at most once, a Provider failure is not
    * retried (the feed row stays the record).
+   *
+   * Decision 0178: only rows whose fine event is in `eventTypes` (the
+   * events whose emit switch is on) are claimed; absent = the Decision
+   * 0177 four.
    */
   claimPushes(input: {
     readonly now: Date;
     readonly freshnessSeconds: number;
     readonly limit: number;
+    readonly eventTypes?: readonly NotificationInboxEventType[];
   }): Promise<readonly NotificationInboxPushClaim[]>;
   /** Settles unsettled rows older than the window without a push. */
   settleStalePushes(input: {
@@ -91,6 +106,19 @@ const graduationRowSchema = z.object({
   graduated_at: z.instanceof(Date),
   official_pool_id: z.string().nullable(),
   listing: z.string(),
+});
+
+const activationRowSchema = z.object({
+  instance_id: z.string().uuid(),
+  job_id: z.string().uuid(),
+  project_id: z.string().uuid(),
+  owner_user_id: z.string().uuid(),
+  name: z.string().min(1),
+  ticker: z.string().nullable(),
+  nft_sale_start: z.instanceof(Date),
+  activated_at: z.instanceof(Date),
+  listing: z.string(),
+  task_status: z.string(),
 });
 
 const mintRowSchema = z.object({
@@ -281,6 +309,86 @@ export function createPostgresNotificationInboxRepository(
     });
   }
 
+  /**
+   * Decision 0178: one `launch.activated` row to the project owner per
+   * newly registered instance (the launch2 lane registers an instance only
+   * once its deployment task is `activated`, which is when its ID exists).
+   * Marker `launch2_instances.inbox_activation_settled_at` + dedupe key:
+   * at most once. Stale (activated > 24 h before the lane sees it), hidden,
+   * or not-activated (defensive: the lane registers only activated tasks)
+   * instances are only marked.
+   */
+  async function produceActivations(
+    now: Date,
+    freshnessSeconds: number,
+    limit: number,
+  ): Promise<{
+    readonly written: number;
+    readonly skipped: number;
+    readonly rows: number;
+    readonly claimed: number;
+  }> {
+    return withV2Transaction(pool, unavailable, async (client) => {
+      const pending = await client.query<Row>({
+        text: `
+          select i.instance_id::text, i.job_id::text, i.project_id::text,
+            i.owner_user_id::text, i.name, i.ticker, i.nft_sale_start,
+            coalesce(t.activated_at, i.registered_at) as activated_at,
+            i.listing, t.status as task_status
+          from public.launch2_instances i
+          join public.hooks_launch_deployment_tasks t on t.job_id = i.job_id
+          where i.inbox_activation_settled_at is null
+          order by i.registered_at, i.instance_id
+          limit $1
+          for update of i skip locked
+        `,
+        values: [limit],
+      });
+      let written = 0;
+      let skipped = 0;
+      let rows = 0;
+      for (const raw of pending.rows) {
+        const instance = activationRowSchema.parse(raw);
+        const stale =
+          instance.activated_at.getTime() <
+          now.getTime() - freshnessSeconds * 1000;
+        if (
+          stale ||
+          instance.listing !== "visible" ||
+          instance.task_status !== "activated"
+        ) {
+          skipped += 1;
+        } else {
+          const inserted = await insertNotificationRow(
+            client,
+            launchActivatedNotification({
+              ownerUserId: instance.owner_user_id,
+              projectId: instance.project_id,
+              jobId: instance.job_id,
+              instanceId: instance.instance_id,
+              projectName: instance.name,
+              symbol: instance.ticker,
+              saleStartAt: instance.nft_sale_start.toISOString(),
+              activatedAt: instance.activated_at.toISOString(),
+              now,
+            }),
+          );
+          if (inserted !== null) rows += 1;
+          written += 1;
+        }
+        await client.query({
+          text: `
+            update public.launch2_instances
+            set inbox_activation_settled_at = clock_timestamp()
+            where instance_id = $1
+          `,
+          values: [instance.instance_id],
+        });
+      }
+      return { written, skipped, rows, claimed: pending.rows.length };
+    });
+  }
+
   const repository: NotificationInboxRepository = {
     async produceLaunch2(input) {
       try {
@@ -294,14 +402,21 @@ export function createPostgresNotificationInboxRepository(
           input.freshnessSeconds,
           input.mintLimit,
         );
+        const activations = await produceActivations(
+          input.now,
+          input.freshnessSeconds,
+          launchActivationBatch,
+        );
         return Object.freeze({
           graduations: graduations.written,
           mints: mints.written,
-          skipped: graduations.skipped + mints.skipped,
-          notifications: graduations.rows + mints.rows,
+          activations: activations.written,
+          skipped: graduations.skipped + mints.skipped + activations.skipped,
+          notifications: graduations.rows + mints.rows + activations.rows,
           saturated:
             graduations.claimed >= input.graduationLimit ||
-            mints.claimed >= input.mintLimit,
+            mints.claimed >= input.mintLimit ||
+            activations.claimed >= launchActivationBatch,
         });
       } catch {
         throw new NotificationInboxRepositoryUnavailableError();
@@ -317,6 +432,7 @@ export function createPostgresNotificationInboxRepository(
               from public.notifications
               where event_type is not null and push_settled_at is null
                 and created_at >= $1::timestamptz
+                and event_type = any($3::text[])
               order by created_at, notification_id
               limit $2
               for update skip locked
@@ -334,6 +450,7 @@ export function createPostgresNotificationInboxRepository(
               input.now.getTime() - input.freshnessSeconds * 1000,
             ).toISOString(),
             input.limit,
+            [...(input.eventTypes ?? notificationInboxCoreEventTypes)],
           ],
         });
         return Object.freeze(

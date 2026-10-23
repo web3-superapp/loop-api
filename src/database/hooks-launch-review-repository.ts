@@ -21,6 +21,10 @@ import {
   type HooksLaunchReviewRepository,
 } from "../features/launch/hooks-launch-review.js";
 import { allocateHooksLaunchConfigVersion } from "./hooks-launch-config-version-allocator.js";
+import {
+  recordLaunchReviewApprovedNotification,
+  recordLaunchReviewRejectedNotification,
+} from "./launch-review-inbox-repository.js";
 
 /**
  * Decision 0108: PostgreSQL Hooks launch review (ported from the requirer
@@ -292,6 +296,12 @@ async function approveConfig(
   if (!inserted.rowCount) {
     throw new HooksLaunchReviewError("OPS_VERSION_CONFLICT");
   }
+  // Decision 0178: the owner may now sign — same transaction, once per
+  // approved version.
+  await recordLaunchReviewApprovedNotification(client, {
+    projectId,
+    configVersion: command.payload.configVersion,
+  });
   return inserted.rows[0];
 }
 
@@ -368,6 +378,13 @@ async function rejectConfig(
       command.payload.note,
     ],
   );
+  // Decision 0178: the owner learns why — same transaction.
+  await recordLaunchReviewRejectedNotification(client, {
+    projectId,
+    decision: { kind: "config", configVersion: command.payload.configVersion },
+    reasonCode: command.payload.reasonCode,
+    note: command.payload.note,
+  });
   return inserted.rows[0];
 }
 
@@ -447,6 +464,14 @@ async function rejectProject(
       actor,
     ],
   );
+  // Decision 0178: the owner learns why — same transaction, once per
+  // rejection row.
+  await recordLaunchReviewRejectedNotification(client, {
+    projectId,
+    decision: { kind: "material", rejectionId: command.operationId },
+    reasonCode: command.payload.reasonCode,
+    note: command.payload.note,
+  });
   return inserted.rows[0];
 }
 

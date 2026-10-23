@@ -91,14 +91,51 @@ export function isNotificationCategory(
  * push never surface them, because a released client decodes `type`
  * against the ten categories and would reject the whole page.
  */
-export const notificationInboxEventTypes = Object.freeze([
+export const notificationInboxCoreEventTypes = Object.freeze([
   "launch.graduated",
   "launch.badge_minted",
   "social.friend_request",
   "social.friend_accepted",
 ] as const);
+
+/**
+ * Decision 0178 (S291): the project owner's launch review / deployment
+ * progress events. Stored like the Decision 0177 events (category
+ * `launch.round` in `type`, the fine event in `event_type`) but gated by
+ * their own switch, `LAUNCH_REVIEW_INBOX_EMIT` (default off).
+ */
+export const launchReviewInboxEventTypes = Object.freeze([
+  "launch.review_approved",
+  "launch.review_rejected",
+  "launch.activated",
+  "launch.deploy_failed",
+] as const);
+export type LaunchReviewInboxEventType =
+  (typeof launchReviewInboxEventTypes)[number];
+
+export const notificationInboxEventTypes = Object.freeze([
+  ...notificationInboxCoreEventTypes,
+  ...launchReviewInboxEventTypes,
+] as const);
 export type NotificationInboxEventType =
   (typeof notificationInboxEventTypes)[number];
+
+/**
+ * Which fine events a read (feed, unread count, read-all, single read) or
+ * the push lane may surface: the Decision 0177 four while
+ * `NOTIFICATION_INBOX_EMIT` is on, the Decision 0178 four while
+ * `LAUNCH_REVIEW_INBOX_EMIT` is on. Rows with a null `event_type` are
+ * always visible.
+ */
+export function visibleNotificationInboxEventTypes(input: {
+  readonly inboxEmit: boolean;
+  readonly launchReviewEmit: boolean;
+}): readonly NotificationInboxEventType[] {
+  return Object.freeze([
+    ...(input.inboxEmit ? notificationInboxCoreEventTypes : []),
+    ...(input.launchReviewEmit ? launchReviewInboxEventTypes : []),
+  ]);
+}
 
 /** The category whose preference gates each fine event's push. */
 export const notificationInboxEventCategory: Readonly<
@@ -110,6 +147,12 @@ export const notificationInboxEventCategory: Readonly<
   // A request / acceptance is addressed to the reader personally.
   "social.friend_request": "community.mention",
   "social.friend_accepted": "community.mention",
+  // Decision 0178: every project-owner progress event is a launch round
+  // fact ("资格快照与开始提醒" covers the run-up to the sale).
+  "launch.review_approved": "launch.round",
+  "launch.review_rejected": "launch.round",
+  "launch.activated": "launch.round",
+  "launch.deploy_failed": "launch.round",
 });
 
 /** Client route slugs (loop-mobile `LoopRouteManifest`). */
@@ -118,6 +161,10 @@ export const notificationInboxContextRoutes = Object.freeze({
   "launch.badge_minted": "launch2-instance",
   "social.friend_request": "dm-requests",
   "social.friend_accepted": "user-profile",
+  "launch.review_approved": "launch2-project-sign",
+  "launch.review_rejected": "launch2-projects-mine",
+  "launch.activated": "launch2-instance",
+  "launch.deploy_failed": "launch2-projects-mine",
 } as const satisfies Record<NotificationInboxEventType, string>);
 
 /** The feed `type` of a row: the fine event when set, else the category. */

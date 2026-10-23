@@ -1047,6 +1047,12 @@ const environmentSchema = z
     // (rows are still written). Turn on only once every supported client
     // decodes the new feed `type` values.
     NOTIFICATION_INBOX_EMIT: z.enum(["off", "on"]),
+    // Decision 0178: off|on (default off). off hides the four launch review
+    // / deployment progress events (launch.review_approved,
+    // launch.review_rejected, launch.activated, launch.deploy_failed) from
+    // the feed, unread counts, read-all and the single read (rows are still
+    // written). Turn on only once every supported client decodes them.
+    LAUNCH_REVIEW_INBOX_EMIT: z.enum(["off", "on"]),
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1385,6 +1391,9 @@ const reconciliationWorkerEnvironmentSchema = z
     NOTIFICATION_INBOX_ENABLED: booleanString,
     NOTIFICATION_INBOX_INTERVAL_MS: positiveIntegerString(1_000, 600_000),
     NOTIFICATION_INBOX_EMIT: z.enum(["off", "on"]),
+    // Decision 0178: lets the notification_inbox lane push the four launch
+    // review / deployment progress events (default off).
+    LAUNCH_REVIEW_INBOX_EMIT: z.enum(["off", "on"]),
     COMMUNITY_MEMBER_BUY_FEED_ENABLED: booleanString,
     COMMUNITY_MEMBER_BUY_FEED_INTERVAL_MS: positiveIntegerString(
       5_000,
@@ -1950,6 +1959,8 @@ export interface AppConfig {
   readonly communityLabelEmit: boolean;
   /** Decision 0177: NOTIFICATION_INBOX_EMIT === "on" (default off). */
   readonly notificationInboxEmit: boolean;
+  /** Decision 0178: LAUNCH_REVIEW_INBOX_EMIT === "on" (default off). */
+  readonly launchReviewInboxEmit: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -2323,6 +2334,8 @@ export interface ReconciliationWorkerConfig {
   readonly notificationInbox: {
     readonly intervalMs: number;
     readonly emit: boolean;
+    /** Decision 0178: `LAUNCH_REVIEW_INBOX_EMIT === "on"` (default off). */
+    readonly launchReviewEmit: boolean;
   } | null;
   /**
    * `community_member_buy_feed` lane (Decision 0097); default on. It turns
@@ -4334,6 +4347,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     PROFILE_LAUNCH2_EMIT: environment["PROFILE_LAUNCH2_EMIT"] ?? "off",
     COMMUNITY_LABEL_EMIT: environment["COMMUNITY_LABEL_EMIT"] ?? "off",
     NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
+    LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4509,6 +4523,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     profileLaunch2Emit: parsed.data.PROFILE_LAUNCH2_EMIT === "on",
     communityLabelEmit: parsed.data.COMMUNITY_LABEL_EMIT === "on",
     notificationInboxEmit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
+    launchReviewInboxEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:
@@ -4742,6 +4757,7 @@ export function loadReconciliationWorkerConfig(
     NOTIFICATION_INBOX_INTERVAL_MS:
       environment["NOTIFICATION_INBOX_INTERVAL_MS"] ?? "10000",
     NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
+    LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
     FRIEND_DIRECT_CHANNEL_INTERVAL_MS:
       environment["FRIEND_DIRECT_CHANNEL_INTERVAL_MS"] ?? "5000",
     FRIEND_CHANNEL_BACKFILL_ENABLED:
@@ -4986,6 +5002,7 @@ export function loadReconciliationWorkerConfig(
       ? Object.freeze({
           intervalMs: parsed.data.NOTIFICATION_INBOX_INTERVAL_MS,
           emit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
+          launchReviewEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
         })
       : null,
     friendDirectChannel: parsed.data.FRIEND_DIRECT_CHANNEL_ENABLED

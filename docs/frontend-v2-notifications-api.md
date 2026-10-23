@@ -420,3 +420,30 @@ Base URL、headers、模块开关与 capability（`notificationsFeed`）同 §1�
   `push.socialFriendRequest.*`、`push.socialFriendAccepted.*`（Android 下划线拼写）须在开关 `on` 前发版；
   router 需新增四个 type ↔ route 配对（`launch2Instance` → `launch2-instance`，`friendRequest` →
   `dm-requests` / `user-profile`）。推送仍是四键，点击后重读 feed 按 `type + entityRef` 找行。
+
+## 9. 发射进度通知（决策 0178，S291 / 客户端 S292）
+
+项目方（提交该项目、签名部署任务的账号）在审核 / 部署链路上收到四种通知。存储与读法同 §8：库里
+`type` = `launch.round`（十类之一，决定推送开关），feed / 单条已读返回的 `type` = 细分事件。
+
+| feed `type`（`eventType`） | 触发                                   | `title` / `body`                                                              | `entityRef`                 | `contextRoute`          | `contextParams`  | 推送 `type`              |
+| -------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- | --------------------------- | ----------------------- | ---------------- | ------------------------ |
+| `launch.review_approved`   | 发射配置审核通过（进入待签名）         | 「{项目名} 审核已通过」/「请完成签名，发射才会部署」                          | `launchProject:<projectId>` | `launch2-project-sign`  | `{ projectId }`  | `launch_review_approved` |
+| `launch.review_rejected`   | 资料或配置被驳回                       | 「{项目名} 审核未通过」/ 驳回原因（审核员备注，否则原因码对应的中文）         | `launchProject:<projectId>` | `launch2-projects-mine` | `{ projectId }`  | `launch_review_rejected` |
+| `launch.activated`         | 部署并激活成功、实例已登记             | 「{项目名} 已上链」/「YYYY-MM-DD HH:mm（北京时间）开售」或「已开售」          | `launch2Instance:<id>`      | `launch2-instance`      | `{ instanceId }` | `launch_activated`       |
+| `launch.deploy_failed`     | 执行器部署 / 核验 / 激活失败且不再重试 | 「{项目名} 部署失败」/ 简短原因（按失败码，未知码「部署未完成，请联系平台」） | `launchProject:<projectId>` | `launch2-projects-mine` | `{ projectId }`  | `launch_deploy_failed`   |
+
+`payload`（全部字符串）：`event`、`title`、`body`、`projectName`、`symbol`（有就带）、`taskId`（= 项目
+ID，与 `projectId` 同值，即「我的项目」行与签名页的 `id`）、`projectId`；另：审核通过 / 配置驳回带
+`configVersion`；驳回带 `reasonCode`、`reasonText`；激活带 `jobId`、`instanceId`、`saleStartAt`
+（RFC 3339）；失败带 `jobId`、`failureCode`。
+
+- 开关 `LAUNCH_REVIEW_INBOX_EMIT`（默认 `off`，API 与 worker 同时切）：`off` 时照常写库，但 feed、
+  `unreadCount`、`unread-count`、`read-all`、单条已读都看不见这四种（单条已读 404），worker 不推送。
+  与 `NOTIFICATION_INBOX_EMIT` 互相独立。
+- 推送四键不变（`eventVersion: "1"`）；设备端本地化键 `push.launchReviewApproved.*`、
+  `push.launchReviewRejected.*`、`push.launchActivated.*`、`push.launchDeployFailed.*`；router 新增
+  `launchProject` → `launch2-project-sign` / `launch2-projects-mine`，`launch2Instance` → `launch2-instance`。
+- `launch2-projects-mine` 是本契约的字面路由名（manifest slug 为 `launch2-projects`），客户端按字面匹配，服务端不改。
+- 项目事件 `entityRef` 只发 `launchProject:<uuid>`，`contextParams.projectId` 必带；`launch.activated` 只发
+  `launch2Instance:<uuid>`，`contextParams.instanceId` 必带。

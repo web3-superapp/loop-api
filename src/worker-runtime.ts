@@ -2865,6 +2865,7 @@ export async function runReconciliationWorker(
         repository: database.notificationInbox,
         push: inboxPush,
         emit: inboxConfig.emit,
+        launchReviewEmit: inboxConfig.launchReviewEmit,
         logger: {
           warn: (context) => {
             const reasonCode = context["reasonCode"];
@@ -2893,7 +2894,10 @@ export async function runReconciliationWorker(
                 {
                   ...logFields(),
                   lane,
-                  inserted: result.produced.graduations + result.produced.mints,
+                  inserted:
+                    result.produced.graduations +
+                    result.produced.mints +
+                    (result.produced.activations ?? 0),
                   count: result.produced.notifications,
                   skippedCount: result.produced.skipped,
                   succeededCount: result.pushSent,

@@ -3,6 +3,7 @@ import type {
   NotificationInboxRepository,
 } from "../../database/notification-inbox-repository.js";
 import type { PushDispatchService } from "../push/push-dispatch-service.js";
+import { visibleNotificationInboxEventTypes } from "../alerts/notification-contract.js";
 import {
   notificationInboxFactFreshnessSeconds,
   notificationInboxGraduationBatch,
@@ -18,8 +19,10 @@ import {
  * 1. Write the MEME v2 graduation / badge-minted rows (always: the rows
  *    are the record whether or not the emit switch is on).
  * 2. Settle fine-event rows that are too old to push.
- * 3. Only while `NOTIFICATION_INBOX_EMIT` is on and the push channel is
- *    composed: push the fresh ones, at most once each.
+ * 3. Only while `NOTIFICATION_INBOX_EMIT` (the Decision 0177 events) or
+ *    `LAUNCH_REVIEW_INBOX_EMIT` (the Decision 0178 events) is on and the
+ *    push channel is composed: push the fresh ones of the switched-on
+ *    events, at most once each.
  */
 
 export type NotificationInboxRunResult =
@@ -48,6 +51,11 @@ export interface CreateNotificationInboxServiceOptions {
   readonly push: PushDispatchService | null;
   /** `NOTIFICATION_INBOX_EMIT === "on"`. */
   readonly emit: boolean;
+  /**
+   * Decision 0178: `LAUNCH_REVIEW_INBOX_EMIT === "on"` (absent = off); the
+   * four launch progress events are pushed only while it is on.
+   */
+  readonly launchReviewEmit?: boolean;
   readonly logger: NotificationInboxServiceLogger;
   readonly now?: () => Date;
 }
@@ -75,7 +83,11 @@ export function createNotificationInboxService(
         freshnessSeconds: notificationInboxPushFreshnessSeconds,
       });
       const push = options.push;
-      if (!options.emit || push === null || !push.available) {
+      const pushableEventTypes = visibleNotificationInboxEventTypes({
+        inboxEmit: options.emit,
+        launchReviewEmit: options.launchReviewEmit === true,
+      });
+      if (pushableEventTypes.length === 0 || push === null || !push.available) {
         return Object.freeze({
           kind: "completed",
           produced,
@@ -89,6 +101,7 @@ export function createNotificationInboxService(
         now: now(),
         freshnessSeconds: notificationInboxPushFreshnessSeconds,
         limit: notificationInboxPushBatch,
+        eventTypes: pushableEventTypes,
       });
       let pushSent = 0;
       for (const claim of claims) {

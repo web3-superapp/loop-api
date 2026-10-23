@@ -34,6 +34,11 @@ const pushEventTypes = Object.freeze({
   "launch.badge_minted": "launch_badge_minted",
   "social.friend_request": "social_friend_request",
   "social.friend_accepted": "social_friend_accepted",
+  // Decision 0178.
+  "launch.review_approved": "launch_review_approved",
+  "launch.review_rejected": "launch_review_rejected",
+  "launch.activated": "launch_activated",
+  "launch.deploy_failed": "launch_deploy_failed",
 } as const satisfies Record<NotificationInboxEventType, PushEventType>);
 
 export function notificationInboxPushEventType(

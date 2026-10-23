@@ -164,7 +164,21 @@ describe("push contract (Decision 0067)", () => {
       "launch_badge_minted",
       "social_friend_request",
       "social_friend_accepted",
+      // Decision 0178: the project owner's launch progress events.
+      "launch_review_approved",
+      "launch_review_rejected",
+      "launch_activated",
+      "launch_deploy_failed",
     ]);
+    for (const eventType of [
+      "launch_review_approved",
+      "launch_review_rejected",
+      "launch_activated",
+      "launch_deploy_failed",
+    ] as const) {
+      expect(pushPreferenceCategory(eventType)).toBe("launch.round");
+      expect(pushEventDictionary[eventType].mandatory).toBe(false);
+    }
     // Decision 0177: each inbox event is optional and gated by the category
     // its feed row is stored under.
     expect(pushPreferenceCategory("launch_graduated")).toBe(

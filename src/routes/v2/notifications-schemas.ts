@@ -239,7 +239,7 @@ const notificationSchema = {
       type: "string",
       enum: [...notificationFeedTypes],
       description:
-        "The preference category, or (Decision 0177, only while the server's NOTIFICATION_INBOX_EMIT is on) the fine inbox event: launch.graduated, launch.badge_minted (categories launch.graduation / launch.round), social.friend_request, social.friend_accepted (category community.mention).",
+        "The preference category, or (Decision 0177, only while the server's NOTIFICATION_INBOX_EMIT is on) the fine inbox event: launch.graduated, launch.badge_minted (categories launch.graduation / launch.round), social.friend_request, social.friend_accepted (category community.mention). Decision 0178, only while LAUNCH_REVIEW_INBOX_EMIT is on: launch.review_approved, launch.review_rejected, launch.activated, launch.deploy_failed (category launch.round; the project owner's launch progress).",
     },
     entityRef: {
       type: "string",

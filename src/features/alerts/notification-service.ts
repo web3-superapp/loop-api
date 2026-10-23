@@ -135,6 +135,11 @@ export interface CreateNotificationServiceInput {
    * read-all.
    */
   readonly inboxEmit?: boolean;
+  /**
+   * Decision 0178: `LAUNCH_REVIEW_INBOX_EMIT`. Off (default): the four
+   * launch review / deployment progress events are hidden the same way.
+   */
+  readonly launchReviewEmit?: boolean;
   readonly now?: () => Date;
 }
 
@@ -263,6 +268,7 @@ export function createNotificationService(
   const push =
     input.pushRuntimeAvailable === true ? pushAvailable : pushUnavailable;
   const includeInboxEvents = input.inboxEmit === true;
+  const includeLaunchReviewEvents = input.launchReviewEmit === true;
   const now = input.now ?? (() => new Date());
   const service: NotificationService = {
     async listFeed({ principal, cursor, limit }) {
@@ -323,6 +329,7 @@ export function createNotificationService(
           ownerUserId: principal.userId,
           limit: pageSize,
           includeInboxEvents,
+          includeLaunchReviewEvents,
           ...(before === undefined ? {} : { before }),
         });
       } catch (error) {
@@ -360,6 +367,7 @@ export function createNotificationService(
           principal.userId,
           notificationId,
           includeInboxEvents,
+          includeLaunchReviewEvents,
         );
       } catch (error) {
         return translate(error);
@@ -379,6 +387,7 @@ export function createNotificationService(
         unread = await input.repository.countUnread({
           ownerUserId: principal.userId,
           includeInboxEvents,
+          includeLaunchReviewEvents,
         });
       } catch (error) {
         return translate(error);
@@ -392,6 +401,7 @@ export function createNotificationService(
         marked = await input.repository.markAllRead({
           ownerUserId: principal.userId,
           includeInboxEvents,
+          includeLaunchReviewEvents,
         });
       } catch (error) {
         return translate(error);
