@@ -39,6 +39,8 @@ import {
   type ReferralBoostRecord,
   type ReferralEdgeRecord,
   type ReferralInviteeKey,
+  type ReferralInviteeRecord,
+  type ReferralInviteeStatsRecord,
   type ReferralInviteeStatus,
   type ReferralRepository,
 } from "./referral-repository.js";
@@ -133,8 +135,34 @@ export const referralInviteePaging = Object.freeze({
   maximumLimit: 50,
 });
 
+/** Decision 0180: the website's invite panel serves 100 invitees a page. */
+export const referralDashboardPageSize = 100;
+
+/**
+ * Decision 0180: the website's "my invites" panel. The same reads as the
+ * App's invite center (`GET /v2/referral` + `GET /v2/referral/invitees`):
+ * the lazily issued invite code, the direct edge and claim window, the
+ * Decision 0162 stats of the newest settled hour, and the direct invitees
+ * newest first. Independent of REFERRAL_CENTER_EMIT (an App codec switch).
+ */
+export interface ReferralDashboardResource {
+  readonly inviteCode: { readonly code: string; readonly issuedAt: string };
+  readonly inviteLink: string;
+  /** A depth-1 edge exists (bound once, ever; invalidated edges count). */
+  readonly bound: boolean;
+  readonly claimWindow: ReturnType<typeof claimWindow>;
+  /**
+   * Null before the first settled mining hour (validity is unknown) or
+   * when the stats read failed; never zeros in place of unknown.
+   */
+  readonly stats: ReferralInviteeStatsRecord | null;
+  readonly invitees: readonly ReferralInviteeRecord[];
+  readonly nextCursor: string | null;
+}
+
 const inviteeCursorRoute = "referralInvitees";
 const inviteeCursorFilter = "depth=1";
+const dashboardCursorRoute = "webReferralDashboard";
 
 export interface ReferralService {
   getReferral(input: {
@@ -152,6 +180,12 @@ export interface ReferralService {
     readonly cursor?: unknown;
     readonly limit?: unknown;
   }): Promise<ReferralInviteeListResource>;
+  /** Decision 0180: the website's invite panel. */
+  getDashboard(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly requestId: string;
+    readonly cursor?: unknown;
+  }): Promise<ReferralDashboardResource>;
 }
 
 function translate(error: unknown): never {
@@ -304,6 +338,48 @@ export function createReferralService(dependencies: {
       throw V2ApiError.invalidRequest();
     }
     return { limit, after: { boundAtKey, referralEdgeId } };
+  }
+
+  function requireCodec(): V2CursorCodec {
+    if (codec === null) {
+      throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+        reasonCode: "V2_CURSOR_NOT_CONFIGURED",
+      });
+    }
+    return codec;
+  }
+
+  function parseDashboardCursor(
+    activeCodec: V2CursorCodec,
+    ownerId: string,
+    cursor: unknown,
+  ): ReferralInviteeKey | null {
+    if (cursor === undefined) {
+      return null;
+    }
+    if (typeof cursor !== "string") {
+      throw V2ApiError.invalidRequest();
+    }
+    let continuation;
+    try {
+      continuation = activeCodec.decode({
+        ownerId,
+        route: dashboardCursorRoute,
+        filter: inviteeCursorFilter,
+        cursor,
+      });
+    } catch (error) {
+      if (error instanceof InvalidV2CursorError) {
+        throw V2ApiError.invalidRequest();
+      }
+      throw error;
+    }
+    const boundAtKey = continuation["boundAt"];
+    const referralEdgeId = continuation["edge"];
+    if (typeof boundAtKey !== "string" || typeof referralEdgeId !== "string") {
+      throw V2ApiError.invalidRequest();
+    }
+    return { boundAtKey, referralEdgeId };
   }
 
   async function ensureInviteCode(
@@ -522,6 +598,63 @@ export function createReferralService(dependencies: {
         return translate(error);
       }
     },
+
+    async getDashboard(input: Parameters<ReferralService["getDashboard"]>[0]) {
+      try {
+        const ownerUserId = input.principal.userId;
+        const activeCodec = requireCodec();
+        const after = parseDashboardCursor(
+          activeCodec,
+          ownerUserId,
+          input.cursor,
+        );
+        const epochId = await repository.getLatestSettledEpochId();
+        const [inviteCode, state, direct, rows, stats] = await Promise.all([
+          ensureInviteCode(ownerUserId, input.requestId),
+          repository.getAccountState(ownerUserId),
+          repository.getDirectEdge(ownerUserId),
+          repository.listDirectInvitees({
+            inviterUserId: ownerUserId,
+            after,
+            limit: referralDashboardPageSize + 1,
+          }),
+          epochId === null
+            ? Promise.resolve(null)
+            : repository
+                .getInviteeStats(ownerUserId, epochId)
+                // A derived figure: a failed read is unknown, never zeros.
+                .catch(() => null),
+        ]);
+        const served = rows.slice(0, referralDashboardPageSize);
+        const last = served.at(-1);
+        const nextCursor =
+          rows.length > referralDashboardPageSize && last !== undefined
+            ? activeCodec.encode({
+                ownerId: ownerUserId,
+                route: dashboardCursorRoute,
+                filter: inviteeCursorFilter,
+                continuation: {
+                  boundAt: last.boundAtKey,
+                  edge: last.referralEdgeId,
+                },
+              })
+            : null;
+        return Object.freeze({
+          inviteCode: Object.freeze({
+            code: inviteCode.code,
+            issuedAt: inviteCode.issuedAt,
+          }),
+          inviteLink: `${linkBase}/i/${inviteCode.code}`,
+          bound: direct !== null,
+          claimWindow: claimWindow(state.activatedAt, now()),
+          stats: stats === null || stats.validAsOf === null ? null : stats,
+          invitees: Object.freeze(served),
+          nextCursor,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
   });
 }
 
@@ -532,5 +665,6 @@ export function createUnavailableReferralService(): ReferralService {
     getReferral: unavailableService,
     claim: unavailableService,
     listInvitees: unavailableService,
+    getDashboard: unavailableService,
   });
 }

@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { z } from "zod";
 
+import { loopIdPatternSource } from "../features/identity/loop-id.js";
 import { inviteCodePatternSource } from "../features/referral/invite-code.js";
 import {
   referralCommandDigestVersion,
@@ -95,6 +96,7 @@ const inviteeRowSchema = z
     public_profile_id: z.string().nullable(),
     alias: z.string().nullable(),
     avatar_ref: z.string().nullable(),
+    loop_id: z.string().regex(new RegExp(loopIdPatternSource)).nullable(),
     locked_at: dateSchema,
     bound_at_key: boundAtKeySchema,
     status: z.enum(referralInviteeStatuses),
@@ -553,6 +555,7 @@ export function createPostgresReferralRepository(
                 else p.public_profile_id::text end as public_profile_id,
               case when blocked.blocked then null else p.alias end as alias,
               case when blocked.blocked then null else p.avatar_ref end as avatar_ref,
+              case when blocked.blocked then null else u.loop_id end as loop_id,
               e.locked_at,
               to_char(e.locked_at at time zone 'UTC',
                 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as bound_at_key,
@@ -565,6 +568,7 @@ export function createPostgresReferralRepository(
                 else 'pending'
               end as status
             from public.referral_edges as e
+            join public.loop_users as u on u.id = e.invitee_user_id
             left join public.user_profiles as p
               on p.owner_user_id = e.invitee_user_id and p.profile_status = 'active'
             left join lateral (
@@ -601,6 +605,7 @@ export function createPostgresReferralRepository(
               publicProfileId: row.public_profile_id,
               alias: row.alias,
               avatarRef: row.avatar_ref,
+              loopId: row.loop_id,
               boundAt: toIsoString(row.locked_at),
               boundAtKey: row.bound_at_key,
               validationStatus: row.status,

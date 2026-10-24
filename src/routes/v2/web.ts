@@ -19,14 +19,21 @@ import { V2ApiError, v2ErrorResponseSchema } from "../../core/http/v2-error.js";
 import { evmAddressPatternSource } from "../../features/chain/chain-contract.js";
 import { loopIdPatternSource } from "../../features/identity/loop-id.js";
 import { maximumRawTextLength } from "../../features/profile/profile-v2-contract.js";
+import { inviteCodePatternSource } from "../../features/referral/invite-code.js";
+import { referralDashboardPageSize } from "../../features/referral/referral-service.js";
 import {
   parseWebWriteMetadata,
+  webInviteeStatuses,
   webReasonCodes,
   webWriteHeadersSchema,
 } from "../../features/web/web-registration-contract.js";
 import type { WebRegistrationService } from "../../features/web/web-registration-service.js";
 import type { WebRateLimiter } from "../../features/web/web-rate-limit.js";
-import { assertNoBodyOrQueryV2, assertNoQuery } from "./community-schemas.js";
+import {
+  assertNoBodyOrQueryV2,
+  assertNoBodyV2,
+  assertNoQuery,
+} from "./community-schemas.js";
 
 /**
  * Decision 0179: the web registration surface `/v2/web/*` for the LOOP
@@ -208,6 +215,165 @@ const previewResponseSchema = {
         { type: "null" },
       ],
     },
+  },
+} as const;
+
+const dashboardQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: {
+      type: "string",
+      minLength: 1,
+      maxLength: 1024,
+      description:
+        "The previous page's nextCursor (owner-bound, opaque). Omit for the first page.",
+    },
+  },
+} as const;
+
+const nonNegativeCountSchema = { type: "integer", minimum: 0 } as const;
+
+const dashboardResponseSchema = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: [
+    "code",
+    "inviteLink",
+    "stats",
+    "invitees",
+    "nextCursor",
+    "inviter",
+    "binding",
+    "observedAt",
+  ],
+  properties: {
+    code: {
+      type: "string",
+      pattern: inviteCodePatternSource,
+      description:
+        "The caller's own invite code (LOOP-XXXXC). Issued on the account's first invite-center read (App or website), before the username is set; never changes.",
+    },
+    inviteLink: {
+      type: "string",
+      format: "uri",
+      description:
+        "{PUBLIC_BASE_URL}/i/{code}, the same link the App shares (Universal Link / App Link; 302 to the website when WEB_BASE_URL is set).",
+    },
+    stats: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "direct",
+            "valid",
+            "deeper",
+            "pendingVerification",
+            "validAsOf",
+          ],
+          properties: {
+            direct: {
+              ...nonNegativeCountSchema,
+              description: "Direct invitees in force (depth 1).",
+            },
+            valid: {
+              ...nonNegativeCountSchema,
+              description:
+                "Direct invitees in force whose own mining power was > 0 in the newest settled hour.",
+            },
+            deeper: {
+              ...nonNegativeCountSchema,
+              description: "In-force relationships of depth 2 to 5.",
+            },
+            pendingVerification: {
+              ...nonNegativeCountSchema,
+              description: "direct - valid.",
+            },
+            validAsOf: {
+              ...dateTimeSchema,
+              description: "End of the settled hour `valid` is read from.",
+            },
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "Null before the first settled mining hour or when the figures cannot be read (unknown, never zeros).",
+    },
+    invitees: {
+      type: "array",
+      maxItems: referralDashboardPageSize,
+      description:
+        "Direct invitees (depth 1, in force and void), newest binding first; the App's invite list.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["loopId", "username", "depth", "status", "joinedAt"],
+        properties: {
+          loopId: {
+            anyOf: [loopIdSchema, { type: "null" }],
+            description: "Null when the invitee blocked the caller.",
+          },
+          username: {
+            ...nullableUsernameSchema,
+            description:
+              "Active profile alias; null before the invitee set a username or when the invitee blocked the caller.",
+          },
+          depth: { type: "integer", minimum: 1, maximum: 1 },
+          status: {
+            type: "string",
+            enum: webInviteeStatuses,
+            description:
+              "valid: own mining power > 0 in the newest settled hour; pending: in force, not (yet) valid; void: relationship invalidated.",
+          },
+          joinedAt: {
+            ...dateTimeSchema,
+            description: "Binding time of the relationship.",
+          },
+        },
+      },
+    },
+    nextCursor: {
+      anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+      description:
+        "Present when more invitees exist: GET again with ?cursor=. The other fields are re-read on every page.",
+    },
+    inviter: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["loopId", "username"],
+          properties: {
+            loopId: loopIdSchema,
+            username: nullableUsernameSchema,
+          },
+        },
+        { type: "null" },
+      ],
+      description: "The caller's direct inviter; null when unbound.",
+    },
+    binding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["bound", "windowEndsAt", "canClaim"],
+      properties: {
+        bound: { type: "boolean" },
+        windowEndsAt: {
+          anyOf: [dateTimeSchema, { type: "null" }],
+          description:
+            "Activation + 7 days; null before the username (activation).",
+        },
+        canClaim: {
+          type: "boolean",
+          description:
+            "Not bound and the window is not closed (before the username: set it first, then claim).",
+        },
+      },
+    },
+    observedAt: dateTimeSchema,
   },
 } as const;
 
@@ -483,6 +649,42 @@ export function registerV2WebRoutes(
           return sendNoStore(
             reply,
             await options.service.preview({ code: query.code }),
+          );
+        },
+      );
+
+      scope.get(
+        "/referral/me",
+        {
+          schema: {
+            operationId: "getWebReferralDashboard",
+            summary: "My invites: code, link, counts, invitees, inviter",
+            description:
+              "Decision 0180. Bearer only (no contract, idempotency, or device headers are read). The App's invite-center reads: the invite code is issued on the first read (also before the username), stats use the Decision 0162 source (valid = the invitee's own power > 0 in the newest settled hour), invitees are the direct ones newest first, 100 a page with an owner-bound cursor. Invitees show only LOOP ID and username. 409 ACCOUNT_BOOTSTRAP_REQUIRED before POST /v2/web/session; 503 V2_REFERRAL_MODULE_DEFERRED / V2_CURSOR_NOT_CONFIGURED / WEB_REPOSITORY_UNAVAILABLE.",
+            tags: ["web"],
+            security: [{ privyBearer: [] }],
+            querystring: dashboardQuerySchema,
+            response: {
+              200: dashboardResponseSchema,
+              400: v2ErrorResponseSchema(["INVALID_REQUEST"]),
+              401: bearer401,
+              409: v2ErrorResponseSchema(["ACCOUNT_BOOTSTRAP_REQUIRED"]),
+              500: common500,
+              503: common503,
+            },
+          },
+          preValidation: assertNoBodyV2,
+          preHandler: options.authenticateLoopBearer,
+        },
+        async (request, reply) => {
+          const query = request.query as { readonly cursor?: string };
+          return sendNoStore(
+            reply,
+            await options.service.referralDashboard({
+              principal: requireAuthenticatedLoopPrincipal(request),
+              requestId: request.id,
+              ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+            }),
           );
         },
       );

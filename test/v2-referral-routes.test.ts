@@ -454,6 +454,7 @@ describe("LOOP API V2 referral module", () => {
           : `5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e${String(index).padStart(2, "0")}`,
       alias: index === 2 ? null : `friend ${String(index)}`,
       avatarRef: null,
+      loopId: index === 2 ? null : `LOOP-ABCD123${String(index)}`,
       boundAt: `2026-09-08T01:00:${second}.123Z`,
       boundAtKey: `2026-09-08T01:00:${second}.123456Z`,
       validationStatus: index === 0 ? "valid" : "pending",

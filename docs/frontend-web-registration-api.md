@@ -11,6 +11,7 @@ Privy 登录（邮箱验证码 / Google）→ getAccessToken()
   → [有邀请码 且 invite.canClaim] POST /v2/web/referral/claim
   → 完成页：GET /v2/web/meta 给下载链接；App 里用同一邮箱 / Google 登录即同一账号
 落地页 /i/{code}：GET /v2/web/referral/preview?code=… 显示「XX 邀请你」并预填
+我的邀请面板：GET /v2/web/referral/me（S297，决策 0180）
 ```
 
 **顺序要求**：绑码必须在用户名之后（未起名 → 409 `PROFILE_ACTIVATION_REQUIRED`）。邀请码请在落地页存起来（URL / sessionStorage），起名成功后再 claim。
@@ -27,6 +28,7 @@ Privy 登录（邮箱验证码 / Google）→ getAccessToken()
 | `POST /v2/web/session`               | 必须                                         | 必须                           | 必须              | 有 body（`{}`）时必须；也可不发 body 不带该头 |
 | `PUT /v2/web/profile/username`       | 必须                                         | 必须                           | 必须              | 必须                                          |
 | `POST /v2/web/referral/claim`        | 必须                                         | 必须                           | 必须              | 必须                                          |
+| `GET /v2/web/referral/me[?cursor=]`  | 必须                                         | 不需要（不读）                 | 不需要（不读）    | —                                             |
 | `GET /v2/web/referral/preview?code=` | 不需要                                       | 不需要                         | 不需要            | —                                             |
 | `GET /v2/web/meta`                   | 不需要                                       | 不需要                         | 不需要            | —                                             |
 
@@ -138,6 +140,67 @@ GET /v2/web/referral/preview?code=LOOP-7HJKM
 
 任一项未配置为 null → 隐藏对应按钮。不要带任何 query。
 
+## 6b. `GET /v2/web/referral/me`（我的邀请，S297 决策 0180）
+
+只需 `Authorization: Bearer`；不需要契约版本头、幂等键（发了也忽略）。先 `POST /v2/web/session` 建账号（否则 409 `ACCOUNT_BOOTSTRAP_REQUIRED`）。
+
+```http
+GET /v2/web/referral/me
+Authorization: Bearer eyJ…
+```
+
+```json
+{
+  "code": "LOOP-7HJKM",
+  "inviteLink": "https://api-staging.quant-dinger.cc/i/LOOP-7HJKM",
+  "stats": {
+    "direct": 2,
+    "valid": 1,
+    "deeper": 1,
+    "pendingVerification": 1,
+    "validAsOf": "2026-10-24T03:00:00.000Z"
+  },
+  "invitees": [
+    {
+      "loopId": "LOOP-ABCD1234",
+      "username": "Bob",
+      "depth": 1,
+      "status": "valid",
+      "joinedAt": "2026-10-23T10:00:00.000Z"
+    },
+    {
+      "loopId": null,
+      "username": null,
+      "depth": 1,
+      "status": "pending",
+      "joinedAt": "2026-10-23T09:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "inviter": { "loopId": "LOOP-WXYZ5678", "username": "Alice" },
+  "binding": {
+    "bound": true,
+    "windowEndsAt": "2026-10-30T10:00:00.000Z",
+    "canClaim": false
+  },
+  "observedAt": "2026-10-24T10:00:00.000Z"
+}
+```
+
+| 字段         | 含义 / 前端处理                                                                                                                                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code`       | 自己的邀请码，**永远有值**：账号第一次读邀请中心（App 或本接口）时生成，**不需要先起用户名**，之后不变                                                                                                                                                         |
+| `inviteLink` | 分享链接（与 App 同一条）；配了 `WEB_BASE_URL` 时没装 App 的人会被 302 到网站 `/i/{code}`                                                                                                                                                                      |
+| `stats`      | `direct` 直接邀请人数；`valid` 其中最近一个已结算小时有自有算力的人数；`deeper` 2–5 级人数；`pendingVerification` = direct − valid；`validAsOf` 有效判定所依据的小时。**null = 还没有结算数据，显示「—」不要显示 0**                                           |
+| `invitees`   | 只列**直接邀请**（与 App 邀请列表同口径），绑定时间倒序，每页最多 100。`status`：`valid` 有效 / `pending` 待验证 / `void` 关系已失效。只给 `loopId`、`username`；`username` null = 对方没起名（显示 LOOP ID）；两者都 null = 对方拉黑了你（显示「LOOP 用户」） |
+| `nextCursor` | 非 null 时还有更多：`GET /v2/web/referral/me?cursor=<原样 encodeURIComponent>`，用返回的 `invitees` 追加；其它字段以最新一页为准                                                                                                                               |
+| `inviter`    | 我的邀请人；未绑为 null                                                                                                                                                                                                                                        |
+| `binding`    | 同 session 的 `invite`：`canClaim` 为 true 时可展示「填写邀请码」入口                                                                                                                                                                                          |
+
+错误：400 `INVALID_REQUEST`（多余 query / 游标坏了 → 去掉 cursor 重新拉第一页）、401、409 `ACCOUNT_BOOTSTRAP_REQUIRED`、500、503 `CAPABILITY_UNAVAILABLE`（`V2_REFERRAL_MODULE_DEFERRED` 邀请模块未开 → 隐藏面板；`V2_CURSOR_NOT_CONFIGURED` 服务端缺游标密钥；`WEB_REPOSITORY_UNAVAILABLE` / 无 reasonCode 数据库不可用 → 稍后重试）、503 `PROVIDER_DISCONNECTED` / `REQUEST_TIMEOUT`。
+
+**用户名「换一个」**：服务端没有建议接口（App 的「换一个」是纯客户端规则）。网站照抄：词干 `Voyager, Signal, Ledger, Orbit, Cipher, Harbor, Nimbus, Quartz` 任取其一 + `_` + 10–99 的两位数（例 `Orbit_42`）；用户名可重名，不需要查可用性，提交时由 `PUT /v2/web/profile/username` 判定。
+
 ## 7. `/i/{code}` 邀请链接
 
 App 里分享出去的邀请链接仍是 `{API 域名}/i/{code}`。服务端配了 `WEB_BASE_URL` 后，**没装 App** 的访问会被 302 到 `${WEB_BASE_URL}/i/{code}`（code 原样，已做 URL 编码）。所以网站必须实现 `/i/[code]` 页面：调 preview 显示邀请人、把 code 存起来、引导 Privy 登录 → 注册。装了 App 的手机由系统直接拉起 App，不经过网站。
@@ -168,7 +231,7 @@ App 里分享出去的邀请链接仍是 `{API 域名}/i/{code}`。服务端配�
 | 403  | `POLICY_BLOCKED`                   | `REFERRAL_CLAIM_WINDOW_CLOSED` | claim                  | 「注册已超过 7 天，不能再绑定邀请码」                                |
 | 404  | `NOT_FOUND`                        | `REFERRAL_CODE_UNKNOWN`        | claim                  | 「邀请码不存在」                                                     |
 | 404  | `NOT_FOUND`                        | —                              | 全部                   | 服务端没开 web 面（`WEB_ORIGINS` 空）或路径错                        |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`       | —                              | username/claim         | 先调 `POST /v2/web/session`                                          |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`       | —                              | username/claim/me      | 先调 `POST /v2/web/session`                                          |
 | 409  | `PROFILE_ACTIVATION_REQUIRED`      | `PROFILE_ACTIVATION_REQUIRED`  | claim                  | 先起用户名                                                           |
 | 409  | `IDEMPOTENCY_CONFLICT`             | —                              | username/claim         | 同一个 key 换了内容 → 换新 key                                       |
 | 409  | `VERSION_CONFLICT`                 | —                              | 写接口                 | `X-Loop-Contract-Version` 不是 `2.0`；改名时极少数并发冲突，重试一次 |
@@ -182,7 +245,8 @@ App 里分享出去的邀请链接仍是 `{API 域名}/i/{code}`。服务端配�
 | 503  | `PROVIDER_DISCONNECTED`            | —                              | 带 Bearer 的           | Privy 校验不可用，稍后再试                                           |
 | 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_SESSION_DISABLED`         | session                | 服务端关了 V2 会话                                                   |
 | 503  | `CAPABILITY_UNAVAILABLE`           | `V2_PROFILE_MODULE_DEFERRED`   | username               | 服务端未开资料模块                                                   |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_REFERRAL_MODULE_DEFERRED`  | claim/preview          | 服务端未开邀请模块；隐藏绑码 UI                                      |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_CURSOR_NOT_CONFIGURED`     | me                     | 服务端缺游标密钥，稍后再试                                           |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_REFERRAL_MODULE_DEFERRED`  | claim/preview/me       | 服务端未开邀请模块；隐藏绑码 UI                                      |
 | 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_REPOSITORY_UNAVAILABLE`   | 全部                   | 数据库不可用，稍后再试                                               |
 | 503  | `REQUEST_TIMEOUT`                  | —                              | 全部                   | 超时，可重试（写接口用同一个 key）                                   |
 
