@@ -45,6 +45,12 @@ export interface ReferralInviteeRecord {
   readonly publicProfileId: string | null;
   readonly alias: string | null;
   readonly avatarRef: string | null;
+  /**
+   * Decision 0180: the invitee's LOOP ID for the website's invite list;
+   * null when the invitee blocked the inviter (same rule as the profile).
+   * The App's `GET /v2/referral/invitees` does not emit it.
+   */
+  readonly loopId: string | null;
   readonly boundAt: string;
   /** Microsecond-exact `locked_at` (keyset key), never sent to clients. */
   readonly boundAtKey: string;

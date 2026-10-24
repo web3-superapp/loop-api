@@ -16,6 +16,7 @@ import {
   type WebClaimResource,
   type WebInvitePreviewResource,
   type WebMetaResource,
+  type WebReferralDashboardResource,
   type WebSessionResource,
   type WebUsernameResource,
   type WebWriteMetadata,
@@ -38,6 +39,8 @@ import {
  * - claim: the App's referral claim service, unchanged; the web answer adds
  *   `already_bound` and a `reasonCode` on refusals.
  * - preview: the code owner's LOOP ID and active alias only.
+ * - referral dashboard (Decision 0180): the App's invite-center reads
+ *   (`ReferralService.getDashboard`) plus the caller's own direct inviter.
  */
 
 export interface WebRegistrationService {
@@ -57,6 +60,11 @@ export interface WebRegistrationService {
     readonly requestId: string;
   }): Promise<WebClaimResource>;
   preview(input: { readonly code: unknown }): Promise<WebInvitePreviewResource>;
+  referralDashboard(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly requestId: string;
+    readonly cursor?: unknown;
+  }): Promise<WebReferralDashboardResource>;
   meta(): WebMetaResource;
 }
 
@@ -320,6 +328,68 @@ export function createWebRegistrationService(
           username: owner.username,
           loopId: owner.loopId,
         }),
+      });
+    },
+
+    async referralDashboard(input) {
+      assertReferral();
+      const dashboard = await options.referralService.getDashboard({
+        principal: input.principal,
+        requestId: input.requestId,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      });
+      const direct = dashboard.bound
+        ? await repository
+            .getDirectInviter(input.principal.userId)
+            .catch(translateRepository)
+        : null;
+      const window = dashboard.claimWindow;
+      const { stats } = dashboard;
+      return Object.freeze({
+        code: dashboard.inviteCode.code,
+        inviteLink: dashboard.inviteLink,
+        stats:
+          stats === null || stats.validAsOf === null
+            ? null
+            : Object.freeze({
+                direct: stats.directCount,
+                valid: stats.validCount,
+                deeper: stats.level2to5Count,
+                pendingVerification: Math.max(
+                  0,
+                  stats.directCount - stats.validCount,
+                ),
+                validAsOf: stats.validAsOf,
+              }),
+        invitees: Object.freeze(
+          dashboard.invitees.map((row) =>
+            Object.freeze({
+              loopId: row.loopId,
+              username: row.alias,
+              depth: 1,
+              status:
+                row.validationStatus === "invalid"
+                  ? ("void" as const)
+                  : row.validationStatus,
+              joinedAt: row.boundAt,
+            }),
+          ),
+        ),
+        nextCursor: dashboard.nextCursor,
+        inviter:
+          direct === null
+            ? null
+            : Object.freeze({
+                loopId: direct.loopId,
+                username: direct.username,
+              }),
+        binding: Object.freeze({
+          bound: dashboard.bound,
+          windowEndsAt:
+            window.status === "unavailable" ? null : window.closesAt,
+          canClaim: !dashboard.bound && window.status !== "closed",
+        }),
+        observedAt: now().toISOString(),
       });
     },
 

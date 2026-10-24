@@ -2245,6 +2245,583 @@
         }
       }
     },
+    "/v2/web/referral/me": {
+      "get": {
+        "operationId": "getWebReferralDashboard",
+        "summary": "My invites: code, link, counts, invitees, inviter",
+        "tags": ["web"],
+        "description": "Decision 0180. Bearer only (no contract, idempotency, or device headers are read). The App's invite-center reads: the invite code is issued on the first read (also before the username), stats use the Decision 0162 source (valid = the invitee's own power > 0 in the newest settled hour), invitees are the direct ones newest first, 100 a page with an owner-bound cursor. Invitees show only LOOP ID and username. 409 ACCOUNT_BOOTSTRAP_REQUIRED before POST /v2/web/session; 503 V2_REFERRAL_MODULE_DEFERRED / V2_CURSOR_NOT_CONFIGURED / WEB_REPOSITORY_UNAVAILABLE.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "description": "The previous page's nextCursor (owner-bound, opaque). Omit for the first page."
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "inviteLink",
+                    "stats",
+                    "invitees",
+                    "nextCursor",
+                    "inviter",
+                    "binding",
+                    "observedAt"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "pattern": "^LOOP-[0-9A-HJKMNP-TV-Z]{5}$",
+                      "description": "The caller's own invite code (LOOP-XXXXC). Issued on the account's first invite-center read (App or website), before the username is set; never changes."
+                    },
+                    "inviteLink": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "{PUBLIC_BASE_URL}/i/{code}, the same link the App shares (Universal Link / App Link; 302 to the website when WEB_BASE_URL is set)."
+                    },
+                    "stats": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "direct",
+                            "valid",
+                            "deeper",
+                            "pendingVerification",
+                            "validAsOf"
+                          ],
+                          "properties": {
+                            "direct": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Direct invitees in force (depth 1)."
+                            },
+                            "valid": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "Direct invitees in force whose own mining power was > 0 in the newest settled hour."
+                            },
+                            "deeper": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "In-force relationships of depth 2 to 5."
+                            },
+                            "pendingVerification": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "description": "direct - valid."
+                            },
+                            "validAsOf": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "End of the settled hour `valid` is read from."
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "Null before the first settled mining hour or when the figures cannot be read (unknown, never zeros)."
+                    },
+                    "invitees": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "description": "Direct invitees (depth 1, in force and void), newest binding first; the App's invite list.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "loopId",
+                          "username",
+                          "depth",
+                          "status",
+                          "joinedAt"
+                        ],
+                        "properties": {
+                          "loopId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^LOOP-[0-9A-HJKMNP-TV-Z]{8}$"
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Null when the invitee blocked the caller."
+                          },
+                          "username": {
+                            "anyOf": [
+                              { "type": "string", "minLength": 1 },
+                              { "type": "null" }
+                            ],
+                            "description": "Active profile alias; null before the invitee set a username or when the invitee blocked the caller."
+                          },
+                          "depth": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["valid", "pending", "void"],
+                            "description": "valid: own mining power > 0 in the newest settled hour; pending: in force, not (yet) valid; void: relationship invalidated."
+                          },
+                          "joinedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "Binding time of the relationship."
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        { "type": "string", "minLength": 1 },
+                        { "type": "null" }
+                      ],
+                      "description": "Present when more invitees exist: GET again with ?cursor=. The other fields are re-read on every page."
+                    },
+                    "inviter": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["loopId", "username"],
+                          "properties": {
+                            "loopId": {
+                              "type": "string",
+                              "pattern": "^LOOP-[0-9A-HJKMNP-TV-Z]{8}$"
+                            },
+                            "username": {
+                              "anyOf": [
+                                { "type": "string", "minLength": 1 },
+                                { "type": "null" }
+                              ]
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ],
+                      "description": "The caller's direct inviter; null when unbound."
+                    },
+                    "binding": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["bound", "windowEndsAt", "canClaim"],
+                      "properties": {
+                        "bound": { "type": "boolean" },
+                        "windowEndsAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ],
+                          "description": "Activation + 7 days; null before the username (activation)."
+                        },
+                        "canClaim": {
+                          "type": "boolean",
+                          "description": "Not bound and the window is not closed (before the username: set it first, then claim)."
+                        }
+                      }
+                    },
+                    "observedAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ACCOUNT_BOOTSTRAP_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/web/meta": {
       "get": {
         "operationId": "getWebMeta",

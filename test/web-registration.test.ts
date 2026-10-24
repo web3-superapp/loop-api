@@ -1014,6 +1014,7 @@ describe("Decision 0179: web OpenAPI artifact", () => {
       "GET /health/live",
       "GET /health/ready",
       "GET /v2/web/meta",
+      "GET /v2/web/referral/me",
       "GET /v2/web/referral/preview",
       "POST /v2/web/referral/claim",
       "POST /v2/web/session",

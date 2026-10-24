@@ -139,3 +139,38 @@ export interface WebMetaResource {
   };
   readonly observedAt: string;
 }
+
+/** Decision 0180: the website-facing validity of a direct invitee. */
+export const webInviteeStatuses = ["valid", "pending", "void"] as const;
+export type WebInviteeStatus = (typeof webInviteeStatuses)[number];
+
+export interface WebReferralInvitee {
+  /** Null when the invitee blocked the caller (as is the username). */
+  readonly loopId: string | null;
+  /** Active profile alias; null while pending or when blocked. */
+  readonly username: string | null;
+  /** Always 1 (direct invitees, the App's invite list). */
+  readonly depth: number;
+  readonly status: WebInviteeStatus;
+  readonly joinedAt: string;
+}
+
+export interface WebReferralDashboardResource {
+  readonly code: string;
+  readonly inviteLink: string;
+  readonly stats: {
+    readonly direct: number;
+    readonly valid: number;
+    readonly deeper: number;
+    readonly pendingVerification: number;
+    readonly validAsOf: string;
+  } | null;
+  readonly invitees: readonly WebReferralInvitee[];
+  readonly nextCursor: string | null;
+  readonly inviter: {
+    readonly loopId: string;
+    readonly username: string | null;
+  } | null;
+  readonly binding: WebInviteState;
+  readonly observedAt: string;
+}
