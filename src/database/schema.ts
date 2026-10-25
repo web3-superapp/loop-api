@@ -1,4 +1,4 @@
-export const latestMigrationName = "000101_community_membership_history";
+export const latestMigrationName = "000102_account_wallet_archived_reason";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

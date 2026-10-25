@@ -1567,6 +1567,204 @@ describe("LOOP API V2 chain, wallet, and watchlist modules", () => {
     expect(response.statusCode).toBe(404);
   });
 
+  describe("Decision 0185: external wallet link policy", () => {
+    const heldBackId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const unlinkedId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const inventory: readonly AccountWalletRecord[] = [
+      { ...walletRecord, archivedReason: null },
+      {
+        walletId: heldBackId,
+        providerWalletId: null,
+        address: "0x00000000000000000000000000000000000000e4",
+        kind: "external",
+        status: "archived",
+        isActive: false,
+        archivedReason: "external_limit_exceeded",
+        firstSeenAt: observedAt,
+        lastSeenAt: observedAt,
+      },
+      {
+        walletId: unlinkedId,
+        providerWalletId: null,
+        address: "0x00000000000000000000000000000000000000e5",
+        kind: "external",
+        status: "archived",
+        isActive: false,
+        archivedReason: null,
+        firstSeenAt: observedAt,
+        lastSeenAt: observedAt,
+      },
+    ];
+    function linkFakes() {
+      const dependencies = fakes();
+      const sync = vi.fn<AccountWalletRepository["sync"]>(() =>
+        Promise.resolve(inventory),
+      );
+      dependencies.repository.sync = sync;
+      dependencies.repository.setActive = vi.fn<
+        AccountWalletRepository["setActive"]
+      >(() => Promise.resolve(inventory));
+      return { ...dependencies, sync };
+    }
+
+    for (const emit of ["unset", "off"] as const) {
+      it(`keeps GET /v2/wallets and PUT /v2/wallets/active in the pre-0185 shape (${emit})`, async () => {
+        const { app } = await createApp(
+          linkFakes(),
+          emit === "unset" ? {} : { WALLET_LINK_POLICY_EMIT: "off" },
+        );
+        const listed = await app.inject({
+          method: "GET",
+          url: "/v2/wallets",
+          headers: commonHeaders(),
+        });
+        const selected = await app.inject({
+          method: "PUT",
+          url: "/v2/wallets/active",
+          headers: commonHeaders(),
+          payload: { walletId, expectedActiveWalletId: walletId },
+        });
+        for (const response of [listed, selected]) {
+          expect(response.statusCode).toBe(200);
+          const body = response.json<Record<string, unknown>>();
+          expect(Object.keys(body).sort()).toEqual(
+            ["activeWalletId", "contractVersion", "source", "wallets"].sort(),
+          );
+          for (const wallet of body["wallets"] as Record<string, unknown>[]) {
+            expect(Object.keys(wallet).sort()).toEqual(
+              [
+                "address",
+                "firstSeenAt",
+                "isActive",
+                "kind",
+                "lastSeenAt",
+                "provider",
+                "status",
+                "walletId",
+              ].sort(),
+            );
+          }
+        }
+      });
+    }
+
+    it("adds externalWalletLimit and archivedReason to the list when WALLET_LINK_POLICY_EMIT is on", async () => {
+      const { app } = await createApp(linkFakes(), {
+        WALLET_LINK_POLICY_EMIT: "on",
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/v2/wallets",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        externalWalletLimit: number;
+        wallets: Record<string, unknown>[];
+      }>();
+      expect(body.externalWalletLimit).toBe(3);
+      expect(body.wallets.map((wallet) => wallet["archivedReason"])).toEqual([
+        undefined,
+        "external_limit_exceeded",
+        undefined,
+      ]);
+    });
+
+    it("POST /v2/wallets/sync re-reads Privy past the reuse window and always carries the link-policy keys", async () => {
+      const dependencies = linkFakes();
+      const { app, listEthereumWallets } = await createApp(dependencies);
+      const listed = await app.inject({
+        method: "GET",
+        url: "/v2/wallets",
+        headers: commonHeaders(),
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listEthereumWallets).toHaveBeenCalledTimes(1);
+      // Inside the 60 s window a GET reuses the observation …
+      await app.inject({
+        method: "GET",
+        url: "/v2/wallets",
+        headers: commonHeaders(),
+      });
+      expect(listEthereumWallets).toHaveBeenCalledTimes(1);
+      // … a sync never does.
+      const synced = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers: commonHeaders(),
+      });
+      expect(synced.statusCode).toBe(200);
+      expect(synced.headers["cache-control"]).toBe("no-store");
+      expect(listEthereumWallets).toHaveBeenCalledTimes(2);
+      expect(synced.json()).toMatchObject({
+        externalWalletLimit: 3,
+        activeWalletId: walletId,
+        wallets: [
+          { walletId },
+          { walletId: heldBackId, archivedReason: "external_limit_exceeded" },
+          { walletId: unlinkedId },
+        ],
+      });
+      expect(dependencies.sync).toHaveBeenLastCalledWith(
+        expect.objectContaining({ ownerUserId: accountId }),
+      );
+      // Idempotent, and no Idempotency-Key / body / query is accepted.
+      const again = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers: commonHeaders(),
+      });
+      expect(listEthereumWallets).toHaveBeenCalledTimes(3);
+      expect({
+        ...again.json<Record<string, unknown>>(),
+        source: null,
+      }).toEqual({ ...synced.json<Record<string, unknown>>(), source: null });
+      const withKey = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers: commonHeaders({
+          "idempotency-key": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        }),
+      });
+      expect(withKey.statusCode).toBe(400);
+      const withBody = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers: commonHeaders(),
+        payload: { walletId },
+      });
+      expect(withBody.statusCode).toBe(400);
+    });
+
+    it("POST /v2/wallets/sync fails closed when Privy is unreachable", async () => {
+      const dependencies = linkFakes();
+      dependencies.listEthereumWallets.mockImplementation(() =>
+        Promise.reject(new Error("privy down")),
+      );
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers: commonHeaders(),
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "PROVIDER_DISCONNECTED" });
+      expect(dependencies.sync).not.toHaveBeenCalled();
+    });
+
+    it("POST /v2/wallets/sync requires a bearer token", async () => {
+      const { app } = await createApp(linkFakes());
+      const headers = commonHeaders();
+      delete headers["authorization"];
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/wallets/sync",
+        headers,
+      });
+      expect(response.statusCode).toBe(401);
+    });
+  });
+
   it("separates display, spendable, gas reserve, pending, and valuation", async () => {
     const { app, recordBalanceSnapshot } = await createApp();
     const response = await app.inject({

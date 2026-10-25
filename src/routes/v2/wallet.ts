@@ -115,6 +115,34 @@ export function registerV2WalletRoutes(
     },
   );
 
+  app.post(
+    "/v2/wallets/sync",
+    {
+      schema: {
+        operationId: "syncV2Wallets",
+        summary: "Re-read the account's wallets from Privy now",
+        description:
+          "Decision 0185. Call after Privy siwe.link / siwe.unlink. Reads Privy immediately (never the short reuse window GET /v2/wallets uses), reconciles the inventory, and answers the same list as GET /v2/wallets plus the optional externalWalletLimit / archivedReason keys. An unlinked wallet is archived (unlinked) and stops mining at once: the current hour's settlement and every later snapshot no longer attribute it. A newly linked external wallet beyond externalWalletLimit, or one that is an active wallet of another LOOP account, is stored archived (external_limit_exceeded / address_conflict) and never mines. Idempotent: no body, no Idempotency-Key; repeating it re-reads Privy and converges on the same list.",
+        tags: ["wallet"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommonHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        response: { 200: walletListResourceSchema, ...chainWriteErrors },
+      },
+      onRequest: validateChainWriteHeaders,
+      preValidation: assertNoBodyOrQuery,
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const resource = await walletReadService.syncWallets({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        signal: requestSignal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send(resource);
+    },
+  );
+
   app.get(
     "/v2/wallets/:walletId/balances",
     {

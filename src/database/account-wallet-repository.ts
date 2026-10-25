@@ -3,7 +3,10 @@ import { z } from "zod";
 
 import {
   evmAddressPatternSource,
+  externalWalletLimit,
+  walletArchivedReasons,
   walletKinds,
+  type WalletArchivedReason,
   type WalletKind,
 } from "../features/chain/chain-contract.js";
 
@@ -21,6 +24,7 @@ const walletRowSchema = z
     kind: z.enum(walletKinds),
     status: z.enum(["active", "archived"]),
     is_active: z.boolean(),
+    archived_reason: z.enum(walletArchivedReasons).nullable(),
     first_seen_at: z.date(),
     last_seen_at: z.date(),
   })
@@ -33,6 +37,12 @@ export interface AccountWalletRecord {
   readonly kind: WalletKind;
   readonly status: "active" | "archived";
   readonly isActive: boolean;
+  /**
+   * Decision 0185: why the row is archived; null while active, or for rows
+   * archived before migration 000102. Always set by the repository;
+   * optional only so older in-memory fixtures stay valid.
+   */
+  readonly archivedReason?: WalletArchivedReason | null;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
 }
@@ -46,6 +56,15 @@ export interface ObservedWallet {
 export interface SyncAccountWalletsInput {
   readonly ownerUserId: string;
   readonly observed: readonly ObservedWallet[];
+  /**
+   * Decision 0185 D: called (after commit) once per observed external
+   * address that is already an active wallet of another account and was
+   * therefore recorded as `address_conflict` instead of a second owner.
+   */
+  readonly onAddressConflict?: (conflict: {
+    readonly ownerUserId: string;
+    readonly walletId: string;
+  }) => void;
 }
 
 export interface AccountWalletRepository {
@@ -153,6 +172,7 @@ const walletColumns = `
   kind,
   status,
   is_active,
+  archived_reason,
   first_seen_at,
   last_seen_at
 `;
@@ -166,6 +186,7 @@ function mapWallet(row: unknown): AccountWalletRecord {
     kind: parsed.kind,
     status: parsed.status,
     isActive: parsed.is_active,
+    archivedReason: parsed.archived_reason,
     firstSeenAt: parsed.first_seen_at.toISOString(),
     lastSeenAt: parsed.last_seen_at.toISOString(),
   });
@@ -206,20 +227,73 @@ export function createPostgresAccountWalletRepository(
           }
         }
 
+        // Decision 0185 D: serialize concurrent syncs that claim the same
+        // external address (two accounts linking it at once), in a stable
+        // order so two transactions never wait on each other in a cycle.
+        const externalAddresses = [
+          ...new Set(
+            input.observed
+              .filter((wallet) => wallet.kind === "external")
+              .map((wallet) => wallet.address),
+          ),
+        ].sort();
+        for (const address of externalAddresses) {
+          await client.query({
+            text: `select pg_advisory_xact_lock(hashtext('account_wallets.address:' || $1))`,
+            values: [address],
+          });
+        }
+
+        // External wallets that were already counted before this sync keep
+        // their slot under the limit; newcomers fill what is left.
+        const previous = await client.query<{ address: string }>({
+          text: `
+            select address
+            from public.account_wallets
+            where owner_user_id = $1 and status = 'active' and kind = 'external'
+          `,
+          values: [input.ownerUserId],
+        });
+        const previouslyActiveExternal = previous.rows.map(
+          (row) => row.address,
+        );
+
+        const taken = await client.query<{ address: string }>({
+          text: `
+            select distinct address
+            from public.account_wallets
+            where address = any($2::text[])
+              and owner_user_id <> $1
+              and status = 'active'
+          `,
+          values: [input.ownerUserId, externalAddresses],
+        });
+        const conflicting = new Set(taken.rows.map((row) => row.address));
+
         for (const wallet of input.observed) {
+          const conflict =
+            wallet.kind === "external" && conflicting.has(wallet.address);
           await client.query<Record<string, unknown>>({
             text: `
               insert into public.account_wallets (
-                owner_user_id, provider_wallet_id, address, kind
+                owner_user_id, provider_wallet_id, address, kind,
+                status, archived_reason
               )
-              values ($1, $2, $3, $4)
+              values (
+                $1, $2, $3, $4,
+                case when $5::boolean then 'archived' else 'active' end,
+                case when $5::boolean then 'address_conflict' end
+              )
               on conflict (owner_user_id, chain_type, address) do update set
                 provider_wallet_id = coalesce(
                   excluded.provider_wallet_id,
                   public.account_wallets.provider_wallet_id
                 ),
                 kind = excluded.kind,
-                status = 'active',
+                status = excluded.status,
+                archived_reason = excluded.archived_reason,
+                is_active = public.account_wallets.is_active
+                  and excluded.status = 'active',
                 last_seen_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             `,
@@ -228,6 +302,7 @@ export function createPostgresAccountWalletRepository(
               wallet.providerWalletId,
               wallet.address,
               wallet.kind,
+              conflict,
             ],
           });
         }
@@ -239,6 +314,7 @@ export function createPostgresAccountWalletRepository(
           text: `
             update public.account_wallets
             set status = 'archived',
+                archived_reason = 'unlinked',
                 is_active = false,
                 updated_at = clock_timestamp()
             where owner_user_id = $1
@@ -246,6 +322,34 @@ export function createPostgresAccountWalletRepository(
               and status = 'active'
           `,
           values: [input.ownerUserId, observedAddresses],
+        });
+
+        // Decision 0185 A: at most `externalWalletLimit` active external
+        // wallets. Previously counted ones first, then the earliest seen.
+        await client.query<Record<string, unknown>>({
+          text: `
+            update public.account_wallets
+            set status = 'archived',
+                archived_reason = 'external_limit_exceeded',
+                is_active = false,
+                updated_at = clock_timestamp()
+            where wallet_id in (
+              select wallet_id
+              from public.account_wallets
+              where owner_user_id = $1
+                and status = 'active'
+                and kind = 'external'
+              order by (address = any($2::text[])) desc,
+                first_seen_at asc,
+                wallet_id asc
+              offset $3
+            )
+          `,
+          values: [
+            input.ownerUserId,
+            previouslyActiveExternal,
+            externalWalletLimit,
+          ],
         });
 
         // Exactly one active wallet: when nothing is selected yet (or the
@@ -276,7 +380,21 @@ export function createPostgresAccountWalletRepository(
         });
         await client.query("commit");
         inTransaction = false;
-        return Object.freeze(result.rows.map(mapWallet));
+        const records = Object.freeze(result.rows.map(mapWallet));
+        if (input.onAddressConflict !== undefined) {
+          for (const record of records) {
+            if (
+              record.archivedReason === "address_conflict" &&
+              conflicting.has(record.address)
+            ) {
+              input.onAddressConflict({
+                ownerUserId: input.ownerUserId,
+                walletId: record.walletId,
+              });
+            }
+          }
+        }
+        return records;
       } catch (error) {
         if (inTransaction) {
           try {

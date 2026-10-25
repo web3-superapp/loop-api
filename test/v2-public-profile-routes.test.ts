@@ -593,6 +593,43 @@ describe("LOOP API V2 public profiles (Decision 0095)", () => {
     });
   });
 
+  it("reads another viewer's holdings / trades from the embedded wallet unless EXTERNAL_WALLET_ADDRESS_PUBLIC is true (Decision 0185)", async () => {
+    for (const [overrides, embeddedOnly] of [
+      [{}, true],
+      [{ EXTERNAL_WALLET_ADDRESS_PUBLIC: "false" }, true],
+      [{ EXTERNAL_WALLET_ADDRESS_PUBLIC: "true" }, false],
+    ] as const) {
+      const dependencies = fakes();
+      const { app } = await createApp(dependencies, overrides);
+      for (const path of ["holdings", "trades"]) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/v2/profiles/${targetProfileId}/${path}`,
+          headers: headers(),
+        });
+        expect(response.statusCode).toBe(200);
+      }
+      expect(dependencies.repository.getActiveWallet.mock.calls).toEqual([
+        [targetUserId, { embeddedOnly }],
+        [targetUserId, { embeddedOnly }],
+      ]);
+    }
+    // The owner always reads the wallet they selected.
+    const self = fakes();
+    self.repository.findProfile.mockResolvedValue(
+      record({ targetUserId: viewerId }),
+    );
+    const { app } = await createApp(self);
+    await app.inject({
+      method: "GET",
+      url: `/v2/profiles/${targetProfileId}/holdings`,
+      headers: headers(),
+    });
+    expect(self.repository.getActiveWallet.mock.calls).toEqual([
+      [viewerId, { embeddedOnly: false }],
+    ]);
+  });
+
   it("classifies swaps as buy/sell of the non-quote token and pages with an opaque cursor", async () => {
     const { app } = await createApp();
     const first = await app.inject({

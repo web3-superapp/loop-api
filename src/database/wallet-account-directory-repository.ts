@@ -26,7 +26,15 @@ const rowSchema = z.object({
 
 export function createPostgresWalletAccountLookup(
   pool: Pool,
+  options: {
+    /**
+     * Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC; absent = false, and
+     * then only embedded wallets map an address to an account.
+     */
+    readonly externalWalletAddressPublic?: boolean;
+  } = {},
 ): WalletAccountLookup {
+  const includeExternal = options.externalWalletAddressPublic === true;
   return Object.freeze({
     async findByAddresses(rawAddresses: readonly string[]) {
       const addresses = [
@@ -48,9 +56,10 @@ export function createPostgresWalletAccountLookup(
           left join public.privacy_preferences_v2 as pv
             on pv.owner_user_id = w.owner_user_id
           where w.address = any($1::text[]) and w.status = 'active'
+            and ($2::boolean or w.kind = 'embedded')
           order by w.address, w.first_seen_at asc, w.wallet_id asc
         `,
-        values: [addresses],
+        values: [addresses, includeExternal],
       });
       return result.rows.map((raw): WalletAccountRecord => {
         const row = rowSchema.parse(raw);

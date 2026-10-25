@@ -1072,6 +1072,18 @@ const environmentSchema = z
     // the feed, unread counts, read-all and the single read (rows are still
     // written). Turn on only once every supported client decodes them.
     LAUNCH_REVIEW_INBOX_EMIT: z.enum(["off", "on"]),
+    // Decision 0185: off|on (default off). off keeps GET /v2/wallets and
+    // PUT /v2/wallets/active byte-identical; on adds the optional
+    // `externalWalletLimit` key and the per-wallet `archivedReason` key.
+    // POST /v2/wallets/sync (new) always carries them. Turn on only once
+    // every supported client decodes the keys.
+    WALLET_LINK_POLICY_EMIT: z.enum(["off", "on"]),
+    // Decision 0185: true|false (default false; any other value refuses
+    // boot). false = a trader / holder address that belongs to an account
+    // only through an *external* wallet is never shown next to that account
+    // (trade feeds stay bare chain addresses) and another viewer's read of a
+    // public profile uses the owner's embedded wallet, never an external one.
+    EXTERNAL_WALLET_ADDRESS_PUBLIC: booleanString,
     // Decision 0124: the official-pool swap router (OfficialPoolRouter) and
     // its runtime code hash, one unit, BSC Testnet only. Blank = the pool
     // quote / prepare stay 503 POOL_ROUTER_NOT_CONFIGURED.
@@ -1999,6 +2011,10 @@ export interface AppConfig {
   readonly notificationInboxEmit: boolean;
   /** Decision 0178: LAUNCH_REVIEW_INBOX_EMIT === "on" (default off). */
   readonly launchReviewInboxEmit: boolean;
+  /** Decision 0185: WALLET_LINK_POLICY_EMIT === "on" (default off). */
+  readonly walletLinkPolicyEmit: boolean;
+  /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
+  readonly externalWalletAddressPublic: boolean;
   /**
    * Decision 0108: Hooks launch configuration, signing preparation, and
    * deployment tasks. `enabled` false keeps every hooks route at 503; a null
@@ -4511,6 +4527,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["MARKET_ROW_SPARKLINE24H_EMIT"] ?? "off",
     NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
     LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
+    WALLET_LINK_POLICY_EMIT: environment["WALLET_LINK_POLICY_EMIT"] ?? "off",
+    EXTERNAL_WALLET_ADDRESS_PUBLIC:
+      environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
       environment["LAUNCH2_DEFAULT_SLIPPAGE_BPS"] ?? "100",
     LAUNCH2_POOL_ROUTER_ADDRESS:
@@ -4689,6 +4708,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       parsed.data.MARKET_ROW_SPARKLINE24H_EMIT === "on",
     notificationInboxEmit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
     launchReviewInboxEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
+    walletLinkPolicyEmit: parsed.data.WALLET_LINK_POLICY_EMIT === "on",
+    externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
       factoryAddress:

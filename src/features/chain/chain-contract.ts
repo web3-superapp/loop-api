@@ -171,6 +171,27 @@ export type AssetCapabilityValue = (typeof assetCapabilityValues)[number];
 export const walletKinds = Object.freeze(["embedded", "external"] as const);
 export type WalletKind = (typeof walletKinds)[number];
 
+/**
+ * Decision 0185: an account holds at most this many active external wallets
+ * (wallets linked through Privy `siwe.link`). Embedded wallets do not count.
+ * A wallet Privy reports beyond the limit is archived with
+ * `external_limit_exceeded`, so it never mines and never attributes trades.
+ */
+export const externalWalletLimit = 3;
+
+/**
+ * Decision 0185: why an `account_wallets` row is archived. `unlinked` =
+ * Privy no longer reports it; `external_limit_exceeded` = over
+ * `externalWalletLimit`; `address_conflict` = the address is already an
+ * active wallet of another LOOP account.
+ */
+export const walletArchivedReasons = Object.freeze([
+  "unlinked",
+  "external_limit_exceeded",
+  "address_conflict",
+] as const);
+export type WalletArchivedReason = (typeof walletArchivedReasons)[number];
+
 export class InvalidChainIdentityError extends Error {
   readonly code = "invalid_chain_identity";
 
