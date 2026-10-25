@@ -1095,9 +1095,15 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       carol = await createUser(true, false);
       const communities = await pool.query<{ community_id: string }>({
         text: `
-          insert into public.communities (name, slug, bound_asset_key, created_by_user_id, verification_status, verified_at, reviewed_at)
+          insert into public.communities (
+            name, slug, bound_asset_key, created_by_user_id,
+            verification_status, verified_at, reviewed_at
+          )
           values ('Cake Holders', 'cake-holders', $2, $1, 'verified', now(), now()),
-                 ('Cake Rivals', 'cake-rivals', $2, $1, 'verified', now(), now()),
+                 -- Decision 0182: a second live holder of the same token can
+                 -- no longer exist; a rejected one still can, and it does not
+                 -- occupy the token (it neither blocks nor is listed).
+                 ('Cake Rivals', 'cake-rivals', $2, $1, 'rejected', null, now()),
                  ('No Token', 'no-token', null, $1, 'verified', now(), now())
           returning community_id
         `,
@@ -1151,9 +1157,26 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       // Boundaries are inclusive and a re-review replaces the value.
       expect((await attempt(boundCommunity, "2")).weight).toBe("2");
       expect((await attempt(boundCommunity, "0.5")).weight).toBe("0.5");
+      // The live holder occupies the token: the rejected rival cannot take a
+      // weight on it.
       await expect(attempt(secondBoundCommunity, "1")).rejects.toBeInstanceOf(
         MiningCommunityWeightConflictError,
       );
+      // Decision 0182: a rejected community does not occupy the token, so an
+      // approved weight left on it does not block the live holder (with one
+      // live community per token the conflict branch is defensive).
+      await pool.query({
+        text: `
+          insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at)
+          values ($1, 'approved', '1', $2, now())
+        `,
+        values: [secondBoundCommunity, baselineVersion],
+      });
+      expect((await attempt(boundCommunity, "0.5")).weight).toBe("0.5");
+      await pool.query({
+        text: `delete from public.community_mining_weights where community_id = $1`,
+        values: [secondBoundCommunity],
+      });
       const inputs = await mining.listCommunityWeightInputs(baselineVersion);
       expect(inputs.find((row) => row.communityId === boundCommunity)).toEqual({
         communityId: boundCommunity,
@@ -1161,14 +1184,10 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         weight: "0.5",
         status: "approved",
       });
+      // Decision 0183: only verified communities are snapshot candidates.
       expect(
-        inputs.find((row) => row.communityId === secondBoundCommunity),
-      ).toEqual({
-        communityId: secondBoundCommunity,
-        assetId: cakeAsset,
-        weight: null,
-        status: "pending_review",
-      });
+        inputs.some((row) => row.communityId === secondBoundCommunity),
+      ).toBe(false);
       expect(inputs.some((row) => row.communityId === unboundCommunity)).toBe(
         false,
       );

@@ -1274,6 +1274,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 and w.config_version = $1
                 and c.bound_asset_key = $2
                 and w.community_id <> $3
+                -- Decision 0182: a rejected community does not occupy its
+                -- token; with one live binding per token this branch is
+                -- defensive only.
+                and c.verification_status <> 'rejected'
               limit 1
             `,
             values: [configVersion, communityRow.bound_asset_key, communityId],

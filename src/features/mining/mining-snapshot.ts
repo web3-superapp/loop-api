@@ -194,6 +194,8 @@ export function selectMiningWeight(
     };
   }
   if (others.length > 0) {
+    // Decision 0182: one live community per token, so two approved weights
+    // on one asset are defensive only.
     return {
       kind: "skip",
       reasonCode: miningReasonCodes.communityWeightAmbiguous,

@@ -19,8 +19,19 @@ export const referralCommandIdempotencyScope = "v2_referral_command" as const;
 export const referralMaximumDepth = 5;
 /** Ancestor-chain scan bound for cycle detection; edges are still capped at 5. */
 export const referralCycleScanDepth = 64;
-/** Days after profile activation during which an invite code may be claimed. */
-export const referralClaimWindowDays = 7;
+/**
+ * Decision 0181: deprecated, wire-only. The claim window was removed (an
+ * activated account may claim at any time); `GET /v2/referral.rules`
+ * still carries this integer because shipped App codecs (build <= 42)
+ * require the key. Remove once the App codec no longer reads it.
+ */
+export const referralLegacyClaimWindowDays = 7;
+/**
+ * Decision 0181: deprecated, wire-only. `claimWindow.closesAt` stays a
+ * required timestamp for shipped App codecs; this fixed far-future value
+ * means "no deadline". Never compared against a clock.
+ */
+export const referralClaimWindowNoDeadline = "9999-12-31T23:59:59.999Z";
 
 export const referralValidationStatuses = [
   "pending_activation",
@@ -35,7 +46,6 @@ export type ReferralValidationStatus =
 export const referralReasonCodes = Object.freeze({
   /** The same slot as `GET /v2/mining/summary.referralBoost` (Decision 0046). */
   boostPending: miningReasonCodes.referralBoostPending,
-  claimWindowClosed: "REFERRAL_CLAIM_WINDOW_CLOSED",
   claimWindowNotActivated: "PROFILE_ACTIVATION_REQUIRED",
   alreadyBound: "REFERRAL_ALREADY_BOUND",
   selfInvite: "REFERRAL_SELF_INVITE",
@@ -92,22 +102,17 @@ export function referralCommandDigest(
 }
 
 /**
- * Claim window: `[activatedAt, activatedAt + 7 days)`. An unactivated
- * account has no window; the boundary is evaluated with the server clock.
+ * Claim window (Decision 0181: no deadline). An unactivated account has no
+ * window yet (activation is a precondition of the claim); once activated
+ * the window is `open` forever. `closesAt` is the fixed
+ * `referralClaimWindowNoDeadline` sentinel, kept only because shipped App
+ * codecs require the key; `now` is no longer consulted.
  */
-export function claimWindow(
-  activatedAt: string | null,
-  now: Date,
-):
+export function claimWindow(activatedAt: string | null):
   | {
       readonly status: "open";
       readonly activatedAt: string;
-      readonly closesAt: string;
-    }
-  | {
-      readonly status: "closed";
-      readonly activatedAt: string;
-      readonly closesAt: string;
+      readonly closesAt: typeof referralClaimWindowNoDeadline;
     }
   | { readonly status: "unavailable"; readonly reasonCode: string } {
   if (activatedAt === null) {
@@ -116,15 +121,14 @@ export function claimWindow(
       reasonCode: referralReasonCodes.claimWindowNotActivated,
     });
   }
-  const activatedMs = Date.parse(activatedAt);
-  if (!Number.isFinite(activatedMs)) {
+  if (!Number.isFinite(Date.parse(activatedAt))) {
     throw new InvalidReferralRequestError();
   }
-  const closesAtMs = activatedMs + referralClaimWindowDays * 86_400_000;
-  const closesAt = new Date(closesAtMs).toISOString();
-  return now.getTime() < closesAtMs
-    ? Object.freeze({ status: "open" as const, activatedAt, closesAt })
-    : Object.freeze({ status: "closed" as const, activatedAt, closesAt });
+  return Object.freeze({
+    status: "open" as const,
+    activatedAt,
+    closesAt: referralClaimWindowNoDeadline,
+  });
 }
 
 /**

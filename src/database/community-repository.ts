@@ -21,6 +21,11 @@ import { logoRefMediaId } from "../features/media/media-contract.js";
 import { loopIdSearchPatternSource } from "../features/identity/loop-id.js";
 import { enqueueFriendDirectChannelJob } from "./friend-direct-channel-job-repository.js";
 import {
+  communityBoundAssetUniqueIndex,
+  findBoundAssetHolder,
+  readBoundAssetHolder,
+} from "./community-bound-asset.js";
+import {
   canPerformSelfAction,
   canPerformTargetAction,
   communityMembershipStatuses,
@@ -34,6 +39,7 @@ import {
 } from "../features/community/community-policy.js";
 import {
   CommunityBoundAssetNotRegisteredError,
+  CommunityBoundAssetTakenError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -356,6 +362,50 @@ async function assertBoundAssetRegistered(
   }
 }
 
+/**
+ * Decision 0182: refuse a key another non-rejected community already holds.
+ * Takes the per-asset advisory lock, so two binders of one key serialise.
+ */
+async function assertBoundAssetAvailable(
+  client: DatabaseClient,
+  boundAssetKey: string | null | undefined,
+  communityId: string | null,
+): Promise<void> {
+  if (boundAssetKey === null || boundAssetKey === undefined) {
+    return;
+  }
+  const holder = await findBoundAssetHolder(client, boundAssetKey, communityId);
+  if (holder !== null) {
+    throw new CommunityBoundAssetTakenError(holder);
+  }
+}
+
+/**
+ * Decision 0182 fallback: a write that still reached the partial unique
+ * index (a binder outside these paths) becomes the same refusal; the holder
+ * is read after the rollback, best effort.
+ */
+async function boundAssetIndexConflict(
+  pool: Pool,
+  error: unknown,
+  boundAssetKey: string | null | undefined,
+  communityId: string | null,
+): Promise<unknown> {
+  if (!isUniqueViolation(error, communityBoundAssetUniqueIndex)) {
+    return error;
+  }
+  if (boundAssetKey === null || boundAssetKey === undefined) {
+    return new CommunityBoundAssetTakenError(null);
+  }
+  try {
+    return new CommunityBoundAssetTakenError(
+      await readBoundAssetHolder(pool, boundAssetKey, communityId),
+    );
+  } catch {
+    return new CommunityBoundAssetTakenError(null);
+  }
+}
+
 const miningOrderingRowSchema = z
   .object({
     mining_power: z.string().regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/),
@@ -527,12 +577,16 @@ function translateRepositoryError(error: unknown): never {
     error instanceof CommunitySlugTakenError ||
     error instanceof CommunityTargetUnavailableError ||
     error instanceof CommunityLogoMediaRejectedError ||
-    error instanceof CommunityBoundAssetNotRegisteredError
+    error instanceof CommunityBoundAssetNotRegisteredError ||
+    error instanceof CommunityBoundAssetTakenError
   ) {
     throw error;
   }
   if (isUniqueViolation(error, "communities_slug_unique")) {
     throw new CommunitySlugTakenError();
+  }
+  if (isUniqueViolation(error, communityBoundAssetUniqueIndex)) {
+    throw new CommunityBoundAssetTakenError(null);
   }
   throw new CommunityRepositoryUnavailableError();
 }
@@ -1735,6 +1789,7 @@ export function createPostgresCommunityRepository(
             communityId: null,
           });
           await assertBoundAssetRegistered(client, rawInput.boundAssetKey);
+          await assertBoundAssetAvailable(client, rawInput.boundAssetKey, null);
           const created = await client.query<{ community_id: string }>({
             text: `
               insert into public.communities (
@@ -1786,7 +1841,14 @@ export function createPostgresCommunityRepository(
           return readDetail(client, communityId, ownerUserId);
         });
       } catch (error) {
-        return translateRepositoryError(error);
+        return translateRepositoryError(
+          await boundAssetIndexConflict(
+            pool,
+            error,
+            rawInput.boundAssetKey,
+            null,
+          ),
+        );
       }
     },
 
@@ -1837,6 +1899,14 @@ export function createPostgresCommunityRepository(
           // bound before Decision 0097 can still edit its other fields.
           if (values.boundAssetKey !== current.boundAssetKey) {
             await assertBoundAssetRegistered(client, values.boundAssetKey);
+            // Decision 0182: one token, one community. Checked whatever this
+            // community's own review state, so a rejected community cannot
+            // park a taken key and collide on resubmission.
+            await assertBoundAssetAvailable(
+              client,
+              values.boundAssetKey,
+              communityId,
+            );
           }
           // Only the keys actually present change; `slug` and
           // `verification_status` are immutable through this path.
@@ -1881,7 +1951,14 @@ export function createPostgresCommunityRepository(
           return readDetail(client, communityId, ownerUserId);
         });
       } catch (error) {
-        return translateRepositoryError(error);
+        return translateRepositoryError(
+          await boundAssetIndexConflict(
+            pool,
+            error,
+            rawInput.values.boundAssetKey,
+            rawInput.communityId,
+          ),
+        );
       }
     },
 
@@ -2129,6 +2206,13 @@ export function createPostgresCommunityRepository(
           if (current.verificationStatus !== "rejected") {
             throw new CommunityDataStaleError();
           }
+          // Decision 0182: a rejected community did not occupy its token;
+          // back to pending it would, so it may not while another holds it.
+          await assertBoundAssetAvailable(
+            client,
+            current.boundAssetKey,
+            communityId,
+          );
           await client.query({
             text: `
               update public.communities
@@ -3669,6 +3753,15 @@ export function createPostgresCommunityRepository(
               eventId: null,
               changed: false,
             });
+          }
+          // Decision 0182: reconsidering a rejection brings its token back
+          // into play; refused while another community holds it.
+          if (current.verificationStatus === "rejected") {
+            await assertBoundAssetAvailable(
+              client,
+              current.boundAssetKey,
+              communityId,
+            );
           }
           // Decision 0073: verifying also closes the review, whether the
           // application was pending or the operator reconsidered a rejection.

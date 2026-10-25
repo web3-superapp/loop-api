@@ -455,6 +455,9 @@ describe("Universal Links / App Links for LOOP ID links (Decision 0090)", () => 
     expect(response.body).toContain(`邀请码`);
     expect(response.body).toContain(`data-code="${inviteCode}"`);
     expect(response.body).toContain("复制邀请码并下载 LOOP");
+    // Decision 0181: no claim deadline on the landing copy.
+    expect(response.body).toContain("注册后随时可以绑定");
+    expect(response.body).not.toContain("7 天");
     expect(response.body).toContain(
       'data-ios="https://apps.apple.com/app/id000000"',
     );

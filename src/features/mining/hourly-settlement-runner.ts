@@ -370,6 +370,8 @@ export function prepareMiningHour(input: {
   const communityOf = new Map<string, string | null>();
   const unboundInstances: string[] = [];
   for (const instance of input.facts.nftInstances) {
+    // Decision 0182: one live community per token, so more than one id here
+    // is defensive only (the instance then counts as unbound).
     const community =
       instance.communityIds.length === 1
         ? (instance.communityIds[0] as string)

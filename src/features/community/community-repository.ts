@@ -653,6 +653,24 @@ export class CommunityBoundAssetNotRegisteredError extends Error {
   }
 }
 
+/**
+ * Decision 0182: one token, one community. Another community that is not
+ * `rejected` already binds this `boundAssetKey`. `holderCommunityId` is that
+ * community's opaque ID — the only fact the client receives about it — or
+ * null when only the database index caught the race and the holder could no
+ * longer be read.
+ */
+export class CommunityBoundAssetTakenError extends Error {
+  readonly code = "community_bound_asset_taken";
+  readonly holderCommunityId: string | null;
+
+  constructor(holderCommunityId: string | null) {
+    super("The bound asset is already bound by another community");
+    this.name = "CommunityBoundAssetTakenError";
+    this.holderCommunityId = holderCommunityId;
+  }
+}
+
 /** The account has no activated V2 profile, so it has no public identity. */
 export class CommunityProfileRequiredError extends Error {
   readonly code = "community_profile_required";

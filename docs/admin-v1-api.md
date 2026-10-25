@@ -103,6 +103,7 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 | `ADMIN_COMMUNITY_NOT_FOUND`（附 `communityId`）                                                                                                                                               | 推荐社区 / 系数草稿 422、审核 404                                                  |
 | `ADMIN_COMMUNITY_DUPLICATED`                                                                                                                                                                  | 推荐社区 422                                                                       |
 | `ADMIN_COMMUNITY_ALREADY_VERIFIED`                                                                                                                                                            | 驳回已认证社区 409                                                                 |
+| `ADMIN_COMMUNITY_BOUND_ASSET_TAKEN`（附 `holderCommunityId`）                                                                                                                                 | 改判通过被驳回社区时其绑定代币已被别的社区占用 409（决策 0182）                    |
 | `ADMIN_PROMOTION_INVALID`（附 `index`，图片不合格时另附 `field: "imageUrl"`）                                                                                                                 | 活动位 422                                                                         |
 | `ADMIN_REASON_CODE_INVALID`                                                                                                                                                                   | 审核 / MEME 422                                                                    |
 | `ADMIN_REASON_TEXT_REQUIRED`                                                                                                                                                                  | 驳回、隐藏 422                                                                     |
@@ -391,7 +392,7 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 - 审计：先记 `community.review.requested`，再记 `community.review.decided`（与审核备注同事务）或
   `community.review.failed`（审核流程拒绝时，如已认证不能驳回）。意图行写不进去 → 503
   `ADMIN_AUDIT_UNAVAILABLE`，社区状态不变、不发通知。
-- 再次提交同一结论 → 200、`changed: false`（仍记 requested + decided 两条审计）。已认证社区不能驳回 → 409 `ADMIN_COMMUNITY_ALREADY_VERIFIED`。被驳回的社区可以改判通过。
+- 再次提交同一结论 → 200、`changed: false`（仍记 requested + decided 两条审计）。已认证社区不能驳回 → 409 `ADMIN_COMMUNITY_ALREADY_VERIFIED`。被驳回的社区可以改判通过；但若其绑定代币在被驳回期间已被另一个未被驳回的社区绑定（决策 0182「一币一社区」），改判通过 → 409 `ADMIN_CONFLICT`，`detailsSafe = {reasonCode: "ADMIN_COMMUNITY_BOUND_ASSET_TAKEN", holderCommunityId}`，先让群主改绑或清空代币。
 
 200：
 

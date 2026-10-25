@@ -61,6 +61,7 @@ const HOUR_S = BigInt(Date.parse(HOUR) / 1000);
 const MEME = "0x1111111111111111111111111111111111116666";
 const NFT = "0x2222222222222222222222222222222222222222";
 const ASSET = `${CHAIN}:${MEME}`;
+const OTHER_ASSET = `${CHAIN}:0x3333333333333333333333333333333333337777`;
 const DAILY = 500_000n * loop;
 
 function connectionUrl(source: string, name: string): string {
@@ -619,11 +620,19 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
   });
 
   it("Decision 0183 (000101): facts count verified bindings, embedded wallets, and membership intervals kept by the history trigger", async () => {
-    // A pending community "listing" the same MEME no longer unbinds the NFT.
+    // Decision 0182 forbids a second live community on ASSET; a rejected one
+    // may still carry the key and never counts. A pending community on
+    // another MEME is not a binding the hour sees either.
+    await pool.query(
+      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id,
+         verification_status, reviewed_at, rejected_reason)
+       values ('S300 Squatter', 's300-squatter', $1, $2, 'rejected', now(), 'other')`,
+      [ASSET, users[7]],
+    );
     const pending = await pool.query<{ community_id: string }>(
       `insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
-       values ('S300 Squatter', 's300-squatter', $1, $2) returning community_id`,
-      [ASSET, users[7]],
+       values ('S300 Pending', 's300-pending', $1, $2) returning community_id`,
+      [OTHER_ASSET, users[7]],
     );
     const pendingId = pending.rows[0]!.community_id;
     // An external wallet on the NFT holder's address is not an owner.
@@ -644,7 +653,7 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
         chainId: CHAIN,
         hourStart: HOUR_S,
         hourEnd: HOUR_S + 3_600n,
-        assetIds: [ASSET],
+        assetIds: [ASSET, OTHER_ASSET],
       });
     const facts = await read();
     expect(facts.nftInstances[0]?.communityIds).toEqual([communityId]);
@@ -748,7 +757,7 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     });
     const pendingId = (
       await pool.query<{ community_id: string }>(
-        "select community_id from public.communities where slug = 's300-squatter'",
+        "select community_id from public.communities where slug = 's300-pending'",
       )
     ).rows[0]!.community_id;
     const missing = "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e";

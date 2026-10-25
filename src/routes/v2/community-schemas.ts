@@ -1319,7 +1319,7 @@ export const createCommunityRequestSchema = {
     },
     boundAssetKey: {
       description:
-        "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
+        "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so. Decision 0182: one token, one community — a key another community that is not rejected already binds is 409 COMMUNITY_BOUND_ASSET_TAKEN with detailsSafe.communityId naming that community (opaque ID only).",
       anyOf: [
         { type: "string", pattern: boundAssetKeyPatternSource },
         { type: "null" },
@@ -1568,6 +1568,23 @@ export const commandErrors = {
     "VALIDATION_FAILED",
     "ALIAS_RESERVED",
     "ALIAS_BLOCKED",
+  ]),
+} as const;
+
+/**
+ * Decision 0182: the commands that bind a token or bring a rejected
+ * community (and its token) back add 409 COMMUNITY_BOUND_ASSET_TAKEN.
+ */
+export const boundAssetCommandErrors = {
+  ...commandErrors,
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "COMMUNITY_BOUND_ASSET_TAKEN",
+    "DATA_STALE",
+    "IDEMPOTENCY_CONFLICT",
+    "PROFILE_ACTIVATION_REQUIRED",
+    "RESOURCE_CONFLICT",
+    "VERSION_CONFLICT",
   ]),
 } as const;
 

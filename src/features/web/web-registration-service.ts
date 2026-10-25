@@ -9,7 +9,6 @@ import {
   InvalidInviteCodeError,
   parseInviteCode,
 } from "../referral/invite-code.js";
-import { claimWindow } from "../referral/referral-contract.js";
 import type { ReferralService } from "../referral/referral-service.js";
 import {
   webReasonCodes,
@@ -181,20 +180,16 @@ export function createWebRegistrationService(
         throw unavailable(webReasonCodes.repositoryUnavailable);
       }
       const at = now();
-      const window = claimWindow(summary.activatedAt, at);
       return Object.freeze({
         loopId: summary.loopId,
         username: summary.username,
         usernameRequired: summary.username === null,
         walletAddress: summary.walletAddress,
+        // Decision 0181: no claim deadline. Before the username the claim
+        // still needs activation first (409 PROFILE_ACTIVATION_REQUIRED).
         invite: Object.freeze({
           bound: summary.inviteBound,
-          windowEndsAt:
-            window.status === "unavailable" ? null : window.closesAt,
-          canClaim:
-            options.referralAvailable &&
-            !summary.inviteBound &&
-            window.status !== "closed",
+          canClaim: options.referralAvailable && !summary.inviteBound,
         }),
         observedAt: at.toISOString(),
       });
@@ -254,7 +249,7 @@ export function createWebRegistrationService(
         });
       } catch (error) {
         if (!(error instanceof V2ApiError)) throw error;
-        if (error.code === "DATA_STALE" || error.code === "POLICY_BLOCKED") {
+        if (error.code === "DATA_STALE") {
           const direct = await repository
             .getDirectInviter(userId)
             .catch(translateRepository);
@@ -275,8 +270,6 @@ export function createWebRegistrationService(
         switch (error.code) {
           case "PROFILE_ACTIVATION_REQUIRED":
             throw withReason(error, webReasonCodes.activationRequired);
-          case "POLICY_BLOCKED":
-            throw withReason(error, webReasonCodes.claimWindowClosed);
           case "NOT_FOUND":
             throw withReason(error, webReasonCodes.codeUnknown);
           case "DATA_STALE":
@@ -343,7 +336,6 @@ export function createWebRegistrationService(
             .getDirectInviter(input.principal.userId)
             .catch(translateRepository)
         : null;
-      const window = dashboard.claimWindow;
       const { stats } = dashboard;
       return Object.freeze({
         code: dashboard.inviteCode.code,
@@ -383,11 +375,10 @@ export function createWebRegistrationService(
                 loopId: direct.loopId,
                 username: direct.username,
               }),
+        // Decision 0181: no claim deadline, so no `windowEndsAt`.
         binding: Object.freeze({
           bound: dashboard.bound,
-          windowEndsAt:
-            window.status === "unavailable" ? null : window.closesAt,
-          canClaim: !dashboard.bound && window.status !== "closed",
+          canClaim: !dashboard.bound,
         }),
         observedAt: now().toISOString(),
       });

@@ -5395,7 +5395,7 @@
                     ]
                   },
                   "boundAssetKey": {
-                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so. Decision 0182: one token, one community — a key another community that is not rejected already binds is 409 COMMUNITY_BOUND_ASSET_TAKEN with detailsSafe.communityId naming that community (opaque ID only).",
                     "anyOf": [
                       {
                         "type": "string",
@@ -6413,6 +6413,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",
@@ -7860,7 +7861,7 @@
                     ]
                   },
                   "boundAssetKey": {
-                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so. Decision 0182: one token, one community — a key another community that is not rejected already binds is 409 COMMUNITY_BOUND_ASSET_TAKEN with detailsSafe.communityId naming that community (opaque ID only).",
                     "anyOf": [
                       {
                         "type": "string",
@@ -8887,6 +8888,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",
@@ -12315,7 +12317,7 @@
         "operationId": "resubmitV2Community",
         "summary": "Resubmit a rejected community application",
         "tags": ["community"],
-        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE. Decision 0182: a rejected community does not hold its bound token; when another community bound that token meanwhile, resubmission is 409 COMMUNITY_BOUND_ASSET_TAKEN (change or clear the token with PATCH first).",
         "parameters": [
           {
             "schema": {
@@ -13329,6 +13331,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",
@@ -126324,7 +126327,7 @@
         "operationId": "getV2Referral",
         "summary": "Get the caller's invite code, link, binding, counts, and boost",
         "tags": ["referral"],
-        "description": "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. The claim window is [activatedAt, activatedAt + 7 days).",
+        "description": "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. Decision 0181: the claim window has no deadline; `rules.claimWindowDays` and `binding.claimWindow.closesAt` are deprecated compatibility keys.",
         "parameters": [
           {
             "schema": {
@@ -126446,6 +126449,7 @@
                               "type": "object",
                               "additionalProperties": false,
                               "required": ["status", "activatedAt", "closesAt"],
+                              "description": "Decision 0181: no deadline. Once the profile is activated the window is always open (`closed` is never emitted any more; the enum keeps it for shipped App codecs).",
                               "properties": {
                                 "status": {
                                   "type": "string",
@@ -126457,7 +126461,9 @@
                                 },
                                 "closesAt": {
                                   "type": "string",
-                                  "format": "date-time"
+                                  "format": "date-time",
+                                  "deprecated": true,
+                                  "description": "Decision 0181: deprecated. Always the fixed sentinel 9999-12-31T23:59:59.999Z (no deadline); kept only because shipped App codecs require the key. Will be removed after the App codec stops reading it."
                                 }
                               }
                             },
@@ -126690,7 +126696,12 @@
                           "enum": ["miningPower"]
                         },
                         "maximumDepth": { "type": "integer", "enum": [5] },
-                        "claimWindowDays": { "type": "integer", "enum": [7] }
+                        "claimWindowDays": {
+                          "type": "integer",
+                          "deprecated": true,
+                          "description": "Decision 0181: deprecated and no longer enforced (an activated account may claim at any time). Still 7 only because shipped App codecs require a positive integer; removed after the App codec stops reading it.",
+                          "enum": [7]
+                        }
                       }
                     },
                     "contractVersion": { "type": "string", "enum": ["2.0"] }
@@ -127575,7 +127586,7 @@
         "operationId": "claimV2Referral",
         "summary": "Bind the caller to an inviter with an invite code",
         "tags": ["referral"],
-        "description": "Allowed once, only for an activated profile inside its 7-day window. Unactivated → 409 PROFILE_ACTIVATION_REQUIRED; window closed → 403 POLICY_BLOCKED; unknown code → 404; self-invite or cycle → 422 VALIDATION_FAILED; already bound → 409 DATA_STALE. Edges are materialised from the inviter chain up to depth 5 in one transaction; the same Idempotency-Key replays the original result.",
+        "description": "Allowed once, only for an activated profile, with no time limit after activation (Decision 0181). Unactivated → 409 PROFILE_ACTIVATION_REQUIRED; unknown code → 404; self-invite or cycle → 422 VALIDATION_FAILED; already bound → 409 DATA_STALE. Edges are materialised from the inviter chain up to depth 5 in one transaction; the same Idempotency-Key replays the original result.",
         "requestBody": {
           "required": true,
           "content": {
@@ -127702,6 +127713,7 @@
                               "type": "object",
                               "additionalProperties": false,
                               "required": ["status", "activatedAt", "closesAt"],
+                              "description": "Decision 0181: no deadline. Once the profile is activated the window is always open (`closed` is never emitted any more; the enum keeps it for shipped App codecs).",
                               "properties": {
                                 "status": {
                                   "type": "string",
@@ -127713,7 +127725,9 @@
                                 },
                                 "closesAt": {
                                   "type": "string",
-                                  "format": "date-time"
+                                  "format": "date-time",
+                                  "deprecated": true,
+                                  "description": "Decision 0181: deprecated. Always the fixed sentinel 9999-12-31T23:59:59.999Z (no deadline); kept only because shipped App codecs require the key. Will be removed after the App codec stops reading it."
                                 }
                               }
                             },
@@ -127850,76 +127864,6 @@
                       "type": "string",
                       "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
                     },
-                    "category": {
-                      "type": "string",
-                      "enum": [
-                        "authentication",
-                        "authorization",
-                        "availability",
-                        "conflict",
-                        "internal",
-                        "rateLimit",
-                        "stale",
-                        "validation"
-                      ]
-                    },
-                    "retryable": { "type": "boolean" },
-                    "userMessageKey": {
-                      "type": "string",
-                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
-                      "maxLength": 128
-                    },
-                    "correlationId": { "type": "string", "format": "uuid" },
-                    "detailsSafe": {
-                      "anyOf": [
-                        { "type": "object", "additionalProperties": true },
-                        { "type": "null" }
-                      ]
-                    },
-                    "providerReferenceSafe": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^[A-Za-z0-9._:-]+$"
-                        },
-                        { "type": "null" }
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "headers": {
-              "cache-control": {
-                "schema": { "type": "string", "const": "no-store" },
-                "description": "Sensitive and operational responses are never cached"
-              },
-              "x-request-id": {
-                "schema": { "type": "string", "format": "uuid" },
-                "description": "Server-generated request correlation ID"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "code",
-                    "category",
-                    "retryable",
-                    "userMessageKey",
-                    "correlationId",
-                    "detailsSafe",
-                    "providerReferenceSafe"
-                  ],
-                  "properties": {
-                    "code": { "type": "string", "enum": ["POLICY_BLOCKED"] },
                     "category": {
                       "type": "string",
                       "enum": [

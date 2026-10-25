@@ -5,7 +5,7 @@
 - 基线：`d1a32d9`（merge S297）
 - 依据：需求方 2026-10-25 裁决，`docs/48-算力计算公式说明-2026-10-25.md` 附录 D 第 2 / 3 / 4 条及第 5 条的 API 侧校验；决策 0116（小时结算）、0123（按数量计）、0125 / 0126（快照按数量、毕业币）。
 - 范围：迁移 `000101_community_membership_history`；结算事实读取、runner 切段、快照余额输入与社区权重输入；后台挖矿参数草稿 / 批准校验；新增后台错误码 `MINING_COMMUNITY_UNKNOWN`；草稿响应可选键 `skippedCommunityIds`；`ops/seed-mock.sh` 的 mock 钱包改为 embedded。不新增 `/v2` 路由或键，App 接口形状不变。
-- 并行：S299-api（迁移 000100，一币一社区唯一约束）。本决策以「合并后一个 launch2 MEME 最多被一个未拒绝社区绑定」为前提，但多绑定防御分支保留。
+- 并行：S299-api / 决策 0182（迁移 000100，一币一社区唯一约束），已合并进本分支。本决策以「一个 MEME 最多被一个未拒绝社区绑定」为前提，但多绑定防御分支保留。
 
 ## 规则
 
@@ -99,8 +99,14 @@
 
 `ops/seed-mock.sh`：mock 账号钱包改为 `kind = 'embedded'`，`provider_wallet_id = 'mock-seed.' || md5(...)`（满足 embedded 必须有 provider_wallet_id 的检查）；已有的 mock external 钱包用一条 update 改为 embedded。脚本未运行。
 
+## 与决策 0182（S299，一币一社区）合并后的调整
+
+- 迁移头为 000101（000100 之后）；`schema.ts` 与所有断言迁移头的测试都以 000101 为准。
+- 快照 `setCommunityWeight` 的「一币一次」冲突检查排除 `rejected` 社区（已驳回社区不占用代币）；在一币一个未拒绝社区的前提下，该冲突分支、结算 runner 的 `communityIds.length !== 1` 分支、快照 `COMMUNITY_WEIGHT_AMBIGUOUS` 分支都只剩防御作用（代码注释引用 0182）。
+- `ops/seed-mock.sh` 的 `mock-vol-01` 从 USDT 改绑 LTC（BSC-peg `0x4338665cbb7b2485a8855a139b75d5e34ab0db94`），避免与 staging builders-guild 的 USDT 绑定撞唯一索引；该币需先 `pnpm asset:register` 才能跑 `--holdings`。
+
 ## 跟进
 
 - loop-mobile：文案「持仓即算力」需补充「须加入社区」「只算 LOOP 内置钱包」「只认已验证社区」；`docs/47 §7.3` 那条「未通过审核的社区没有权重」现在对结算也成立。App 接口无变化。
 - loop-admin：处理 `MINING_COMMUNITY_UNKNOWN`（草稿与批准两个入口，读 `detailsSafe.unknownCommunityIds` 标红对应行）；可选展示 `skippedCommunityIds`；社区系数改为从已验证社区列表选择（附录 D 第 5 条）。
-- 部署：000100（S299）与 000101 必须按序执行；本分支单独执行过 000101 的库，在合并 S299 后需要重建或先回滚 000101。
+- 部署：000100（S299）与 000101 必须按序执行。曾在合并 S299 之前单独执行过 000101 的库（只有本批次的临时测试库）需要重建。
