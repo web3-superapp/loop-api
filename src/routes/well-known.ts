@@ -512,7 +512,7 @@ export function renderInviteLandingPage(
       ? ""
       : `<a class="store" href="${escapeHtml(stores.android)}" rel="noopener noreferrer">Google Play</a>`,
   ].join("");
-  const body = `<p class="label">LOOP</p><h1>邀请码</h1><p class="id code">${safeCode}</p><p>好友邀请你加入 LOOP</p><button id="copy" class="cta" type="button" data-code="${safeCode}"${attribute("ios", stores.ios)}${attribute("android", stores.android)}${attribute("fallback", stores.fallback)}>复制邀请码并下载 LOOP</button><p id="status" class="hint" aria-live="polite"></p>${storeLinks === "" ? "" : `<p class="stores">${storeLinks}</p>`}<p class="hint">注册后在「填写邀请码」粘贴即可绑定（注册后 7 天内有效）。已安装 LOOP 时打开这个链接会直接进入 App。</p>`;
+  const body = `<p class="label">LOOP</p><h1>邀请码</h1><p class="id code">${safeCode}</p><p>好友邀请你加入 LOOP</p><button id="copy" class="cta" type="button" data-code="${safeCode}"${attribute("ios", stores.ios)}${attribute("android", stores.android)}${attribute("fallback", stores.fallback)}>复制邀请码并下载 LOOP</button><p id="status" class="hint" aria-live="polite"></p>${storeLinks === "" ? "" : `<p class="stores">${storeLinks}</p>`}<p class="hint">注册后在「填写邀请码」粘贴即可绑定（注册后随时可以绑定）。已安装 LOOP 时打开这个链接会直接进入 App。</p>`;
   return renderLandingDocument(body, {
     title: `LOOP 邀请码 ${safeCode}`,
     head: `<meta property="og:title" content="LOOP 邀请码 ${safeCode}">

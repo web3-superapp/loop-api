@@ -161,7 +161,11 @@ describe("LOOP API V2 referral module", () => {
     expect(body.binding).toMatchObject({
       status: "unbound",
       inviter: null,
-      claimWindow: { status: "open", activatedAt },
+      claimWindow: {
+        status: "open",
+        activatedAt,
+        closesAt: "9999-12-31T23:59:59.999Z",
+      },
     });
     expect(body.levels).toHaveLength(5);
     expect(body.levels[0]).toEqual({
@@ -188,11 +192,12 @@ describe("LOOP API V2 referral module", () => {
       effectiveAt: "2026-09-01T00:00:00.000Z",
       appliesTo: "miningPower",
       maximumDepth: 5,
+      // Decision 0181: deprecated, still 7 for shipped App codecs.
       claimWindowDays: 7,
     });
   });
 
-  it("claims a code inside the window and materialises edges from the inviter chain", async () => {
+  it("claims a code after activation and materialises edges from the inviter chain", async () => {
     const { app, repository } = await createApp();
     const response = await claim(app, code.toLowerCase());
     expect(response.statusCode).toBe(200);
@@ -209,9 +214,7 @@ describe("LOOP API V2 referral module", () => {
         claimWindow: {
           status: "open",
           activatedAt,
-          closesAt: new Date(
-            Date.parse(activatedAt) + 7 * 86_400_000,
-          ).toISOString(),
+          closesAt: "9999-12-31T23:59:59.999Z",
         },
       },
       contractVersion: "2.0",
@@ -298,25 +301,36 @@ describe("LOOP API V2 referral module", () => {
     expect(conflict.json()).toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
   });
 
-  it("refuses a claim outside the 7-day window with POLICY_BLOCKED and an unactivated profile with PROFILE_ACTIVATION_REQUIRED", async () => {
-    const expired = await createApp(
+  it("claims 400 days after activation (Decision 0181: no deadline) and refuses an unactivated profile with PROFILE_ACTIVATION_REQUIRED", async () => {
+    const longAgo = new Date(Date.now() - 400 * 86_400_000).toISOString();
+    const late = await createApp(
       repositoryFake({
         getAccountState: vi.fn(() =>
-          Promise.resolve({
-            activatedAt: new Date(Date.now() - 8 * 86_400_000).toISOString(),
-            hasWallet: true,
-          }),
+          Promise.resolve({ activatedAt: longAgo, hasWallet: true }),
         ),
       }),
     );
-    const closed = await claim(expired.app, code);
-    expect(closed.statusCode).toBe(403);
-    expect(closed.json()).toMatchObject({ code: "POLICY_BLOCKED" });
-    expect(
-      calls(expired.repository, "recordRejectedClaim"),
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({ reasonCode: "claim_window_closed" }),
+    const accepted = await claim(late.app, code);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({
+      binding: {
+        status: "bound",
+        claimWindow: {
+          status: "open",
+          activatedAt: longAgo,
+          closesAt: "9999-12-31T23:59:59.999Z",
+        },
+      },
+    });
+    expect(calls(late.repository, "claim")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inviteeUserId: s7AccountId,
+        validationStatus: "pending_mining",
+      }),
     );
+    expect(
+      calls(late.repository, "recordRejectedClaim"),
+    ).not.toHaveBeenCalled();
     const unactivated = await createApp(
       repositoryFake({
         getAccountState: vi.fn(() =>

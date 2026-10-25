@@ -18,7 +18,6 @@ export const webReasonCodes = Object.freeze({
   usernameInvalid: "WEB_USERNAME_INVALID",
   codeInvalid: "REFERRAL_CODE_INVALID",
   codeUnknown: "REFERRAL_CODE_UNKNOWN",
-  claimWindowClosed: "REFERRAL_CLAIM_WINDOW_CLOSED",
   activationRequired: "PROFILE_ACTIVATION_REQUIRED",
   selfInvite: "REFERRAL_SELF_INVITE",
   cycle: "REFERRAL_CYCLE",
@@ -99,9 +98,9 @@ export function parseWebWriteMetadata(
   return Object.freeze({ contractVersion: v2ContractVersion, idempotencyKey });
 }
 
+/** Decision 0181: no claim deadline, so no `windowEndsAt`. */
 export interface WebInviteState {
   readonly bound: boolean;
-  readonly windowEndsAt: string | null;
   readonly canClaim: boolean;
 }
 

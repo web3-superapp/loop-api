@@ -44,7 +44,7 @@ const inviterId = "1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d";
 const inviterLoopId = "LOOP-ABCD1234";
 const epochId = "0f1e2d3c-4b5a-4968-8776-655443322110";
 const recentActivation = new Date(Date.now() - 86_400_000).toISOString();
-const oldActivation = new Date(Date.now() - 8 * 86_400_000).toISOString();
+const oldActivation = new Date(Date.now() - 400 * 86_400_000).toISOString();
 
 const edge: ReferralEdgeRecord = Object.freeze({
   referralEdgeId: "7d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6",
@@ -211,13 +211,7 @@ describe("Decision 0180: GET /v2/web/referral/me", () => {
       ],
       nextCursor: null,
       inviter: { loopId: inviterLoopId, username: "Alice" },
-      binding: {
-        bound: true,
-        windowEndsAt: new Date(
-          Date.parse(recentActivation) + 7 * 86_400_000,
-        ).toISOString(),
-        canClaim: false,
-      },
+      binding: { bound: true, canClaim: false },
       observedAt: expect.any(String) as string,
     });
     // Same settled hour for the stats as the App (Decision 0162).
@@ -265,11 +259,7 @@ describe("Decision 0180: GET /v2/web/referral/me", () => {
     expect(issueInviteCode).toHaveBeenCalledWith(
       expect.objectContaining({ ownerUserId: s7AccountId }),
     );
-    expect(body["binding"]).toEqual({
-      bound: false,
-      windowEndsAt: null,
-      canClaim: true,
-    });
+    expect(body["binding"]).toEqual({ bound: false, canClaim: true });
     expect(body["inviter"]).toBeNull();
     expect(body["invitees"]).toEqual([]);
     // Unbound: the inviter lookup is skipped.
@@ -296,7 +286,7 @@ describe("Decision 0180: GET /v2/web/referral/me", () => {
     expect(failed.json()).toMatchObject({ stats: null });
   });
 
-  it("reports a closed window as canClaim false while unbound", async () => {
+  it("keeps an unbound account activated 400 days ago claimable (Decision 0181)", async () => {
     const { app } = await createApp({
       referral: referralFake({
         getAccountState: vi.fn(() =>
@@ -306,7 +296,7 @@ describe("Decision 0180: GET /v2/web/referral/me", () => {
       }),
     });
     expect((await get(app)).json()).toMatchObject({
-      binding: { bound: false, canClaim: false },
+      binding: { bound: false, canClaim: true },
       inviter: null,
     });
   });

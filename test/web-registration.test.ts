@@ -67,7 +67,8 @@ const ownCode = `LOOP-8XYZ${inviteCodeCheckSymbol("8XYZ")}`;
 const unknownCode = `LOOP-9QRS${inviteCodeCheckSymbol("9QRS")}`;
 const idempotencyKey = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbba";
 const recentActivation = new Date(Date.now() - 86_400_000).toISOString();
-const oldActivation = new Date(Date.now() - 8 * 86_400_000).toISOString();
+/** Decision 0181: far past the former 7-day window. */
+const oldActivation = new Date(Date.now() - 400 * 86_400_000).toISOString();
 
 const inviter: WebInviter = Object.freeze({
   userId: inviterId,
@@ -402,7 +403,7 @@ describe("Decision 0179: web registration surface", () => {
         username: null,
         usernameRequired: true,
         walletAddress: null,
-        invite: { bound: false, windowEndsAt: null, canClaim: true },
+        invite: { bound: false, canClaim: true },
         observedAt: expect.any(String) as string,
       });
       expect(
@@ -410,7 +411,7 @@ describe("Decision 0179: web registration surface", () => {
       ).toHaveBeenCalledWith("did:privy:verified-user");
     });
 
-    it("accepts an empty JSON object body and reports the claim window", async () => {
+    it("accepts an empty JSON object body and reports the invite state", async () => {
       const web = webFake({
         getAccountSummary: vi.fn(() =>
           Promise.resolve(
@@ -434,18 +435,15 @@ describe("Decision 0179: web registration surface", () => {
         username: "Bob",
         usernameRequired: false,
         walletAddress: "0x00000000000000000000000000000000000000aa",
-        invite: {
-          bound: false,
-          windowEndsAt: new Date(
-            Date.parse(recentActivation) + 7 * 86_400_000,
-          ).toISOString(),
-          canClaim: true,
-        },
+        invite: { bound: false, canClaim: true },
       });
+      expect(
+        response.json<{ invite: Record<string, unknown> }>().invite,
+      ).not.toHaveProperty("windowEndsAt");
     });
 
-    it("reports a closed window and a bound invite as not claimable", async () => {
-      const closed = await createApp({
+    it("keeps an account activated 400 days ago claimable (Decision 0181) and a bound invite not", async () => {
+      const old = await createApp({
         web: webFake({
           getAccountSummary: vi.fn(() =>
             Promise.resolve(
@@ -461,7 +459,10 @@ describe("Decision 0179: web registration surface", () => {
           ),
         }),
       });
-      for (const { app } of [closed, bound]) {
+      for (const [{ app }, claimable] of [
+        [old, true],
+        [bound, false],
+      ] as const) {
         const response = await app.inject({
           method: "POST",
           url: "/v2/web/session",
@@ -469,7 +470,7 @@ describe("Decision 0179: web registration surface", () => {
         });
         expect(
           response.json<{ invite: { canClaim: boolean } }>().invite.canClaim,
-        ).toBe(false);
+        ).toBe(claimable);
       }
     });
 
@@ -738,21 +739,23 @@ describe("Decision 0179: web registration surface", () => {
       });
     });
 
-    it("refuses after the 7-day window with REFERRAL_CLAIM_WINDOW_CLOSED", async () => {
-      const { app } = await createApp({
-        referral: referralFake({
-          getAccountState: vi.fn(() =>
-            Promise.resolve({ activatedAt: oldActivation, hasWallet: false }),
-          ),
-        }),
-        web: webFake({ getDirectInviter: vi.fn(() => Promise.resolve(null)) }),
+    it("binds an account activated 400 days ago (Decision 0181: no claim deadline)", async () => {
+      const referral = referralFake({
+        getAccountState: vi.fn(() =>
+          Promise.resolve({ activatedAt: oldActivation, hasWallet: false }),
+        ),
       });
+      const { app } = await createApp({ referral });
       const response = await claim(app, code);
-      expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({
-        code: "POLICY_BLOCKED",
-        detailsSafe: { reasonCode: "REFERRAL_CLAIM_WINDOW_CLOSED" },
-      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ status: "bound", inviterLoopId });
+      expect(calls(referral, "claim")).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inviteeUserId: s7AccountId,
+          edges: [{ inviterUserId: inviterId, depth: 1 }],
+        }),
+      );
+      expect(calls(referral, "recordRejectedClaim")).not.toHaveBeenCalled();
     });
 
     it("needs the username first, then names unknown and malformed codes", async () => {

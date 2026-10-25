@@ -114,18 +114,15 @@ const sessionResponseSchema = {
     invite: {
       type: "object",
       additionalProperties: false,
-      required: ["bound", "windowEndsAt", "canClaim"],
+      required: ["bound", "canClaim"],
+      description:
+        "Decision 0181: an invite code can be claimed at any time after the username (activation); there is no deadline.",
       properties: {
         bound: { type: "boolean" },
-        windowEndsAt: {
-          anyOf: [dateTimeSchema, { type: "null" }],
-          description:
-            "End of the 7-day claim window (activation + 7 days); null before the username (activation).",
-        },
         canClaim: {
           type: "boolean",
           description:
-            "Not bound, the referral module is available, and the window is not closed. Before the username is set the window has not started yet: set the username first, then claim.",
+            "Not bound and the referral module is available. Before the username is set, set it first, then claim (claiming earlier is 409 PROFILE_ACTIVATION_REQUIRED).",
         },
       },
     },
@@ -358,18 +355,15 @@ const dashboardResponseSchema = {
     binding: {
       type: "object",
       additionalProperties: false,
-      required: ["bound", "windowEndsAt", "canClaim"],
+      required: ["bound", "canClaim"],
+      description:
+        "Decision 0181: no claim deadline after the username (activation).",
       properties: {
         bound: { type: "boolean" },
-        windowEndsAt: {
-          anyOf: [dateTimeSchema, { type: "null" }],
-          description:
-            "Activation + 7 days; null before the username (activation).",
-        },
         canClaim: {
           type: "boolean",
           description:
-            "Not bound and the window is not closed (before the username: set it first, then claim).",
+            "Not bound (before the username: set it first, then claim).",
         },
       },
     },
@@ -535,7 +529,7 @@ export function registerV2WebRoutes(
             operationId: "setWebUsername",
             summary: "Set the LOOP username (profile alias)",
             description:
-              "Decision 0179. Same rules and services as the App: a pending profile is activated with this alias (the App's one-time activation command; the Idempotency-Key replays it, the same key with another username is 409 IDEMPOTENCY_CONFLICT); an active profile has its alias replaced (compare-and-swap, one automatic retry on a concurrent edit; setting the current name is a no-op). Activation starts the 7-day invite-claim window. 409 ACCOUNT_BOOTSTRAP_REQUIRED before POST /v2/web/session.",
+              "Decision 0179. Same rules and services as the App: a pending profile is activated with this alias (the App's one-time activation command; the Idempotency-Key replays it, the same key with another username is 409 IDEMPOTENCY_CONFLICT); an active profile has its alias replaced (compare-and-swap, one automatic retry on a concurrent edit; setting the current name is a no-op). After activation an invite code can be claimed at any time (Decision 0181). 409 ACCOUNT_BOOTSTRAP_REQUIRED before POST /v2/web/session.",
             tags: ["web"],
             security: [{ privyBearer: [] }],
             headers: webWriteHeadersSchema,
@@ -583,7 +577,7 @@ export function registerV2WebRoutes(
             operationId: "claimWebReferral",
             summary: "Bind the account to an inviter with an invite code",
             description:
-              "Decision 0179. The App's claim service and every check unchanged: once per account, only after the username (activation) and inside the 7-day window, not the caller's own code, no cycle; edges up to depth 5 in one transaction; the same Idempotency-Key replays the original result. An account that is already bound gets 200 already_bound (no write). Refusals carry detailsSafe.reasonCode: 400 REFERRAL_CODE_INVALID, 404 REFERRAL_CODE_UNKNOWN, 403 REFERRAL_CLAIM_WINDOW_CLOSED, 409 PROFILE_ACTIVATION_REQUIRED, 422 REFERRAL_SELF_INVITE | REFERRAL_CYCLE.",
+              "Decision 0179. The App's claim service and every check unchanged: once per account, only after the username (activation) with no deadline (Decision 0181), not the caller's own code, no cycle; edges up to depth 5 in one transaction; the same Idempotency-Key replays the original result. An account that is already bound gets 200 already_bound (no write). Refusals carry detailsSafe.reasonCode: 400 REFERRAL_CODE_INVALID, 404 REFERRAL_CODE_UNKNOWN, 409 PROFILE_ACTIVATION_REQUIRED, 422 REFERRAL_SELF_INVITE | REFERRAL_CYCLE.",
             tags: ["web"],
             security: [{ privyBearer: [] }],
             headers: webWriteHeadersSchema,
@@ -592,7 +586,6 @@ export function registerV2WebRoutes(
               200: claimResponseSchema,
               400: v2ErrorResponseSchema(["INVALID_REQUEST"]),
               401: bearer401,
-              403: v2ErrorResponseSchema(["POLICY_BLOCKED"]),
               404: v2ErrorResponseSchema(["NOT_FOUND"]),
               409: v2ErrorResponseSchema([
                 "ACCOUNT_BOOTSTRAP_REQUIRED",
