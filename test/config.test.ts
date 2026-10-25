@@ -901,6 +901,27 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses MARKET_ROW_SPARKLINE24H_EMIT as off|on, default off, and refuses anything else (Decision 0186)", () => {
+    expect(loadConfig(validEnvironment()).marketRowSparkline24hEmit).toBe(
+      false,
+    );
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["MARKET_ROW_SPARKLINE24H_EMIT"] = value;
+      expect(loadConfig(environment).marketRowSparkline24hEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["MARKET_ROW_SPARKLINE24H_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /MARKET_ROW_SPARKLINE24H_EMIT/,
+      );
+    }
+  });
+
   it("parses WALLET_LINK_POLICY_EMIT as off|on and EXTERNAL_WALLET_ADDRESS_PUBLIC as a strict boolean, both default off (Decision 0185)", () => {
     const defaults = loadConfig(validEnvironment());
     expect(defaults.walletLinkPolicyEmit).toBe(false);

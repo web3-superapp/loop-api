@@ -551,6 +551,12 @@ home / members / commands / recommended, `GET /v2/search` `displaySnapshot`, `GE
 `COMMUNITY_LABEL_EMIT=on` (default off, byte-identical). Front-end contract:
 `docs/frontend-v2-community-api.md` §社区自定义标签.
 
+S307 / Decision 0186: `GET /v2/market/assets?category=` items and `GET /v2/market/overview`
+watchlist / trending items add the optional `sparkline24h: string[] | null` (up to 24 hourly
+closes: the row's own GeckoTerminal `sparkline`, else launch2 / MEME v1 chain trades bucketed
+by hour) only with `MARKET_ROW_SPARKLINE24H_EMIT=on` (default off, byte-identical). No
+migration. Front-end contract: `docs/frontend-v2-market-api.md` §12a.
+
 S274 (Decision 0173, migration 000096): the project NFT picture. `POST /v2/media/project-nft-images`
 (media kind `project_nft_image`, the community-logo upload rules) answers `201 {mediaId, ref,
 url, mediaUrl, cid, ipfsUri, width, height}`; with `NFT_IMAGE_STORAGE=filebase` the stored

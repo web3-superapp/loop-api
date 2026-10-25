@@ -37,6 +37,7 @@ import {
 } from "../src/database/market-category-repository.js";
 import { bscChainId } from "../src/features/chain/chain-contract.js";
 import { candleLimits } from "../src/features/market/market-contract.js";
+import type { MarketRowSeriesStore } from "../src/features/market/market-row-sparkline24h.js";
 import type { InternalUserRepository } from "../src/features/identity/internal-user-repository.js";
 import { createUnavailableDeviceSessionRepository } from "../src/features/session/device-session-repository.js";
 import type { BscReadClient } from "../src/integrations/bsc/rpc-client.js";
@@ -636,6 +637,7 @@ function fakes(
     readonly controlPlane?: ControlPlaneRepository;
     readonly pairsProvider?: ReturnType<typeof pairsProviderFake>;
     readonly categories?: MarketCategoryRepository;
+    readonly rowSeries?: MarketRowSeriesStore;
   } = {},
 ) {
   const database = {
@@ -654,6 +656,9 @@ function fakes(
     ...(options.categories === undefined
       ? {}
       : { marketCategories: options.categories }),
+    ...(options.rowSeries === undefined
+      ? {}
+      : { marketRowSeries: options.rowSeries }),
     internalUsers: {
       findByPrivyUserId: vi.fn<InternalUserRepository["findByPrivyUserId"]>(
         () => Promise.resolve({ id: accountId }),
@@ -3391,6 +3396,190 @@ describe("LOOP API V2 market module", () => {
         const refused = await app.inject({ method: "GET", url, headers });
         expect(refused.statusCode, url).toBe(status);
       }
+    });
+
+    describe("row sparkline24h (Decision 0186)", () => {
+      const nowSeconds = Math.floor(Date.now() / 1_000);
+      const endBucket = Math.floor(nowSeconds / 3_600) * 3_600;
+
+      /** Chain facts for the testnet MEME only: two hours of history. */
+      function rowSeriesFake(): MarketRowSeriesStore & {
+        readonly calls: (readonly string[])[];
+      } {
+        const calls: (readonly string[])[] = [];
+        return {
+          calls,
+          readHourlyCloses: vi.fn<MarketRowSeriesStore["readHourlyCloses"]>(
+            (input) => {
+              calls.push(input.assetIds);
+              return Promise.resolve(
+                new Map(
+                  input.assetIds
+                    .filter((id) => id === memeAsset.assetId)
+                    .map(
+                      (id) =>
+                        [
+                          id,
+                          {
+                            firstAt: endBucket - 2 * 3_600 + 10,
+                            priorCloseE18: null,
+                            buckets: [
+                              {
+                                t: endBucket - 2 * 3_600,
+                                closeE18: "5000000000000",
+                              },
+                              { t: endBucket, closeE18: "6000000000000" },
+                            ],
+                          },
+                        ] as const,
+                    ),
+                ),
+              );
+            },
+          ),
+        };
+      }
+
+      function sparklineCacheRow(address: string): MarketFactCacheRecord {
+        const at = new Date().toISOString();
+        return {
+          subjectKey: `token:${address}`,
+          factKind: "sparkline_1h",
+          source: "geckoterminal",
+          value: {
+            interval: "1h",
+            poolAddress,
+            poolOrigin: "registry",
+            poolChosenAt: at,
+            closes: ["747.12", "747.48", "748.01"],
+            candleCount: 3,
+            high: "748.9",
+            low: "746.5",
+          },
+          rawDigest: "c".repeat(64),
+          fetchedAt: at,
+          ttlSeconds: 300,
+        };
+      }
+
+      it("emits no key with the switch off (default): old clients see the same rows", async () => {
+        const rowSeries = rowSeriesFake();
+        const { app } = await createApp(
+          fakes({
+            assets: registryRows,
+            pairsProvider: categoryPairsProvider(),
+            categories: categoriesFake(),
+            rowSeries,
+          }),
+        );
+        for (const query of ["category=meme", "category=major"]) {
+          const response = await list(app, query);
+          expect(response.statusCode).toBe(200);
+          for (const row of response.body.items) {
+            expect(row, query).not.toHaveProperty("sparkline24h");
+          }
+        }
+        const overview = await app.inject({
+          method: "GET",
+          url: "/v2/market/overview",
+          headers: commonHeaders(),
+        });
+        expect(overview.body).not.toContain("sparkline24h");
+        expect(rowSeries.calls).toEqual([]);
+      });
+
+      it("serves the warmed GeckoTerminal closes for a major row and the chain series for a MEME row, null otherwise", async () => {
+        const rowSeries = rowSeriesFake();
+        const candles = candlesProviderFake();
+        const { app, database } = await createApp(
+          fakes({
+            assets: registryRows,
+            pairsProvider: categoryPairsProvider(),
+            categories: categoriesFake(),
+            candlesProvider: candles.provider,
+            rowSeries,
+          }),
+          { MARKET_ROW_SPARKLINE24H_EMIT: "on" },
+        );
+        await database.marketFacts.put(sparklineCacheRow(wbnb));
+
+        const major = await list(app, "category=major");
+        expect(major.statusCode).toBe(200);
+        const majorById = new Map(
+          major.body.items.map((row) => [row["assetId"], row]),
+        );
+        expect(majorById.get(wbnbAssetId)).toMatchObject({
+          sparkline: { status: "available" },
+          sparkline24h: ["747.12", "747.48", "748.01"],
+        });
+        // Native reads WBNB's row as proxied, exactly as its sparkline.
+        expect(majorById.get("eip155:56:native")?.["sparkline24h"]).toEqual([
+          "747.12",
+          "747.48",
+          "748.01",
+        ]);
+        // USDT has no warmed row and no chain facts.
+        expect(majorById.get(usdtAssetId)).toHaveProperty("sparkline24h", null);
+
+        const meme = await list(app, "category=meme");
+        expect(meme.statusCode).toBe(200);
+        const memeById = new Map(
+          meme.body.items.map((row) => [row["assetId"], row]),
+        );
+        expect(memeById.get(memeAsset.assetId)).toMatchObject({
+          sparkline: { status: "unavailable" },
+          sparkline24h: ["0.000005", "0.000005", "0.000006"],
+        });
+        expect(memeById.get(frogAsset.assetId)).toHaveProperty(
+          "sparkline24h",
+          null,
+        );
+        // Only rows without an own line are looked up, in one batch.
+        expect(rowSeries.calls).toEqual([
+          [usdtAssetId],
+          [frogAsset.assetId, memeAsset.assetId],
+        ]);
+
+        const overview = await app.inject({
+          method: "GET",
+          url: "/v2/market/overview",
+          headers: commonHeaders(),
+        });
+        expect(overview.statusCode).toBe(200);
+        const body = overview.json<{
+          watchlist: { items: Record<string, unknown>[] };
+          trending: { items: Record<string, unknown>[] };
+        }>();
+        expect(body.watchlist.items[0]).toMatchObject({
+          assetId: wbnbAssetId,
+          sparkline24h: ["747.12", "747.48", "748.01"],
+        });
+        for (const row of body.trending.items) {
+          expect(row).toHaveProperty("sparkline24h");
+        }
+        expect(candles.readPoolOhlcv).not.toHaveBeenCalled();
+      });
+
+      it("answers null on every chain-sourced row when the series read fails, and keeps the list up", async () => {
+        const { app } = await createApp(
+          fakes({
+            assets: registryRows,
+            pairsProvider: categoryPairsProvider(),
+            categories: categoriesFake(),
+            rowSeries: {
+              readHourlyCloses: vi.fn(() =>
+                Promise.reject(new Error("db down")),
+              ),
+            },
+          }),
+          { MARKET_ROW_SPARKLINE24H_EMIT: "on" },
+        );
+        const meme = await list(app, "category=meme");
+        expect(meme.statusCode).toBe(200);
+        for (const row of meme.body.items) {
+          expect(row).toHaveProperty("sparkline24h", null);
+        }
+      });
     });
   });
 });

@@ -30,6 +30,7 @@ import {
   signedDecimalPatternSource,
   tradeLimits,
 } from "../../features/market/market-contract.js";
+import { marketRowSparkline24hPolicy } from "../../features/market/market-row-sparkline24h.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { tokenLogoSchema } from "./token-logo-schema.js";
 import { assetResourceSchema, unavailableSchema } from "./chain-schemas.js";
@@ -196,6 +197,24 @@ export const marketRange24hSchema = {
     "Same cache row and the same unavailable reason codes as the overview row sparkline: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED, MARKET_SPARKLINE_EXPIRED, MARKET_SPARKLINE_EMPTY, MARKET_FACT_CACHE_UNAVAILABLE, ASSET_BLOCKED.",
 } as const;
 
+/**
+ * Decision 0186: the list rows' optional 24 h trend line. Present only with
+ * `MARKET_ROW_SPARKLINE24H_EMIT=on`; a client must accept rows without it.
+ */
+export const marketRowSparkline24hSchema = {
+  anyOf: [
+    {
+      type: "array",
+      minItems: marketRowSparkline24hPolicy.minimumPoints,
+      maxItems: marketRowSparkline24hPolicy.points,
+      items: decimalSchema,
+    },
+    { type: "null" },
+  ],
+  description:
+    "Optional (Decision 0186; emitted only with MARKET_ROW_SPARKLINE24H_EMIT=on). Up to 24 hourly closes of the last 24 hours, oldest first, the last one the current hour; canonical decimal strings in the unit of the row's price (USD; launchpad tokens: USD1 at par). Source: the row's own `sparkline` when available (GeckoTerminal, Decision 0074), else the LOOP chain facts of a launch2 / MEME v1 token (curve trades and official-pool swaps, close of each UTC hour, an hour without trades repeats the previous close). Fewer than 2 points, or no source: null — draw no line. Never padded, never zero-filled.",
+} as const;
+
 const marketAssetRowSchema = {
   type: "object",
   additionalProperties: false,
@@ -214,6 +233,7 @@ const marketAssetRowSchema = {
     price: marketFactSchema,
     priceChange24h: marketFactSchema,
     sparkline: marketSparklineSchema,
+    sparkline24h: marketRowSparkline24hSchema,
   },
 } as const;
 
@@ -1111,6 +1131,7 @@ export const marketCategoryAssetsResourceSchema = {
               "Present exactly when quote is null. MARKET_CHAIN_NOT_PRICED (asset on a chain the market Provider is not read for, e.g. a BSC testnet Launch token), MARKET_PROVIDER_DEXSCREENER_DISABLED, MARKET_PROVIDER_UNREACHABLE, MARKET_PROVIDER_RATE_LIMITED, MARKET_PAIR_NOT_FOUND, MARKET_PAIR_UNREPRESENTABLE, MARKET_FACT_NOT_REPORTED, MARKET_FACT_CACHE_UNAVAILABLE.",
           },
           sparkline: marketSparklineSchema,
+          sparkline24h: marketRowSparkline24hSchema,
           community: {
             type: "object",
             additionalProperties: false,
