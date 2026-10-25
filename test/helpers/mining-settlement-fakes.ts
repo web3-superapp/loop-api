@@ -149,6 +149,7 @@ export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
       Promise.resolve(repo.versions.find((v) => v.versionId === id) ?? null),
     listApprovedCommunityWeights: () => Promise.resolve([]),
     findUnknownAssetIds: () => Promise.resolve([]),
+    findUnverifiedCommunityIds: () => Promise.resolve([]),
     createParameterDraft: reject,
     approveParameterVersion: reject,
     withdrawParameterVersion: reject,

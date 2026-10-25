@@ -14,7 +14,7 @@ function captureSql(operation: (pgm: MigrationBuilder) => void): string {
 
 describe("000100 community bound asset unique (Decision 0182)", () => {
   it("is the schema head", () => {
-    expect(latestMigrationName).toBe("000100_community_bound_asset_unique");
+    expect(latestMigrationName).toBe("000101_community_membership_history");
   });
 
   it("releases duplicates (verified first, then oldest; rejected excluded) before the partial unique index", () => {

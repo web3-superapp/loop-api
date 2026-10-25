@@ -5,6 +5,7 @@ import {
   parseMiningParameterDraft,
 } from "../mining/hourly-settlement-contract.js";
 import {
+  MiningCommunityUnknownError,
   MiningSettlementConflictError,
   MiningSettlementUnavailableError,
   type MiningAuditRecord,
@@ -62,8 +63,20 @@ const permissionReasons: ReadonlySet<string> = new Set([
   adminReasonCodes.accountDisabled,
 ]);
 
+/** Decision 0183: 422 MINING_COMMUNITY_UNKNOWN with the offending ids. */
+function communityUnknown(communityIds: readonly string[]): AdminApiError {
+  return new AdminApiError("MINING_COMMUNITY_UNKNOWN", {
+    reasonCode: "MINING_COMMUNITY_UNKNOWN",
+    field: "communityCoefficients",
+    unknownCommunityIds: Object.freeze([...communityIds]),
+  });
+}
+
 function translate(error: unknown): never {
   if (error instanceof AdminApiError) throw error;
+  if (error instanceof MiningCommunityUnknownError) {
+    throw communityUnknown(error.communityIds);
+  }
   if (error instanceof MiningSettlementConflictError) {
     if (permissionReasons.has(error.reasonCode)) {
       throw new AdminApiError("PERMISSION_DENIED", {
@@ -199,12 +212,29 @@ export function createAdminMiningSettlementService(dependencies: {
           });
         }
         const given = parameters as Record<string, unknown>;
-        const communityCoefficients =
-          given["communityCoefficients"] ??
-          (await repo.listApprovedCommunityWeights()).map((entry) => ({
-            communityId: entry.communityId,
-            coefficient: entry.weight,
-          }));
+        // Decision 0183: the frozen copy keeps only verified communities and
+        // reports the ones it skipped; an explicit table is checked below.
+        let skippedCommunityIds: readonly string[] | null = null;
+        let communityCoefficients: unknown = given["communityCoefficients"];
+        if (communityCoefficients === undefined) {
+          const copied = await repo.listApprovedCommunityWeights();
+          const skipped = new Set(
+            await repo.findUnverifiedCommunityIds(
+              copied.map((entry) => entry.communityId),
+            ),
+          );
+          skippedCommunityIds = Object.freeze(
+            copied
+              .map((entry) => entry.communityId)
+              .filter((id) => skipped.has(id)),
+          );
+          communityCoefficients = copied
+            .filter((entry) => !skipped.has(entry.communityId))
+            .map((entry) => ({
+              communityId: entry.communityId,
+              coefficient: entry.weight,
+            }));
+        }
         let document;
         try {
           document = parseMiningParameterDraft({
@@ -222,6 +252,10 @@ export function createAdminMiningSettlementService(dependencies: {
           }
           throw error;
         }
+        const unverified = await repo.findUnverifiedCommunityIds(
+          document.communityCoefficients.map((entry) => entry.communityId),
+        );
+        if (unverified.length > 0) throw communityUnknown(unverified);
         const unknown = await repo.findUnknownAssetIds(
           document.assetWeights.map((entry) => entry.assetId),
         );
@@ -251,6 +285,10 @@ export function createAdminMiningSettlementService(dependencies: {
         return Object.freeze({
           version: projectVersion(created.version),
           audit: auditReference(created.audit),
+          // Only when the frozen copy dropped something (additive key).
+          ...(skippedCommunityIds === null || skippedCommunityIds.length === 0
+            ? {}
+            : { skippedCommunityIds }),
         });
       } catch (error) {
         return translate(error);
@@ -307,7 +345,9 @@ export function createAdminMiningSettlementService(dependencies: {
         const reason =
           error instanceof MiningSettlementConflictError
             ? error.reasonCode
-            : adminReasonCodes.databaseUnavailable;
+            : error instanceof MiningCommunityUnknownError
+              ? "MINING_COMMUNITY_UNKNOWN"
+              : adminReasonCodes.databaseUnavailable;
         await repo
           .recordAudit({
             ...auditBase,

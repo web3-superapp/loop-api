@@ -157,6 +157,24 @@ const versionWriteResource = resource({
   version: versionSchema,
   audit: auditSchema,
 });
+/**
+ * Decision 0183: a draft whose community table was the frozen copy also
+ * lists the copied community ids it dropped because they are not verified.
+ */
+const draftWriteResource = {
+  type: "object",
+  headers: noStoreResponseHeaders(),
+  additionalProperties: false,
+  required: ["version", "audit"],
+  properties: {
+    version: versionSchema,
+    audit: auditSchema,
+    skippedCommunityIds: {
+      type: "array",
+      items: { type: "string", pattern: uuidPattern },
+    },
+  },
+} as const;
 const versionParams = {
   type: "object",
   additionalProperties: false,
@@ -232,7 +250,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "createAdminMiningParameterDraft",
         summary: "Draft a hourly settlement parameter version",
         description:
-          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
+          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[]), and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -247,11 +265,12 @@ export function registerAdminMiningSettlementRoutes(
           },
         },
         response: {
-          201: versionWriteResource,
+          201: draftWriteResource,
           ...adminErrors(
             ...guardedSessionErrors,
             "ADMIN_CONFLICT",
             "VALIDATION_FAILED",
+            "MINING_COMMUNITY_UNKNOWN",
             "CAPABILITY_UNAVAILABLE",
           ),
         },
@@ -275,7 +294,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "approveAdminMiningParameterVersion",
         summary: "Approve a parameter version (in force at effectiveFrom)",
         description:
-          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Approved versions are immutable; history is never rewritten.",
+          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
         tags: ["admin-mining"],
         security: adminSecurity,
         params: versionParams,
@@ -286,6 +305,7 @@ export function registerAdminMiningSettlementRoutes(
             ...guardedSessionErrors,
             "NOT_FOUND",
             "ADMIN_CONFLICT",
+            "MINING_COMMUNITY_UNKNOWN",
             "CAPABILITY_UNAVAILABLE",
           ),
         },

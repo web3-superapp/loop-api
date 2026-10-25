@@ -83,6 +83,7 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     communities: "mixed",
     community_channels: "mixed",
     community_memberships: "user",
+    community_membership_history: "user",
     community_role_events: "mixed",
     community_channel_members: "user",
     community_channel_sync_jobs: "user",
@@ -553,6 +554,7 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
     `${ownedBy("actor_user_id")} or ${ownedBy("target_user_id")}
       or idempotency_record_id in ${ownedIdempotency}`,
   ),
+  del("community_membership_history", ownedBy("user_id")),
   del("community_memberships", ownedBy()),
   // Group chats and direct channels (only users create them: whole tables)
   del("chat_group_membership_events", "true"),

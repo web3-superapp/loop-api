@@ -907,6 +907,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             left join public.community_mining_weights as w
               on w.community_id = c.community_id
             where c.bound_asset_key is not null
+              -- Decision 0183: a pending / rejected community's binding
+              -- never touches the snapshot.
+              and c.verification_status = 'verified'
             order by c.community_id
           `,
           values: [configVersion],
@@ -1271,6 +1274,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 and w.config_version = $1
                 and c.bound_asset_key = $2
                 and w.community_id <> $3
+                -- Decision 0182: a rejected community does not occupy its
+                -- token; with one live binding per token this branch is
+                -- defensive only.
+                and c.verification_status <> 'rejected'
               limit 1
             `,
             values: [configVersion, communityRow.bound_asset_key, communityId],
@@ -1815,7 +1822,33 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             join public.account_wallets as w on w.wallet_id = s.wallet_id
             join public.assets as a on a.asset_id = s.asset_id
             where w.status = 'active' and a.status <> 'blocked'
+              -- Decision 0183: only LOOP embedded wallets mine.
+              and w.kind = 'embedded'
               and ($1::boolean is true or s.source = 'chain')
+              -- Decision 0183: a MEME bound by a verified community counts
+              -- only for its members (the creator counts as one); a MEME no
+              -- verified community binds is not gated.
+              and (
+                not exists (
+                  select 1 from public.communities as c
+                  where c.bound_asset_key = s.asset_id
+                    and c.verification_status = 'verified'
+                )
+                or exists (
+                  select 1 from public.communities as c
+                  where c.bound_asset_key = s.asset_id
+                    and c.verification_status = 'verified'
+                    and (
+                      c.created_by_user_id = w.owner_user_id
+                      or exists (
+                        select 1 from public.community_memberships as m
+                        where m.community_id = c.community_id
+                          and m.owner_user_id = w.owner_user_id
+                          and m.status <> 'banned'
+                      )
+                    )
+                )
+              )
             order by s.wallet_id, s.asset_id, s.block_number desc
           `,
           values: [includeMockSeedHoldings],

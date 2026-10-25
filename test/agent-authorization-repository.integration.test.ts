@@ -129,6 +129,7 @@ const truncateAll = `
     public.user_blocks,
     public.follow_edges,
     public.community_role_events,
+    public.community_membership_history,
     public.community_memberships,
     public.communities,
     public.chat_operation_events,

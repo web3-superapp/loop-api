@@ -17,6 +17,7 @@ import {
   type MiningParameterDocument,
 } from "../src/features/mining/hourly-settlement-contract.js";
 import {
+  MiningCommunityUnknownError,
   MiningSettlementConflictError,
   type MiningSettlementRepository,
 } from "../src/features/mining/hourly-settlement-ports.js";
@@ -60,6 +61,7 @@ const HOUR_S = BigInt(Date.parse(HOUR) / 1000);
 const MEME = "0x1111111111111111111111111111111111116666";
 const NFT = "0x2222222222222222222222222222222222222222";
 const ASSET = `${CHAIN}:${MEME}`;
+const OTHER_ASSET = `${CHAIN}:0x3333333333333333333333333333333333337777`;
 const DAILY = 500_000n * loop;
 
 function connectionUrl(source: string, name: string): string {
@@ -184,11 +186,23 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
       );
     }
     const community = await pool.query<{ community_id: string }>(
-      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
-       values ('S138 Frogs', 's138-frogs', $1, $2) returning community_id`,
+      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id,
+         verification_status, verified_at, reviewed_at)
+       values ('S138 Frogs', 's138-frogs', $1, $2, 'verified', '2026-10-01', '2026-10-01')
+       returning community_id`,
       [ASSET, users[0]],
     );
     communityId = community.rows[0]!.community_id;
+    // Decision 0183: the NFT (users[6]) and MEME (users[5]) holders are
+    // members of the verified community since before the hour.
+    for (const index of [5, 6]) {
+      await pool.query(
+        `insert into public.community_memberships (community_id, owner_user_id, role, status,
+           joined_at, updated_at)
+         values ($1, $2, 'member', 'active', '2026-10-01', '2026-10-01')`,
+        [communityId, users[index]],
+      );
+    }
     // Launch2 facts. FK chains to the S132 task tables are not under test.
     const instanceId = randomUUID();
     const client = await pool.connect();
@@ -603,6 +617,182 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
       audit: { ...audit("mining.parameters.withdraw"), actor: "operator" },
     });
     expect(withdrawn.version.status).toBe("withdrawn");
+  });
+
+  it("Decision 0183 (000101): facts count verified bindings, embedded wallets, and membership intervals kept by the history trigger", async () => {
+    // Decision 0182 forbids a second live community on ASSET; a rejected one
+    // may still carry the key and never counts. A pending community on
+    // another MEME is not a binding the hour sees either.
+    await pool.query(
+      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id,
+         verification_status, reviewed_at, rejected_reason)
+       values ('S300 Squatter', 's300-squatter', $1, $2, 'rejected', now(), 'other')`,
+      [ASSET, users[7]],
+    );
+    const pending = await pool.query<{ community_id: string }>(
+      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
+       values ('S300 Pending', 's300-pending', $1, $2) returning community_id`,
+      [OTHER_ASSET, users[7]],
+    );
+    const pendingId = pending.rows[0]!.community_id;
+    // An external wallet on the NFT holder's address is not an owner.
+    await pool.query(
+      `insert into public.account_wallets (owner_user_id, address, kind, status,
+         is_active, first_seen_at, last_seen_at)
+       values ($1, $2, 'external', 'active', false, '2026-01-01', '2026-01-01')`,
+      [users[7], wallets[6]],
+    );
+    // The creator counts from the community's creation: backdate it so the
+    // settled hour is covered (the row was inserted "now").
+    await pool.query(
+      "update public.communities set created_at = '2026-10-01' where community_id = $1",
+      [communityId],
+    );
+    const read = () =>
+      repository.readSettlementFacts({
+        chainId: CHAIN,
+        hourStart: HOUR_S,
+        hourEnd: HOUR_S + 3_600n,
+        assetIds: [ASSET, OTHER_ASSET],
+      });
+    const facts = await read();
+    expect(facts.nftInstances[0]?.communityIds).toEqual([communityId]);
+    expect(
+      facts.walletOwners.find((row) => row.address === wallets[6])?.userIds,
+    ).toEqual([users[6]]);
+    expect(facts.membershipGate?.assetCommunities).toEqual([
+      { assetId: ASSET, communityIds: [communityId] },
+    ]);
+    const since = BigInt(Date.parse("2026-10-01T00:00:00Z") / 1000);
+    const intervals = (userId: string | undefined) =>
+      facts.membershipGate?.memberships
+        .filter((row) => row.userId === userId)
+        .map((row) => [row.communityId, row.to]);
+    expect(intervals(users[5])).toEqual([[communityId, null]]);
+    expect(intervals(users[6])).toEqual([[communityId, null]]);
+    // The creator has no membership row and still counts as a member.
+    expect(intervals(users[0])).toEqual([[communityId, null]]);
+    expect(intervals(users[7])).toEqual([]);
+    expect(
+      facts.membershipGate?.memberships.find((row) => row.userId === users[5])
+        ?.from,
+    ).toBe(since);
+
+    // Leave (delete) closes the interval; rejoin opens a new one.
+    await pool.query(
+      "delete from public.community_memberships where community_id = $1 and owner_user_id = $2",
+      [communityId, users[5]],
+    );
+    await pool.query(
+      `insert into public.community_memberships (community_id, owner_user_id, role, status)
+       values ($1, $2, 'member', 'active')`,
+      [communityId, users[5]],
+    );
+    // Ban closes, unban reopens; a muted member stays a member.
+    for (const status of ["muted", "banned", "active"]) {
+      await pool.query(
+        "update public.community_memberships set status = $3 where community_id = $1 and owner_user_id = $2",
+        [communityId, users[6], status],
+      );
+    }
+    const history = await pool.query<{
+      user_id: string;
+      open: boolean;
+      source: string;
+    }>(
+      `select user_id, left_at is null as open, source
+       from public.community_membership_history
+       where community_id = $1 order by user_id, joined_at`,
+      [communityId],
+    );
+    const of = (userId: string | undefined) =>
+      history.rows
+        .filter((row) => row.user_id === userId)
+        .map((row) => row.open);
+    expect(of(users[5])).toEqual([false, true]);
+    expect(of(users[6])).toEqual([false, true]);
+    // At most one open interval per (community, user).
+    await expect(
+      pool.query(
+        `insert into public.community_membership_history (community_id, user_id, joined_at)
+         values ($1, $2, now())`,
+        [communityId, users[5]],
+      ),
+    ).rejects.toThrow(/community_membership_history_open_idx/u);
+    const after = await read();
+    expect(
+      after.membershipGate?.memberships.filter(
+        (row) => row.userId === users[5] && row.to !== null,
+      ),
+    ).toHaveLength(1);
+    expect(
+      await repository.findUnverifiedCommunityIds([
+        communityId,
+        pendingId,
+        "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e",
+      ]),
+    ).toEqual([pendingId, "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e"]);
+  });
+
+  it("Decision 0183: approval refuses a document naming unknown or unverified communities", async () => {
+    const hash = await hashAdminPassword("s300-password-0123");
+    const reviewerUser = await user(22);
+    await pool.query(
+      `insert into public.ops_operators (user_id, label, enabled) values ($1, 's300-reviewer', true)`,
+      [reviewerUser],
+    );
+    const reviewerId = randomUUID();
+    await pool.query(
+      `insert into public.admin_accounts (id, username, password_hash, role, operator_user_id, created_by, created_at, credentials_changed_at)
+       values ($1, 's300-reviewer', $2, 'reviewer', $3, 'operator', now(), now())`,
+      [reviewerId, hash, reviewerUser],
+    );
+    const audit = (action: string) => ({
+      actor: "s300-reviewer",
+      actorAccountId: reviewerId,
+      action,
+      targetType: "mining_parameter_version",
+      targetId: null,
+      requestId: randomUUID(),
+    });
+    const pendingId = (
+      await pool.query<{ community_id: string }>(
+        "select community_id from public.communities where slug = 's300-pending'",
+      )
+    ).rows[0]!.community_id;
+    const missing = "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e";
+    const draft = await repository.createParameterDraft({
+      configVersion: "s300-unknown-community",
+      document: {
+        ...miningDefaultParameterDocument,
+        releaseStartAt: "2026-10-09T00:00:00.000Z",
+        assetWeights: [],
+        communityCoefficients: [
+          { communityId, coefficient: "1.5" },
+          { communityId: missing, coefficient: "2" },
+          { communityId: pendingId, coefficient: "1" },
+        ],
+      },
+      effectiveFrom: "2099-03-01T00:00:00.000Z",
+      author: { actor: "operator", accountId: null },
+      audit: audit("mining.parameters.draft"),
+    });
+    const requested = await repository.recordAudit(
+      audit("mining.parameters.approve.requested"),
+    );
+    const refusal = repository.approveParameterVersion({
+      versionId: draft.version.versionId,
+      approver: { actor: "s300-reviewer", accountId: reviewerId },
+      requestedAuditId: requested.auditId,
+      audit: audit("mining.parameters.approve"),
+    });
+    await expect(refusal).rejects.toBeInstanceOf(MiningCommunityUnknownError);
+    await expect(refusal).rejects.toMatchObject({
+      communityIds: [missing, pendingId],
+    });
+    expect(
+      (await repository.getParameterVersion(draft.version.versionId))?.status,
+    ).toBe("pending_approval");
   });
 
   describe("claims on the real ledger", () => {

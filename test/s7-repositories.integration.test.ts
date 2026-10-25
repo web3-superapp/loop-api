@@ -141,12 +141,15 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
     if (withWallet) {
       await pool.query({
         text: `
-          insert into public.account_wallets (owner_user_id, address, kind, is_active)
-          values ($1, $2, 'external', true)
+          insert into public.account_wallets (
+            owner_user_id, address, kind, provider_wallet_id, is_active
+          )
+          values ($1, $2, 'embedded', $3, true)
         `,
         values: [
           userId,
           `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+          `s7-test-${randomUUID()}`,
         ],
       });
     }
@@ -724,6 +727,102 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       ).rejects.toThrow();
     });
 
+    it("Decision 0183: snapshot inputs count embedded wallets only, gate a verified community's MEME to its members, and ignore pending bindings", async () => {
+      const gatedAsset = "eip155:56:0x0000000000000000000000000000000000183a01";
+      const pendingAsset =
+        "eip155:56:0x0000000000000000000000000000000000183a02";
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values
+            ($1, 'eip155:56', '0x0000000000000000000000000000000000183a01', 'GATE', 'Gate', 18, 'pending', 'chain_call', 1, now()),
+            ($2, 'eip155:56', '0x0000000000000000000000000000000000183a02', 'PEND', 'Pend', 18, 'pending', 'chain_call', 1, now())
+          on conflict (asset_id) do nothing
+        `,
+        values: [gatedAsset, pendingAsset],
+      });
+      const creator = await createUser(true, true);
+      const member = await createUser(true, true);
+      const outsider = await createUser(true, true);
+      const banned = await createUser(true, true);
+      const external = await createUser(true, false);
+      await pool.query({
+        text: `
+          insert into public.account_wallets (owner_user_id, address, kind, is_active)
+          values ($1, '0x0000000000000000000000000000000000183aee', 'external', true)
+        `,
+        values: [external],
+      });
+      const communities = await pool.query<{ community_id: string }>({
+        text: `
+          insert into public.communities (name, slug, bound_asset_key, created_by_user_id, verification_status, verified_at, reviewed_at)
+          values ('Gate Verified', 'gate-verified-0183', $2, $1, 'verified', now(), now())
+          returning community_id
+        `,
+        values: [creator, gatedAsset],
+      });
+      const verified = communities.rows[0]?.community_id ?? "";
+      const pending = await pool.query<{ community_id: string }>({
+        text: `
+          insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
+          values ('Gate Pending', 'gate-pending-0183', $2, $1)
+          returning community_id
+        `,
+        values: [creator, pendingAsset],
+      });
+      const pendingId = pending.rows[0]?.community_id ?? "";
+      await pool.query({
+        text: `
+          insert into public.community_memberships (community_id, owner_user_id, role, status)
+          values ($1, $2, 'member', 'active'), ($1, $3, 'member', 'banned'),
+                 ($1, $4, 'member', 'active')
+        `,
+        values: [verified, member, banned, external],
+      });
+      const owners = [creator, member, outsider, banned, external];
+      const wallets = await pool.query<{
+        wallet_id: string;
+        owner_user_id: string;
+      }>({
+        text: `select wallet_id, owner_user_id from public.account_wallets where owner_user_id = any($1::uuid[])`,
+        values: [owners],
+      });
+      for (const wallet of wallets.rows) {
+        for (const assetId of [gatedAsset, pendingAsset]) {
+          await pool.query({
+            text: `
+              insert into public.wallet_balance_snapshots (wallet_id, asset_id, block_number, block_hash, raw_value)
+              values ($1, $2, 500, $3, '1000000000000000000')
+            `,
+            values: [wallet.wallet_id, assetId, `0x${"c".repeat(64)}`],
+          });
+        }
+      }
+      const inputs = await mining.listBalanceInputs({
+        includeMockSeedHoldings: false,
+      });
+      const holders = (assetId: string) =>
+        inputs
+          .filter((row) => row.assetId === assetId)
+          .map((row) => row.ownerUserId)
+          .sort();
+      // Creator (no membership row) and the active member count; the
+      // outsider, the banned member, and the external wallet do not.
+      expect(holders(gatedAsset)).toEqual([creator, member].sort());
+      // A pending community's binding gates nothing; external still excluded.
+      expect(holders(pendingAsset)).toEqual(
+        [creator, member, outsider, banned].sort(),
+      );
+      const weights = await mining.listCommunityWeightInputs(
+        "miningFormulaV1-draft",
+      );
+      expect(weights.some((row) => row.communityId === verified)).toBe(true);
+      expect(weights.some((row) => row.communityId === pendingId)).toBe(false);
+    });
+
     it("writes a snapshot with per-account powers only under an approved formula, and approve is single and one-way", async () => {
       // A TEST-ONLY version; the seeded draft is never approved by this suite.
       await pool.query({
@@ -838,9 +937,9 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       });
       const communities = await pool.query<{ community_id: string }>({
         text: `
-          insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
-          values ('Weight Current', 'weight-current', 'eip155:56:0x00000000000000000000000000000000000000aa', $1),
-                 ('Weight Retired', 'weight-retired', 'eip155:56:0x00000000000000000000000000000000000000bb', $1)
+          insert into public.communities (name, slug, bound_asset_key, created_by_user_id, verification_status, verified_at, reviewed_at)
+          values ('Weight Current', 'weight-current', 'eip155:56:0x00000000000000000000000000000000000000aa', $1, 'verified', now(), now()),
+                 ('Weight Retired', 'weight-retired', 'eip155:56:0x00000000000000000000000000000000000000bb', $1, 'verified', now(), now())
           returning community_id
         `,
         values: [owner],
@@ -998,14 +1097,14 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         text: `
           insert into public.communities (
             name, slug, bound_asset_key, created_by_user_id,
-            verification_status, reviewed_at
+            verification_status, verified_at, reviewed_at
           )
-          values ('Cake Holders', 'cake-holders', $2, $1, 'pending', null),
+          values ('Cake Holders', 'cake-holders', $2, $1, 'verified', now(), now()),
                  -- Decision 0182: a second live holder of the same token can
-                 -- no longer exist; a rejected one still can (it does not
-                 -- occupy the token) and still trips the once-per-asset rule.
-                 ('Cake Rivals', 'cake-rivals', $2, $1, 'rejected', now()),
-                 ('No Token', 'no-token', null, $1, 'pending', null)
+                 -- no longer exist; a rejected one still can, and it does not
+                 -- occupy the token (it neither blocks nor is listed).
+                 ('Cake Rivals', 'cake-rivals', $2, $1, 'rejected', null, now()),
+                 ('No Token', 'no-token', null, $1, 'verified', now(), now())
           returning community_id
         `,
         values: [alice, cakeAsset],
@@ -1058,9 +1157,26 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       // Boundaries are inclusive and a re-review replaces the value.
       expect((await attempt(boundCommunity, "2")).weight).toBe("2");
       expect((await attempt(boundCommunity, "0.5")).weight).toBe("0.5");
+      // The live holder occupies the token: the rejected rival cannot take a
+      // weight on it.
       await expect(attempt(secondBoundCommunity, "1")).rejects.toBeInstanceOf(
         MiningCommunityWeightConflictError,
       );
+      // Decision 0182: a rejected community does not occupy the token, so an
+      // approved weight left on it does not block the live holder (with one
+      // live community per token the conflict branch is defensive).
+      await pool.query({
+        text: `
+          insert into public.community_mining_weights (community_id, status, weight, config_version, reviewed_at)
+          values ($1, 'approved', '1', $2, now())
+        `,
+        values: [secondBoundCommunity, baselineVersion],
+      });
+      expect((await attempt(boundCommunity, "0.5")).weight).toBe("0.5");
+      await pool.query({
+        text: `delete from public.community_mining_weights where community_id = $1`,
+        values: [secondBoundCommunity],
+      });
       const inputs = await mining.listCommunityWeightInputs(baselineVersion);
       expect(inputs.find((row) => row.communityId === boundCommunity)).toEqual({
         communityId: boundCommunity,
@@ -1068,14 +1184,10 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         weight: "0.5",
         status: "approved",
       });
+      // Decision 0183: only verified communities are snapshot candidates.
       expect(
-        inputs.find((row) => row.communityId === secondBoundCommunity),
-      ).toEqual({
-        communityId: secondBoundCommunity,
-        assetId: cakeAsset,
-        weight: null,
-        status: "pending_review",
-      });
+        inputs.some((row) => row.communityId === secondBoundCommunity),
+      ).toBe(false);
       expect(inputs.some((row) => row.communityId === unboundCommunity)).toBe(
         false,
       );

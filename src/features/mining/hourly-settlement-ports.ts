@@ -29,6 +29,21 @@ export class MiningSettlementConflictError extends Error {
   }
 }
 
+/**
+ * Decision 0183: a parameter document names community ids that do not exist
+ * or are not `verified` (draft save and approval refuse it, 422
+ * `MINING_COMMUNITY_UNKNOWN`).
+ */
+export class MiningCommunityUnknownError extends Error {
+  readonly communityIds: readonly string[];
+
+  constructor(communityIds: readonly string[]) {
+    super("MINING_COMMUNITY_UNKNOWN");
+    this.name = "MiningCommunityUnknownError";
+    this.communityIds = Object.freeze([...communityIds]);
+  }
+}
+
 export class MiningClaimIdempotencyConflictError extends Error {
   constructor() {
     super("Idempotency key reused with a different request");
@@ -77,7 +92,10 @@ export interface MiningNftInstanceFact {
   readonly instanceId: string;
   /** The MEME asset id the instance's community is bound by. */
   readonly memeAssetId: string;
-  /** Every community bound to that asset (0 or 1 is well-formed). */
+  /**
+   * Every community bound to that asset (0 or 1 is well-formed). Decision
+   * 0183: only `verified` communities (pending / rejected never count).
+   */
   readonly communityIds: readonly string[];
 }
 
@@ -154,6 +172,38 @@ export interface MiningReferralEdgeFact {
   readonly to: bigint | null;
 }
 
+/**
+ * Decision 0183: a membership interval `[from, to)` (unix seconds, `to` null
+ * = still a member) of a user in a verified community that binds a MEME the
+ * hour reads. A community's creator is reported as one open interval from
+ * the community's creation.
+ */
+export interface MiningMembershipFact {
+  readonly userId: string;
+  readonly communityId: string;
+  readonly from: bigint;
+  readonly to: bigint | null;
+}
+
+/** Decision 0183: the verified communities bound to an admitted asset. */
+export interface MiningAssetCommunityFact {
+  readonly assetId: string;
+  readonly communityIds: readonly string[];
+}
+
+/**
+ * Decision 0183 membership gate. Present on every fact set the repository
+ * reads from S300 on: an NFT segment counts only while its holder is a
+ * member of the instance's verified community, a MEME balance segment only
+ * while its holder is a member of a verified community bound to that MEME
+ * (a MEME no verified community binds is not gated). Fact sets without it
+ * (fixtures written before S300) are prepared under the pre-0183 rule.
+ */
+export interface MiningMembershipGateFacts {
+  readonly assetCommunities: readonly MiningAssetCommunityFact[];
+  readonly memberships: readonly MiningMembershipFact[];
+}
+
 export interface MiningSettlementFacts {
   readonly nftInstances: readonly MiningNftInstanceFact[];
   readonly nftOpenings: readonly MiningNftOpeningFact[];
@@ -163,6 +213,7 @@ export interface MiningSettlementFacts {
   readonly unknownAssetIds: readonly string[];
   readonly walletOwners: readonly MiningWalletOwnerFact[];
   readonly referralEdges: readonly MiningReferralEdgeFact[];
+  readonly membershipGate?: MiningMembershipGateFacts;
 }
 
 export interface MiningIndexerFreshness {
@@ -343,6 +394,13 @@ export interface MiningSettlementRepository {
   >;
   /** Admitted asset ids without a launch2 / MEME v1 source. */
   findUnknownAssetIds(assetIds: readonly string[]): Promise<readonly string[]>;
+  /**
+   * Decision 0183: the given community ids that do not exist or are not
+   * `verified`, in input order.
+   */
+  findUnverifiedCommunityIds(
+    communityIds: readonly string[],
+  ): Promise<readonly string[]>;
   createParameterDraft(input: {
     readonly configVersion: string;
     readonly document: MiningParameterDocument;

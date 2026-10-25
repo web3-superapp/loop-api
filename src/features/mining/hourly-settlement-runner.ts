@@ -22,6 +22,7 @@ import {
 import type {
   CommitMiningEpochInput,
   MiningEpochRecord,
+  MiningMembershipFact,
   MiningParameterVersionRecord,
   MiningSettlementFacts,
   MiningSettlementRepository,
@@ -174,6 +175,69 @@ function segmentsOf(
   return out.filter((segment) => segment.value > 0n);
 }
 
+interface Interval {
+  readonly from: bigint;
+  readonly to: bigint;
+}
+
+/**
+ * Decision 0183: merged membership intervals of every (user, community)
+ * clipped to [start, end). Keyed `user|community`.
+ */
+function membershipIntervals(
+  memberships: readonly MiningMembershipFact[],
+  start: bigint,
+  end: bigint,
+): Map<string, Interval[]> {
+  const raw = new Map<string, Interval[]>();
+  for (const membership of memberships) {
+    const from = membership.from > start ? membership.from : start;
+    const to =
+      membership.to === null || membership.to > end ? end : membership.to;
+    if (to <= from) continue;
+    const key = `${membership.userId}|${membership.communityId}`;
+    const list = raw.get(key) ?? [];
+    list.push({ from, to });
+    raw.set(key, list);
+  }
+  for (const [key, list] of raw) raw.set(key, mergeIntervals(list));
+  return raw;
+}
+
+function mergeIntervals(list: readonly Interval[]): Interval[] {
+  const sorted = [...list].sort((a, b) =>
+    a.from < b.from ? -1 : a.from > b.from ? 1 : 0,
+  );
+  const out: Interval[] = [];
+  for (const interval of sorted) {
+    const last = out[out.length - 1];
+    if (last !== undefined && interval.from <= last.to) {
+      out[out.length - 1] = {
+        from: last.from,
+        to: interval.to > last.to ? interval.to : last.to,
+      };
+    } else {
+      out.push(interval);
+    }
+  }
+  return out;
+}
+
+/** The parts of [from, to) covered by the merged intervals. */
+function intersectIntervals(
+  from: bigint,
+  to: bigint,
+  intervals: readonly Interval[],
+): Interval[] {
+  const out: Interval[] = [];
+  for (const interval of intervals) {
+    const a = interval.from > from ? interval.from : from;
+    const b = interval.to < to ? interval.to : to;
+    if (b > a) out.push({ from: a, to: b });
+  }
+  return out;
+}
+
 function stringifyBigints(value: unknown): unknown {
   if (typeof value === "bigint") return value.toString(10);
   if (value instanceof Map) {
@@ -254,10 +318,60 @@ export function prepareMiningHour(input: {
   }
   let unattributed = 0;
 
+  // Decision 0183 membership gate (absent on pre-S300 fixtures: no gate).
+  const gate = input.facts.membershipGate ?? null;
+  const memberIntervals =
+    gate === null
+      ? new Map<string, Interval[]>()
+      : membershipIntervals(gate.memberships, start, end);
+  const assetCommunities = new Map<string, readonly string[]>(
+    gate === null
+      ? []
+      : gate.assetCommunities.map((row) => [row.assetId, row.communityIds]),
+  );
+  let gatedSegments = 0;
+  /** Membership intervals of `userId` in any of `communityIds`. */
+  const memberOf = (
+    userId: string,
+    communityIds: readonly string[],
+  ): Interval[] =>
+    mergeIntervals(
+      communityIds.flatMap(
+        (communityId) => memberIntervals.get(`${userId}|${communityId}`) ?? [],
+      ),
+    );
+  /**
+   * The parts of a holding segment that count: all of it without a gate or
+   * without a verified community; otherwise only while the holder is a
+   * member of one of `communityIds`.
+   */
+  const gated = (
+    userId: string,
+    communityIds: readonly string[],
+    segment: { from: bigint; to: bigint },
+  ): Interval[] => {
+    if (gate === null || communityIds.length === 0) {
+      return [{ from: segment.from, to: segment.to }];
+    }
+    const parts = intersectIntervals(
+      segment.from,
+      segment.to,
+      memberOf(userId, communityIds),
+    );
+    const covered = parts.reduce(
+      (sum, part) => sum + (part.to - part.from),
+      0n,
+    );
+    if (covered < segment.to - segment.from) gatedSegments += 1;
+    return parts;
+  };
+
   // NFT holdings.
   const communityOf = new Map<string, string | null>();
   const unboundInstances: string[] = [];
   for (const instance of input.facts.nftInstances) {
+    // Decision 0182: one live community per token, so more than one id here
+    // is defensive only (the instance then counts as unbound).
     const community =
       instance.communityIds.length === 1
         ? (instance.communityIds[0] as string)
@@ -315,15 +429,24 @@ export function prepareMiningHour(input: {
       unattributed += 1;
       continue;
     }
+    const communityId = communityOf.get(instanceId) ?? null;
     for (const segment of segments) {
-      nftHoldings.push({
+      // Decision 0183: an NFT of a verified community counts only while its
+      // holder is a member of that community.
+      for (const part of gated(
         userId,
-        instanceId,
-        communityId: communityOf.get(instanceId) ?? null,
-        from: segment.from,
-        to: segment.to,
-        count: segment.value,
-      });
+        communityId === null ? [] : [communityId],
+        segment,
+      )) {
+        nftHoldings.push({
+          userId,
+          instanceId,
+          communityId,
+          from: part.from,
+          to: part.to,
+          count: segment.value,
+        });
+      }
     }
   }
 
@@ -394,13 +517,19 @@ export function prepareMiningHour(input: {
           continue;
         }
         for (const segment of segments) {
-          assetHoldings.push({
+          for (const part of gated(
             userId,
-            assetId: asset.assetId,
-            from: segment.from,
-            to: segment.to,
-            balanceRaw: segment.value,
-          });
+            assetCommunities.get(asset.assetId) ?? [],
+            segment,
+          )) {
+            assetHoldings.push({
+              userId,
+              assetId: asset.assetId,
+              from: part.from,
+              to: part.to,
+              balanceRaw: segment.value,
+            });
+          }
         }
       }
     }
@@ -457,13 +586,21 @@ export function prepareMiningHour(input: {
         continue;
       }
       for (const segment of segments) {
-        assetHoldings.push({
+        // Decision 0183: a MEME bound by a verified community counts only
+        // while its holder is a member of it; an unbound MEME is not gated.
+        for (const part of gated(
           userId,
-          assetId: asset.assetId,
-          from: segment.from,
-          to: segment.to,
-          balanceRaw: segment.value,
-        });
+          assetCommunities.get(asset.assetId) ?? [],
+          segment,
+        )) {
+          assetHoldings.push({
+            userId,
+            assetId: asset.assetId,
+            from: part.from,
+            to: part.to,
+            balanceRaw: segment.value,
+          });
+        }
       }
     }
   }
@@ -515,6 +652,13 @@ export function prepareMiningHour(input: {
       ambiguousAddressCount: ambiguous.length,
       unattributedHoldingCount: unattributed,
       excludedAssets,
+      // Decision 0183: only on hours prepared with the membership gate.
+      ...(gate === null
+        ? {}
+        : {
+            membershipGate: "verified_member_embedded",
+            membershipGatedSegmentCount: gatedSegments,
+          }),
     }),
   });
 }
