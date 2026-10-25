@@ -419,6 +419,90 @@ describe("Decision 0125: launch2 MEME → Asset Registry + community binding (S1
     ).rejects.toThrow(/launch2_instances_community_binding_check/u);
   });
 
+  it("Decision 0182: a MEME another live community already binds is a conflict (warned), while a rejected holder does not block", async () => {
+    // The project owner's community is unbound, but a stranger's community
+    // already binds the MEME's asset key.
+    const owner = await user();
+    const mine = await community(owner);
+    const target = await instance({ owner, communityId: mine });
+    const holder = await community(await user(), target.assetId);
+    const warnings: unknown[] = [];
+    await registerPendingLaunch2MemeAssets({
+      repository: memeAssets,
+      reader: { readTokenIdentity: () => Promise.resolve(identity) },
+      chainId,
+      onWarning: (warning) => warnings.push(warning),
+    });
+    const row = await pool.query(
+      "select community_binding from public.launch2_instances where instance_id = $1",
+      [target.instanceId],
+    );
+    expect(row.rows[0]).toEqual({ community_binding: "conflict" });
+    expect(warnings).toContainEqual({
+      reasonCode: "LAUNCH2_COMMUNITY_BOUND_ASSET_TAKEN",
+      count: 1,
+      instanceId: target.instanceId,
+      communityId: holder,
+    });
+    const untouched = await pool.query(
+      "select bound_asset_key from public.communities where community_id = $1",
+      [mine],
+    );
+    expect(untouched.rows[0]).toEqual({ bound_asset_key: null });
+    const audit = await pool.query(
+      "select 1 from public.community_role_events where community_id = $1",
+      [mine],
+    );
+    expect(audit.rowCount).toBe(0);
+
+    // The repository result names the holder too.
+    const directOwner = await user();
+    const direct = await instance({
+      owner: directOwner,
+      communityId: await community(directOwner),
+    });
+    await pool.query(
+      "update public.communities set bound_asset_key = $2 where community_id = $1",
+      [holder, direct.assetId],
+    );
+    expect(
+      await memeAssets.registerMemeAsset({
+        instanceId: direct.instanceId,
+        identity,
+      }),
+    ).toEqual({
+      assetId: direct.assetId,
+      inserted: true,
+      communityBinding: "conflict",
+      takenByCommunityId: holder,
+    });
+
+    // A rejected holder does not occupy the token: the owner's community
+    // is bound as usual.
+    const freeOwner = await user();
+    const free = await instance({
+      owner: freeOwner,
+      communityId: await community(freeOwner),
+    });
+    const rejectedHolder = await community(await user(), free.assetId);
+    await pool.query(
+      `update public.communities
+       set verification_status = 'rejected', reviewed_at = now()
+       where community_id = $1`,
+      [rejectedHolder],
+    );
+    expect(
+      await memeAssets.registerMemeAsset({
+        instanceId: free.instanceId,
+        identity,
+      }),
+    ).toEqual({
+      assetId: free.assetId,
+      inserted: true,
+      communityBinding: "bound",
+    });
+  });
+
   it("the lane helper catches up instances deployed before 0125 without manual SQL", async () => {
     const owner = await user();
     const communityId = await community(owner);

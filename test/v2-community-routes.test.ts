@@ -21,6 +21,7 @@ import { createUnavailableProfileRepository } from "../src/database/profile-repo
 import { createUnavailableWatchlistRepository } from "../src/database/watchlist-repository.js";
 import {
   CommunityBoundAssetNotRegisteredError,
+  CommunityBoundAssetTakenError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -1202,6 +1203,68 @@ describe("LOOP API V2 community, social, and search modules", () => {
         detailsSafe: { reasonCode: "ASSET_NOT_REGISTERED" },
         providerReferenceSafe: null,
       });
+    }
+  });
+
+  it("refuses a token another community already binds with 409 COMMUNITY_BOUND_ASSET_TAKEN (Decision 0182)", async () => {
+    const holderCommunityId = "00000000-0000-4000-8000-0000000000c1";
+    for (const [method, url, holder] of [
+      ["POST", "/v2/communities", holderCommunityId],
+      ["PATCH", `/v2/communities/${communityId}`, holderCommunityId],
+      ["POST", `/v2/communities/${communityId}/resubmit`, holderCommunityId],
+      // The 23505 fallback whose holder could not be read.
+      ["PATCH", `/v2/communities/${communityId}`, null],
+    ] as const) {
+      const dependencies = fakes();
+      const taken = () =>
+        Promise.reject(new CommunityBoundAssetTakenError(holder));
+      dependencies.communityRepository.createCommunity = vi.fn(taken);
+      dependencies.communityRepository.updateCommunity = vi.fn(taken);
+      dependencies.communityRepository.resubmitCommunity = vi.fn(taken);
+      const { app } = await createApp(dependencies);
+      const response = await app.inject({
+        method,
+        url,
+        headers: commandHeaders(),
+        ...(url.endsWith("/resubmit")
+          ? {}
+          : {
+              payload:
+                method === "POST"
+                  ? {
+                      name: "Frog Holders",
+                      slug: "frog-holders",
+                      description: null,
+                      logoRef: null,
+                      boundAssetKey:
+                        "eip155:56:0x1111111111111111111111111111111111111111",
+                    }
+                  : {
+                      boundAssetKey:
+                        "eip155:56:0x1111111111111111111111111111111111111111",
+                    },
+            }),
+      });
+      expect(response.statusCode, `${method} ${url}`).toBe(409);
+      const body = response.json<Record<string, unknown>>();
+      expect(Object.keys(body).sort()).toEqual([
+        "category",
+        "code",
+        "correlationId",
+        "detailsSafe",
+        "providerReferenceSafe",
+        "retryable",
+        "userMessageKey",
+      ]);
+      expect(body).toMatchObject({
+        code: "COMMUNITY_BOUND_ASSET_TAKEN",
+        category: "conflict",
+        retryable: false,
+        userMessageKey: "errors.community.boundAssetTaken",
+        providerReferenceSafe: null,
+      });
+      // Only the holder's opaque ID — no name, slug, or review state.
+      expect(body["detailsSafe"]).toEqual({ communityId: holder });
     }
   });
 

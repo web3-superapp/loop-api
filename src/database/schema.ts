@@ -1,4 +1,4 @@
-export const latestMigrationName = "000099_launch_review_inbox";
+export const latestMigrationName = "000100_community_bound_asset_unique";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

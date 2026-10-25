@@ -2307,28 +2307,30 @@ describe("PostgreSQL V2 community and social graph repository", () => {
       await verify(communityId);
       await join(viewer.userId, communityId);
     }
+    // Decision 0182: the tokens are unique per run, so a re-run against the
+    // same test database never meets the previous run's holders.
+    const run = randomUUID().replaceAll("-", "");
     const frog = await registerAndBindAsset(
       communityIds[0] ?? "",
-      "0x5111000000000000000000000000000000000001",
+      `0x5111${run}0001`,
       "FROG",
     );
+    // Decision 0182: one token, one community — the second FROG-symbol
+    // community binds its own token.
     await registerAndBindAsset(
       communityIds[1] ?? "",
-      "0x5111000000000000000000000000000000000001",
+      `0x5111${run}0003`,
       "FROG",
     );
     const toad = await registerAndBindAsset(
       communityIds[2] ?? "",
-      "0x5111000000000000000000000000000000000002",
+      `0x5111${run}0002`,
       "TOAD",
     );
     // Bound to a key the registry does not hold (pre-0097 data).
     await pool.query({
       text: `update public.communities set bound_asset_key = $2 where community_id = $1`,
-      values: [
-        communityIds[3],
-        "eip155:56:0x5111000000000000000000000000000000000003",
-      ],
+      values: [communityIds[3], `eip155:56:0x5111${run}0004`],
     });
 
     const statements: string[] = [];
@@ -2704,7 +2706,9 @@ describe("PostgreSQL V2 community and social graph repository", () => {
   });
 
   describe("discover orderings that need a fact (Decision 0061)", () => {
-    const boundAsset = "eip155:56:0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    // Decision 0182: per run, so a re-run never meets the previous holder.
+    const boundAddress = `0x0e09${randomUUID().replaceAll("-", "")}cafe`;
+    const boundAsset = `eip155:56:${boundAddress}`;
     const configVersion = "miningFormulaOrderingTestOnly";
 
     async function seedMiningSnapshot(rows: {
@@ -2721,13 +2725,13 @@ describe("PostgreSQL V2 community and social graph repository", () => {
             source_kind, source_block_number, source_verified_at
           )
           values (
-            $1, 'eip155:56', '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82',
+            $1, 'eip155:56', $2,
             'Cake', 'PancakeSwap Token', 18, 'pending', 'chain_call',
             122037728, now()
           )
           on conflict (asset_id) do nothing
         `,
-        values: [boundAsset],
+        values: [boundAsset, boundAddress],
       });
       await pool.query({
         text: `
@@ -2806,7 +2810,27 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         `order-none-${randomUUID().slice(0, 6)}`,
         "Unweighted",
       );
-      for (const communityId of [strong, weak, unweighted]) {
+      // Decision 0182: one token, one community — the weak and the
+      // unweighted communities bind tokens of their own.
+      const weakAddress = `0x0e09${randomUUID().replaceAll("-", "")}0001`;
+      const weakAsset = `eip155:56:${weakAddress}`;
+      const unweightedAsset = `eip155:56:0x0e09${randomUUID().replaceAll("-", "")}0002`;
+      await pool.query({
+        text: `
+          insert into public.assets (
+            asset_id, chain_id, address, symbol, name, decimals, status,
+            source_kind, source_block_number, source_verified_at
+          )
+          values ($1, 'eip155:56', $2, 'WEAK', 'Weak Token', 18, 'pending',
+            'chain_call', 1, now())
+        `,
+        values: [weakAsset, weakAddress],
+      });
+      for (const [communityId, asset] of [
+        [strong, boundAsset],
+        [weak, weakAsset],
+        [unweighted, unweightedAsset],
+      ] as const) {
         await repository.verifyCommunity({
           communityId,
           requestId: randomUUID(),
@@ -2814,7 +2838,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         });
         await pool.query({
           text: `update public.communities set bound_asset_key = $2 where community_id = $1`,
-          values: [communityId, boundAsset],
+          values: [communityId, asset],
         });
       }
       // Only the stronger community has the second member, so its sum is
@@ -2855,9 +2879,10 @@ describe("PostgreSQL V2 community and social graph repository", () => {
             reference_price_usd, reference_price_quality, weight, power,
             block_number
           )
-          values ($1, $2, $3, '1', '1', 'fresh', '1', '30', 100)
+          values ($1, $2, $3, '1', '1', 'fresh', '1', '30', 100),
+            ($1, $2, $4, '1', '1', 'fresh', '1', '30', 100)
         `,
-        values: [snapshotId, owner.userId, boundAsset],
+        values: [snapshotId, owner.userId, boundAsset, weakAsset],
       });
 
       const page = await repository.listCommunities({

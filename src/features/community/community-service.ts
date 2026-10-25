@@ -105,6 +105,7 @@ import {
 } from "./community-policy.js";
 import {
   CommunityBoundAssetNotRegisteredError,
+  CommunityBoundAssetTakenError,
   CommunityDataStaleError,
   CommunityIdempotencyConflictError,
   CommunityNotFoundError,
@@ -696,6 +697,12 @@ function mapFailure(error: unknown): never {
   if (error instanceof CommunityBoundAssetNotRegisteredError) {
     throw V2ApiError.fromCode("VALIDATION_FAILED", {
       reasonCode: communityBoundAssetReasonCodes.notRegistered,
+    });
+  }
+  if (error instanceof CommunityBoundAssetTakenError) {
+    // Decision 0182: only the holder's opaque ID, never its name or state.
+    throw V2ApiError.fromCode("COMMUNITY_BOUND_ASSET_TAKEN", {
+      communityId: error.holderCommunityId,
     });
   }
   if (error instanceof CommunityPermissionDeniedError) {

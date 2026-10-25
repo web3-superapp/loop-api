@@ -263,6 +263,11 @@ export const adminReasonCodes = Object.freeze({
   communityNotVerified: "ADMIN_COMMUNITY_NOT_VERIFIED",
   communityNotFound: "ADMIN_COMMUNITY_NOT_FOUND",
   communityAlreadyVerified: "ADMIN_COMMUNITY_ALREADY_VERIFIED",
+  /**
+   * Decision 0182: verifying a rejected community whose bound token another
+   * (not rejected) community now holds.
+   */
+  communityBoundAssetTaken: "ADMIN_COMMUNITY_BOUND_ASSET_TAKEN",
   /** Decision 0175: the custom label is longer than 12 characters. */
   communityLabelTooLong: "ADMIN_COMMUNITY_LABEL_TOO_LONG",
   promotionInvalid: "ADMIN_PROMOTION_INVALID",

@@ -168,6 +168,18 @@ memberships and combines with all four sorts and the keyset cursor. No migration
 no new error code — `implemented`. Frontend contract:
 [`frontend-v2-community-api.md`](frontend-v2-community-api.md) §4.2.
 
+Decision 0182 (S299): one token, one community. Migration 000100 releases
+existing duplicate bindings (keeper = first-created `verified`, else
+first-created; `rejected` rows untouched, one NOTICE each) and adds the partial
+unique index `communities_bound_asset_key_unique` (`bound_asset_key` where not
+null and `verification_status <> 'rejected'`). `POST /v2/communities`, `PATCH
+/v2/communities/{id}` (changed key only) and `POST .../resubmit` answer `409
+COMMUNITY_BOUND_ASSET_TAKEN` with `detailsSafe.communityId` (the holder's opaque
+ID) when another non-rejected community binds the token; the console verify
+of a rejected community answers `409 ADMIN_CONFLICT` /
+`ADMIN_COMMUNITY_BOUND_ASSET_TAKEN`; the launch2 auto-binding records
+`conflict` and warns `LAUNCH2_COMMUNITY_BOUND_ASSET_TAKEN` — `implemented`.
+
 Decision 0097 (S108): `POST /v2/communities` and `PATCH /v2/communities/{id}`
 refuse a `boundAssetKey` that is not an Asset Registry row (`422
 VALIDATION_FAILED`, `detailsSafe.reasonCode = ASSET_NOT_REGISTERED`; an

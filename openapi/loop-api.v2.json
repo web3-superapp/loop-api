@@ -5395,7 +5395,7 @@
                     ]
                   },
                   "boundAssetKey": {
-                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so. Decision 0182: one token, one community — a key another community that is not rejected already binds is 409 COMMUNITY_BOUND_ASSET_TAKEN with detailsSafe.communityId naming that community (opaque ID only).",
                     "anyOf": [
                       {
                         "type": "string",
@@ -6413,6 +6413,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",
@@ -7860,7 +7861,7 @@
                     ]
                   },
                   "boundAssetKey": {
-                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so.",
+                    "description": "Decision 0097: must name an Asset Registry row (any status), else 422 VALIDATION_FAILED with detailsSafe.reasonCode ASSET_NOT_REGISTERED. On PATCH an unchanged key is not re-checked. An asset without a registered pool is accepted; the resource's boundAsset.hasRegisteredPool says so. Decision 0182: one token, one community — a key another community that is not rejected already binds is 409 COMMUNITY_BOUND_ASSET_TAKEN with detailsSafe.communityId naming that community (opaque ID only).",
                     "anyOf": [
                       {
                         "type": "string",
@@ -8887,6 +8888,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",
@@ -12315,7 +12317,7 @@
         "operationId": "resubmitV2Community",
         "summary": "Resubmit a rejected community application",
         "tags": ["community"],
-        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE.",
+        "description": "Owner-only, body-less command that moves a `rejected` application back to `pending` (Decision 0073): the rejection reason and review time are cleared, `application.submittedAt` moves to now, and a `community_resubmitted` audit row is appended. Edit the profile with PATCH first; this command changes nothing else. Any state other than `rejected` is DATA_STALE. Decision 0182: a rejected community does not hold its bound token; when another community bound that token meanwhile, resubmission is 409 COMMUNITY_BOUND_ASSET_TAKEN (change or clear the token with PATCH first).",
         "parameters": [
           {
             "schema": {
@@ -13329,6 +13331,7 @@
                       "type": "string",
                       "enum": [
                         "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "COMMUNITY_BOUND_ASSET_TAKEN",
                         "DATA_STALE",
                         "IDEMPOTENCY_CONFLICT",
                         "PROFILE_ACTIVATION_REQUIRED",

@@ -422,12 +422,29 @@ MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boun
 `eip155:56:0x…`（服务端转小写），且**必须是 Asset Registry 里已有的资产**（任意状态），
 否则 `422 VALIDATION_FAILED` + `detailsSafe.reasonCode = ASSET_NOT_REGISTERED`（决策 0097）；
 资产没有已注册池子不拒绝，资源里的 `boundAsset.hasRegisteredPool = false` 会说明。
+**一币一社区（决策 0182）**：该代币已被另一个**未被驳回**（`pending` 或 `verified`）的社区
+绑定 → `409 COMMUNITY_BOUND_ASSET_TAKEN`，`detailsSafe = {"communityId": "<占用社区的 id>"}`
+（只给 opaque id，不带名称 / 状态；极少数并发兜底时为 `null`），提示用户换一个代币，不要重试。
+被驳回（`rejected`）的社区不占位，它绑的币别人可以绑。
+
+```json
+{
+  "code": "COMMUNITY_BOUND_ASSET_TAKEN",
+  "category": "conflict",
+  "retryable": false,
+  "userMessageKey": "errors.community.boundAssetTaken",
+  "correlationId": "<request id>",
+  "detailsSafe": { "communityId": "6f1c2b0e-8a4d-4e7b-9c1a-2d3e4f5a6b7c" },
+  "providerReferenceSafe": null
+}
+```
 
 成功 `201`，返回社区资源，`verificationStatus` 恒为 `pending`，申请人即 owner。
 **API 没有自助认证路径**，`verified` 只能由运维脚本设置。
 
 错误：`422 ALIAS_RESERVED`（名称撞保留词）、`422 ALIAS_BLOCKED`（撞运营屏蔽词）、
 `409 RESOURCE_CONFLICT`（slug 已被别的社区占用，提示用户换一个）、
+`409 COMMUNITY_BOUND_ASSET_TAKEN`（绑定代币已被别的社区占用，决策 0182）、
 `422 VALIDATION_FAILED`（归一化后长度越界）、
 `400 INVALID_REQUEST`（字段形状不合法）、`409 PROFILE_ACTIVATION_REQUIRED`。
 
@@ -444,8 +461,9 @@ MEDIA_NOT_AUTHORIZED`；渲染为 `{baseUrl}/v2/media/{mediaId}.webp`）；`boun
 }
 ```
 
-校验规则与创建一致（`boundAssetKey` 的 `ASSET_NOT_REGISTERED` 只校验**有变化**的值：
-0097 之前绑定的旧值原样回传不会被拒）。`slug` 与 `verificationStatus` **不可通过本接口修改**
+校验规则与创建一致（`boundAssetKey` 的 `ASSET_NOT_REGISTERED` 与 `COMMUNITY_BOUND_ASSET_TAKEN`
+都只校验**有变化**的值：0097 之前绑定的旧值原样回传不会被拒；改成别的社区已占用的代币 →
+`409 COMMUNITY_BOUND_ASSET_TAKEN`，被驳回的社区改绑也一样查）。`slug` 与 `verificationStatus` **不可通过本接口修改**
 （出现在 body 里 → `400 INVALID_REQUEST`；空 body 同样 `400`）。owner 与 admin
 可调用（决策 0098，2026-10-08 起 admin 可改名称 / 简介 / logo），member 或非成员 →
 `403 PERMISSION_DENIED`（`detailsSafe: null`）。**绑定代币 `boundAssetKey` 仍只有
@@ -480,13 +498,14 @@ admin 改绑定代币的错误体：
 写一条 `community_resubmitted` 审计；驳回原因保留在审计里。返回 4.4 的社区资源
 （`application.status === "pending"`，`onlineCount` 固定 `STREAM_PRESENCE_NOT_OBSERVED`）。
 
-| 情况                                    | 响应                         |
-| --------------------------------------- | ---------------------------- |
-| 当前不是 `rejected`（pending/verified） | `409 DATA_STALE`（刷新详情） |
-| 非 owner、被封禁                        | `403 PERMISSION_DENIED`      |
-| 社区不存在 / 对调用者不可见             | `404 NOT_FOUND`              |
-| 带 body 或 query、缺 `Idempotency-Key`  | `400 INVALID_REQUEST`        |
-| 同 key 不同请求                         | `409 IDEMPOTENCY_CONFLICT`   |
+| 情况                                     | 响应                                                                                |
+| ---------------------------------------- | ----------------------------------------------------------------------------------- |
+| 当前不是 `rejected`（pending/verified）  | `409 DATA_STALE`（刷新详情）                                                        |
+| 绑定代币在驳回期间被别的社区绑走（0182） | `409 COMMUNITY_BOUND_ASSET_TAKEN`（`detailsSafe.communityId`；先 PATCH 换币或清空） |
+| 非 owner、被封禁                         | `403 PERMISSION_DENIED`                                                             |
+| 社区不存在 / 对调用者不可见              | `404 NOT_FOUND`                                                                     |
+| 带 body 或 query、缺 `Idempotency-Key`   | `400 INVALID_REQUEST`                                                               |
+| 同 key 不同请求                          | `409 IDEMPOTENCY_CONFLICT`                                                          |
 
 为什么不是 PATCH：PATCH 是资料编辑，契约写明 `verificationStatus` 不可经它改变；把状态
 迁移藏在一次改名里，会让「改个简介」意外触发重新审核。重新提交是一次明确的、可审计的
@@ -1154,6 +1173,7 @@ body `{"targetPublicProfileId": "…"}`，带 `Idempotency-Key`，返回 200，
 | `DATA_STALE`                     | 409  | 状态已变（已禁言/已处理/已过期/非成员）；resubmit 时申请不是 `rejected` | 刷新后重新决定，禁止盲重试     |
 | `IDEMPOTENCY_CONFLICT`           | 409  | 同一 key 配不同请求内容                                                 | 换新 key 重发                  |
 | `RESOURCE_CONFLICT`              | 409  | slug 已被别的社区占用                                                   | 提示用户换 slug，不重试同值    |
+| `COMMUNITY_BOUND_ASSET_TAKEN`    | 409  | 绑定代币已被另一个未被驳回的社区占用（建 / 改绑 / resubmit，决策 0182） | 提示用户换代币，不重试同值     |
 | `VERSION_CONFLICT`               | 409  | `X-Loop-Contract-Version` 不是 `2.0`                                    | 升级客户端                     |
 | `VALIDATION_FAILED`              | 422  | 归一化后长度越界；`reasonCode=ASSET_NOT_REGISTERED`：绑定代币不在资产表 | 提示用户改内容 / 换代币        |
 | `ALIAS_RESERVED`                 | 422  | 社区名撞保留词                                                          | 提示换名，不重试同名           |
