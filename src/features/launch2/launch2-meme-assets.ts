@@ -14,7 +14,10 @@
  * - `bound`: the community now points at the MEME;
  * - `already_bound`: it already did;
  * - `conflict`: it points at another asset (never overwritten; a reviewer
- *   rejection `community_binding_mismatch` is the remedy);
+ *   rejection `community_binding_mismatch` is the remedy), or — Decision
+ *   0182, one token, one community — another community that is not
+ *   rejected already binds the MEME (`takenByCommunityId`, warned as
+ *   `LAUNCH2_COMMUNITY_BOUND_ASSET_TAKEN`);
  * - `not_owner`: the instance owner no longer owns the community;
  * - `community_unavailable`: the community is gone or rejected;
  * - `asset_blocked`: the registry row is `blocked`;
@@ -73,6 +76,11 @@ export interface Launch2MemeAssetRepository {
     readonly assetId: string;
     readonly inserted: boolean;
     readonly communityBinding: Launch2CommunityBindingOutcome | null;
+    /**
+     * Decision 0182: set only with `conflict` when the MEME is already bound
+     * by another (not rejected) community — that community's ID.
+     */
+    readonly takenByCommunityId?: string;
   }>;
 }
 
@@ -121,6 +129,7 @@ export async function registerPendingLaunch2MemeAssets(input: {
     readonly reasonCode: string;
     readonly count: number;
     readonly instanceId?: string;
+    readonly communityId?: string;
   }) => void;
 }): Promise<Launch2MemeAssetRegistration> {
   const pending = await input.repository.listPendingMemeAssets(input.chainId);
@@ -157,6 +166,14 @@ export async function registerPendingLaunch2MemeAssets(input: {
     });
     if (outcome.inserted) registered += 1;
     if (outcome.communityBinding !== null) bindings += 1;
+    if (outcome.takenByCommunityId !== undefined) {
+      input.onWarning?.({
+        reasonCode: "LAUNCH2_COMMUNITY_BOUND_ASSET_TAKEN",
+        count: 1,
+        instanceId: asset.instanceId,
+        communityId: outcome.takenByCommunityId,
+      });
+    }
   }
   return Object.freeze({ registered, bindings, failed });
 }

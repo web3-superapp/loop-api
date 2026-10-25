@@ -88,6 +88,19 @@ export const v2ErrorCatalog = Object.freeze({
     userMessageKey: "errors.chain.mismatch",
     includeBearerChallenge: false,
   },
+  /**
+   * Decision 0182: one token, one community. Another community that is not
+   * rejected already binds the requested `boundAssetKey`;
+   * `detailsSafe.communityId` names it (opaque ID only, null when unknown).
+   * The client asks the user for another token; retrying cannot succeed.
+   */
+  COMMUNITY_BOUND_ASSET_TAKEN: {
+    statusCode: 409,
+    category: "conflict",
+    retryable: false,
+    userMessageKey: "errors.community.boundAssetTaken",
+    includeBearerChallenge: false,
+  },
   DATA_STALE: {
     statusCode: 409,
     category: "stale",

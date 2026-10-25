@@ -8,6 +8,7 @@ import {
   type Launch2MemeAssetRepository,
 } from "../features/launch2/launch2-meme-assets.js";
 import { Launch2RepositoryUnavailableError } from "../features/launch2/launch2-ports.js";
+import { findBoundAssetHolder } from "./community-bound-asset.js";
 import { withV2Transaction } from "./v2-command-support.js";
 
 /**
@@ -18,6 +19,13 @@ import { withV2Transaction } from "./v2-command-support.js";
  * changed. The community is bound only when it is unbound, not rejected,
  * and still owned (active `owner` membership) by the instance owner; the
  * change appends a `community_role_events` operator row.
+ *
+ * Decision 0182 (one token, one community): when another community that is
+ * not rejected already binds the MEME, the attempt is the same `conflict`
+ * outcome and the result names that community in `takenByCommunityId` so
+ * the lane can warn. Should a binder outside the advisory lock still reach
+ * the unique index first, the transaction fails as unavailable and the next
+ * tick re-runs the attempt, which then sees the holder.
  */
 
 type Row = Record<string, unknown>;
@@ -135,6 +143,7 @@ export function createPostgresLaunch2MemeAssetRepository(
           }
           const communityId = nullableTextOf(instance, "community_id");
           let outcome: Launch2CommunityBindingOutcome;
+          let takenByCommunityId: string | null = null;
           if (communityId === null) {
             outcome = "none";
           } else if (textOf(asset, "status") === "blocked") {
@@ -177,28 +186,37 @@ export function createPostgresLaunch2MemeAssetRepository(
             } else if (bound !== null) {
               outcome = "conflict";
             } else {
-              await client.query({
-                text: `
-                  update public.communities
-                  set bound_asset_key = $2,
-                    record_version = record_version + 1,
-                    updated_at = clock_timestamp()
-                  where community_id = $1 and bound_asset_key is null
-                `,
-                values: [communityId, assetId],
-              });
-              await client.query({
-                text: `
-                  insert into public.community_role_events (
-                    community_id, actor_user_id, actor_type, target_user_id,
-                    event_type, reason_code, idempotency_record_id, request_id
-                  )
-                  values ($1, null, 'operator', $2, 'community_profile_updated',
-                    'launch2_asset_auto_bound', null, $3)
-                `,
-                values: [communityId, ownerUserId, randomUUID()],
-              });
-              outcome = "bound";
+              takenByCommunityId = await findBoundAssetHolder(
+                client,
+                assetId,
+                communityId,
+              );
+              if (takenByCommunityId !== null) {
+                outcome = "conflict";
+              } else {
+                await client.query({
+                  text: `
+                    update public.communities
+                    set bound_asset_key = $2,
+                      record_version = record_version + 1,
+                      updated_at = clock_timestamp()
+                    where community_id = $1 and bound_asset_key is null
+                  `,
+                  values: [communityId, assetId],
+                });
+                await client.query({
+                  text: `
+                    insert into public.community_role_events (
+                      community_id, actor_user_id, actor_type, target_user_id,
+                      event_type, reason_code, idempotency_record_id, request_id
+                    )
+                    values ($1, null, 'operator', $2, 'community_profile_updated',
+                      'launch2_asset_auto_bound', null, $3)
+                  `,
+                  values: [communityId, ownerUserId, randomUUID()],
+                });
+                outcome = "bound";
+              }
             }
           }
           if (!launch2CommunityBindingOutcomes.includes(outcome)) {
@@ -216,6 +234,7 @@ export function createPostgresLaunch2MemeAssetRepository(
             assetId,
             inserted,
             communityBinding: outcome,
+            ...(takenByCommunityId === null ? {} : { takenByCommunityId }),
           });
         });
       } catch (error) {

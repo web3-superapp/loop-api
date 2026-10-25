@@ -64,7 +64,7 @@ describe("000055 admin accounts", () => {
   });
 
   it("lists the new relations (head moved on in 000058)", () => {
-    expect(latestMigrationName).toBe("000099_launch_review_inbox");
+    expect(latestMigrationName).toBe("000100_community_bound_asset_unique");
     expect(requiredDatabaseRelations).toContain("public.admin_accounts");
     expect(requiredDatabaseRelations).toContain(
       "public.admin_account_commands",

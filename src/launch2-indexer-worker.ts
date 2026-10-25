@@ -149,6 +149,8 @@ export interface Launch2LaneOptions {
     readonly reasonCode: string;
     readonly count: number;
     readonly instanceId?: string;
+    /** Decision 0182: the community already holding a MEME's token. */
+    readonly communityId?: string;
   }) => void;
   readonly onIdle?: (reasonCode: string) => void;
   /** Decision 0135: per tick, the count of logs that are not ours (debug). */

@@ -97,6 +97,13 @@ describe("V2 error code catalog", () => {
       false,
     ],
     CHAIN_MISMATCH: [422, "validation", false, "errors.chain.mismatch", false],
+    COMMUNITY_BOUND_ASSET_TAKEN: [
+      409,
+      "conflict",
+      false,
+      "errors.community.boundAssetTaken",
+      false,
+    ],
     DATA_STALE: [409, "stale", false, "errors.data.stale", false],
     IDEMPOTENCY_CONFLICT: [
       409,
@@ -260,7 +267,7 @@ describe("V2 error code catalog", () => {
       ),
     ).toEqual(expectedCatalog);
     expect(v2ErrorCodes).toEqual(Object.keys(expectedCatalog).sort());
-    expect(v2ErrorCodes).toHaveLength(33);
+    expect(v2ErrorCodes).toHaveLength(34);
   });
 
   it("keeps the category enum at exactly eight values", () => {

@@ -1680,6 +1680,15 @@ export function createAdminService(options: AdminServiceOptions): AdminService {
               reasonCode: adminReasonCodes.communityAlreadyVerified,
             });
           }
+          if (errorCode === "community_bound_asset_taken") {
+            const holder = (
+              error as { readonly holderCommunityId?: unknown } | null
+            )?.holderCommunityId;
+            throw new AdminApiError("ADMIN_CONFLICT", {
+              reasonCode: adminReasonCodes.communityBoundAssetTaken,
+              holderCommunityId: typeof holder === "string" ? holder : null,
+            });
+          }
           if (errorCode === "community_not_found") {
             throw new AdminApiError("NOT_FOUND", {
               reasonCode: adminReasonCodes.communityNotFound,

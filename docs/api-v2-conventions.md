@@ -141,6 +141,7 @@ return. Modules raise errors with `V2ApiError.fromCode(code)`.
 | `AUTH_STEP_UP_REQUIRED`       | 403    | `authentication` | no        | `errors.auth.stepUpRequired`        |
 | `CAPABILITY_UNAVAILABLE`      | 503    | `availability`   | yes       | `errors.capability.unavailable`     |
 | `CHAIN_MISMATCH`              | 422    | `validation`     | no        | `errors.chain.mismatch`             |
+| `COMMUNITY_BOUND_ASSET_TAKEN` | 409    | `conflict`       | no        | `errors.community.boundAssetTaken`  |
 | `DATA_STALE`                  | 409    | `stale`          | no        | `errors.data.stale`                 |
 | `IDEMPOTENCY_CONFLICT`        | 409    | `conflict`       | no        | `errors.idempotency.conflict`       |
 | `INDEXING_DELAYED`            | 503    | `availability`   | yes       | `errors.indexing.delayed`           |
@@ -175,6 +176,13 @@ never retries the same alias.
 identifier is already taken by another resource (today: a community `slug`).
 It is a conflict, not a shape failure, so the client asks the user for a
 different value rather than retrying the same one.
+
+`COMMUNITY_BOUND_ASSET_TAKEN` (Decision 0182) means one token, one
+community: another community that is not `rejected` already binds the
+requested `boundAssetKey` (community create, PATCH, resubmit).
+`detailsSafe.communityId` is that community's opaque ID (null in the rare
+database-race fallback) and nothing else about it. The client asks the user
+for another token; retrying the same request cannot succeed.
 
 `PROFILE_ACTIVATION_REQUIRED` (Decision 0031) means the account is
 bootstrapped but has no activated V2 profile, so it has no public identity to

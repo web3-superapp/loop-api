@@ -996,10 +996,16 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       carol = await createUser(true, false);
       const communities = await pool.query<{ community_id: string }>({
         text: `
-          insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
-          values ('Cake Holders', 'cake-holders', $2, $1),
-                 ('Cake Rivals', 'cake-rivals', $2, $1),
-                 ('No Token', 'no-token', null, $1)
+          insert into public.communities (
+            name, slug, bound_asset_key, created_by_user_id,
+            verification_status, reviewed_at
+          )
+          values ('Cake Holders', 'cake-holders', $2, $1, 'pending', null),
+                 -- Decision 0182: a second live holder of the same token can
+                 -- no longer exist; a rejected one still can (it does not
+                 -- occupy the token) and still trips the once-per-asset rule.
+                 ('Cake Rivals', 'cake-rivals', $2, $1, 'rejected', now()),
+                 ('No Token', 'no-token', null, $1, 'pending', null)
           returning community_id
         `,
         values: [alice, cakeAsset],

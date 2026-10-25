@@ -33,6 +33,6 @@ describe("000058 admin follow-ups", () => {
     expect(captureSql(followups.down)).toContain(
       "S130 facts exist; refusing to roll back 000058",
     );
-    expect(latestMigrationName).toBe("000099_launch_review_inbox");
+    expect(latestMigrationName).toBe("000100_community_bound_asset_unique");
   });
 });
