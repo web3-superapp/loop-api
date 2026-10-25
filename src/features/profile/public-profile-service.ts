@@ -247,6 +247,14 @@ export interface CreatePublicProfileServiceInput {
    * rows and the recommended communities carry `label`. Default false.
    */
   readonly communityLabelEmit?: boolean;
+  /**
+   * Decision 0185 (EXTERNAL_WALLET_ADDRESS_PUBLIC): false (default) reads
+   * another viewer's holdings / trades from the owner's embedded wallet even
+   * when the owner selected an external one, so the external address never
+   * surfaces through a public profile (its trade hashes name it). The owner
+   * viewing their own profile always reads the selected wallet.
+   */
+  readonly externalWalletAddressPublic?: boolean;
   readonly logger?: {
     warn(object: Record<string, unknown>, message: string): void;
   };
@@ -310,6 +318,8 @@ export function createPublicProfileService(
   input: CreatePublicProfileServiceInput,
 ): PublicProfileService {
   const communityLabelEmit = input.communityLabelEmit === true;
+  const externalWalletAddressPublic =
+    input.externalWalletAddressPublic === true;
   const { quoteAssetIds, stableAssetIds } = swapQuoteSets(
     input.chainId,
     input.usd1Address,
@@ -340,6 +350,16 @@ export function createPublicProfileService(
     record: PublicProfileRecord,
   ): boolean {
     return record.targetUserId === principal.userId;
+  }
+
+  /** Decision 0185: the wallet a profile read may show to this viewer. */
+  function profileWallet(
+    principal: AuthenticatedLoopPrincipal,
+    record: PublicProfileRecord,
+  ): Promise<ProfileWalletRecord | null> {
+    return input.repository.getActiveWallet(record.targetUserId, {
+      embeddedOnly: !externalWalletAddressPublic && !isSelf(principal, record),
+    });
   }
 
   function data<T extends object>(
@@ -416,7 +436,7 @@ export function createPublicProfileService(
       }
       const launch2 = input.launch2 ?? null;
       if (launch2 !== null) {
-        return mergedHoldings(record, launch2, signal);
+        return mergedHoldings(principal, record, launch2, signal);
       }
       if (input.walletReadService === null) {
         return emptyHoldings(
@@ -426,7 +446,7 @@ export function createPublicProfileService(
       }
       let wallet;
       try {
-        wallet = await input.repository.getActiveWallet(record.targetUserId);
+        wallet = await profileWallet(principal, record);
       } catch (error) {
         return mapFailure(error);
       }
@@ -793,13 +813,14 @@ export function createPublicProfileService(
    * primary chain only.
    */
   async function mergedHoldings(
+    principal: AuthenticatedLoopPrincipal,
     record: PublicProfileRecord,
     sources: ProfileLaunch2Sources,
     signal: AbortSignal,
   ): Promise<HoldingsResource> {
     let wallet;
     try {
-      wallet = await input.repository.getActiveWallet(record.targetUserId);
+      wallet = await profileWallet(principal, record);
     } catch (error) {
       return mapFailure(error);
     }
@@ -875,9 +896,7 @@ export function createPublicProfileService(
         }
         before = { blockNumber, logIndex };
       }
-      const wallet = await input.repository.getActiveWallet(
-        record.targetUserId,
-      );
+      const wallet = await profileWallet(principal, record);
       if (wallet === null) {
         return emptyTrades(
           "unavailable",
@@ -979,9 +998,7 @@ export function createPublicProfileService(
           transactionHash: hash,
         };
       }
-      const wallet = await input.repository.getActiveWallet(
-        record.targetUserId,
-      );
+      const wallet = await profileWallet(principal, record);
       if (wallet === null) {
         return emptyTrades(
           "unavailable",

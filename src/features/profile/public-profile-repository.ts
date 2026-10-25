@@ -160,7 +160,16 @@ export interface PublicProfileRepository {
     readonly lookup: PublicProfileLookup;
   }): Promise<PublicProfileRecord | null>;
   /** The owner's selected active wallet, or null. */
-  getActiveWallet(ownerUserId: string): Promise<ProfileWalletRecord | null>;
+  /**
+   * The owner's selected wallet. `embeddedOnly` (Decision 0185) instead
+   * answers the owner's embedded wallet — the selected one when it is
+   * embedded, else the earliest active embedded wallet — so an external
+   * wallet is never read on another viewer's behalf.
+   */
+  getActiveWallet(
+    ownerUserId: string,
+    options?: { readonly embeddedOnly?: boolean },
+  ): Promise<ProfileWalletRecord | null>;
   /** Whether the `erc20_transfer` lane has ever committed a checkpoint. */
   hasTransferCheckpoint(chainId: string): Promise<boolean>;
   listTrades(input: ListTradesInput): Promise<{

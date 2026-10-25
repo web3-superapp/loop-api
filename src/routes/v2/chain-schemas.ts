@@ -15,6 +15,7 @@ import {
   rawAmountPatternSource,
   reasonCodePatternSource,
   transactionHashPatternSource,
+  walletArchivedReasons,
   walletKinds,
 } from "../../features/chain/chain-contract.js";
 import {
@@ -365,6 +366,12 @@ const walletProjectionSchema = {
     isActive: { type: "boolean" },
     firstSeenAt: { type: "string", format: "date-time" },
     lastSeenAt: { type: "string", format: "date-time" },
+    archivedReason: {
+      type: "string",
+      enum: [...walletArchivedReasons],
+      description:
+        "Decision 0185, optional: why an archived wallet is archived. unlinked = Privy no longer reports it; external_limit_exceeded = the account already holds externalWalletLimit active external wallets; address_conflict = the address is an active wallet of another LOOP account (unlink it there first). Absent on active rows, on rows archived before 0185, and on GET /v2/wallets / PUT /v2/wallets/active while WALLET_LINK_POLICY_EMIT is off.",
+    },
   },
 } as const;
 
@@ -389,6 +396,12 @@ export const walletListResourceSchema = {
         provider: { type: "string", const: "privy" },
         observedAt: { type: "string", format: "date-time" },
       },
+    },
+    externalWalletLimit: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Decision 0185, optional: the most active external (linked) wallets one account may hold; wallets beyond it are archived with external_limit_exceeded and do not mine. Always present on POST /v2/wallets/sync; on GET /v2/wallets and PUT /v2/wallets/active only while WALLET_LINK_POLICY_EMIT is on.",
     },
     contractVersion: { type: "string", const: v2ContractVersion },
   },

@@ -92,6 +92,6 @@ describe("000075 MEME coverage integrity (Decision 0129 §2)", () => {
   });
 
   it("is the latest migration", () => {
-    expect(latestMigrationName).toBe("000101_community_membership_history");
+    expect(latestMigrationName).toBe("000102_account_wallet_archived_reason");
   });
 });

@@ -113,7 +113,7 @@ describe("Decision 0142 MEME list volume and weekly best trades on PostgreSQL", 
       });
     }
     await pool.query({
-      text: `insert into public.account_wallets (owner_user_id, address, kind, is_active) values ($1, $2, 'external', true)`,
+      text: `insert into public.account_wallets (owner_user_id, provider_wallet_id, address, kind, is_active) values ($1, 'fixture-' || gen_random_uuid()::text, $2, 'embedded', true)`,
       values: [user.id, wallet(walletNumber)],
     });
     return user.id;
@@ -543,6 +543,32 @@ describe("Decision 0142 MEME list volume and weekly best trades on PostgreSQL", 
       ["bob", "FROG", (20n * e18 - (25n * e18) / 10n).toString()],
       ["alice", "FROG", (15n * e18).toString()],
     ]);
+
+    // Decision 0185: a wallet that is only an external (linked) wallet maps
+    // to its account only with EXTERNAL_WALLET_ADDRESS_PUBLIC on.
+    await pool.query({
+      text: `update public.account_wallets
+             set kind = 'external', provider_wallet_id = null
+             where address = $1`,
+      values: [wallet(11)],
+    });
+    const week = {
+      chainId,
+      contractAddress: memeCurveAddress,
+      since: weekAgo,
+      until: now,
+      limit: 10,
+    };
+    expect(
+      (await repository.rankBestTrades(week)).map((item) => item.alias),
+    ).toEqual(["alice", "alice", "gina"]);
+    expect(
+      (
+        await createPostgresMemeRepository(pool, {
+          externalWalletAddressPublic: true,
+        }).rankBestTrades(week)
+      ).map((item) => item.alias),
+    ).toEqual(["bob", "alice", "alice", "gina"]);
 
     // Another contract sees nothing.
     expect(

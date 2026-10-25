@@ -318,7 +318,18 @@ function mapListToken(raw: unknown): MemeTokenListRecord {
  * rule); the account needs an active public profile and a trade history
  * visible to everyone.
  */
-const bestTradesSql = `
+/**
+ * Decision 0185 (EXTERNAL_WALLET_ADDRESS_PUBLIC): the extra predicate on an
+ * `account_wallets as w` row that maps a chain address to an account. Off
+ * (default) only embedded wallets map, so an address held through a linked
+ * external wallet is never shown next to its account. A constant chosen from
+ * a boolean, never caller text.
+ */
+function walletKindPredicate(includeExternal: boolean): string {
+  return includeExternal ? "" : " and w.kind = 'embedded'";
+}
+
+const bestTradesSql = (includeExternal: boolean): string => `
   with sells as (
     select tr.wallet, tr.meme_token_id,
       sum(tr.usd1_amount) as sell_usd1,
@@ -363,7 +374,7 @@ const bestTradesSql = `
     join public.user_profiles as p
       on p.owner_user_id = w.owner_user_id and p.profile_status = 'active'
     left join public.privacy_preferences_v2 as pv on pv.owner_user_id = w.owner_user_id
-    where w.address = sc.wallet and w.status = 'active'
+    where w.address = sc.wallet and w.status = 'active'${walletKindPredicate(includeExternal)}
     order by w.first_seen_at asc, w.wallet_id asc
     limit 1
   ) as acct on true
@@ -408,7 +419,7 @@ const accountColumns = `
 `;
 
 /** The account (if any) whose active-status wallet is `${column}`. */
-function accountJoin(column: string): string {
+function accountJoin(column: string, includeExternal: boolean): string {
   return `
     left join lateral (
       select w.owner_user_id, p.public_profile_id, p.alias, p.avatar_ref,
@@ -418,7 +429,7 @@ function accountJoin(column: string): string {
         on p.owner_user_id = w.owner_user_id and p.profile_status = 'active'
       left join public.privacy_preferences_v2 as pv
         on pv.owner_user_id = w.owner_user_id
-      where w.address = ${column} and w.status = 'active'
+      where w.address = ${column} and w.status = 'active'${walletKindPredicate(includeExternal)}
       order by w.first_seen_at asc, w.wallet_id asc
       limit 1
     ) as acct on true
@@ -833,7 +844,14 @@ async function assertDraftCreatable(
   }
 }
 
-export function createPostgresMemeRepository(pool: Pool): MemeRepository {
+export function createPostgresMemeRepository(
+  pool: Pool,
+  options: {
+    /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC; absent = false. */
+    readonly externalWalletAddressPublic?: boolean;
+  } = {},
+): MemeRepository {
+  const includeExternal = options.externalWalletAddressPublic === true;
   async function getToken(memeTokenId: string) {
     const result = await pool.query({
       text: `select ${tokenColumns} from ${tokenFrom} where t.meme_token_id = $1`,
@@ -989,7 +1007,7 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
     async rankBestTrades(input) {
       try {
         const result = await pool.query({
-          text: bestTradesSql,
+          text: bestTradesSql(includeExternal),
           values: [
             input.chainId,
             addressSchema.parse(input.contractAddress),
@@ -1042,7 +1060,7 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
               tr.price_after_e18::text as price_after_e18, tr.traded_at,
               ${accountColumns}
             from public.meme_trades as tr
-            ${accountJoin("tr.wallet")}
+            ${accountJoin("tr.wallet", includeExternal)}
             where tr.meme_token_id = $1 and not tr.removed
               and ($3::numeric is null
                 or (tr.block_number, tr.log_index) < ($3::numeric, $4::int))
@@ -1172,7 +1190,7 @@ export function createPostgresMemeRepository(pool: Pool): MemeRepository {
           text: `
             select h.wallet, h.balance::text as balance, h.frozen_at, ${accountColumns}
             from public.meme_holders as h
-            ${accountJoin("h.wallet")}
+            ${accountJoin("h.wallet", includeExternal)}
             where h.meme_token_id = $1
               and ($3::numeric is null
                 or h.balance < $3::numeric

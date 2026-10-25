@@ -509,13 +509,23 @@ export function createPostgresPublicProfileRepository(
 
     async getActiveWallet(
       ownerUserId: string,
+      options?: { readonly embeddedOnly?: boolean },
     ): Promise<ProfileWalletRecord | null> {
       try {
         const result = await pool.query<{
           wallet_id: string;
           address: string;
         }>({
-          text: `
+          text:
+            options?.embeddedOnly === true
+              ? `
+            select wallet_id, address
+            from public.account_wallets
+            where owner_user_id = $1 and status = 'active' and kind = 'embedded'
+            order by is_active desc, first_seen_at asc, wallet_id asc
+            limit 1
+          `
+              : `
             select wallet_id, address
             from public.account_wallets
             where owner_user_id = $1 and is_active and status = 'active'

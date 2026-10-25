@@ -211,8 +211,20 @@ X-Loop-Client-Version: 1.0.0
   （实测 594–969ms → 8–31ms；空闲超过 60s 后的第一次调用仍要等一次 Privy，约 0.3–1.1s）。
   钱包列表本身每次都从数据库重建，所以 `PUT /v2/wallets/active` 之后立刻调用
   `GET /v2/wallets` 一定能看到新的 `activeWalletId`；只有"账号下有哪些钱包"
-  这件事最多滞后 60s。用户在 Privy 新绑一个钱包后，前端若需要立即看到，
-  可提示用户稍后重试，不要轮询。
+  这件事最多滞后 60s。用户在 Privy 新绑 / 解绑一个钱包后，前端调
+  `POST /v2/wallets/sync`（决策 0185）立即刷新，不要轮询。
+
+外部钱包绑定（决策 0185）：
+
+- 每个账号最多 `externalWalletLimit`（3）个 active 外部钱包；超出的、或地址已是另一账号
+  active 钱包的，`status = archived`，并带 `archivedReason`
+  （`external_limit_exceeded` / `address_conflict`；解绑的是 `unlinked`）。归档钱包不计算力、
+  不能被选为活跃钱包。
+- `POST /v2/wallets/sync`：无 body、无 query、不带 `Idempotency-Key`（请求头同
+  `PUT /v2/wallets/active`）；立即重读 Privy，响应同 `GET /v2/wallets`，并总是带可选键
+  `externalWalletLimit` 与 `wallets[].archivedReason`。Privy 不可达 → `503 PROVIDER_DISCONNECTED`。
+- `GET /v2/wallets` / `PUT /v2/wallets/active` 只在后端开 `WALLET_LINK_POLICY_EMIT=on`
+  后才带这两个可选键（客户端先发版解码，再开开关）。
 
 切换活跃钱包：
 

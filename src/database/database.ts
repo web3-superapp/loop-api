@@ -352,6 +352,11 @@ export interface PostgresDatabaseConfig {
    */
   readonly launchChain?: { readonly chainId: LaunchChainId };
   /**
+   * Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC. Absent / false = trade
+   * feeds map an address to an account only through an embedded wallet.
+   */
+  readonly externalWalletAddressPublic?: boolean;
+  /**
    * Decision 0117: the operator config-save path keeps the same sale-start
    * lead as the owner path. Absent (worker processes) means 86,400 s.
    */
@@ -573,7 +578,9 @@ export function createPostgresDatabase(
         ...launchSlotRepositoryOptions,
       }),
     launchChain: createPostgresLaunchChainRepository(pool),
-    meme: createPostgresMemeRepository(pool),
+    meme: createPostgresMemeRepository(pool, {
+      externalWalletAddressPublic: config.externalWalletAddressPublic === true,
+    }),
     launch2: createPostgresLaunch2Repository(pool),
     launch2Publications: createPostgresLaunch2PublicationRepository(
       pool,
@@ -600,7 +607,9 @@ export function createPostgresDatabase(
     mining,
     referral,
     webRegistration,
-    walletAccounts: createPostgresWalletAccountLookup(pool),
+    walletAccounts: createPostgresWalletAccountLookup(pool, {
+      externalWalletAddressPublic: config.externalWalletAddressPublic === true,
+    }),
     async ping(): Promise<void> {
       const result = await pool.query<{ schema_ready: boolean }>({
         text: `
