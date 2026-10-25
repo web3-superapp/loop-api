@@ -57273,6 +57273,22 @@
                                       }
                                     ],
                                     "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
+                                  },
+                                  "sparkline24h": {
+                                    "anyOf": [
+                                      {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 24,
+                                        "items": {
+                                          "type": "string",
+                                          "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                          "description": "Canonical decimal string; never a JavaScript number."
+                                        }
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "Optional (Decision 0186; emitted only with MARKET_ROW_SPARKLINE24H_EMIT=on). Up to 24 hourly closes of the last 24 hours, oldest first, the last one the current hour; canonical decimal strings in the unit of the row's price (USD; launchpad tokens: USD1 at par). Source: the row's own `sparkline` when available (GeckoTerminal, Decision 0074), else the LOOP chain facts of a launch2 / MEME v1 token (curve trades and official-pool swaps, close of each UTC hour, an hour without trades repeats the previous close). Fewer than 2 points, or no source: null — draw no line. Never padded, never zero-filled."
                                   }
                                 }
                               }
@@ -57677,6 +57693,22 @@
                                       }
                                     ],
                                     "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
+                                  },
+                                  "sparkline24h": {
+                                    "anyOf": [
+                                      {
+                                        "type": "array",
+                                        "minItems": 2,
+                                        "maxItems": 24,
+                                        "items": {
+                                          "type": "string",
+                                          "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                          "description": "Canonical decimal string; never a JavaScript number."
+                                        }
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "Optional (Decision 0186; emitted only with MARKET_ROW_SPARKLINE24H_EMIT=on). Up to 24 hourly closes of the last 24 hours, oldest first, the last one the current hour; canonical decimal strings in the unit of the row's price (USD; launchpad tokens: USD1 at par). Source: the row's own `sparkline` when available (GeckoTerminal, Decision 0074), else the LOOP chain facts of a launch2 / MEME v1 token (curve trades and official-pool swaps, close of each UTC hour, an hour without trades repeats the previous close). Fewer than 2 points, or no source: null — draw no line. Never padded, never zero-filled."
                                   },
                                   "volume24h": {
                                     "type": "object",
@@ -58712,6 +58744,22 @@
                               }
                             ],
                             "description": "Unavailable reason codes: MARKET_PROVIDER_GECKOTERMINAL_DISABLED, MARKET_SPARKLINE_NOT_CACHED (the warm lane has not written this asset yet), MARKET_SPARKLINE_EXPIRED (row older than TTL + grace), MARKET_SPARKLINE_EMPTY (the Provider answered no candles), MARKET_FACT_CACHE_UNAVAILABLE, ASSET_NOT_READABLE, ASSET_BLOCKED."
+                          },
+                          "sparkline24h": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 24,
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^-?(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                                  "description": "Canonical decimal string; never a JavaScript number."
+                                }
+                              },
+                              { "type": "null" }
+                            ],
+                            "description": "Optional (Decision 0186; emitted only with MARKET_ROW_SPARKLINE24H_EMIT=on). Up to 24 hourly closes of the last 24 hours, oldest first, the last one the current hour; canonical decimal strings in the unit of the row's price (USD; launchpad tokens: USD1 at par). Source: the row's own `sparkline` when available (GeckoTerminal, Decision 0074), else the LOOP chain facts of a launch2 / MEME v1 token (curve trades and official-pool swaps, close of each UTC hour, an hour without trades repeats the previous close). Fewer than 2 points, or no source: null — draw no line. Never padded, never zero-filled."
                           },
                           "community": {
                             "type": "object",

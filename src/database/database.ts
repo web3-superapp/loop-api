@@ -43,6 +43,8 @@ import {
   createPostgresMarketCategoryRepository,
   type MarketCategoryRepository,
 } from "./market-category-repository.js";
+import { createPostgresMarketRowSeriesStore } from "./market-row-series-repository.js";
+import type { MarketRowSeriesStore } from "../features/market/market-row-sparkline24h.js";
 import {
   createPostgresTokenLogoCacheRepository,
   type TokenLogoCacheRepository,
@@ -239,6 +241,8 @@ export interface Database {
   readonly marketFacts?: MarketFactCacheRepository;
   /** Candidate sets of the categorised market list (Decision 0100). */
   readonly marketCategories?: MarketCategoryRepository;
+  /** Hourly closes of launchpad assets for the list rows' `sparkline24h` (Decision 0186). */
+  readonly marketRowSeries?: MarketRowSeriesStore;
   /** Token logo proxy cache (Decision 0089). */
   readonly tokenLogoCache?: TokenLogoCacheRepository;
   /** Uploaded avatars and community logos (Decision 0095). */
@@ -461,6 +465,7 @@ export function createPostgresDatabase(
   const alerts = createPostgresAlertRepository(pool);
   const marketFacts = createPostgresMarketFactCacheRepository(pool);
   const marketCategories = createPostgresMarketCategoryRepository(pool);
+  const marketRowSeries = createPostgresMarketRowSeriesStore(pool);
   const tokenLogoCache = createPostgresTokenLogoCacheRepository(pool);
   const media = createPostgresMediaRepository(pool);
   const publicProfiles = createPostgresPublicProfileRepository(pool);
@@ -541,6 +546,7 @@ export function createPostgresDatabase(
     alerts,
     marketFacts,
     marketCategories,
+    marketRowSeries,
     tokenLogoCache,
     media,
     publicProfiles,

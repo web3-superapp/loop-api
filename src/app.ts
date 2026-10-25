@@ -86,6 +86,7 @@ import {
   createMarketReadService,
   type MarketReadService,
 } from "./features/market/market-read-service.js";
+import { createMarketRowSparkline24hReader } from "./features/market/market-row-sparkline24h.js";
 import {
   createAlertV2Service,
   type AlertV2Service,
@@ -1970,6 +1971,30 @@ export async function buildApp(
         read: memePoolPriceReader,
         readMany: memePoolPriceReaders.readMany,
       }),
+      // Decision 0186: MARKET_ROW_SPARKLINE24H_EMIT off (default) keeps the
+      // list rows byte-identical; on adds `sparkline24h`, the launchpad
+      // series memoised for the market candles TTL.
+      rowSparkline24h: config.marketRowSparkline24hEmit
+        ? createMarketRowSparkline24hReader({
+            store: database.marketRowSeries ?? null,
+            ttlMs: config.market.candlesTtlSeconds * 1_000,
+            onReadFailed: (error) => {
+              app.log.warn(
+                {
+                  reasonCode: "MARKET_ROW_SPARKLINE24H_READ_FAILED",
+                  errorName: error instanceof Error ? error.name : "unknown",
+                },
+                "market row sparkline24h read failed; rows answer null",
+              );
+            },
+            onRead: (event) => {
+              app.log.debug(
+                { event: "market_row_sparkline24h_read", ...event },
+                "market row sparkline24h read",
+              );
+            },
+          })
+        : null,
       wallets: database.accountWallets ?? null,
       readClient: bscReadClient,
       cursorCodec: v2CursorCodec,

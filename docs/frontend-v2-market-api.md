@@ -868,6 +868,21 @@ unavailable 行为：
 - cursor 密钥未配置：三个分类都 `503`。
 - 空分类（例如还没有任何 Launch 登记项目代币）是真实的 `items: []` + `nextCursor: null`，显示空态。
 
+## 12a. 行内 24h 走势：`sparkline24h`（决策 0186，可选键，开关默认关）
+
+出现位置：§12 分类列表 `items[]`、§3 overview 的 `watchlist.items[]` / `trending.items[]`，只这三处。
+服务端开关 `MARKET_ROW_SPARKLINE24H_EMIT=on` 时每行都带：
+
+```json
+"sparkline24h": ["0.000005", "0.000005", "0.000006"]
+"sparkline24h": null
+```
+
+- 2–24 个十进制字符串，按小时升序，最后一点是当前小时，单位同该行价格（发射台代币为 USD1≈USD）。
+- 来源：行自己的 `sparkline`（GeckoTerminal，主流币）→ LOOP 链上成交（launch2 曲线 + 官方池、MEME v1 曲线，1h 收盘，空小时沿用上一收盘）→ `null`。
+- `null` = 服务端查过所有来源都没有，不画线、不再回退 `sparkline`；键缺失（开关关）才回退 `sparkline` 块。
+- 严格 codec 必须先把 `sparkline24h` 放进这三种行的**可选**键集合并发版，服务端才会开开关。
+
 ## 13. `GET /v2/intel/promotions` → 情报页活动位（决策 0100）
 
 ```

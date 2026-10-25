@@ -29,6 +29,11 @@ import {
 } from "../meme/meme-curve-math.js";
 import { percentChange } from "../meme/meme-projection.js";
 import {
+  attachSparkline24h,
+  type MarketRowSparkline24h,
+  type MarketRowSparkline24hReader,
+} from "./market-row-sparkline24h.js";
+import {
   memePoolMarketCapRaw,
   memePoolPriceKey,
   type MemePoolPrice,
@@ -157,6 +162,8 @@ export interface MarketAssetRow {
    * Provider on the request path.
    */
   readonly sparkline: SparklineProjection;
+  /** Decision 0186: only with `MARKET_ROW_SPARKLINE24H_EMIT=on`. */
+  readonly sparkline24h?: MarketRowSparkline24h;
 }
 
 export interface TrendingRow extends MarketAssetRow {
@@ -227,6 +234,8 @@ export interface MarketCategoryAssetRow {
   /** Present exactly when `quote` is null. */
   readonly quoteUnavailable?: { readonly reasonCode: string };
   readonly sparkline: SparklineProjection;
+  /** Decision 0186: only with `MARKET_ROW_SPARKLINE24H_EMIT=on`. */
+  readonly sparkline24h?: MarketRowSparkline24h;
   /** Only on the `community` category: the verified community bound to the asset. */
   readonly community?: {
     readonly communityId: string;
@@ -553,6 +562,11 @@ export interface CreateMarketReadServiceInput {
     /** Decision 0105: one batched read of a page's pools. */
     readonly readMany?: MemePoolPriceBatchReader;
   } | null;
+  /**
+   * Decision 0186: the reader behind the list rows' optional `sparkline24h`.
+   * `null` / absent (`MARKET_ROW_SPARKLINE24H_EMIT=off`) emits no key.
+   */
+  readonly rowSparkline24h?: MarketRowSparkline24hReader | null;
   /** Account wallets for `isOwn` on trades; `null` when the wallet module is not composed. */
   readonly wallets: AccountWalletRepository | null;
   readonly readClient: BscReadClient;
@@ -1489,7 +1503,7 @@ export function createMarketReadService(
             );
           }
         }
-        const rows = await Promise.all(pending);
+        const rows = await withSparkline24h(await Promise.all(pending));
         watchlist = Object.freeze({
           status: "available",
           version: snapshot.version,
@@ -1551,7 +1565,9 @@ export function createMarketReadService(
                 ordering: marketTrendingRules.ordering,
               }),
               items: Object.freeze(
-                candidates.slice(0, marketTrendingRules.maximumItems),
+                await withSparkline24h(
+                  candidates.slice(0, marketTrendingRules.maximumItems),
+                ),
               ),
             });
 
@@ -2561,7 +2577,9 @@ export function createMarketReadService(
       });
       const page = pageMarketCategoryRows(rows, keyOf, after, pageSize);
       const last = page.items.at(-1);
-      const items = await fillMemePoolQuotes(page.items, slot0Deferred);
+      const items = await withSparkline24h(
+        await fillMemePoolQuotes(page.items, slot0Deferred),
+      );
       let nextCursor: string | null = null;
       if (page.hasMore && last !== undefined) {
         const key = keyOf(last);
@@ -2593,6 +2611,21 @@ export function createMarketReadService(
     },
   };
   return Object.freeze(service);
+
+  /**
+   * Decision 0186: adds `sparkline24h` to the returned rows only (never to
+   * candidates off the page), with one batched read for the rows whose own
+   * sparkline is not available. Off: the rows unchanged, no key.
+   */
+  async function withSparkline24h<
+    Row extends {
+      readonly assetId: string;
+      readonly sparkline: SparklineProjection;
+    },
+  >(rows: readonly Row[]): Promise<readonly Row[]> {
+    const reader = input.rowSparkline24h ?? null;
+    return reader === null ? rows : attachSparkline24h(rows, reader);
+  }
 
   /**
    * Decision 0103: a graduated MEME candidate on the launch slot whose pool

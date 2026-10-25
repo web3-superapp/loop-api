@@ -1055,6 +1055,11 @@ const environmentSchema = z
     // `verificationStatus`. Turn on only once every supported client decodes
     // the key.
     COMMUNITY_LABEL_EMIT: z.enum(["off", "on"]),
+    // Decision 0186: off|on (default off). off keeps the market list rows
+    // (category items, overview watchlist / trending items) byte-identical;
+    // on adds the optional `sparkline24h` key (decimal strings or null).
+    // Turn on only once every supported client decodes the key.
+    MARKET_ROW_SPARKLINE24H_EMIT: z.enum(["off", "on"]),
     // Decision 0177: off|on (default off). off hides the four fine inbox
     // events (launch.graduated, launch.badge_minted, social.friend_request,
     // social.friend_accepted) from the feed, unread counts and read-all
@@ -1988,6 +1993,8 @@ export interface AppConfig {
   readonly profileLaunch2Emit: boolean;
   /** Decision 0175: COMMUNITY_LABEL_EMIT === "on" (default off). */
   readonly communityLabelEmit: boolean;
+  /** Decision 0186: MARKET_ROW_SPARKLINE24H_EMIT === "on" (default off). */
+  readonly marketRowSparkline24hEmit: boolean;
   /** Decision 0177: NOTIFICATION_INBOX_EMIT === "on" (default off). */
   readonly notificationInboxEmit: boolean;
   /** Decision 0178: LAUNCH_REVIEW_INBOX_EMIT === "on" (default off). */
@@ -4500,6 +4507,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       environment["WALLET_ACTIVITY_LAUNCH2_EMIT"] ?? "off",
     PROFILE_LAUNCH2_EMIT: environment["PROFILE_LAUNCH2_EMIT"] ?? "off",
     COMMUNITY_LABEL_EMIT: environment["COMMUNITY_LABEL_EMIT"] ?? "off",
+    MARKET_ROW_SPARKLINE24H_EMIT:
+      environment["MARKET_ROW_SPARKLINE24H_EMIT"] ?? "off",
     NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
     LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4676,6 +4685,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       parsed.data.WALLET_ACTIVITY_LAUNCH2_EMIT === "on",
     profileLaunch2Emit: parsed.data.PROFILE_LAUNCH2_EMIT === "on",
     communityLabelEmit: parsed.data.COMMUNITY_LABEL_EMIT === "on",
+    marketRowSparkline24hEmit:
+      parsed.data.MARKET_ROW_SPARKLINE24H_EMIT === "on",
     notificationInboxEmit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
     launchReviewInboxEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
     hooksLaunch: {
