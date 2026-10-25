@@ -3147,6 +3147,7 @@ export async function buildApp(
                 chainId: config.launchChain.chainId,
                 indexerGraceSeconds:
                   config.miningSettlement.indexerGraceSeconds,
+                embeddedWalletOnly: config.miningSettlement.embeddedWalletOnly,
                 now: options.walletIntentNow ?? ((): Date => new Date()),
               }),
         chain: miningClaimChain,

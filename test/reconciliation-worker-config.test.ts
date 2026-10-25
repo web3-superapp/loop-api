@@ -146,6 +146,7 @@ describe("loadReconciliationWorkerConfig", () => {
         usdtAddress: null,
         claimConfirmations: 3,
         indexerGraceSeconds: 120,
+        embeddedWalletOnly: false,
       },
       // Decision 0095: real identity in community chat by default.
       communityChatRealIdentity: true,
@@ -560,5 +561,14 @@ describe("loadReconciliationWorkerConfig", () => {
     production["NODE_ENV"] = "production";
     production["MINING_MOCK_HOLDINGS_ENABLED"] = "true";
     expect(() => loadReconciliationWorkerConfig(production)).toThrow();
+  });
+
+  it("carries MINING_EMBEDDED_WALLET_ONLY into the settlement config (Decision 0184)", () => {
+    const environment = validEnvironment();
+    environment["MINING_EMBEDDED_WALLET_ONLY"] = "true";
+    expect(
+      loadReconciliationWorkerConfig(environment).miningSettlement
+        .embeddedWalletOnly,
+    ).toBe(true);
   });
 });

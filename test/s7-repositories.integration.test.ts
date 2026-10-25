@@ -660,6 +660,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       }
       const inputs = await mining.listBalanceInputs({
         includeMockSeedHoldings: false,
+        embeddedWalletOnly: false,
       });
       const mine = inputs.filter((row) => row.ownerUserId === owner);
       expect(mine).toEqual([
@@ -695,6 +696,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
 
       const chainOnly = await mining.listBalanceInputs({
         includeMockSeedHoldings: false,
+        embeddedWalletOnly: false,
       });
       expect(
         chainOnly.filter((row) => row.walletId === walletId),
@@ -702,6 +704,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
 
       const withSeed = await mining.listBalanceInputs({
         includeMockSeedHoldings: true,
+        embeddedWalletOnly: false,
       });
       expect(withSeed).toContainEqual(
         expect.objectContaining({
@@ -727,7 +730,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
       ).rejects.toThrow();
     });
 
-    it("Decision 0183: snapshot inputs count embedded wallets only, gate a verified community's MEME to its members, and ignore pending bindings", async () => {
+    it("Decisions 0183 / 0184: snapshot inputs count the configured wallet kinds, gate a verified community's MEME to its members, and ignore pending bindings", async () => {
       const gatedAsset = "eip155:56:0x0000000000000000000000000000000000183a01";
       const pendingAsset =
         "eip155:56:0x0000000000000000000000000000000000183a02";
@@ -801,20 +804,32 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           });
         }
       }
-      const inputs = await mining.listBalanceInputs({
-        includeMockSeedHoldings: false,
-      });
-      const holders = (assetId: string) =>
-        inputs
-          .filter((row) => row.assetId === assetId)
-          .map((row) => row.ownerUserId)
-          .sort();
-      // Creator (no membership row) and the active member count; the
-      // outsider, the banned member, and the external wallet do not.
-      expect(holders(gatedAsset)).toEqual([creator, member].sort());
+      const holdersOf = async (embeddedWalletOnly: boolean) => {
+        const inputs = await mining.listBalanceInputs({
+          includeMockSeedHoldings: false,
+          embeddedWalletOnly,
+        });
+        return (assetId: string) =>
+          inputs
+            .filter((row) => row.assetId === assetId)
+            .map((row) => row.ownerUserId)
+            .sort();
+      };
+      // Switch on (MINING_EMBEDDED_WALLET_ONLY=true): creator (no
+      // membership row) and the active member count; the outsider, the
+      // banned member, and the external wallet (an active member) do not.
+      const embeddedOnly = await holdersOf(true);
+      expect(embeddedOnly(gatedAsset)).toEqual([creator, member].sort());
       // A pending community's binding gates nothing; external still excluded.
-      expect(holders(pendingAsset)).toEqual(
+      expect(embeddedOnly(pendingAsset)).toEqual(
         [creator, member, outsider, banned].sort(),
+      );
+      // Switch off (default, Decision 0184): the external wallet counts as
+      // any other active wallet, still subject to the membership gate.
+      const allKinds = await holdersOf(false);
+      expect(allKinds(gatedAsset)).toEqual([creator, member, external].sort());
+      expect(allKinds(pendingAsset)).toEqual(
+        [creator, member, outsider, banned, external].sort(),
       );
       const weights = await mining.listCommunityWeightInputs(
         "miningFormulaV1-draft",

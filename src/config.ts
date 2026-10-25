@@ -175,6 +175,10 @@ const miningSettlementEnvironmentShape = {
   MINING_CLAIM_USDT_ADDRESS: optionalCredential(64),
   MINING_CLAIM_CONFIRMATIONS: positiveIntegerString(1, 100),
   MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: positiveIntegerString(0, 3_600),
+  // Decision 0184: narrow Mining Power (hourly settlement attribution and
+  // snapshot balance inputs) to LOOP embedded wallets. Default off: embedded
+  // and linked external wallets both count until the requester confirms.
+  MINING_EMBEDDED_WALLET_ONLY: booleanString,
 } as const;
 
 function miningSettlementEnvironmentDefaults(
@@ -187,6 +191,8 @@ function miningSettlementEnvironmentDefaults(
       environment["MINING_CLAIM_CONFIRMATIONS"] ?? "3",
     MINING_SETTLEMENT_INDEXER_GRACE_SECONDS:
       environment["MINING_SETTLEMENT_INDEXER_GRACE_SECONDS"] ?? "120",
+    MINING_EMBEDDED_WALLET_ONLY:
+      environment["MINING_EMBEDDED_WALLET_ONLY"] ?? "false",
   };
 }
 
@@ -195,6 +201,12 @@ export interface MiningSettlementSharedConfig {
   readonly usdtAddress: string | null;
   readonly claimConfirmations: number;
   readonly indexerGraceSeconds: number;
+  /**
+   * Decision 0184 (`MINING_EMBEDDED_WALLET_ONLY`, default false): when true
+   * only `account_wallets.kind = 'embedded'` wallets mine; when false every
+   * active wallet (embedded and linked external) does.
+   */
+  readonly embeddedWalletOnly: boolean;
 }
 
 function parseMiningSettlementShared(data: {
@@ -202,6 +214,7 @@ function parseMiningSettlementShared(data: {
   readonly MINING_CLAIM_USDT_ADDRESS?: string | undefined;
   readonly MINING_CLAIM_CONFIRMATIONS: number;
   readonly MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: number;
+  readonly MINING_EMBEDDED_WALLET_ONLY: boolean;
 }): MiningSettlementSharedConfig {
   const issues: string[] = [];
   for (const key of [
@@ -220,6 +233,7 @@ function parseMiningSettlementShared(data: {
     usdtAddress: data.MINING_CLAIM_USDT_ADDRESS?.toLowerCase() ?? null,
     claimConfirmations: data.MINING_CLAIM_CONFIRMATIONS,
     indexerGraceSeconds: data.MINING_SETTLEMENT_INDEXER_GRACE_SECONDS,
+    embeddedWalletOnly: data.MINING_EMBEDDED_WALLET_ONLY,
   });
 }
 
@@ -2904,6 +2918,7 @@ export function parseMiningSettlementApi(data: {
   readonly MINING_CLAIM_USDT_ADDRESS?: string | undefined;
   readonly MINING_CLAIM_CONFIRMATIONS: number;
   readonly MINING_SETTLEMENT_INDEXER_GRACE_SECONDS: number;
+  readonly MINING_EMBEDDED_WALLET_ONLY: boolean;
 }): MiningSettlementApiConfig {
   const shared = parseMiningSettlementShared(data);
   const key = data.MINING_REWARD_SIGNER_PRIVATE_KEY?.trim();

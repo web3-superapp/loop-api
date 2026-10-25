@@ -796,6 +796,7 @@ describe("mining-snapshot lane", () => {
     await worker.runOnce();
     expect(calls(repository, "listBalanceInputs")).toHaveBeenCalledWith({
       includeMockSeedHoldings: false,
+      embeddedWalletOnly: false,
     });
 
     const opted = repositoryFake({
@@ -824,6 +825,7 @@ describe("mining-snapshot lane", () => {
     const result = await optedWorker.runOnce();
     expect(calls(opted, "listBalanceInputs")).toHaveBeenCalledWith({
       includeMockSeedHoldings: true,
+      embeddedWalletOnly: false,
     });
     expect(result).toMatchObject({
       kind: "snapshotted",
@@ -832,5 +834,24 @@ describe("mining-snapshot lane", () => {
     expect(calls(opted, "writeSnapshot")).toHaveBeenCalledWith(
       expect.objectContaining({ holdingsSource: "mock_seed" }),
     );
+  });
+
+  it("passes MINING_EMBEDDED_WALLET_ONLY to the balance read; default false (Decision 0184)", async () => {
+    for (const embeddedWalletOnly of [undefined, false, true] as const) {
+      const repository = repositoryFake({
+        getApprovedFormula: vi.fn(() => Promise.resolve(approvedTestFormula)),
+      });
+      const worker = createMiningSnapshotWorker({
+        repository,
+        registry: { listAssets: vi.fn(() => Promise.resolve([loopAsset])) },
+        prices: priceReader("fresh"),
+        ...(embeddedWalletOnly === undefined ? {} : { embeddedWalletOnly }),
+      });
+      await worker.runOnce();
+      expect(calls(repository, "listBalanceInputs")).toHaveBeenCalledWith({
+        includeMockSeedHoldings: false,
+        embeddedWalletOnly: embeddedWalletOnly ?? false,
+      });
+    }
   });
 });

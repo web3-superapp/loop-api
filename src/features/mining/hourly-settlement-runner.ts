@@ -656,9 +656,13 @@ export function prepareMiningHour(input: {
       ...(gate === null
         ? {}
         : {
-            membershipGate: "verified_member_embedded",
+            membershipGate: "verified_member",
             membershipGatedSegmentCount: gatedSegments,
           }),
+      // Decision 0184: the wallet scope in effect for this hour.
+      ...(input.facts.walletKinds === undefined
+        ? {}
+        : { walletKinds: input.facts.walletKinds }),
     }),
   });
 }
@@ -736,6 +740,8 @@ export function createMiningSettlementRunner(dependencies: {
   readonly repository: MiningSettlementRepository;
   readonly chainId: string;
   readonly indexerGraceSeconds: number;
+  /** Decision 0184 (`MINING_EMBEDDED_WALLET_ONLY`). */
+  readonly embeddedWalletOnly: boolean;
   readonly now?: () => Date;
 }): MiningSettlementRunner {
   const { repository } = dependencies;
@@ -751,6 +757,7 @@ export function createMiningSettlementRunner(dependencies: {
       hourStart,
       hourEnd: end,
       assetIds: admittedAssetIds(versions, hourStart, end),
+      embeddedWalletOnly: dependencies.embeddedWalletOnly,
     });
   }
 

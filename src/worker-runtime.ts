@@ -1916,6 +1916,7 @@ export async function runReconciliationWorker(
               repository,
               chainId: launchChainConfig.chainId,
               indexerGraceSeconds: settlementConfig.indexerGraceSeconds,
+              embeddedWalletOnly: settlementConfig.embeddedWalletOnly,
             }),
             repository,
             rewards:
@@ -2383,6 +2384,9 @@ export async function runReconciliationWorker(
             // Decision 0061: off unless the Development stack asked for the
             // seeded holdings; the configuration refuses it in production.
             includeMockSeedHoldings: options.config.miningMockHoldingsEnabled,
+            // Decision 0184: MINING_EMBEDDED_WALLET_ONLY, default false.
+            embeddedWalletOnly:
+              options.config.miningSettlement.embeddedWalletOnly,
             prices: createMarketFactService({
               config: options.config.market,
               cache: database.marketFacts,

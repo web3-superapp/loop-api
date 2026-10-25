@@ -279,6 +279,13 @@ market fact cache and registry; it stays idle until a formula version is
 approved. See `docs/frontend-v2-launch-api.md` and
 `docs/frontend-v2-mining-api.md`.
 
+`MINING_EMBEDDED_WALLET_ONLY` (Decision 0184, default `false`) sets the wallet
+scope of both the snapshot balance inputs and the hourly settlement address
+attribution: `false` counts every active wallet (embedded and linked
+external), `true` counts only `account_wallets.kind = 'embedded'`. The API
+(console replay / test trigger) and the worker read the same key; set it the
+same on both.
+
 ### Mining development baseline (Decision 0043)
 
 The Development stack computes real numbers under a self-describing

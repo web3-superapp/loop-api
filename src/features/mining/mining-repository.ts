@@ -308,10 +308,12 @@ export interface MiningRepository {
    * Latest observed balance per active wallet and readable asset. Rows
    * written by the Development seed (`source = 'mock_seed'`, Decision 0061)
    * are excluded unless the caller asks for them; the repository never
-   * decides that on its own.
+   * decides that on its own. `embeddedWalletOnly` (Decision 0184) narrows
+   * the wallets to `kind = 'embedded'`; false keeps every active wallet.
    */
   listBalanceInputs(input: {
     readonly includeMockSeedHoldings: boolean;
+    readonly embeddedWalletOnly: boolean;
   }): Promise<readonly MiningBalanceInput[]>;
   /** Operator path (Decision 0043): inserts a new `pending_approval` version. */
   createFormulaVersion(
