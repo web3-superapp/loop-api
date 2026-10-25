@@ -87,6 +87,8 @@ function defaultCreateDependencies(
       // when the operator's environment says so; the config refuses the flag
       // in production and this script refuses production outright.
       includeMockSeedHoldings: config.miningMockHoldingsEnabled,
+      // Decision 0184: MINING_EMBEDDED_WALLET_ONLY, default false.
+      embeddedWalletOnly: config.miningSettlement.embeddedWalletOnly,
     },
     close: () => pool.end(),
   };

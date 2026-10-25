@@ -742,6 +742,10 @@ read models under a reviewer-approved parameter version. Claims sign an EIP-712
 `MINING_REWARD_CLAIM_ADDRESS`, launch slot, `BSC_WRITES_ENABLED`); the device
 sends the transaction. Contract: `docs/frontend-v2-mining-rewards-api.md`;
 console: `docs/frontend-admin-role-separation.md` §12.
+Decision 0184: `MINING_EMBEDDED_WALLET_ONLY` (default `false`) narrows the
+address attribution (and the snapshot balance inputs) to embedded wallets;
+off, every active wallet counts. `input_summary.walletKinds` records
+`embedded | all` per settled hour.
 
 | Method and path                 | Request                                             | Success projection                                                                                                                                                        | Interface     | Capability                                                                                       |
 | ------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |

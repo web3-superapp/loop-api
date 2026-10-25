@@ -619,7 +619,7 @@ describe("Decision 0183 runner — membership gate (S300)", () => {
     const hour = prepared([]);
     expect(hour.input.nftHoldings).toEqual([]);
     expect(hour.summary).toMatchObject({
-      membershipGate: "verified_member_embedded",
+      membershipGate: "verified_member",
       membershipGatedSegmentCount: 1,
     });
     expect(nftPower([])).toBe(0n);
@@ -752,7 +752,7 @@ describe("Decision 0183 runner — membership gate (S300)", () => {
 });
 
 describe("Decision 0116 runner — settle", () => {
-  function runnerWith(now: string) {
+  function runnerWith(now: string, embeddedWalletOnly = false) {
     const repo = createInMemoryMiningSettlement();
     repo.versions.push(version());
     repo.readIndexerFreshness = vi.fn(() =>
@@ -775,6 +775,7 @@ describe("Decision 0116 runner — settle", () => {
       repository: repo,
       chainId: "eip155:97",
       indexerGraceSeconds: 120,
+      embeddedWalletOnly,
       now: () => new Date(now),
     });
     return { repo, runner, commit };
@@ -796,6 +797,43 @@ describe("Decision 0116 runner — settle", () => {
     expect(second.kind).toBe("already_settled");
     expect(commit).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [false, "all"],
+    [true, "embedded"],
+  ] as const)(
+    "Decision 0184: MINING_EMBEDDED_WALLET_ONLY=%s reaches the facts read and the summary records walletKinds=%s",
+    async (embeddedWalletOnly, walletKinds) => {
+      const { repo, runner, commit } = runnerWith(
+        "2026-10-10T11:10:00.000Z",
+        embeddedWalletOnly,
+      );
+      const reads = vi.fn(
+        (input: Parameters<typeof repo.readSettlementFacts>[0]) =>
+          Promise.resolve({
+            ...facts(),
+            walletKinds: input.embeddedWalletOnly
+              ? ("embedded" as const)
+              : ("all" as const),
+          }),
+      );
+      repo.readSettlementFacts = reads;
+      const outcome = await runner.settleHour({
+        hourStart: S,
+        trigger: "scheduled",
+      });
+      expect(outcome.kind).toBe("settled");
+      expect(reads).toHaveBeenCalledWith(
+        expect.objectContaining({ embeddedWalletOnly }),
+      );
+      const committed = (
+        commit.mock.calls as unknown as [
+          { inputSummary: Readonly<Record<string, unknown>> },
+        ][]
+      )[0]?.[0];
+      expect(committed?.inputSummary["walletKinds"]).toBe(walletKinds);
+    },
+  );
 
   it("waits for the hour end + grace and for the indexer", async () => {
     const early = runnerWith("2026-10-10T11:01:00.000Z");
@@ -970,6 +1008,7 @@ describe("Decision 0129 §3: failed-hour retry backoff", () => {
       repository: repo,
       chainId: "eip155:97",
       indexerGraceSeconds: 120,
+      embeddedWalletOnly: false,
       now: () => new Date(clock.now),
     });
     return { repo, runner, reads };

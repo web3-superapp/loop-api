@@ -647,6 +647,7 @@ describe("Decision 0125: MEME ERC-20 transfers and post-graduation balances", ()
       hourStart: hour,
       hourEnd: hour + 3_600n,
       assetIds: [target.assetId],
+      embeddedWalletOnly: false,
     });
     const asset = facts.assets.find(
       (entry) => entry.assetId === target.assetId,
@@ -669,6 +670,7 @@ describe("Decision 0125: MEME ERC-20 transfers and post-graduation balances", ()
       hourStart: hour,
       hourEnd: hour + 3_600n,
       assetIds: [target.assetId],
+      embeddedWalletOnly: false,
     });
     expect(
       before.assets.find((entry) => entry.assetId === target.assetId)

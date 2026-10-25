@@ -292,6 +292,7 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
       repository,
       chainId: CHAIN,
       indexerGraceSeconds: 120,
+      embeddedWalletOnly: false,
       now: () => new Date("2026-10-10T00:10:00.000Z"),
     });
 
@@ -619,7 +620,7 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
     expect(withdrawn.version.status).toBe("withdrawn");
   });
 
-  it("Decision 0183 (000101): facts count verified bindings, embedded wallets, and membership intervals kept by the history trigger", async () => {
+  it("Decisions 0183 / 0184 (000101): facts count verified bindings, the configured wallet kinds, and membership intervals kept by the history trigger", async () => {
     // Decision 0182 forbids a second live community on ASSET; a rejected one
     // may still carry the key and never counts. A pending community on
     // another MEME is not a binding the hour sees either.
@@ -635,7 +636,8 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
       [OTHER_ASSET, users[7]],
     );
     const pendingId = pending.rows[0]!.community_id;
-    // An external wallet on the NFT holder's address is not an owner.
+    // Decision 0184: an external wallet on the NFT holder's address is an
+    // owner only while MINING_EMBEDDED_WALLET_ONLY is off.
     await pool.query(
       `insert into public.account_wallets (owner_user_id, address, kind, status,
          is_active, first_seen_at, last_seen_at)
@@ -648,18 +650,29 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
       "update public.communities set created_at = '2026-10-01' where community_id = $1",
       [communityId],
     );
-    const read = () =>
+    const read = (embeddedWalletOnly = true) =>
       repository.readSettlementFacts({
         chainId: CHAIN,
         hourStart: HOUR_S,
         hourEnd: HOUR_S + 3_600n,
         assetIds: [ASSET, OTHER_ASSET],
+        embeddedWalletOnly,
       });
     const facts = await read();
     expect(facts.nftInstances[0]?.communityIds).toEqual([communityId]);
+    // Switch on: the external wallet is not an owner.
+    expect(facts.walletKinds).toBe("embedded");
     expect(
       facts.walletOwners.find((row) => row.address === wallets[6])?.userIds,
     ).toEqual([users[6]]);
+    // Switch off (default): the external wallet counts too, so the shared
+    // address now has two owners (ambiguous, left unattributed by the runner).
+    const allKinds = await read(false);
+    expect(allKinds.walletKinds).toBe("all");
+    expect(
+      allKinds.walletOwners.find((row) => row.address === wallets[6])?.userIds,
+    ).toEqual([users[6], users[7]].sort());
+    expect(allKinds.membershipGate).toEqual(facts.membershipGate);
     expect(facts.membershipGate?.assetCommunities).toEqual([
       { assetId: ASSET, communityIds: [communityId] },
     ]);

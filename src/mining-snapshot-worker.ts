@@ -113,6 +113,11 @@ export interface CreateMiningSnapshotWorkerOptions {
    * configuration refuses to set it under `NODE_ENV=production`.
    */
   readonly includeMockSeedHoldings?: boolean;
+  /**
+   * Decision 0184 (`MINING_EMBEDDED_WALLET_ONLY`): count only LOOP embedded
+   * wallets. Default false: embedded and linked external wallets both count.
+   */
+  readonly embeddedWalletOnly?: boolean;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
     event: MiningSnapshotInfrastructureBackoff,
@@ -288,6 +293,7 @@ export function createMiningSnapshotWorker(
     const [balances, communityWeights] = await Promise.all([
       options.repository.listBalanceInputs({
         includeMockSeedHoldings: options.includeMockSeedHoldings ?? false,
+        embeddedWalletOnly: options.embeddedWalletOnly ?? false,
       }),
       options.repository.listCommunityWeightInputs(formula.configVersion),
     ]);

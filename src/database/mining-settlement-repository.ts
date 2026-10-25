@@ -1011,6 +1011,10 @@ export function createPostgresMiningSettlementRepository(
     },
 
     async readSettlementFacts(input) {
+      if (typeof input.embeddedWalletOnly !== "boolean") {
+        throw new TypeError("embeddedWalletOnly must be a boolean");
+      }
+      const embeddedWalletOnly = input.embeddedWalletOnly;
       const start = isoOf(input.hourStart);
       const end = isoOf(input.hourEnd);
       const instances = await query(
@@ -1084,11 +1088,13 @@ export function createPostgresMiningSettlementRepository(
       const owners = await query(
         `select address, array_agg(distinct owner_user_id::text order by owner_user_id::text) as users
          from public.account_wallets
-         where status = 'active' and kind = 'embedded'
+         where status = 'active'
+           -- Decision 0184: embedded-only only when MINING_EMBEDDED_WALLET_ONLY.
+           and ($3::boolean is false or kind = 'embedded')
            and address = any($1::text[])
            and first_seen_at < $2::timestamptz
          group by address`,
-        [[...addresses].sort(), end],
+        [[...addresses].sort(), end, embeddedWalletOnly],
       );
       const edges = await query(
         `select inviter_user_id, invitee_user_id, depth,
@@ -1143,6 +1149,7 @@ export function createPostgresMiningSettlementRepository(
         [gatedAssetIds, start, end],
       );
       return Object.freeze({
+        walletKinds: embeddedWalletOnly ? "embedded" : "all",
         membershipGate: Object.freeze({
           assetCommunities: bindings.map((row) =>
             Object.freeze({

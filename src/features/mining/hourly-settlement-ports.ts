@@ -214,6 +214,11 @@ export interface MiningSettlementFacts {
   readonly walletOwners: readonly MiningWalletOwnerFact[];
   readonly referralEdges: readonly MiningReferralEdgeFact[];
   readonly membershipGate?: MiningMembershipGateFacts;
+  /**
+   * Decision 0184: the wallet scope the attribution query applied
+   * (`MINING_EMBEDDED_WALLET_ONLY`). Absent on pre-S304 fixtures.
+   */
+  readonly walletKinds?: "embedded" | "all";
 }
 
 export interface MiningIndexerFreshness {
@@ -441,6 +446,8 @@ export interface MiningSettlementRepository {
     readonly hourStart: bigint;
     readonly hourEnd: bigint;
     readonly assetIds: readonly string[];
+    /** Decision 0184: attribute only `kind = 'embedded'` wallets when true. */
+    readonly embeddedWalletOnly: boolean;
   }): Promise<MiningSettlementFacts>;
   getEpochByHour(hourStart: string): Promise<MiningEpochRecord | null>;
   getEpoch(epochId: string): Promise<MiningEpochRecord | null>;

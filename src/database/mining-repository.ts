@@ -1799,11 +1799,15 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
 
     async listBalanceInputs(rawInput: {
       readonly includeMockSeedHoldings: boolean;
+      readonly embeddedWalletOnly: boolean;
     }) {
       try {
         const includeMockSeedHoldings = z
           .boolean()
           .parse(rawInput.includeMockSeedHoldings);
+        const embeddedWalletOnly = z
+          .boolean()
+          .parse(rawInput.embeddedWalletOnly);
         // The seeded holdings of Decision 0061 are a separate class of row,
         // not a different value of the same one: unless the lane was told to
         // include them the query cannot see them at all.
@@ -1822,8 +1826,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             join public.account_wallets as w on w.wallet_id = s.wallet_id
             join public.assets as a on a.asset_id = s.asset_id
             where w.status = 'active' and a.status <> 'blocked'
-              -- Decision 0183: only LOOP embedded wallets mine.
-              and w.kind = 'embedded'
+              -- Decisions 0183 / 0184: only LOOP embedded wallets mine when
+              -- MINING_EMBEDDED_WALLET_ONLY is on; otherwise every active wallet.
+              and ($2::boolean is false or w.kind = 'embedded')
               and ($1::boolean is true or s.source = 'chain')
               -- Decision 0183: a MEME bound by a verified community counts
               -- only for its members (the creator counts as one); a MEME no
@@ -1851,7 +1856,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               )
             order by s.wallet_id, s.asset_id, s.block_number desc
           `,
-          values: [includeMockSeedHoldings],
+          values: [includeMockSeedHoldings, embeddedWalletOnly],
         });
         return Object.freeze(
           result.rows.map((raw): MiningBalanceInput => {

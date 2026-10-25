@@ -226,6 +226,18 @@ describe("loadConfig", () => {
     expect(() => loadConfig(production)).toThrow(ConfigurationError);
   });
 
+  it("keeps MINING_EMBEDDED_WALLET_ONLY off by default and parses it (Decision 0184)", () => {
+    expect(
+      loadConfig(validEnvironment()).miningSettlement.embeddedWalletOnly,
+    ).toBe(false);
+    const on = validEnvironment();
+    on["MINING_EMBEDDED_WALLET_ONLY"] = "true";
+    expect(loadConfig(on).miningSettlement.embeddedWalletOnly).toBe(true);
+    const malformed = validEnvironment();
+    malformed["MINING_EMBEDDED_WALLET_ONLY"] = "yes";
+    expect(() => loadConfig(malformed)).toThrow(ConfigurationError);
+  });
+
   it("rejects a weak Stream token quota secret without echoing it", () => {
     const environment = validEnvironment();
     environment["STREAM_TOKEN_QUOTA_HMAC_SECRET"] = "weak-secret";
