@@ -38,12 +38,14 @@ import type { AssetRegistryService } from "../chain/asset-registry-service.js";
 import {
   bscNativeDecimals,
   eip681Uri,
+  externalWalletLimit,
   formatDecimalAmount,
   launchChainReasonCodes,
   nativeAssetId,
   nativeSymbolForLaunchChain,
   subtractFloorZero,
   type LaunchChainId,
+  type WalletArchivedReason,
   type WalletKind,
 } from "../chain/chain-contract.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
@@ -130,6 +132,12 @@ export interface WalletProjection {
   readonly isActive: boolean;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
+  /**
+   * Decision 0185 (optional key): why an archived wallet is archived.
+   * Present only on archived rows with a known reason, and only while
+   * WALLET_LINK_POLICY_EMIT is on (always on POST /v2/wallets/sync).
+   */
+  readonly archivedReason?: WalletArchivedReason;
 }
 
 export interface WalletListResource {
@@ -139,6 +147,11 @@ export interface WalletListResource {
     readonly provider: "privy";
     readonly observedAt: string;
   };
+  /**
+   * Decision 0185 (optional key): the most active external wallets an
+   * account may hold. Same emission rule as `archivedReason`.
+   */
+  readonly externalWalletLimit?: number;
   readonly contractVersion: typeof v2ContractVersion;
 }
 
@@ -390,6 +403,15 @@ export interface WalletReadService {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly signal: AbortSignal;
   }): Promise<WalletListResource>;
+  /**
+   * Decision 0185 C: re-read Privy now (never the reuse window), reconcile,
+   * and answer the list with the link-policy keys. Idempotent; the App calls
+   * it after Privy `siwe.link` / `siwe.unlink`.
+   */
+  syncWallets(input: {
+    readonly principal: AuthenticatedLoopPrincipal;
+    readonly signal: AbortSignal;
+  }): Promise<WalletListResource>;
   setActiveWallet(input: {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly body: unknown;
@@ -469,6 +491,12 @@ export interface CreateWalletReadServiceInput {
   readonly now?: () => Date;
   /** Decision 0167: absent / null = WALLET_ACTIVITY_LAUNCH2_EMIT off. */
   readonly launch2ActivityMerge?: WalletActivityLaunch2Merge | null;
+  /**
+   * Decision 0185: WALLET_LINK_POLICY_EMIT. True adds `externalWalletLimit`
+   * and `archivedReason` to GET /v2/wallets and PUT /v2/wallets/active.
+   * Absent = false.
+   */
+  readonly walletLinkPolicyEmit?: boolean;
 }
 
 /**
@@ -529,7 +557,17 @@ function createSegmentTimings(
   });
 }
 
-function projectWallet(record: AccountWalletRecord): WalletProjection {
+function projectWallet(
+  record: AccountWalletRecord,
+  linkPolicy: boolean,
+): WalletProjection {
+  const reason =
+    linkPolicy &&
+    record.status === "archived" &&
+    record.archivedReason !== undefined &&
+    record.archivedReason !== null
+      ? record.archivedReason
+      : null;
   return Object.freeze({
     walletId: record.walletId,
     provider: "privy" as const,
@@ -539,17 +577,26 @@ function projectWallet(record: AccountWalletRecord): WalletProjection {
     isActive: record.isActive,
     firstSeenAt: record.firstSeenAt,
     lastSeenAt: record.lastSeenAt,
+    ...(reason === null ? {} : { archivedReason: reason }),
   });
 }
 
+/**
+ * `linkPolicy` (Decision 0185) adds the optional `externalWalletLimit` and
+ * `archivedReason` keys; false keeps the pre-0185 shape byte-identical.
+ */
 function projectWalletList(
   records: readonly AccountWalletRecord[],
   observedAt: string,
+  linkPolicy = false,
 ): WalletListResource {
   return Object.freeze({
-    wallets: Object.freeze(records.map(projectWallet)),
+    wallets: Object.freeze(
+      records.map((record) => projectWallet(record, linkPolicy)),
+    ),
     activeWalletId: records.find((record) => record.isActive)?.walletId ?? null,
     source: Object.freeze({ provider: "privy" as const, observedAt }),
+    ...(linkPolicy ? { externalWalletLimit } : {}),
     contractVersion: v2ContractVersion,
   });
 }
@@ -1307,9 +1354,15 @@ export function createWalletReadService(
   const now = input.now ?? ((): Date => new Date());
   const walletInventoryTtlMs =
     input.walletInventoryTtlMs ?? defaultWalletInventoryTtlMs;
+  const walletLinkPolicyEmit = input.walletLinkPolicyEmit === true;
   const walletInventoryCache = new Map<string, WalletInventoryObservation>();
   /** One Privy inventory read per subject at a time (Decision 0086). */
   const walletInventoryReads = new Map<
+    string,
+    Promise<WalletInventoryObservation>
+  >();
+  /** Decision 0185 C: forced reads (POST /v2/wallets/sync), one per subject. */
+  const walletInventoryForcedReads = new Map<
     string,
     Promise<WalletInventoryObservation>
   >();
@@ -1322,8 +1375,14 @@ export function createWalletReadService(
    */
   function observeInventory(
     privyUserId: string,
+    fresh = false,
   ): Promise<WalletInventoryObservation> {
-    const pending = walletInventoryReads.get(privyUserId);
+    // A forced read (Decision 0185 C) never joins an ordinary read that may
+    // have been sent before the user's link / unlink reached Privy; forced
+    // reads for one subject share each other, so a burst of POST
+    // /v2/wallets/sync costs one Privy call at a time.
+    const reads = fresh ? walletInventoryForcedReads : walletInventoryReads;
+    const pending = reads.get(privyUserId);
     if (pending !== undefined) {
       return pending;
     }
@@ -1342,11 +1401,11 @@ export function createWalletReadService(
       rememberInventory(privyUserId, observation);
       return observation;
     })().finally(() => {
-      if (walletInventoryReads.get(privyUserId) === tracked) {
-        walletInventoryReads.delete(privyUserId);
+      if (reads.get(privyUserId) === tracked) {
+        reads.delete(privyUserId);
       }
     });
-    walletInventoryReads.set(privyUserId, tracked);
+    reads.set(privyUserId, tracked);
     return tracked;
   }
 
@@ -1355,6 +1414,15 @@ export function createWalletReadService(
     observation: WalletInventoryObservation,
   ): void {
     if (walletInventoryTtlMs <= 0) {
+      return;
+    }
+    // An older read that answers late never replaces a newer observation
+    // (a forced read after link / unlink must stick).
+    const current = walletInventoryCache.get(privyUserId);
+    if (
+      current !== undefined &&
+      current.requestedAtMs > observation.requestedAtMs
+    ) {
       return;
     }
     walletInventoryCache.set(privyUserId, observation);
@@ -1522,6 +1590,46 @@ export function createWalletReadService(
     });
   }
 
+  async function recordObservation(
+    principal: AuthenticatedLoopPrincipal,
+    observation: WalletInventoryObservation,
+  ): Promise<readonly AccountWalletRecord[]> {
+    try {
+      return await input.repository.sync({
+        ownerUserId: principal.userId,
+        observed: observation.wallets,
+        // Decision 0185 D: the address stays out of the log; the wallet ID
+        // is enough to find the row.
+        onAddressConflict: (conflict) => {
+          input.logger?.warn?.(
+            {
+              reasonCode: "WALLET_ADDRESS_OWNED_BY_OTHER_ACCOUNT",
+              ownerUserId: conflict.ownerUserId,
+              walletId: conflict.walletId,
+            },
+            "External wallet already belongs to another account; not linked",
+          );
+        },
+      });
+    } catch (error) {
+      if (error instanceof AccountWalletObservationEmptyError) {
+        throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
+      }
+      if (error instanceof AccountWalletProviderIdConflictError) {
+        throw V2ApiError.fromCode("RESOURCE_CONFLICT");
+      }
+      // Decision 0127: recording the observation is a write. When it
+      // fails (read-only database, lost connection) the stored inventory
+      // is served only if it already says exactly what Privy reported;
+      // otherwise the answer would hide a wallet, so it is unavailable.
+      return storedInventoryMatching(
+        principal.userId,
+        observation.wallets,
+        error,
+      );
+    }
+  }
+
   async function storedInventoryMatching(
     ownerUserId: string,
     observed: readonly PrivyWalletAccount[],
@@ -1534,18 +1642,33 @@ export function createWalletReadService(
       stored = [];
     }
     const active = stored.filter((record) => record.status === "active");
+    // Decision 0185: an observed wallet the last sync held back (over the
+    // external limit, or owned by another account) is stored archived on
+    // purpose; it still matches the observation.
+    const heldBack = stored.filter(
+      (record) =>
+        record.status === "archived" &&
+        (record.archivedReason === "external_limit_exceeded" ||
+          record.archivedReason === "address_conflict"),
+    );
+    const sameWallet = (
+      record: AccountWalletRecord,
+      wallet: PrivyWalletAccount,
+    ): boolean =>
+      record.address.toLowerCase() === wallet.address.toLowerCase() &&
+      record.kind === wallet.kind &&
+      (wallet.providerWalletId === null ||
+        record.providerWalletId === wallet.providerWalletId);
     const matches =
       observed.length > 0 &&
-      active.length === observed.length &&
       active.filter((record) => record.isActive).length === 1 &&
-      observed.every((wallet) =>
-        active.some(
-          (record) =>
-            record.address.toLowerCase() === wallet.address.toLowerCase() &&
-            record.kind === wallet.kind &&
-            (wallet.providerWalletId === null ||
-              record.providerWalletId === wallet.providerWalletId),
-        ),
+      active.every((record) =>
+        observed.some((wallet) => sameWallet(record, wallet)),
+      ) &&
+      observed.every(
+        (wallet) =>
+          active.some((record) => sameWallet(record, wallet)) ||
+          heldBack.some((record) => sameWallet(record, wallet)),
       );
     input.logger?.warn?.(
       {
@@ -1852,30 +1975,32 @@ export function createWalletReadService(
           throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
         }
       }
-      let records;
+      const records = await recordObservation(principal, observation);
+      return projectWalletList(
+        records,
+        observation.observedAt,
+        walletLinkPolicyEmit,
+      );
+    },
+
+    async syncWallets({
+      principal,
+      signal,
+    }: {
+      readonly principal: AuthenticatedLoopPrincipal;
+      readonly signal: AbortSignal;
+    }): Promise<WalletListResource> {
+      let observation: WalletInventoryObservation;
       try {
-        records = await input.repository.sync({
-          ownerUserId: principal.userId,
-          observed: observation.wallets,
-        });
-      } catch (error) {
-        if (error instanceof AccountWalletObservationEmptyError) {
-          throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
-        }
-        if (error instanceof AccountWalletProviderIdConflictError) {
-          throw V2ApiError.fromCode("RESOURCE_CONFLICT");
-        }
-        // Decision 0127: recording the observation is a write. When it
-        // fails (read-only database, lost connection) the stored inventory
-        // is served only if it already says exactly what Privy reported;
-        // otherwise the answer would hide a wallet, so it is unavailable.
-        records = await storedInventoryMatching(
-          principal.userId,
-          observation.wallets,
-          error,
+        observation = await raceAbort(
+          observeInventory(principal.privyUserId, true),
+          signal,
         );
+      } catch {
+        throw V2ApiError.fromCode("PROVIDER_DISCONNECTED");
       }
-      return projectWalletList(records, observation.observedAt);
+      const records = await recordObservation(principal, observation);
+      return projectWalletList(records, observation.observedAt, true);
     },
 
     async setActiveWallet({
@@ -1906,7 +2031,11 @@ export function createWalletReadService(
           walletId,
           expectedActiveWalletId: expected,
         });
-        return projectWalletList(records, now().toISOString());
+        return projectWalletList(
+          records,
+          now().toISOString(),
+          walletLinkPolicyEmit,
+        );
       } catch (error) {
         if (error instanceof AccountWalletNotFoundError) {
           throw V2ApiError.notFound();

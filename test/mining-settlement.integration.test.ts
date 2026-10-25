@@ -6,6 +6,7 @@ import { runner } from "node-pg-migrate";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createPostgresAccountWalletRepository } from "../src/database/account-wallet-repository.js";
 import { createPostgresMiningSettlementRepository } from "../src/database/mining-settlement-repository.js";
 import type { AuthenticatedLoopPrincipal } from "../src/core/http/authentication.js";
 import { V2ApiError } from "../src/core/http/v2-error.js";
@@ -745,6 +746,58 @@ describe("Decision 0116 hourly settlement on PostgreSQL", () => {
         "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e",
       ]),
     ).toEqual([pendingId, "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e"]);
+  });
+
+  it("Decision 0185: an unlinked or conflicting external wallet stops being an owner in the very hour being settled", async () => {
+    const accountWallets = createPostgresAccountWalletRepository(pool);
+    const read = () =>
+      repository.readSettlementFacts({
+        chainId: CHAIN,
+        hourStart: HOUR_S,
+        hourEnd: HOUR_S + 3_600n,
+        assetIds: [ASSET, OTHER_ASSET],
+        embeddedWalletOnly: false,
+      });
+    const ownersOf = async (wallet: string | undefined) =>
+      (await read()).walletOwners.find((row) => row.address === wallet)
+        ?.userIds;
+    // The previous case left users[7] an active external wallet on the NFT
+    // holder's address (a pre-0185 row): two owners.
+    expect(await ownersOf(wallets[6])).toEqual([users[6], users[7]].sort());
+    const embeddedRow = await pool.query<{ provider_wallet_id: string }>(
+      `select provider_wallet_id from public.account_wallets
+       where owner_user_id = $1 and kind = 'embedded'`,
+      [users[7]],
+    );
+    const embedded = {
+      address: wallets[7]!,
+      kind: "embedded" as const,
+      providerWalletId: embeddedRow.rows[0]!.provider_wallet_id,
+    };
+    const other = {
+      address: address(0xe1),
+      kind: "external" as const,
+      providerWalletId: null,
+    };
+    // Privy siwe.unlink, then the App's POST /v2/wallets/sync.
+    const unlinked = await accountWallets.sync({
+      ownerUserId: users[7]!,
+      observed: [embedded, other],
+    });
+    expect(
+      unlinked.find((row) => row.address === wallets[6])?.archivedReason,
+    ).toBe("unlinked");
+    expect(await ownersOf(wallets[6])).toEqual([users[6]]);
+    // Linking it again while users[6] holds it active is a conflict, not a
+    // second owner.
+    const relinked = await accountWallets.sync({
+      ownerUserId: users[7]!,
+      observed: [embedded, other, { ...other, address: wallets[6]! }],
+    });
+    expect(
+      relinked.find((row) => row.address === wallets[6])?.archivedReason,
+    ).toBe("address_conflict");
+    expect(await ownersOf(wallets[6])).toEqual([users[6]]);
   });
 
   it("Decision 0183: approval refuses a document naming unknown or unverified communities", async () => {

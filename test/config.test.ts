@@ -901,6 +901,42 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses WALLET_LINK_POLICY_EMIT as off|on and EXTERNAL_WALLET_ADDRESS_PUBLIC as a strict boolean, both default off (Decision 0185)", () => {
+    const defaults = loadConfig(validEnvironment());
+    expect(defaults.walletLinkPolicyEmit).toBe(false);
+    expect(defaults.externalWalletAddressPublic).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["WALLET_LINK_POLICY_EMIT"] = value;
+      expect(loadConfig(environment).walletLinkPolicyEmit).toBe(enabled);
+    }
+    for (const [value, enabled] of [
+      ["false", false],
+      ["true", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] = value;
+      expect(loadConfig(environment).externalWalletAddressPublic).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["WALLET_LINK_POLICY_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /WALLET_LINK_POLICY_EMIT/,
+      );
+    }
+    for (const value of ["", "on", "TRUE", "1"]) {
+      const environment = validEnvironment();
+      environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /EXTERNAL_WALLET_ADDRESS_PUBLIC/,
+      );
+    }
+  });
+
   it("keeps Hooks launch off with no Factory by default (Decision 0108)", () => {
     expect(loadConfig(validEnvironment()).hooksLaunch).toEqual({
       enabled: false,

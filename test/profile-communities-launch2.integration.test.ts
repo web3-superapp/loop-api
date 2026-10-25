@@ -436,8 +436,9 @@ describe("Decision 0169: 晚风-style holdings and trades with PROFILE_LAUNCH2_E
     const viewer = await account();
     const wallet = hex(20);
     await pool.query(
-      `insert into public.account_wallets (owner_user_id, address, kind, is_active)
-       values ($1, $2, 'external', true)`,
+      // Decision 0185: another viewer reads the owner's embedded wallet.
+      `insert into public.account_wallets (owner_user_id, provider_wallet_id, address, kind, is_active)
+       values ($1, 'fixture-' || gen_random_uuid()::text, $2, 'embedded', true)`,
       [owner.userId, wallet],
     );
     const wind = await instance("WIND", "Evening Wind");

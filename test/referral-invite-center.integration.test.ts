@@ -172,9 +172,10 @@ describe("Decision 0162 invite center and trader accounts (PostgreSQL)", () => {
     status: "active" | "archived" = "active",
   ) {
     await pool.query(
-      `insert into public.account_wallets (owner_user_id, address, kind, status,
-         first_seen_at, last_seen_at)
-       values ($1, $2, 'external', $3, $4, $4)`,
+      // Decision 0185: only embedded wallets map to accounts by default.
+      `insert into public.account_wallets (owner_user_id, provider_wallet_id,
+         address, kind, status, first_seen_at, last_seen_at)
+       values ($1, 'fixture-' || gen_random_uuid()::text, $2, 'embedded', $3, $4, $4)`,
       [owner, address, status, firstSeenAt],
     );
   }

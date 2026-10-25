@@ -153,7 +153,7 @@ describe("Decision 0101 MEME launchpad on PostgreSQL", () => {
     });
     creatorProfileId = profile.rows[0]?.public_profile_id ?? "";
     await pool.query({
-      text: `insert into public.account_wallets (owner_user_id, address, kind, is_active) values ($1, $2, 'external', true)`,
+      text: `insert into public.account_wallets (owner_user_id, provider_wallet_id, address, kind, is_active) values ($1, 'fixture-' || gen_random_uuid()::text, $2, 'embedded', true)`,
       values: [user.id, buyerA],
     });
   }, 120_000);

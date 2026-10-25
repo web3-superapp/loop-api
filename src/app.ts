@@ -1899,6 +1899,9 @@ export async function buildApp(
             repository: database.walletActivityMerge ?? null,
           })
         : null,
+      // Decision 0185: WALLET_LINK_POLICY_EMIT off (default) keeps GET
+      // /v2/wallets and PUT /v2/wallets/active byte-identical.
+      walletLinkPolicyEmit: config.walletLinkPolicyEmit,
     });
   // Decision 0145: net worth history. `current` is valued live with the
   // balances valuation (same registry, read client, and price facts).
@@ -1994,6 +1997,9 @@ export async function buildApp(
       // Decision 0175: COMMUNITY_LABEL_EMIT off (default) keeps the profile
       // community rows and recommended communities byte-identical.
       communityLabelEmit: config.communityLabelEmit,
+      // Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC false (default) reads
+      // another viewer's profile holdings / trades from the embedded wallet.
+      externalWalletAddressPublic: config.externalWalletAddressPublic,
       // Decision 0169: PROFILE_LAUNCH2_EMIT off (default) keeps holdings and
       // trades byte-identical; on merges the owner's Launch-chain launch2
       // holdings / activity (read model + graduated MEME balances).
