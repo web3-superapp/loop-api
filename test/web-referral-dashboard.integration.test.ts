@@ -110,7 +110,6 @@ interface Dashboard {
   } | null;
   readonly binding: {
     readonly bound: boolean;
-    readonly windowEndsAt: string | null;
     readonly canClaim: boolean;
   };
   readonly observedAt: string;
@@ -276,7 +275,7 @@ describe("Decision 0180 web referral dashboard (PostgreSQL)", () => {
       invitees: [],
       nextCursor: null,
       inviter: null,
-      binding: { bound: false, windowEndsAt: null, canClaim: true },
+      binding: { bound: false, canClaim: true },
     });
     expect(first.inviteLink).toBe(`https://api.loop.example/i/${first.code}`);
     const again = await me("carol");
@@ -359,8 +358,8 @@ describe("Decision 0180 web referral dashboard (PostgreSQL)", () => {
 
     const bob = await me("bob");
     expect(bob.inviter).toEqual({ loopId: aliceLoopId, username: "Alice" });
-    expect(bob.binding).toMatchObject({ bound: true, canClaim: false });
-    expect(bob.binding.windowEndsAt).toEqual(expect.any(String));
+    // Decision 0181: no claim deadline, so no windowEndsAt.
+    expect(bob.binding).toEqual({ bound: true, canClaim: false });
     expect(bob.stats).toMatchObject({ direct: 1, valid: 0, deeper: 0 });
 
     // An invitee who blocked the inviter is listed without identity.

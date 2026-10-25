@@ -7,7 +7,7 @@
 ```text
 Privy 登录（邮箱验证码 / Google）→ getAccessToken()
   → POST /v2/web/session                     拿 loopId / usernameRequired / invite
-  → [usernameRequired] PUT /v2/web/profile/username   起用户名（=激活，开始 7 天绑码窗口）
+  → [usernameRequired] PUT /v2/web/profile/username   起用户名（=激活；之后随时可绑码，决策 0181）
   → [有邀请码 且 invite.canClaim] POST /v2/web/referral/claim
   → 完成页：GET /v2/web/meta 给下载链接；App 里用同一邮箱 / Google 登录即同一账号
 落地页 /i/{code}：GET /v2/web/referral/preview?code=… 显示「XX 邀请你」并预填
@@ -57,20 +57,19 @@ Content-Type: application/json
   "username": null,
   "usernameRequired": true,
   "walletAddress": null,
-  "invite": { "bound": false, "windowEndsAt": null, "canClaim": true },
+  "invite": { "bound": false, "canClaim": true },
   "observedAt": "2026-10-23T10:00:00.000Z"
 }
 ```
 
-| 字段                  | 含义                                                                                                                         |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `loopId`              | `LOOP-` + 8 位 Crockford Base32，展示用                                                                                      |
-| `username`            | 已起的用户名；未起为 null                                                                                                    |
-| `usernameRequired`    | true → 先走起名页                                                                                                            |
-| `walletAddress`       | LOOP 已知的钱包地址（小写 0x…）；网页新用户在打开 App 前通常是 null，要立即显示嵌入式钱包请直接用 Privy SDK 的 `user.wallet` |
-| `invite.bound`        | 已绑过上级（一人只能绑一次）                                                                                                 |
-| `invite.windowEndsAt` | 绑码截止时间（起名时刻 + 7 天）；未起名为 null                                                                               |
-| `invite.canClaim`     | 还能绑：未绑、邀请模块可用、窗口没关。未起名时也是 true（意思是「起名后可绑」）                                              |
+| 字段               | 含义                                                                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `loopId`           | `LOOP-` + 8 位 Crockford Base32，展示用                                                                                      |
+| `username`         | 已起的用户名；未起为 null                                                                                                    |
+| `usernameRequired` | true → 先走起名页                                                                                                            |
+| `walletAddress`    | LOOP 已知的钱包地址（小写 0x…）；网页新用户在打开 App 前通常是 null，要立即显示嵌入式钱包请直接用 Privy SDK 的 `user.wallet` |
+| `invite.bound`     | 已绑过上级（一人只能绑一次）                                                                                                 |
+| `invite.canClaim`  | 还能绑：未绑、邀请模块可用（决策 0181：没有截止时间，永久可绑）。未起名时也是 true（意思是「起名后可绑」）                   |
 
 ## 3. `PUT /v2/web/profile/username`
 
@@ -88,7 +87,7 @@ Content-Type: application/json
 { "username": "小明" }
 ```
 
-规则与 App 完全一致：前后空格去掉后 1–40 个字符（Unicode 码点）、不能含控制 / 不可见字符、**可以重名**；保留词（loop / admin / official / support / system / mod / moderator / team 等）与运营屏蔽词不行。第一次调用会「激活」账号并开始 7 天绑码窗口；之后再调就是改名。
+规则与 App 完全一致：前后空格去掉后 1–40 个字符（Unicode 码点）、不能含控制 / 不可见字符、**可以重名**；保留词（loop / admin / official / support / system / mod / moderator / team 等）与运营屏蔽词不行。第一次调用会「激活」账号，之后随时可以绑定邀请码（决策 0181：没有截止时间）；之后再调就是改名。
 
 ## 4. `POST /v2/web/referral/claim`
 
@@ -178,11 +177,7 @@ Authorization: Bearer eyJ…
   ],
   "nextCursor": null,
   "inviter": { "loopId": "LOOP-WXYZ5678", "username": "Alice" },
-  "binding": {
-    "bound": true,
-    "windowEndsAt": "2026-10-30T10:00:00.000Z",
-    "canClaim": false
-  },
+  "binding": { "bound": true, "canClaim": false },
   "observedAt": "2026-10-24T10:00:00.000Z"
 }
 ```
@@ -211,44 +206,43 @@ App 里分享出去的邀请链接仍是 `{API 域名}/i/{code}`。服务端配�
 
 ```json
 {
-  "code": "POLICY_BLOCKED",
-  "category": "authorization",
+  "code": "NOT_FOUND",
+  "category": "validation",
   "retryable": false,
-  "userMessageKey": "errors.policy.blocked",
+  "userMessageKey": "errors.resource.notFound",
   "correlationId": "8a3f…",
-  "detailsSafe": { "reasonCode": "REFERRAL_CLAIM_WINDOW_CLOSED" },
+  "detailsSafe": { "reasonCode": "REFERRAL_CODE_UNKNOWN" },
   "providerReferenceSafe": null
 }
 ```
 
 按 `code` + `detailsSafe.reasonCode` 分支；`correlationId` 给用户 / 客服排查。
 
-| HTTP | `code`                             | `reasonCode`                   | 出现在                 | 前端处理                                                             |
-| ---- | ---------------------------------- | ------------------------------ | ---------------------- | -------------------------------------------------------------------- |
-| 400  | `INVALID_REQUEST`                  | —                              | 全部                   | 头 / body 不对（检查小写 UUID、契约头、JSON）                        |
-| 400  | `INVALID_REQUEST`                  | `REFERRAL_CODE_INVALID`        | claim                  | 「邀请码格式不对」                                                   |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID`   | —                              | session/username/claim | token 缺失或失效 → 重新 `getAccessToken()`，仍失败则重新登录         |
-| 403  | `POLICY_BLOCKED`                   | `REFERRAL_CLAIM_WINDOW_CLOSED` | claim                  | 「注册已超过 7 天，不能再绑定邀请码」                                |
-| 404  | `NOT_FOUND`                        | `REFERRAL_CODE_UNKNOWN`        | claim                  | 「邀请码不存在」                                                     |
-| 404  | `NOT_FOUND`                        | —                              | 全部                   | 服务端没开 web 面（`WEB_ORIGINS` 空）或路径错                        |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`       | —                              | username/claim/me      | 先调 `POST /v2/web/session`                                          |
-| 409  | `PROFILE_ACTIVATION_REQUIRED`      | `PROFILE_ACTIVATION_REQUIRED`  | claim                  | 先起用户名                                                           |
-| 409  | `IDEMPOTENCY_CONFLICT`             | —                              | username/claim         | 同一个 key 换了内容 → 换新 key                                       |
-| 409  | `VERSION_CONFLICT`                 | —                              | 写接口                 | `X-Loop-Contract-Version` 不是 `2.0`；改名时极少数并发冲突，重试一次 |
-| 409  | `DATA_STALE`                       | `REFERRAL_ALREADY_BOUND`       | claim                  | 兜底（正常会是 200 `already_bound`）                                 |
-| 422  | `VALIDATION_FAILED`                | —                              | username               | 「用户名 1–40 个字符」                                               |
-| 422  | `ALIAS_RESERVED` / `ALIAS_BLOCKED` | —                              | username               | 「该用户名不可用」                                                   |
-| 422  | `VALIDATION_FAILED`                | `REFERRAL_SELF_INVITE`         | claim                  | 「不能填写自己的邀请码」                                             |
-| 422  | `VALIDATION_FAILED`                | `REFERRAL_CYCLE`               | claim                  | 「不能绑定自己邀请的人」                                             |
-| 429  | `RATE_LIMITED`                     | `WEB_RATE_LIMITED`             | preview                | 读 `Retry-After`                                                     |
-| 500  | `INTERNAL_ERROR`                   | —                              | 全部                   | 提示稍后再试，带 `correlationId`                                     |
-| 503  | `PROVIDER_DISCONNECTED`            | —                              | 带 Bearer 的           | Privy 校验不可用，稍后再试                                           |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_SESSION_DISABLED`         | session                | 服务端关了 V2 会话                                                   |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_PROFILE_MODULE_DEFERRED`   | username               | 服务端未开资料模块                                                   |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_CURSOR_NOT_CONFIGURED`     | me                     | 服务端缺游标密钥，稍后再试                                           |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_REFERRAL_MODULE_DEFERRED`  | claim/preview/me       | 服务端未开邀请模块；隐藏绑码 UI                                      |
-| 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_REPOSITORY_UNAVAILABLE`   | 全部                   | 数据库不可用，稍后再试                                               |
-| 503  | `REQUEST_TIMEOUT`                  | —                              | 全部                   | 超时，可重试（写接口用同一个 key）                                   |
+| HTTP | `code`                             | `reasonCode`                  | 出现在                 | 前端处理                                                             |
+| ---- | ---------------------------------- | ----------------------------- | ---------------------- | -------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`                  | —                             | 全部                   | 头 / body 不对（检查小写 UUID、契约头、JSON）                        |
+| 400  | `INVALID_REQUEST`                  | `REFERRAL_CODE_INVALID`       | claim                  | 「邀请码格式不对」                                                   |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID`   | —                             | session/username/claim | token 缺失或失效 → 重新 `getAccessToken()`，仍失败则重新登录         |
+| 404  | `NOT_FOUND`                        | `REFERRAL_CODE_UNKNOWN`       | claim                  | 「邀请码不存在」                                                     |
+| 404  | `NOT_FOUND`                        | —                             | 全部                   | 服务端没开 web 面（`WEB_ORIGINS` 空）或路径错                        |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`       | —                             | username/claim/me      | 先调 `POST /v2/web/session`                                          |
+| 409  | `PROFILE_ACTIVATION_REQUIRED`      | `PROFILE_ACTIVATION_REQUIRED` | claim                  | 先起用户名                                                           |
+| 409  | `IDEMPOTENCY_CONFLICT`             | —                             | username/claim         | 同一个 key 换了内容 → 换新 key                                       |
+| 409  | `VERSION_CONFLICT`                 | —                             | 写接口                 | `X-Loop-Contract-Version` 不是 `2.0`；改名时极少数并发冲突，重试一次 |
+| 409  | `DATA_STALE`                       | `REFERRAL_ALREADY_BOUND`      | claim                  | 兜底（正常会是 200 `already_bound`）                                 |
+| 422  | `VALIDATION_FAILED`                | —                             | username               | 「用户名 1–40 个字符」                                               |
+| 422  | `ALIAS_RESERVED` / `ALIAS_BLOCKED` | —                             | username               | 「该用户名不可用」                                                   |
+| 422  | `VALIDATION_FAILED`                | `REFERRAL_SELF_INVITE`        | claim                  | 「不能填写自己的邀请码」                                             |
+| 422  | `VALIDATION_FAILED`                | `REFERRAL_CYCLE`              | claim                  | 「不能绑定自己邀请的人」                                             |
+| 429  | `RATE_LIMITED`                     | `WEB_RATE_LIMITED`            | preview                | 读 `Retry-After`                                                     |
+| 500  | `INTERNAL_ERROR`                   | —                             | 全部                   | 提示稍后再试，带 `correlationId`                                     |
+| 503  | `PROVIDER_DISCONNECTED`            | —                             | 带 Bearer 的           | Privy 校验不可用，稍后再试                                           |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_SESSION_DISABLED`        | session                | 服务端关了 V2 会话                                                   |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_PROFILE_MODULE_DEFERRED`  | username               | 服务端未开资料模块                                                   |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_CURSOR_NOT_CONFIGURED`    | me                     | 服务端缺游标密钥，稍后再试                                           |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `V2_REFERRAL_MODULE_DEFERRED` | claim/preview/me       | 服务端未开邀请模块；隐藏绑码 UI                                      |
+| 503  | `CAPABILITY_UNAVAILABLE`           | `WEB_REPOSITORY_UNAVAILABLE`  | 全部                   | 数据库不可用，稍后再试                                               |
+| 503  | `REQUEST_TIMEOUT`                  | —                             | 全部                   | 超时，可重试（写接口用同一个 key）                                   |
 
 ## 9. unavailable 行为汇总
 

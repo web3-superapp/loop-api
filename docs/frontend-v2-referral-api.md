@@ -34,7 +34,11 @@
   "binding": {
     "status": "unbound",
     "inviter": null,
-    "claimWindow": { "status": "open", "activatedAt": "…", "closesAt": "…" }
+    "claimWindow": {
+      "status": "open",
+      "activatedAt": "…",
+      "closesAt": "9999-12-31T23:59:59.999Z"
+    }
   },
   "levels": [
     {
@@ -145,9 +149,12 @@
 语义不变。请求 `{ "inviteCode": "loop-7hjkm" }`（大小写、`I/L→1`、`O→0`、省略 `LOOP-` 都可）。
 成功 `200 { "binding": {…bound}, "contractVersion": "2.0" }`。
 
-可补绑窗口：LOOP ID 激活起 7 天（`[activatedAt, activatedAt + 7 天)`，服务器时钟）。入口显隐看
-`GET /v2/referral.binding.claimWindow.status`：`open` 显示，`closed` 隐藏，`unavailable` +
-`PROFILE_ACTIVATION_REQUIRED` 先去激活。
+决策 0181（2026-10-25）：**没有截止时间**，LOOP ID 激活后随时可补绑（一账号一次）。入口显隐看
+`binding.status`（`unbound` 显示）与 `binding.claimWindow.status`：激活后恒为 `open`；`unavailable` +
+`PROFILE_ACTIVATION_REQUIRED` 先去激活。`closed` 不再出现。
+
+兼容键（已废弃，下一批 App 改 codec 后由服务端删除，新代码**不要读**）：`rules.claimWindowDays`（仍为 7）、
+`binding.claimWindow.closesAt`（固定哨兵 `9999-12-31T23:59:59.999Z`，表示无截止）。新 codec 应把这两个键当可选并忽略。
 
 ## 5. 错误码（七字段错误体）
 
@@ -161,7 +168,6 @@
 | `GET /v2/referral/invitees` | `400 INVALID_REQUEST`                        | `limit` 越界、`cursor` 与 `limit` 同时出现、游标无效或过期、未知参数                                          |
 | `claim`                     | `400 INVALID_REQUEST`                        | 码格式 / 校验位错、缺 `Idempotency-Key`                                                                       |
 | `claim`                     | `409 PROFILE_ACTIVATION_REQUIRED`            | 去激活 LOOP ID                                                                                                |
-| `claim`                     | `403 POLICY_BLOCKED`                         | 已超过 7 天窗口                                                                                               |
 | `claim`                     | `404 NOT_FOUND`                              | 码不存在（不可枚举）                                                                                          |
 | `claim`                     | `422 VALIDATION_FAILED`                      | 自邀或成环                                                                                                    |
 | `claim`                     | `409 DATA_STALE`                             | 已绑定过                                                                                                      |
@@ -175,7 +181,7 @@
   `applinks:` 域名）拉起 App，App 从路径取 `code`：已登录且 `claimWindow.status = open` → 弹确认后调
   `POST /v2/referral/claim`；未注册 → 预填注册页的邀请码输入框，注册激活后补绑。
 - **未安装**：浏览器打开极简黑底页：显示邀请码、「复制邀请码并下载 LOOP」按钮（复制后按系统跳 App Store /
-  Google Play；都未配置时跳 `APP_DOWNLOAD_URL`；再没有就只复制），以及注册后 7 天内补绑的说明。首次启动时
+  Google Play；都未配置时跳 `APP_DOWNLOAD_URL`；再没有就只复制），以及「注册后随时可以绑定」的说明（决策 0181）。首次启动时
   App 可在用户确认后读剪贴板里的 `LOOP-XXXXC` 预填（docs/09：不接第三方延迟深链 SDK）。
 - 无效码（校验位错 / 格式错）→ 404「链接无效」页。页面不读库，不告诉访问者这个码是否真的存在。
 - 服务端 env：`APP_STORE_URL_IOS`、`APP_STORE_URL_ANDROID`（https，可不配；不配就不显示该商店链接）。

@@ -140,7 +140,6 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
       walletAddress: string | null;
       invite: {
         bound: boolean;
-        windowEndsAt: string | null;
         canClaim: boolean;
       };
     }>();
@@ -189,7 +188,7 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
       username: null,
       usernameRequired: true,
       walletAddress: null,
-      invite: { bound: false, windowEndsAt: null, canClaim: true },
+      invite: { bound: false, canClaim: true },
     });
     const second = await session("alice");
     expect(second.loopId).toBe(first.loopId);
@@ -211,7 +210,7 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
     expect(sessions.rowCount).toBe(0);
   });
 
-  it("activates with the username, starts the claim window, and replaces it later", async () => {
+  it("activates with the username and replaces it later", async () => {
     const key = randomUUID();
     const activated = await setUsername("alice", " Alice ", key);
     expect(activated.statusCode, activated.body).toBe(200);
@@ -229,11 +228,9 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
       [await userIdOf("alice")],
     );
     expect(profile.rows[0]!.status).toBe("active");
-    expect(state.invite.windowEndsAt).toBe(
-      new Date(
-        profile.rows[0]!.activated_at.getTime() + 7 * 86_400_000,
-      ).toISOString(),
-    );
+    expect(profile.rows[0]!.activated_at).toBeInstanceOf(Date);
+    // Decision 0181: no claim deadline, so no windowEndsAt.
+    expect(state.invite).toEqual({ bound: false, canClaim: true });
 
     const renamed = await setUsername("alice", "Alice Two");
     expect(renamed.json()).toEqual({ username: "Alice Two" });
@@ -343,7 +340,7 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
     });
   });
 
-  it("refuses after the 7-day window and reports it in the session", async () => {
+  it("binds 400 days after activation (Decision 0181: no claim deadline)", async () => {
     const aliceCode = await inviteCodeOf("alice");
     await session("carol");
     await setUsername("carol", "Carol");
@@ -355,8 +352,8 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
       await client.query("set session_replication_role = replica");
       await client.query(
         `update public.user_profiles
-         set created_at = now() - interval '9 days',
-           activated_at = now() - interval '8 days'
+         set created_at = now() - interval '401 days',
+           activated_at = now() - interval '400 days'
          where owner_user_id = $1`,
         [carolId],
       );
@@ -364,14 +361,21 @@ describe("Decision 0179 web registration (PostgreSQL)", () => {
     } finally {
       client.release();
     }
-    const closed = await claim("carol", aliceCode);
-    expect(closed.statusCode).toBe(403);
-    expect(closed.json()).toMatchObject({
-      code: "POLICY_BLOCKED",
-      detailsSafe: { reasonCode: "REFERRAL_CLAIM_WINDOW_CLOSED" },
-    });
-    expect((await session("carol")).invite).toMatchObject({
+    expect((await session("carol")).invite).toEqual({
       bound: false,
+      canClaim: true,
+    });
+    const late = await claim("carol", aliceCode);
+    expect(late.statusCode, late.body).toBe(200);
+    expect(late.json()).toMatchObject({ status: "bound" });
+    const edges = await pool.query<{ depth: number }>(
+      `select depth from public.referral_edges
+       where invitee_user_id = $1 and depth = 1`,
+      [carolId],
+    );
+    expect(edges.rowCount).toBe(1);
+    expect((await session("carol")).invite).toEqual({
+      bound: true,
       canClaim: false,
     });
   });

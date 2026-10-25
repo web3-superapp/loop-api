@@ -24,6 +24,7 @@ import {
   parseReferralClaimRequest,
   referralCommandDigest,
   referralCycleScanDepth,
+  referralLegacyClaimWindowDays,
   referralMaximumDepth,
   referralReasonCodes,
   referralValidationStatuses,
@@ -47,8 +48,8 @@ import {
 
 /**
  * Referral service (Decision 0036). Claim admission, in order: request
- * shape → caller activated (409 PROFILE_ACTIVATION_REQUIRED) → inside the
- * 7-day window (403 POLICY_BLOCKED) → code resolves (404 NOT_FOUND, no
+ * shape → caller activated (409 PROFILE_ACTIVATION_REQUIRED; Decision 0181:
+ * no time limit after that) → code resolves (404 NOT_FOUND, no
  * enumeration) → not self (422) → no cycle (422) → not already bound
  * (409 DATA_STALE) → edges written up to depth 5 in one transaction.
  */
@@ -106,7 +107,8 @@ export interface ReferralResource {
     readonly effectiveAt: typeof referralRulesEffectiveAt;
     readonly appliesTo: "miningPower";
     readonly maximumDepth: typeof referralMaximumDepth;
-    readonly claimWindowDays: 7;
+    /** Decision 0181: deprecated, no longer enforced; App codec compat only. */
+    readonly claimWindowDays: typeof referralLegacyClaimWindowDays;
   };
   readonly contractVersion: typeof v2ContractVersion;
 }
@@ -242,7 +244,6 @@ export function createReferralService(dependencies: {
   readonly publicBaseUrl: string;
   /** Null keeps `GET /v2/referral/invitees` 503 V2_CURSOR_NOT_CONFIGURED. */
   readonly cursorCodec?: V2CursorCodec | null;
-  readonly now?: () => Date;
   /**
    * Decision 0166 (REFERRAL_CENTER_EMIT): whether `GET /v2/referral` carries
    * the Decision 0162 `inviteLink`, `stats`, and available `boost`. False
@@ -252,7 +253,6 @@ export function createReferralService(dependencies: {
   readonly centerEmit?: boolean;
 }): ReferralService {
   const { repository } = dependencies;
-  const now = dependencies.now ?? ((): Date => new Date());
   const linkBase = dependencies.publicBaseUrl.replace(/\/+$/, "");
   const codec = dependencies.cursorCodec ?? null;
   const centerEmit = dependencies.centerEmit === true;
@@ -455,10 +455,7 @@ export function createReferralService(dependencies: {
           ...(centerEmit
             ? { inviteLink: `${linkBase}/i/${inviteCode.code}` }
             : {}),
-          binding: bindingProjection(
-            direct,
-            claimWindow(state.activatedAt, now()),
-          ),
+          binding: bindingProjection(direct, claimWindow(state.activatedAt)),
           levels: Object.freeze(levels),
           ...(stats === null
             ? {}
@@ -476,7 +473,7 @@ export function createReferralService(dependencies: {
             effectiveAt: referralRulesEffectiveAt,
             appliesTo: "miningPower" as const,
             maximumDepth: referralMaximumDepth,
-            claimWindowDays: 7 as const,
+            claimWindowDays: referralLegacyClaimWindowDays,
           }),
           contractVersion: v2ContractVersion,
         });
@@ -490,20 +487,11 @@ export function createReferralService(dependencies: {
         const inviteeUserId = input.principal.userId;
         const code = parseReferralClaimRequest(input.body);
         const state = await repository.getAccountState(inviteeUserId);
-        const window = claimWindow(state.activatedAt, now());
+        const window = claimWindow(state.activatedAt);
         if (window.status === "unavailable") {
           throw V2ApiError.fromCode("PROFILE_ACTIVATION_REQUIRED");
         }
         const inviterUserId = await repository.findInviterByCode(code);
-        if (window.status === "closed") {
-          await repository.recordRejectedClaim({
-            inviteeUserId,
-            inviterUserId,
-            reasonCode: "claim_window_closed",
-            requestId: input.requestId,
-          });
-          throw V2ApiError.fromCode("POLICY_BLOCKED");
-        }
         if (inviterUserId === null) {
           // Unknown codes are not enumerable: same answer as any missing resource.
           throw V2ApiError.notFound();
@@ -646,7 +634,7 @@ export function createReferralService(dependencies: {
           }),
           inviteLink: `${linkBase}/i/${inviteCode.code}`,
           bound: direct !== null,
-          claimWindow: claimWindow(state.activatedAt, now()),
+          claimWindow: claimWindow(state.activatedAt),
           stats: stats === null || stats.validAsOf === null ? null : stats,
           invitees: Object.freeze(served),
           nextCursor,

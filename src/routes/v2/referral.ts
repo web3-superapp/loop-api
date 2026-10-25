@@ -10,6 +10,7 @@ import { parseV2CommandMetadata } from "../../features/community/community-contr
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { inviteCodePatternSource } from "../../features/referral/invite-code.js";
 import {
+  referralLegacyClaimWindowDays,
   referralMaximumDepth,
   referralValidationStatuses,
 } from "../../features/referral/referral-contract.js";
@@ -47,10 +48,17 @@ const claimWindowSchema = {
       type: "object",
       additionalProperties: false,
       required: ["status", "activatedAt", "closesAt"],
+      description:
+        "Decision 0181: no deadline. Once the profile is activated the window is always open (`closed` is never emitted any more; the enum keeps it for shipped App codecs).",
       properties: {
         status: { type: "string", enum: ["open", "closed"] },
         activatedAt: dateTimeSchema,
-        closesAt: dateTimeSchema,
+        closesAt: {
+          ...dateTimeSchema,
+          deprecated: true,
+          description:
+            "Decision 0181: deprecated. Always the fixed sentinel 9999-12-31T23:59:59.999Z (no deadline); kept only because shipped App codecs require the key. Will be removed after the App codec stops reading it.",
+        },
       },
     },
     unavailableSchema,
@@ -347,7 +355,13 @@ const referralResourceSchema = {
         effectiveAt: dateTimeSchema,
         appliesTo: { type: "string", const: "miningPower" },
         maximumDepth: { type: "integer", const: referralMaximumDepth },
-        claimWindowDays: { type: "integer", const: 7 },
+        claimWindowDays: {
+          type: "integer",
+          const: referralLegacyClaimWindowDays,
+          deprecated: true,
+          description:
+            "Decision 0181: deprecated and no longer enforced (an activated account may claim at any time). Still 7 only because shipped App codecs require a positive integer; removed after the App codec stops reading it.",
+        },
       },
     },
     contractVersion: { type: "string", const: v2ContractVersion },
@@ -395,7 +409,6 @@ const readErrors = {
 
 const claimErrors = {
   ...readErrors,
-  403: v2ErrorResponseSchema(["POLICY_BLOCKED"]),
   404: v2ErrorResponseSchema(["NOT_FOUND"]),
   409: v2ErrorResponseSchema([
     "ACCOUNT_BOOTSTRAP_REQUIRED",
@@ -433,7 +446,7 @@ export function registerV2ReferralRoutes(
         summary:
           "Get the caller's invite code, link, binding, counts, and boost",
         description:
-          "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. The claim window is [activatedAt, activatedAt + 7 days).",
+          "Issues the account's invite code on first read (one per account, random, unique, LOOP-XXXXC). Decision 0162 adds `inviteLink` ({PUBLIC_BASE_URL}/i/{code}), `stats` (direct / valid / depth 2..5 counts; valid = own power > 0 in the newest settled hour) and an available `boost` (the caller's referral power of the newest settled mining hour, all five levels). Before the first settled hour the boost stays unavailable with MINING_REFERRAL_BOOST_PENDING (Decision 0046). Decision 0162 §E: in `levels[].counts`, `valid` uses the same source as `stats.validCount` (the invitee's own power > 0 in the newest settled hour); every other in-force edge keeps its stored pending_* status. Decision 0181: the claim window has no deadline; `rules.claimWindowDays` and `binding.claimWindow.closesAt` are deprecated compatibility keys.",
         tags: ["referral"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -494,7 +507,7 @@ export function registerV2ReferralRoutes(
         operationId: "claimV2Referral",
         summary: "Bind the caller to an inviter with an invite code",
         description:
-          "Allowed once, only for an activated profile inside its 7-day window. Unactivated → 409 PROFILE_ACTIVATION_REQUIRED; window closed → 403 POLICY_BLOCKED; unknown code → 404; self-invite or cycle → 422 VALIDATION_FAILED; already bound → 409 DATA_STALE. Edges are materialised from the inviter chain up to depth 5 in one transaction; the same Idempotency-Key replays the original result.",
+          "Allowed once, only for an activated profile, with no time limit after activation (Decision 0181). Unactivated → 409 PROFILE_ACTIVATION_REQUIRED; unknown code → 404; self-invite or cycle → 422 VALIDATION_FAILED; already bound → 409 DATA_STALE. Edges are materialised from the inviter chain up to depth 5 in one transaction; the same Idempotency-Key replays the original result.",
         tags: ["referral"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

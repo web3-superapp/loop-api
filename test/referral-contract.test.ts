@@ -16,6 +16,8 @@ import {
   initialValidationStatus,
   materializeReferralEdges,
   parseReferralClaimRequest,
+  referralClaimWindowNoDeadline,
+  referralLegacyClaimWindowDays,
   referralMaximumDepth,
 } from "../src/features/referral/referral-contract.js";
 
@@ -86,22 +88,23 @@ describe("invite code", () => {
 });
 
 describe("claim window", () => {
-  it("is open for seven days after activation and closed afterwards", () => {
-    const activatedAt = "2026-09-01T00:00:00.000Z";
-    expect(
-      claimWindow(activatedAt, new Date("2026-09-07T23:59:59.000Z")),
-    ).toEqual({
+  it("has no deadline: open forever once activated (Decision 0181)", () => {
+    const activatedAt = "2025-09-01T00:00:00.000Z";
+    expect(claimWindow(activatedAt)).toEqual({
       status: "open",
       activatedAt,
-      closesAt: "2026-09-08T00:00:00.000Z",
+      closesAt: referralClaimWindowNoDeadline,
     });
-    expect(
-      claimWindow(activatedAt, new Date("2026-09-08T00:00:00.000Z")).status,
-    ).toBe("closed");
-    expect(claimWindow(null, new Date())).toEqual({
+    expect(referralClaimWindowNoDeadline).toBe("9999-12-31T23:59:59.999Z");
+    // Shipped App codecs (build <= 42) still read a positive integer.
+    expect(referralLegacyClaimWindowDays).toBe(7);
+    expect(claimWindow(null)).toEqual({
       status: "unavailable",
       reasonCode: "PROFILE_ACTIVATION_REQUIRED",
     });
+    expect(() => claimWindow("not a date")).toThrow(
+      InvalidReferralRequestError,
+    );
   });
 
   it("derives the initial validation status from activation and wallet binding", () => {
