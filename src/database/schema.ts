@@ -1,4 +1,4 @@
-export const latestMigrationName = "000099_launch_review_inbox";
+export const latestMigrationName = "000101_community_membership_history";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -184,4 +184,5 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.square_post_likes",
   "public.wallet_networth_snapshots",
   "public.fiat_fx_rates",
+  "public.community_membership_history",
 ] as const);

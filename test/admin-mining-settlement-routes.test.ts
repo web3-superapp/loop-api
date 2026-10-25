@@ -6,10 +6,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { hashAdminPassword } from "../src/features/admin/admin-auth.js";
 import type { AdminRole } from "../src/features/admin/admin-roles.js";
-import type {
-  MiningAuditInput,
-  MiningParameterVersionRecord,
-  MiningSettlementRepository,
+import {
+  MiningCommunityUnknownError,
+  type MiningAuditInput,
+  type MiningParameterVersionRecord,
+  type MiningSettlementRepository,
 } from "../src/features/mining/hourly-settlement-ports.js";
 import { createInMemoryAdminRepository } from "./helpers/admin-fakes.js";
 import {
@@ -284,6 +285,108 @@ describe("Operator console mining settlement (Decision 0116)", () => {
       defaults: {
         assetPowerBasis: "quantity",
         defaultCommunityCoefficient: "1",
+      },
+    });
+  });
+
+  it("Decision 0183: a community table naming unknown or unverified communities is 422 MINING_COMMUNITY_UNKNOWN on draft and approval", async () => {
+    const { call, settlement, audits } = await harness();
+    const verified = "81a1763f-56bf-472c-a795-9370b20590c8";
+    const missing = "0d6e4b8c-1f2a-4b3c-8d4e-5f6a7b8c9d0e";
+    const pending = "9c5d3a7b-2e1f-4a6b-9c8d-7e6f5a4b3c2d";
+    const unverified = new Set([missing, pending]);
+    settlement.findUnverifiedCommunityIds = vi.fn((ids: readonly string[]) =>
+      Promise.resolve(ids.filter((id) => unverified.has(id))),
+    );
+    const refused = await call(
+      "platform_admin",
+      "POST",
+      "/admin/v1/mining/parameter-versions",
+      {
+        ...draft,
+        parameters: {
+          ...draft.parameters,
+          communityCoefficients: [
+            { communityId: verified, coefficient: "1.5" },
+            { communityId: missing, coefficient: "2" },
+            { communityId: pending, coefficient: "1" },
+          ],
+        },
+      },
+    );
+    expect(refused.statusCode, refused.body).toBe(422);
+    expect(refused.json()).toMatchObject({
+      code: "MINING_COMMUNITY_UNKNOWN",
+      category: "validation",
+      detailsSafe: {
+        reasonCode: "MINING_COMMUNITY_UNKNOWN",
+        field: "communityCoefficients",
+        unknownCommunityIds: [missing, pending],
+      },
+    });
+    expect(audits).not.toContain("mining.parameters.draft");
+
+    const accepted = await call(
+      "platform_admin",
+      "POST",
+      "/admin/v1/mining/parameter-versions",
+      {
+        ...draft,
+        parameters: {
+          ...draft.parameters,
+          communityCoefficients: [
+            { communityId: verified, coefficient: "1.5" },
+          ],
+        },
+      },
+    );
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    expect(accepted.json()).not.toHaveProperty("skippedCommunityIds");
+
+    // Approval re-checks inside the repository transaction.
+    settlement.approveParameterVersion = vi.fn(() =>
+      Promise.reject(new MiningCommunityUnknownError([verified])),
+    );
+    const versionId = accepted.json<{ version: { versionId: string } }>()
+      .version.versionId;
+    const approval = await call(
+      "reviewer",
+      "POST",
+      `/admin/v1/mining/parameter-versions/${versionId}/approve`,
+    );
+    expect(approval.statusCode, approval.body).toBe(422);
+    expect(approval.json()).toMatchObject({
+      code: "MINING_COMMUNITY_UNKNOWN",
+      detailsSafe: { unknownCommunityIds: [verified] },
+    });
+  });
+
+  it("Decision 0183: the frozen copy drops unverified communities and lists them in skippedCommunityIds", async () => {
+    const { call, settlement } = await harness();
+    const kept = "81a1763f-56bf-472c-a795-9370b20590c8";
+    const dropped = "9c5d3a7b-2e1f-4a6b-9c8d-7e6f5a4b3c2d";
+    settlement.listApprovedCommunityWeights = vi.fn(() =>
+      Promise.resolve([
+        { communityId: kept, weight: "1.2" },
+        { communityId: dropped, weight: "0.8" },
+      ]),
+    );
+    settlement.findUnverifiedCommunityIds = vi.fn((ids: readonly string[]) =>
+      Promise.resolve(ids.filter((id) => id === dropped)),
+    );
+    const created = await call(
+      "platform_admin",
+      "POST",
+      "/admin/v1/mining/parameter-versions",
+      draft,
+    );
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({
+      skippedCommunityIds: [dropped],
+      version: {
+        document: {
+          communityCoefficients: [{ communityId: kept, coefficient: "1.2" }],
+        },
       },
     });
   });

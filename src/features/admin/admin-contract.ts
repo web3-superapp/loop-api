@@ -104,6 +104,17 @@ export const adminErrorCatalog = Object.freeze({
     retryable: false,
     userMessageKey: "errors.validation.failed",
   },
+  /**
+   * Decision 0183: a mining parameter document lists community ids that do
+   * not exist or are not verified (draft save and approval).
+   * `detailsSafe.unknownCommunityIds` lists them.
+   */
+  MINING_COMMUNITY_UNKNOWN: {
+    statusCode: 422,
+    category: "validation",
+    retryable: false,
+    userMessageKey: "errors.admin.miningCommunityUnknown",
+  },
   NOT_FOUND: {
     statusCode: 404,
     category: "validation",
@@ -136,7 +147,7 @@ export const adminErrorCodes = Object.freeze(
 );
 
 export type AdminErrorDetailsSafe = Readonly<
-  Record<string, string | number | boolean | null>
+  Record<string, string | number | boolean | null | readonly string[]>
 >;
 
 export class AdminApiError extends Error {

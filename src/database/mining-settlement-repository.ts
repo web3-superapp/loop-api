@@ -14,6 +14,7 @@ import {
 } from "../features/mining/hourly-settlement-contract.js";
 import {
   MiningClaimIdempotencyConflictError,
+  MiningCommunityUnknownError,
   MiningSettlementConflictError,
   MiningSettlementUnavailableError,
   type CreateMiningClaimRecord,
@@ -67,6 +68,7 @@ function translate(error: unknown): never {
   if (
     error instanceof MiningSettlementInputError ||
     error instanceof MiningSettlementConflictError ||
+    error instanceof MiningCommunityUnknownError ||
     error instanceof MiningClaimIdempotencyConflictError ||
     error instanceof MiningSettlementUnavailableError
   ) {
@@ -745,6 +747,18 @@ export function createPostgresMiningSettlementRepository(
       );
     },
 
+    async findUnverifiedCommunityIds(communityIds) {
+      if (communityIds.length === 0) return Object.freeze([]);
+      const rows = await query(
+        `select community_id::text as community_id from public.communities
+         where verification_status = 'verified'
+           and community_id::text = any($1::text[])`,
+        [[...communityIds]],
+      );
+      const verified = new Set(rows.map((row) => text(row, "community_id")));
+      return Object.freeze(communityIds.filter((id) => !verified.has(id)));
+    },
+
     async findUnknownAssetIds(assetIds) {
       const unknown: string[] = [];
       for (const assetId of assetIds) {
@@ -832,6 +846,24 @@ export function createPostgresMiningSettlementRepository(
             throw new MiningSettlementConflictError(
               "ADMIN_MINING_PARAMETERS_BASIS_RETIRED",
             );
+          }
+          // Decision 0183: every listed community must still exist and be
+          // verified when the version is approved.
+          const listed = current.document.communityCoefficients.map(
+            (entry) => entry.communityId,
+          );
+          if (listed.length > 0) {
+            const found = await client.query<{ community_id: string }>({
+              text: `select community_id::text as community_id
+                from public.communities
+                where verification_status = 'verified'
+                  and community_id::text = any($1::text[])`,
+              values: [listed],
+            });
+            const verified = new Set(found.rows.map((row) => row.community_id));
+            const unknown = listed.filter((id) => !verified.has(id));
+            if (unknown.length > 0)
+              throw new MiningCommunityUnknownError(unknown);
           }
           if (
             current.draftAuthor?.accountId !== null &&
@@ -989,7 +1021,7 @@ export function createPostgresMiningSettlementRepository(
           from public.launch2_instances i
           left join public.communities c
             on c.bound_asset_key = i.chain_id || ':' || i.meme_address
-              and c.verification_status <> 'rejected'
+              and c.verification_status = 'verified'
           where i.chain_id = $1
           group by i.instance_id, i.chain_id, i.meme_address
           order by i.instance_id
@@ -1052,7 +1084,8 @@ export function createPostgresMiningSettlementRepository(
       const owners = await query(
         `select address, array_agg(distinct owner_user_id::text order by owner_user_id::text) as users
          from public.account_wallets
-         where status = 'active' and address = any($1::text[])
+         where status = 'active' and kind = 'embedded'
+           and address = any($1::text[])
            and first_seen_at < $2::timestamptz
          group by address`,
         [[...addresses].sort(), end],
@@ -1067,7 +1100,65 @@ export function createPostgresMiningSettlementRepository(
          order by inviter_user_id, invitee_user_id, depth, effective_from`,
         [start, end],
       );
+      // Decision 0183: verified communities bound to the MEMEs this hour
+      // reads (every launch2 instance's MEME and every admitted asset), and
+      // the membership intervals of those communities overlapping the hour.
+      // The creator counts as a member from the community's creation.
+      const gatedAssetIds = [
+        ...new Set([
+          ...instances.map((row) => text(row, "asset_id")),
+          ...input.assetIds,
+        ]),
+      ].sort();
+      const bindings = await query(
+        `select bound_asset_key as asset_id,
+           array_agg(community_id::text order by community_id) as community_ids
+         from public.communities
+         where verification_status = 'verified'
+           and bound_asset_key = any($1::text[])
+         group by bound_asset_key
+         order by bound_asset_key`,
+        [gatedAssetIds],
+      );
+      const memberships = await query(
+        `with gated as (
+           select community_id, created_by_user_id, created_at
+           from public.communities
+           where verification_status = 'verified'
+             and bound_asset_key = any($1::text[])
+         )
+         select h.user_id::text as user_id, h.community_id::text as community_id,
+           ceil(extract(epoch from h.joined_at))::bigint::text as from_s,
+           floor(extract(epoch from h.left_at))::bigint::text as to_s
+         from public.community_membership_history h
+         join gated g on g.community_id = h.community_id
+         where h.joined_at < $3::timestamptz
+           and (h.left_at is null or h.left_at > $2::timestamptz)
+         union all
+         select g.created_by_user_id::text, g.community_id::text,
+           ceil(extract(epoch from g.created_at))::bigint::text, null
+         from gated g
+         where g.created_at < $3::timestamptz
+         order by 1, 2, 3`,
+        [gatedAssetIds, start, end],
+      );
       return Object.freeze({
+        membershipGate: Object.freeze({
+          assetCommunities: bindings.map((row) =>
+            Object.freeze({
+              assetId: text(row, "asset_id"),
+              communityIds: Object.freeze(row["community_ids"] as string[]),
+            }),
+          ),
+          memberships: memberships.map((row) =>
+            Object.freeze({
+              userId: text(row, "user_id"),
+              communityId: text(row, "community_id"),
+              from: epochSeconds(row, "from_s"),
+              to: row["to_s"] === null ? null : epochSeconds(row, "to_s"),
+            }),
+          ),
+        }),
         nftInstances: instances.map((row) =>
           Object.freeze({
             instanceId: text(row, "instance_id"),

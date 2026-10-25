@@ -10,7 +10,10 @@ import {
   parseMiningParameterDocument,
 } from "../src/features/mining/hourly-settlement-contract.js";
 import type { MiningEpochRecord } from "../src/features/mining/hourly-settlement-ports.js";
-import type { MiningSettlementFacts } from "../src/features/mining/hourly-settlement-ports.js";
+import type {
+  MiningMembershipFact,
+  MiningSettlementFacts,
+} from "../src/features/mining/hourly-settlement-ports.js";
 import {
   createMiningSettlementRunner,
   miningParameterSlices,
@@ -556,6 +559,195 @@ describe("Decision 0116 runner — inputs", () => {
       }),
     });
     expect(other.digest).not.toBe(one.digest);
+  });
+});
+
+describe("Decision 0183 runner — membership gate (S300)", () => {
+  const OTHER = "eip155:97:0x2222222222222222222222222222222222227777";
+
+  function gatedVersion() {
+    return parameterVersion({
+      versionId: "v-0183",
+      effectiveFrom: "2026-10-10T00:00:00.000Z",
+      document: {
+        ...parameterVersion().document,
+        assetWeights: [
+          { assetId: ASSET, weight: "1" },
+          { assetId: OTHER, weight: "1" },
+        ],
+        communityCoefficients: [{ communityId: C, coefficient: "2" }],
+        assetPowerBasis: "quantity",
+        defaultCommunityCoefficient: "1",
+      },
+    });
+  }
+
+  function asset(assetId: string, address: string, balance: bigint) {
+    return {
+      assetId,
+      source: "launch2" as const,
+      graduatedAt: null,
+      openingPriceE18: loop / 100n,
+      openingBalances: [{ address, balanceRaw: balance }],
+      moves: [],
+    };
+  }
+
+  function prepared(
+    memberships: MiningMembershipFact[],
+    overrides: Partial<MiningSettlementFacts> = {},
+  ) {
+    return prepareMiningHour({
+      hourStart: S,
+      versions: [gatedVersion()],
+      facts: facts({
+        membershipGate: {
+          assetCommunities: [{ assetId: ASSET, communityIds: [C] }],
+          memberships,
+        },
+        ...overrides,
+      }),
+    });
+  }
+
+  function nftPower(memberships: MiningMembershipFact[]): bigint {
+    const result = settleMiningHour(prepared(memberships).input);
+    return result.users.find((row) => row.userId === U1)?.nftSelfPower ?? 0n;
+  }
+
+  it("a non-member's NFT of a verified community earns nothing", () => {
+    const hour = prepared([]);
+    expect(hour.input.nftHoldings).toEqual([]);
+    expect(hour.summary).toMatchObject({
+      membershipGate: "verified_member_embedded",
+      membershipGatedSegmentCount: 1,
+    });
+    expect(nftPower([])).toBe(0n);
+    // A membership in another community does not help.
+    expect(
+      nftPower([
+        {
+          userId: U1,
+          communityId: "c0000000-0000-4000-8000-000000000009",
+          from: 0n,
+          to: null,
+        },
+      ]),
+    ).toBe(0n);
+  });
+
+  it("a member for the whole hour earns exactly the ungated power", () => {
+    const whole = nftPower([
+      { userId: U1, communityId: C, from: S - 86_400n, to: null },
+    ]);
+    // 2 NFTs × coefficient 2 for the full hour.
+    expect(whole).toBe(4n * loop);
+    const ungated = settleMiningHour(
+      prepareMiningHour({
+        hourStart: S,
+        versions: [gatedVersion()],
+        facts: facts(),
+      }).input,
+    ).users.find((row) => row.userId === U1)?.nftSelfPower;
+    expect(whole).toBe(ungated);
+  });
+
+  it("joining mid-hour counts from the join second (per-second slicing)", () => {
+    const hour = prepared([
+      { userId: U1, communityId: C, from: S + 900n, to: null },
+    ]);
+    expect(
+      hour.input.nftHoldings.map((row) => [row.from - S, row.to - S]),
+    ).toEqual([[900n, 3_600n]]);
+    expect(
+      nftPower([{ userId: U1, communityId: C, from: S + 900n, to: null }]),
+    ).toBe((4n * loop * 2_700n) / 3_600n);
+  });
+
+  it("leaving stops the power at the leave second; a rejoin counts again", () => {
+    expect(
+      nftPower([{ userId: U1, communityId: C, from: S - 10n, to: S + 1_800n }]),
+    ).toBe(2n * loop);
+    expect(
+      nftPower([
+        { userId: U1, communityId: C, from: S - 10n, to: S + 600n },
+        { userId: U1, communityId: C, from: S + 3_000n, to: null },
+        // An overlapping duplicate (creator + membership row) is merged.
+        { userId: U1, communityId: C, from: S + 3_300n, to: null },
+      ]),
+    ).toBe((4n * loop * 1_200n) / 3_600n);
+  });
+
+  it("a MEME bound by a verified community counts only for its members; an unbound MEME needs no membership", () => {
+    const overrides = {
+      nftOpenings: [],
+      assets: [asset(ASSET, A, 100n * loop), asset(OTHER, B, 50n * loop)],
+    };
+    const outsider = settleMiningHour(prepared([], overrides).input);
+    expect(
+      outsider.users.find((row) => row.userId === U1)?.assetSelfPower ?? 0n,
+    ).toBe(0n);
+    // OTHER has no verified community: U2 holds it without any membership.
+    expect(
+      outsider.users.find((row) => row.userId === U2)?.assetSelfPower,
+    ).toBe(50n * loop);
+
+    const halfMember = settleMiningHour(
+      prepared(
+        [{ userId: U1, communityId: C, from: S + 1_800n, to: null }],
+        overrides,
+      ).input,
+    );
+    expect(
+      halfMember.users.find((row) => row.userId === U1)?.assetSelfPower,
+    ).toBe(50n * loop);
+  });
+
+  it("referral power follows the gated self power", () => {
+    const result = settleMiningHour(
+      prepared([], {
+        referralEdges: [
+          {
+            inviterUserId: U2,
+            inviteeUserId: U1,
+            depth: 1,
+            from: 0n,
+            to: null,
+          },
+        ],
+      }).input,
+    );
+    expect(
+      result.users.find((row) => row.userId === U2)?.nftReferralPower ?? 0n,
+    ).toBe(0n);
+  });
+
+  it("an NFT of an instance with no verified community stays unbound (0) and is not gated", () => {
+    const hour = prepared([], {
+      nftInstances: [
+        { instanceId: INSTANCE, memeAssetId: ASSET, communityIds: [] },
+      ],
+    });
+    expect(hour.input.nftHoldings).toHaveLength(1);
+    expect(hour.input.nftHoldings[0]?.communityId).toBeNull();
+    expect(
+      settleMiningHour(hour.input).users.find((row) => row.userId === U1)
+        ?.nftSelfPower ?? 0n,
+    ).toBe(0n);
+  });
+
+  it("a fact set without the gate (pre-S300 fixture) keeps the pre-0183 digest", () => {
+    const before = prepareMiningHour({
+      hourStart: S,
+      versions: [gatedVersion()],
+      facts: facts(),
+    });
+    const fullMember = prepared([
+      { userId: U1, communityId: C, from: 0n, to: null },
+    ]);
+    // Same calculator input when every holder is a member: same digest.
+    expect(fullMember.digest).toBe(before.digest);
+    expect(before.summary["membershipGate"]).toBeUndefined();
   });
 });
 

@@ -12757,7 +12757,7 @@
         "operationId": "createAdminMiningParameterDraft",
         "summary": "Draft a hourly settlement parameter version",
         "tags": ["admin-mining"],
-        "description": "Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default \"1\": every unlisted community), assetPowerBasis (optional, only \"quantity\"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.",
+        "description": "Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default \"1\": every unlisted community), assetPowerBasis (optional, only \"quantity\"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[]), and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.",
         "requestBody": {
           "required": true,
           "content": {
@@ -12852,6 +12852,13 @@
                         "seq": { "type": "integer" },
                         "at": { "type": "string", "format": "date-time" },
                         "action": { "type": "string" }
+                      }
+                    },
+                    "skippedCommunityIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
                       }
                     }
                   }
@@ -13125,7 +13132,10 @@
                     "providerReferenceSafe"
                   ],
                   "properties": {
-                    "code": { "type": "string", "enum": ["VALIDATION_FAILED"] },
+                    "code": {
+                      "type": "string",
+                      "enum": ["MINING_COMMUNITY_UNKNOWN", "VALIDATION_FAILED"]
+                    },
                     "category": {
                       "type": "string",
                       "enum": [
@@ -13286,7 +13296,7 @@
         "operationId": "approveAdminMiningParameterVersion",
         "summary": "Approve a parameter version (in force at effectiveFrom)",
         "tags": ["admin-mining"],
-        "description": "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Approved versions are immutable; history is never rewritten.",
+        "description": "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 64 },
@@ -13643,6 +13653,68 @@
                   ],
                   "properties": {
                     "code": { "type": "string", "enum": ["ADMIN_CONFLICT"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["MINING_COMMUNITY_UNKNOWN"]
+                    },
                     "category": {
                       "type": "string",
                       "enum": [
