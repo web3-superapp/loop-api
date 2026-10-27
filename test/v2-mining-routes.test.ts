@@ -643,6 +643,7 @@ describe("LOOP API V2 mining module", () => {
               communityName: "Frog Holders",
               boundAssetId: cakeAsset,
               weight: "0.5",
+              avatarRef: "avatar:preset/community-03",
               power: "230",
               participantCount: 2,
               position: 1,
@@ -1110,7 +1111,15 @@ describe("LOOP API V2 mining module", () => {
         // The repository's contributing accounts, members or not (Decision
         // 0148, S208 revision), passed through unchanged.
         participants: 2,
+        // S316 / Decision 0188: optional community picture, same format as
+        // the community resources' logoRef.
+        avatarRef: "avatar:preset/community-03",
       });
+      expect(
+        (communityRanking.ranking.items[0] as { avatarRef: string }).avatarRef,
+      ).toMatch(
+        /^(avatar:preset\/community-(0[1-9]|1[0-2])|logo:media\/[0-9a-f-]{36})$/u,
+      );
       expect(communityRanking.myPosition).toEqual({
         status: "unavailable",
         reasonCode: "MINING_RANK_NOT_APPLICABLE",
@@ -1131,6 +1140,8 @@ describe("LOOP API V2 mining module", () => {
         },
         weight: "0.5",
         participants: 0,
+        // No logo: the optional key is null.
+        avatarRef: null,
       });
       const unranked = await createApp(
         approvedRepository({

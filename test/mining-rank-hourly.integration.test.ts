@@ -415,6 +415,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Alpha Hourly",
         boundAssetId: assetA,
         weight: "1.5",
+        avatarRef: null,
         power: "2",
         participantCount: 1,
         position: 1,
@@ -425,6 +426,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Beta Hourly",
         boundAssetId: assetB,
         weight: "1",
+        avatarRef: null,
         power: "2",
         participantCount: 1,
         position: 1,
@@ -435,6 +437,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Gamma Hourly",
         boundAssetId: assetC,
         weight: "1",
+        avatarRef: null,
         power: "0",
         participantCount: 0,
         position: null,
@@ -453,6 +456,36 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
       communityB,
       communityC,
     ]);
+
+    // Decision 0188: a community with a logo carries it as `avatarRef`.
+    await pool.query(
+      `update public.communities set logo_ref = 'avatar:preset/community-07'
+       where community_id = $1`,
+      [communityB],
+    );
+    try {
+      const withLogo = await mining.listCommunityRanking({
+        epochId: newestEpochId,
+        limit: 10,
+      });
+      expect(
+        withLogo.find((row) => row.communityId === communityB),
+      ).toMatchObject({ avatarRef: "avatar:preset/community-07" });
+      expect(
+        await mining.getMemberBestCommunityStanding({
+          epochId: newestEpochId,
+          ownerUserId: two,
+        }),
+      ).toMatchObject({
+        communityId: communityB,
+        avatarRef: "avatar:preset/community-07",
+      });
+    } finally {
+      await pool.query(
+        `update public.communities set logo_ref = null where community_id = $1`,
+        [communityB],
+      );
+    }
 
     expect(
       await mining.getMemberBestCommunityStanding({

@@ -9,6 +9,7 @@ import {
   miningPoolVersionOfEpochSql,
 } from "./mining-pool-roster-sql.js";
 
+import { communityLogoRefPatternSource } from "../features/community/community-contract.js";
 import { normalizeDecimalString } from "../features/market/market-contract.js";
 import {
   communityWeightStatuses,
@@ -240,6 +241,7 @@ const communityStandingRowSchema = z
     community_name: z.string().min(1),
     bound_asset_id: z.string().min(1),
     weight: decimalSchema,
+    logo_ref: z.string().min(1).nullable(),
     power: numericTextSchema,
     participant_count: countSchema,
     position: positionSchema.nullable(),
@@ -318,6 +320,8 @@ function mapSnapshotAttempt(raw: unknown): MiningSnapshotAttemptRecord {
   });
 }
 
+const communityLogoRefPattern = new RegExp(communityLogoRefPatternSource, "u");
+
 function mapCommunityStanding(raw: unknown): MiningCommunityStandingRecord {
   const row = communityStandingRowSchema.parse(raw);
   return Object.freeze({
@@ -325,6 +329,12 @@ function mapCommunityStanding(raw: unknown): MiningCommunityStandingRecord {
     communityName: row.community_name,
     boundAssetId: row.bound_asset_id,
     weight: row.weight,
+    // S316: the community picture for the rank row (`avatarRef`); only a
+    // well-formed preset / uploaded logo ref is published, anything else null.
+    avatarRef:
+      row.logo_ref !== null && communityLogoRefPattern.test(row.logo_ref)
+        ? row.logo_ref
+        : null,
     power: row.power,
     participantCount: row.participant_count,
     position: row.position,
@@ -475,7 +485,8 @@ const epochCommunityStandingsSql = `
         0
       ) end as coefficient,
       -- Decision 0187 appendix A: a roster community shows its token weight.
-      r.token_weight as roster_weight
+      r.token_weight as roster_weight,
+      c.logo_ref
     from public.communities as c
     left join pool_roster as r on r.community_id = c.community_id
     where c.bound_asset_key is not null
@@ -528,6 +539,7 @@ const epochCommunityStandingsSql = `
       b.community_name,
       b.bound_asset_id,
       coalesce(b.roster_weight, trim_scale(b.coefficient)::text) as weight,
+      b.logo_ref,
       p.total::text as power,
       p.participant_count,
       case
@@ -575,7 +587,8 @@ const communityStandingsSql = `
       c.community_id,
       c.name as community_name,
       c.bound_asset_key as bound_asset_id,
-      w.weight
+      w.weight,
+      c.logo_ref
     from public.communities as c
     join public.community_mining_weights as w
       on w.community_id = c.community_id
@@ -586,8 +599,10 @@ const communityStandingsSql = `
         select 1 from pool_roster as r where r.community_id = c.community_id
       )
     union all
-    select r.community_id, r.community_name, r.bound_asset_id, r.token_weight
+    select r.community_id, r.community_name, r.bound_asset_id, r.token_weight,
+      c.logo_ref
     from pool_roster as r
+    join public.communities as c on c.community_id = r.community_id
     where r.participate
   ),
   powers as (
@@ -611,6 +626,7 @@ const communityStandingsSql = `
       b.community_name,
       b.bound_asset_id,
       b.weight,
+      b.logo_ref,
       p.total::text as power,
       p.participant_count,
       case
