@@ -25,6 +25,11 @@ export const miningReasonCodes = Object.freeze({
   /** Two communities bind the same asset with an approved weight. */
   communityWeightAmbiguous: "COMMUNITY_WEIGHT_AMBIGUOUS",
   communityAssetNotBound: "COMMUNITY_ASSET_NOT_BOUND",
+  /**
+   * Decision 0187 appendix A: the community's MEME / NFTs are unticked in the
+   * mining pool table (not ranked, no weight).
+   */
+  poolExcluded: "MINING_POOL_EXCLUDED",
   assetWeightNotConfigured: "MINING_ASSET_WEIGHT_NOT_CONFIGURED",
   /**
    * The referral boost itself is not approved by the version in force (or

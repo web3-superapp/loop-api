@@ -6,6 +6,7 @@ import { runner } from "node-pg-migrate";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createPostgresMiningRepository } from "../src/database/mining-repository.js";
 import { createPostgresMiningSettlementRepository } from "../src/database/mining-settlement-repository.js";
 import { hashAdminPassword } from "../src/features/admin/admin-auth.js";
 import {
@@ -79,6 +80,7 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
   const users: string[] = [];
   const communities: Record<string, string> = {};
   let instanceA = "";
+  let settledEpochId = "";
   let log = 0;
 
   async function user(index: number): Promise<string> {
@@ -241,15 +243,19 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
     );
   });
 
-  async function insertVersion(document: MiningParameterDocument) {
+  async function insertVersion(
+    document: MiningParameterDocument,
+    effectiveFrom = "2026-10-01T00:00:00Z",
+  ) {
     await pool.query(
       `insert into public.mining_parameter_versions (version_id, config_version, status,
          document, effective_from, draft_author_actor, approved_by, approved_at)
-       values ($1, $2, 'approved', $3::jsonb, '2026-10-01T00:00:00Z', 'seed', 'seed-reviewer', clock_timestamp())`,
+       values ($1, $2, 'approved', $3::jsonb, $4::timestamptz, 'seed', 'seed-reviewer', clock_timestamp())`,
       [
         randomUUID(),
         `s313-${randomUUID().slice(0, 8)}`,
         JSON.stringify(document),
+        effectiveFrom,
       ],
     );
   }
@@ -340,6 +346,7 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
     });
     expect(outcome.kind, JSON.stringify(outcome)).toBe("settled");
     if (outcome.kind !== "settled") return;
+    settledEpochId = outcome.epoch.epochId;
     expect(outcome.epoch.inputSummary["poolRosterAssetIds"]).toEqual([ASSET_A]);
     const rows = await repository.listEpochRewards({
       epochId: outcome.epoch.epochId,
@@ -388,6 +395,129 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
         [users[3], "0", "3"],
       ].sort((a, b) => ((a[0] as string) < (b[0] as string) ? -1 : 1)),
     );
+  });
+
+  it("appendix A: community weight / standing / rank read the roster (token weight, unticked not ranked)", async () => {
+    const mining = createPostgresMiningRepository(pool);
+    const formulaVersion = "s313-formula";
+    const snapshotId = randomUUID();
+    await pool.query(
+      `insert into public.mining_formula_versions (config_version, formula, weight_range,
+         price_guard_rules, status, effective_at, approved_at)
+       values ($1, $2::jsonb, '{}'::jsonb, '[]'::jsonb, 'approved', now(), now())`,
+      [
+        formulaVersion,
+        JSON.stringify({
+          kind: "holding_times_reference_price_times_weight",
+          expressionKey: "k",
+          dailyOutputKey: "k",
+          assetWeights: {},
+          referralBoost: { status: "pending_approval" },
+        }),
+      ],
+    );
+    await pool.query(
+      `insert into public.assets (asset_id, chain_id, address, symbol, name, decimals,
+         status, source_kind, source_block_number, source_verified_at)
+       values ($1, $2, $3, 'ALPHA', 'Alpha', 18, 'pending', 'chain_call', 1, now())`,
+      [ASSET_A, CHAIN, MEME_A],
+    );
+    await pool.query(
+      `insert into public.mining_snapshots (snapshot_id, block_number, block_hash,
+         formula_version, price_version, total_power, account_count, status, holdings_source)
+       values ($1, 4321, $2, $3, 'launch2_curve:2026-10-26T10:30:00.000Z', '1003', 3,
+         'complete', 'chain')`,
+      [snapshotId, hex(4321), formulaVersion],
+    );
+    for (const [index, power] of [
+      [1, "300"],
+      [2, "700"],
+      [3, "3"],
+    ] as const) {
+      await pool.query(
+        `insert into public.mining_snapshot_powers (snapshot_id, owner_user_id, asset_id,
+           holding, reference_price_usd, reference_price_quality, weight, power, block_number)
+         values ($1, $2, $3, '0', '0', 'fresh', '1', $4, 4321)`,
+        [snapshotId, users[index], ASSET_A, power],
+      );
+    }
+    const inForce = (await repository.listApprovedParameterVersions())[0]!;
+    const alphaWeight = await mining.getCommunityWeight(communities["alpha"]!);
+    expect(alphaWeight).toMatchObject({
+      status: "approved",
+      weight: "1",
+      configVersion: inForce.configVersion,
+      source: "roster",
+      rosterExcluded: false,
+    });
+    expect(alphaWeight?.reviewedAt).not.toBeNull();
+    expect(await mining.getCommunityWeight(communities["beta"]!)).toMatchObject(
+      { status: "pending_review", source: "review" },
+    );
+    // Members only (users[2] is not one): 300 + 3.
+    expect(
+      await mining.getCommunityStanding({
+        snapshotId,
+        configVersion: formulaVersion,
+        communityId: communities["alpha"]!,
+      }),
+    ).toMatchObject({
+      weight: "1",
+      power: "303",
+      participantCount: 2,
+      position: 1,
+    });
+    // A roster community on another chain is listed with zero power.
+    expect(
+      await mining.getCommunityStanding({
+        snapshotId,
+        configVersion: formulaVersion,
+        communityId: communities["gamma"]!,
+      }),
+    ).toMatchObject({ weight: "1", power: "0", position: null });
+    expect(
+      await mining.getCommunityStanding({
+        snapshotId,
+        configVersion: formulaVersion,
+        communityId: communities["beta"]!,
+      }),
+    ).toBeNull();
+    // The settled hour's community rank shows the roster token weight.
+    const ranking = await mining.listCommunityRanking({
+      epochId: settledEpochId,
+      limit: 10,
+    });
+    expect(
+      ranking.find((row) => row.communityId === communities["alpha"]),
+    ).toMatchObject({ weight: "1", position: 1 });
+
+    // Unticked in a newer version: no weight, not ranked.
+    await insertVersion(
+      {
+        ...miningDefaultParameterDocument,
+        releaseStartAt: "2026-10-01T00:00:00.000Z",
+        assetWeights: [],
+        communityCoefficients: [],
+        excludedAssets: [ASSET_A],
+        excludedCommunities: [communities["alpha"]!],
+      },
+      "2026-10-02T00:00:00Z",
+    );
+    expect(
+      await mining.getCommunityWeight(communities["alpha"]!),
+    ).toMatchObject({
+      status: "pending_review",
+      weight: null,
+      source: "roster",
+      rosterExcluded: true,
+    });
+    expect(
+      await mining.getCommunityStanding({
+        snapshotId,
+        configVersion: formulaVersion,
+        communityId: communities["alpha"]!,
+      }),
+    ).toBeNull();
   });
 
   it("refuses to approve a draft excluding a community that is not verified", async () => {

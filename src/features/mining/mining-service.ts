@@ -1307,7 +1307,9 @@ export function createMiningService(dependencies: {
           const reason = unavailable(
             record.boundAssetId === null
               ? miningReasonCodes.communityAssetNotBound
-              : miningReasonCodes.communityWeightPendingReview,
+              : record.rosterExcluded === true
+                ? miningReasonCodes.poolExcluded
+                : miningReasonCodes.communityWeightPendingReview,
           );
           return Object.freeze({
             community,

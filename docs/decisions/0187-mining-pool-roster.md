@@ -102,6 +102,31 @@
 
 ## 待决（交主代理）
 
-1. 社区页 / 社区榜（快照口径，`communityStandingsSql`）仍要求 `community_mining_weights` 的已批准权重，名单社区在社区详情的 `miningPower` 上仍可能是 `COMMUNITY_WEIGHT_PENDING_REVIEW`；账户算力、资产行、排行榜（按账户）已同口径。要不要把社区快照口径也改成名单（需要定义社区 `weight` 投影的含义）。
-2. 生产环境没有已批准的快照公式版本时，快照 lane 与 `/v2/mining/*` 读路径整体空闲；若要在生产只靠矿池显示算力，需要把「基线」从公式版本改为参数版本（较大改动）。
+1. ~~社区页 / 社区榜仍按 `community_mining_weights`~~ 已由附录 A 解决（S313b）。
+2. 生产快照基线：见附录 B（本批不改）。
 3. `referencePriceUsd` 对名单行用曲线价、质量标 `fresh`（枚举限制）；如需要更准确的标注，要客户端先行加枚举值。
+
+## 附录 A（S313b，2026-10-27）：社区页算力与社区榜按矿池口径
+
+主代理裁决：矿池社区在社区页 / 社区榜不得再出 `COMMUNITY_WEIGHT_PENDING_REVIEW`。
+
+| 社区                   | 社区 `weight` 投影                                                                                                                                                        | 是否入榜 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 矿池候选且**参与**     | `status: approved`，`value` = **币权重（tokenWeight）**，`configVersion` = 当前生效的挖矿参数版本，`reviewedAt` = 该版本批准时间；内部记录 `source: roster`（不对外输出） | 入榜     |
+| 矿池候选但**取消参与** | `status: unavailable`，`reasonCode: MINING_POOL_EXCLUDED`，`reviewStatus: not_applicable`；社区算力 / 排名 / 参与人数同为 `MINING_POOL_EXCLUDED`                          | 不入榜   |
+| 非矿池社区             | `community_mining_weights` 旧规则不变                                                                                                                                     | 旧规则   |
+
+- 社区总算力 = 该社区成员（非 banned）在该币上的快照行之和；矿池币的快照行已经是「币轨 + NFT 轨」（§5），与账户口径一致。
+- 名单读自当前生效的已批准挖矿参数版本（`effective_from ≤ now`，`quantity` 文档）；没有这样的版本时名单为空，所有社区按旧规则（与 §5 快照回退一致）。
+- 改动的读路径（共用 `src/database/mining-pool-roster-sql.ts` 的 `pool_version` / `pool_roster` CTE）：`getCommunityWeight`（社区页 `weight`）、`communityStandingsSql`（社区页 `communityPower` / `rank` / `participants`，以及 `/v2/communities/{id}` 的 `miningPower`）、`/v2/communities?sort=miningPower` 的排序与 `miningWeight`、按结算小时的社区榜（`epochCommunityStandingsSql`：展示 `weight` 用该小时参数版本下的币权重，NFT 邀请单位仍乘 NFT 系数；取消参与的矿池社区不入榜）。
+- `/v2` 不加键：`weight` 块形状不变；新原因码 `MINING_POOL_EXCLUDED` 只出现在既有 `reasonCode` 字段（客户端只校验格式）。
+- 测试：`test/mining-pool-roster.test.ts`（投影三种情况、社区页读路径的排除原因）、`test/mining-pool-roster.integration.test.ts`（PostgreSQL：权重记录、快照社区站位只算成员、他链矿池社区为 0、待审核社区无站位、小时社区榜显示币权重、新版本取消参与后无权重无站位）。
+
+## 附录 B：生产快照基线（不在本批改）
+
+生产没有已批准的快照公式版本时，快照 lane 与 `/v2/mining/*` 读路径整体空转。主网上线时二选一：
+
+1. 用 `pnpm mining:approve-formula <baseline> --confirm --approved-by <值班人> --reason <原因> --i-know-this-bypasses-review` 一次性批准基线公式版本（审计记 `bypass: true`）；
+2. 后续批次把快照基线从公式版本迁到挖矿参数版本。
+
+已写入 `docs/29-主网上线执行清单.md` §4 第 6 步。

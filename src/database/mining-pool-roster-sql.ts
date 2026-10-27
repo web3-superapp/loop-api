@@ -1,0 +1,85 @@
+/**
+ * Decision 0187 (appendix A, S313b): the mining pool roster as SQL common
+ * table expressions, for the read paths that project a community's weight
+ * and power (community page, community standings, the discover list's
+ * `sort=miningPower`, the per-hour community rank).
+ *
+ * `pool_version(config_version, approved_at, document)` is the parameter
+ * version the roster is read under; `pool_roster` lists every verified
+ * community that binds a launch2 MEME (any chain) under a `quantity`
+ * document, with
+ *
+ * - `token_weight` — the document's `assetWeights` entry for the MEME, else
+ *   "1" (the same rule as `mining-pool-roster.ts`);
+ * - `participate` — neither the MEME is in `excludedAssets` nor the
+ *   community in `excludedCommunities`.
+ *
+ * A roster community's weight projection is its token weight (approved,
+ * versioned by the parameter version); a non-participating roster community
+ * is not ranked. Without a `pool_version` row the roster is empty and every
+ * community keeps the `community_mining_weights` rule.
+ */
+
+/** The approved parameter version in force now. */
+export const miningPoolVersionInForceSql = `
+  pool_version as (
+    select v.config_version,
+      coalesce(v.approved_at, v.effective_from) as approved_at,
+      v.document
+    from public.mining_parameter_versions as v
+    where v.status = 'approved' and v.effective_from <= clock_timestamp()
+    order by v.effective_from desc
+    limit 1
+  )`;
+
+/** The parameter version an epoch (`epochParameter`, e.g. `$1`) was settled under. */
+export function miningPoolVersionOfEpochSql(epochParameter: string): string {
+  return `
+  pool_version as (
+    select v.config_version,
+      coalesce(v.approved_at, v.effective_from) as approved_at,
+      v.document
+    from public.mining_epochs as e
+    join public.mining_parameter_versions as v on v.version_id = e.version_id
+    where e.epoch_id = ${epochParameter}
+  )`;
+}
+
+export const miningPoolRosterSql = `
+  pool_roster as (
+    select
+      c.community_id,
+      c.name as community_name,
+      c.bound_asset_key as bound_asset_id,
+      pv.config_version as roster_config_version,
+      pv.approved_at as roster_approved_at,
+      coalesce(
+        (
+          select entry->>'weight'
+          from jsonb_array_elements(
+            coalesce(pv.document->'assetWeights', '[]'::jsonb)
+          ) as entry
+          where entry->>'assetId' = c.bound_asset_key
+          limit 1
+        ),
+        '1'
+      ) as token_weight,
+      not exists (
+        select 1
+        from jsonb_array_elements_text(
+          coalesce(pv.document->'excludedAssets', '[]'::jsonb)
+        ) as excluded
+        where excluded = c.bound_asset_key
+      ) and not exists (
+        select 1
+        from jsonb_array_elements_text(
+          coalesce(pv.document->'excludedCommunities', '[]'::jsonb)
+        ) as excluded
+        where excluded = c.community_id::text
+      ) as participate
+    from pool_version as pv
+    join public.communities as c on c.verification_status = 'verified'
+    join public.launch2_instances as i
+      on c.bound_asset_key = i.chain_id || ':' || i.meme_address
+    where pv.document->>'assetPowerBasis' = 'quantity'
+  )`;

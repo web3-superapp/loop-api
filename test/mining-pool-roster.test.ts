@@ -36,6 +36,8 @@ import {
   type MiningBalanceInput,
 } from "../src/features/mining/mining-snapshot.js";
 import { createMiningSnapshotWorker } from "../src/mining-snapshot-worker.js";
+import { projectCommunityWeight } from "../src/features/mining/mining-community-projection.js";
+import { createMiningPowerReader } from "../src/features/mining/mining-power-reader.js";
 import {
   createInMemoryMiningSettlement,
   epochRecord,
@@ -774,5 +776,129 @@ describe("Decision 0187 snapshot lane", () => {
       reasonCode: "MINING_NO_BALANCE_INPUTS",
     });
     expect(reads).not.toHaveBeenCalled();
+  });
+});
+
+describe("Decision 0187 appendix A community weight projection", () => {
+  const base = {
+    communityId: C1,
+    communityName: "Alpha",
+    boundAssetId: ASSET1,
+  };
+
+  it("projects a participating roster community as approved with its token weight", () => {
+    expect(
+      projectCommunityWeight({
+        ...base,
+        status: "approved",
+        weight: "2.5",
+        configVersion: "s313-pool",
+        reviewedAt: "2026-10-27T00:00:00.000Z",
+        source: "roster",
+        rosterExcluded: false,
+      }),
+    ).toEqual({
+      status: "approved",
+      value: "2.5",
+      configVersion: "s313-pool",
+      reviewedAt: "2026-10-27T00:00:00.000Z",
+    });
+  });
+
+  it("never says COMMUNITY_WEIGHT_PENDING_REVIEW for an unticked roster community", () => {
+    expect(
+      projectCommunityWeight({
+        ...base,
+        status: "pending_review",
+        weight: null,
+        configVersion: null,
+        reviewedAt: null,
+        source: "roster",
+        rosterExcluded: true,
+      }),
+    ).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_POOL_EXCLUDED",
+      reviewStatus: "not_applicable",
+    });
+  });
+
+  it("keeps the review rule for a non-roster community", () => {
+    expect(
+      projectCommunityWeight({
+        ...base,
+        status: "pending_review",
+        weight: null,
+        configVersion: null,
+        reviewedAt: null,
+      }),
+    ).toEqual({
+      status: "unavailable",
+      reasonCode: "COMMUNITY_WEIGHT_PENDING_REVIEW",
+      reviewStatus: "pending_review",
+    });
+  });
+
+  it("explains an unticked roster community's missing standing on the community page", async () => {
+    const reader = createMiningPowerReader({
+      repository: {
+        ...createUnavailableMiningRepository(),
+        getApprovedFormula: vi.fn(() =>
+          Promise.resolve({
+            configVersion: "f",
+            formula: {
+              kind: "holding_times_reference_price_times_weight" as const,
+              expressionKey: "k",
+              dailyOutputKey: "k",
+              assetWeights: {},
+              referralBoost: { status: "pending_approval" as const },
+            },
+            weightRange: {
+              loop: { status: "approved" as const, descriptionKey: "k" },
+              community: {
+                status: "pending_approval" as const,
+                descriptionKey: "k",
+              },
+              reviewFactorKeys: [],
+            },
+            priceGuardRules: [],
+            status: "approved" as const,
+            effectiveAt: "2026-09-08T00:00:00.000Z",
+            approvedAt: "2026-09-08T00:00:00.000Z",
+            createdAt: "2026-09-08T00:00:00.000Z",
+          }),
+        ),
+        getLatestSnapshot: vi.fn(() =>
+          Promise.resolve({
+            snapshotId: "e0000000-0000-4000-8000-000000000009",
+            blockNumber: "1",
+            blockHash: hash,
+            formulaVersion: "f",
+            priceVersion: "launch2_curve:2026-10-27T10:00:00.000Z",
+            totalPower: "1",
+            accountCount: 1,
+            computedAt: new Date().toISOString(),
+            holdingsSource: "chain" as const,
+          }),
+        ),
+        getLatestSnapshotAttempt: vi.fn(() => Promise.resolve(null)),
+        getCommunityStanding: vi.fn(() => Promise.resolve(null)),
+        getCommunityWeight: vi.fn(() =>
+          Promise.resolve({
+            ...base,
+            status: "pending_review" as const,
+            weight: null,
+            configVersion: null,
+            reviewedAt: null,
+            source: "roster" as const,
+            rosterExcluded: true,
+          }),
+        ),
+      },
+    });
+    expect(await reader.readCommunityPower(C1)).toEqual({
+      status: "unavailable",
+      reasonCode: "MINING_POOL_EXCLUDED",
+    });
   });
 });

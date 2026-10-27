@@ -56,6 +56,14 @@ export function projectCommunityWeight(
       reviewedAt: record.reviewedAt,
     });
   }
+  if (record.rosterExcluded === true) {
+    // Decision 0187 appendix A: unticked in the mining pool table.
+    return Object.freeze({
+      status: "unavailable" as const,
+      reasonCode: miningReasonCodes.poolExcluded,
+      reviewStatus: "not_applicable" as const,
+    });
+  }
   if (record.boundAssetId === null) {
     return Object.freeze({
       status: "unavailable" as const,
