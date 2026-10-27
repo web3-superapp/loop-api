@@ -22,6 +22,8 @@ import {
 import {
   miningEffectiveAssetWeights,
   miningEffectiveCommunityCoefficients,
+  miningPoolExternalFor,
+  type MiningPoolExternalAssets,
 } from "./mining-pool-roster.js";
 import type {
   CommitMiningEpochInput,
@@ -102,6 +104,7 @@ function sliceOf(
   from: bigint,
   to: bigint,
   poolAssetIds: readonly string[],
+  external: MiningPoolExternalAssets | null,
 ): MiningParameterSlice {
   return Object.freeze({
     from,
@@ -110,20 +113,26 @@ function sliceOf(
     coefficients: miningEffectiveCommunityCoefficients(version.document),
     defaultCoefficient:
       parseMiningDecimal(version.document.defaultCommunityCoefficient) ?? 0n,
-    assetWeights: miningEffectiveAssetWeights(version.document, poolAssetIds),
+    assetWeights: miningEffectiveAssetWeights(
+      version.document,
+      poolAssetIds,
+      external,
+    ),
     assetPowerBasis: version.document.assetPowerBasis,
   });
 }
 
 /**
  * Version slices tiling [start, end). `poolAssetIds` (Decision 0187) are the
- * roster's platform MEMEs on the settled chain.
+ * roster's platform MEMEs on the settled chain; `external` (Decision 0188)
+ * the external roster assets, out unless let in (and readable).
  */
 export function miningParameterSlices(
   versions: readonly MiningParameterVersionRecord[],
   start: bigint,
   end: bigint,
   poolAssetIds: readonly string[] = [],
+  external: MiningPoolExternalAssets | null = null,
 ): readonly MiningParameterSlice[] {
   const first = miningVersionAt(versions, start);
   if (first === null) return [];
@@ -137,12 +146,12 @@ export function miningParameterSlices(
   let cursor = start;
   for (const change of changes) {
     if (change.at > cursor) {
-      slices.push(sliceOf(current, cursor, change.at, poolAssetIds));
+      slices.push(sliceOf(current, cursor, change.at, poolAssetIds, external));
       cursor = change.at;
     }
     current = change.version;
   }
-  slices.push(sliceOf(current, cursor, end, poolAssetIds));
+  slices.push(sliceOf(current, cursor, end, poolAssetIds, external));
   return slices;
 }
 
@@ -300,6 +309,13 @@ export function prepareMiningHour(input: {
    */
   readonly poolAssetIds?: readonly string[];
   /**
+   * Decision 0188: the external roster assets (gated by `includedAssets`)
+   * and the ones the settlement can read. Absent when there are none, and
+   * when replaying an hour settled before 0188 (its summary has no
+   * `poolExternalAssetIds`).
+   */
+  readonly poolExternal?: MiningPoolExternalAssets;
+  /**
    * Decision 0187: the snapshot lane prepares a 1-second window at "now"
    * through the same rules (no budget is computed for a window that is not
    * a whole UTC hour). Default: one hour.
@@ -312,6 +328,7 @@ export function prepareMiningHour(input: {
   const wholeHour =
     windowSeconds === miningHourSeconds && start % miningHourSeconds === 0n;
   const poolAssetIds = [...new Set(input.poolAssetIds ?? [])].sort();
+  const external = normalizedExternal(input.poolExternal);
   const version = miningVersionAt(input.versions, start);
   if (version === null) {
     throw new MiningSettlementInputError(
@@ -330,6 +347,7 @@ export function prepareMiningHour(input: {
     start,
     end,
     poolAssetIds,
+    external,
   );
   const releaseStart = seconds(version.document.releaseStartAt);
 
@@ -699,6 +717,14 @@ export function prepareMiningHour(input: {
       ...(input.poolAssetIds === undefined
         ? {}
         : { poolRosterAssetIds: poolAssetIds }),
+      // Decision 0188: the external roster (only when there is one), so a
+      // replay gates the same assets.
+      ...(external === null
+        ? {}
+        : {
+            poolExternalAssetIds: external.assetIds,
+            poolExternalReadableAssetIds: [...(external.readable ?? [])].sort(),
+          }),
     }),
   });
 }
@@ -747,11 +773,47 @@ function rewardsOf(
 }
 
 /** Asset ids with a positive (effective) weight anywhere in [start, end). */
+/** Decision 0188: sorted, unique; null when there is no external asset. */
+function normalizedExternal(
+  external: MiningPoolExternalAssets | undefined,
+): MiningPoolExternalAssets | null {
+  if (external === undefined || external.assetIds.length === 0) return null;
+  return Object.freeze({
+    assetIds: Object.freeze([...new Set(external.assetIds)].sort()),
+    readable: new Set(
+      [...(external.readable ?? [])].filter((assetId) =>
+        external.assetIds.includes(assetId),
+      ),
+    ),
+  });
+}
+
+function stringList(value: unknown): readonly string[] | null {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : null;
+}
+
+/** Decision 0188: the external roster an epoch was settled with, if any. */
+function storedExternal(
+  summary: Readonly<Record<string, unknown>>,
+): MiningPoolExternalAssets | null {
+  const assetIds = stringList(summary["poolExternalAssetIds"]);
+  if (assetIds === null) return null;
+  return normalizedExternal({
+    assetIds,
+    readable: new Set(
+      stringList(summary["poolExternalReadableAssetIds"]) ?? [],
+    ),
+  });
+}
+
 export function admittedAssetIds(
   versions: readonly MiningParameterVersionRecord[],
   start: bigint,
   end: bigint,
   poolAssetIds: readonly string[] = [],
+  external: MiningPoolExternalAssets | null = null,
 ): readonly string[] {
   const assetIds = new Set<string>();
   for (const slice of miningParameterSlices(
@@ -759,6 +821,7 @@ export function admittedAssetIds(
     start,
     end,
     poolAssetIds,
+    normalizedExternal(external ?? undefined),
   )) {
     for (const [assetId, weight] of slice.assetWeights) {
       if (weight > 0n) assetIds.add(assetId);
@@ -793,23 +856,55 @@ export function createMiningSettlementRunner(dependencies: {
     hourStart: bigint,
     versions: readonly MiningParameterVersionRecord[],
     poolAssetIds: readonly string[],
+    external: MiningPoolExternalAssets | null,
   ): Promise<MiningSettlementFacts> {
     const end = hourStart + miningHourSeconds;
     return repository.readSettlementFacts({
       chainId: dependencies.chainId,
       hourStart,
       hourEnd: end,
-      assetIds: admittedAssetIds(versions, hourStart, end, poolAssetIds),
+      assetIds: admittedAssetIds(
+        versions,
+        hourStart,
+        end,
+        poolAssetIds,
+        external,
+      ),
       embeddedWalletOnly: dependencies.embeddedWalletOnly,
     });
   }
 
-  /** Decision 0187: the roster's platform MEMEs on the settled chain. */
-  async function readPoolAssetIds(): Promise<readonly string[]> {
-    const candidates = await repository.listMiningPoolCandidates({
-      chainId: dependencies.chainId,
-    });
-    return [...new Set(candidates.map((row) => row.assetId))].sort();
+  /**
+   * Decision 0187: the roster's platform MEMEs on the settled chain.
+   * Decision 0188: plus the external roster (every chain), gated by
+   * `includedAssets`; only an external token the settlement has a source
+   * for on the settled chain (a MEME v1 token) can weigh here.
+   */
+  async function readRoster(
+    versions: readonly MiningParameterVersionRecord[],
+  ): Promise<{
+    readonly poolAssetIds: readonly string[];
+    readonly external: MiningPoolExternalAssets | null;
+  }> {
+    const candidates = await repository.listMiningPoolCandidates({});
+    const poolAssetIds = [
+      ...new Set(
+        candidates
+          .filter(
+            (row) =>
+              row.kind !== "external" && row.chainId === dependencies.chainId,
+          )
+          .map((row) => row.assetId),
+      ),
+    ].sort();
+    return {
+      poolAssetIds,
+      external: miningPoolExternalFor(
+        candidates,
+        versions,
+        dependencies.chainId,
+      ),
+    };
   }
 
   return Object.freeze<MiningSettlementRunner>({
@@ -865,7 +960,7 @@ export function createMiningSettlementRunner(dependencies: {
           reasonCode: miningSettlementReasonCodes.outsideRelease,
         };
       }
-      const poolAssetIds = await readPoolAssetIds();
+      const { poolAssetIds, external } = await readRoster(versions);
       const freshness = await repository.readIndexerFreshness({
         chainId: dependencies.chainId,
         assetIds: admittedAssetIds(
@@ -873,6 +968,7 @@ export function createMiningSettlementRunner(dependencies: {
           hourStart,
           hourStart + miningHourSeconds,
           poolAssetIds,
+          external,
         ),
       });
       for (const lane of freshness.lanes) {
@@ -887,12 +983,18 @@ export function createMiningSettlementRunner(dependencies: {
       let prepared: PreparedMiningHour;
       let result: MiningHourlySettlementResult;
       try {
-        const facts = await readFacts(hourStart, versions, poolAssetIds);
+        const facts = await readFacts(
+          hourStart,
+          versions,
+          poolAssetIds,
+          external,
+        );
         prepared = prepareMiningHour({
           hourStart,
           versions,
           facts,
           poolAssetIds,
+          ...(external === null ? {} : { poolExternal: external }),
         });
         result = settleMiningHour(prepared.input);
       } catch (error) {
@@ -944,13 +1046,21 @@ export function createMiningSettlementRunner(dependencies: {
             (value): value is string => typeof value === "string",
           )
         : undefined;
+      // Decision 0188: likewise the stored external roster.
+      const external = storedExternal(epoch.inputSummary);
       try {
-        const facts = await readFacts(hourStart, versions, poolAssetIds ?? []);
+        const facts = await readFacts(
+          hourStart,
+          versions,
+          poolAssetIds ?? [],
+          external,
+        );
         const prepared = prepareMiningHour({
           hourStart,
           versions,
           facts,
           ...(poolAssetIds === undefined ? {} : { poolAssetIds }),
+          ...(external === null ? {} : { poolExternal: external }),
         });
         const result = settleMiningHour(prepared.input);
         const stored = await repository.listEpochRewards({ epochId });

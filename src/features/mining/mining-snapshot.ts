@@ -76,6 +76,15 @@ export interface MiningCommunityWeightInput {
   readonly assetId: string;
   readonly weight: string | null;
   readonly status: "pending_review" | "approved";
+  /**
+   * Decision 0188: `roster` = the row is the power list's (the community's
+   * token weight under the parameter version in force) — the weight then
+   * replaces the formula's asset weight instead of multiplying it. Absent:
+   * a pre-0188 reviewed community weight (second factor).
+   */
+  readonly source?: "roster";
+  /** Decision 0188: a roster row that does not participate. */
+  readonly rosterExcluded?: boolean;
 }
 
 /**
@@ -178,6 +187,8 @@ type WeightSelection =
  * factor on the community's bound asset. A bound asset whose weight is not
  * approved under this version is excluded rather than weighted by the asset
  * weight alone, so a community binding never silently drops its factor.
+ * Decision 0188: a power-list (roster) binding is the asset's weight itself;
+ * a roster row that does not participate is skipped as MINING_POOL_EXCLUDED.
  */
 export function selectMiningWeight(
   assetId: string,
@@ -206,7 +217,9 @@ export function selectMiningWeight(
   if (communityWeight === undefined) {
     return {
       kind: "skip",
-      reasonCode: miningReasonCodes.communityWeightPendingReview,
+      reasonCode: bindings.some((weight) => weight.rosterExcluded === true)
+        ? miningReasonCodes.poolExcluded
+        : miningReasonCodes.communityWeightPendingReview,
     };
   }
   if (others.length > 0) {
@@ -216,6 +229,12 @@ export function selectMiningWeight(
       kind: "skip",
       reasonCode: miningReasonCodes.communityWeightAmbiguous,
     };
+  }
+  if (bindings.some((weight) => weight.source === "roster")) {
+    // Decision 0188: the power list's token weight is the asset's weight
+    // (quantity × weight); the formula entry only admits the asset (its
+    // holdings and reference price are read).
+    return { kind: "weight", weight: communityWeight };
   }
   return {
     kind: "weight",

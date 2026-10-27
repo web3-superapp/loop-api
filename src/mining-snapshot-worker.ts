@@ -21,6 +21,7 @@ import {
 import type { MiningRepository } from "./features/mining/mining-repository.js";
 import {
   computeMiningSnapshot,
+  selectMiningWeight,
   type MiningPriceInput,
   type MiningSnapshotPoolInput,
   type MiningSnapshotSkip,
@@ -29,6 +30,7 @@ import { MiningSettlementInputError } from "./features/mining/hourly-settlement-
 import type { MiningSettlementRepository } from "./features/mining/hourly-settlement-ports.js";
 import { admittedAssetIds } from "./features/mining/hourly-settlement-runner.js";
 import { computeMiningPoolSnapshot } from "./features/mining/mining-pool-snapshot.js";
+import { miningPoolExternalFor } from "./features/mining/mining-pool-roster.js";
 
 /**
  * The `mining-snapshot` lane (Decisions 0036 and 0043), default off behind
@@ -305,11 +307,22 @@ export function createMiningSnapshotWorker(
   }> {
     const source = options.pool ?? null;
     if (source === null) return { part: null, skipped: [] };
-    const candidates = await source.repository.listMiningPoolCandidates({
-      chainId: source.chainId,
-    });
+    // Decision 0188: the pool part values the platform MEMEs only; an
+    // external roster token keeps the formula path (its observed balance),
+    // weighted by the power list (`listCommunityWeightInputs`).
+    const [candidates, externalCandidates] = await Promise.all([
+      source.repository.listMiningPoolCandidates({
+        chainId: source.chainId,
+        kind: "platform",
+      }),
+      source.repository.listMiningPoolCandidates({ kind: "external" }),
+    ]);
     const poolAssetIds = [
-      ...new Set(candidates.map((row) => row.assetId)),
+      ...new Set(
+        candidates
+          .filter((row) => row.kind !== "external")
+          .map((row) => row.assetId),
+      ),
     ].sort();
     if (poolAssetIds.length === 0) return { part: null, skipped: [] };
     const at = BigInt(
@@ -326,13 +339,25 @@ export function createMiningSnapshotWorker(
         Object.freeze({ assetId, reasonCode }),
       ),
     });
+    // Decision 0188: external roster assets never enter the pool part.
+    const external = miningPoolExternalFor(
+      externalCandidates.filter((row) => row.kind === "external"),
+      versions,
+      null,
+    );
     let facts;
     try {
       facts = await source.repository.readSettlementFacts({
         chainId: source.chainId,
         hourStart: at,
         hourEnd: at + 1n,
-        assetIds: admittedAssetIds(versions, at, at + 1n, poolAssetIds),
+        assetIds: admittedAssetIds(
+          versions,
+          at,
+          at + 1n,
+          poolAssetIds,
+          external,
+        ),
         embeddedWalletOnly: options.embeddedWalletOnly ?? false,
       });
     } catch (error) {
@@ -345,6 +370,7 @@ export function createMiningSnapshotWorker(
       at,
       versions,
       poolAssetIds,
+      external,
       facts,
       block,
       registeredAssetIds: new Set(
@@ -396,7 +422,13 @@ export function createMiningSnapshotWorker(
     const candidateAssetIds = [
       ...new Set(balances.map((balance) => balance.assetId)),
     ].filter(
-      (assetId) => weightedAssetIds.has(assetId) && !poolOwned.has(assetId),
+      (assetId) =>
+        weightedAssetIds.has(assetId) &&
+        !poolOwned.has(assetId) &&
+        // Decision 0188: a power-list row that does not take part is not
+        // valued, so its price is not read either.
+        selectMiningWeight(assetId, formula.formula, communityWeights).kind ===
+          "weight",
     );
     const assets =
       candidateAssetIds.length === 0

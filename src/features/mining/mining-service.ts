@@ -1178,6 +1178,8 @@ export function createMiningService(dependencies: {
                     }),
                     weight: row.weight,
                     participants: row.participantCount,
+                    // S316 (optional key, client first): the community logo.
+                    avatarRef: row.avatarRef ?? null,
                   }),
                 ),
               ),

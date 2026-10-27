@@ -316,6 +316,13 @@ function splitAssetId(assetId: string): { chainId: string; address: string } {
   };
 }
 
+/** Decision 0188: the settlement source column of a roster candidate. */
+function settlementSourceOf(
+  value: string | null,
+): "launch2" | "meme_v1" | null {
+  return value === "launch2" || value === "meme_v1" ? value : null;
+}
+
 export function createPostgresMiningSettlementRepository(
   pool: Pool,
 ): MiningSettlementRepository {
@@ -775,8 +782,21 @@ export function createPostgresMiningSettlementRepository(
       return Object.freeze(unknown);
     },
 
+    async findVerifiedBoundAssetIds(assetIds) {
+      if (assetIds.length === 0) return Object.freeze([]);
+      const rows = await query(
+        `select distinct bound_asset_key from public.communities
+         where verification_status = 'verified'
+           and bound_asset_key = any($1::text[])`,
+        [[...assetIds]],
+      );
+      const bound = new Set(rows.map((row) => text(row, "bound_asset_key")));
+      return Object.freeze(assetIds.filter((id) => bound.has(id)));
+    },
+
     async listMiningPoolCandidates(input) {
       // Decision 0187: verified community × the launch2 MEME it binds.
+      // Decision 0188: every other bound asset is an `external` row.
       const limit =
         input.limit === undefined || input.limit === null
           ? null
@@ -786,19 +806,37 @@ export function createPostgresMiningSettlementRepository(
           ? null
           : `%${input.query.replace(/[\\%_]/gu, (match) => `\\${match}`)}%`;
       const rows = await query(
-        `select c.community_id::text as community_id, c.name as community_name,
-           i.chain_id || ':' || i.meme_address as asset_id,
-           i.chain_id, i.meme_address, i.ticker,
-           i.instance_id::text as instance_id, i.launch_id
-         from public.communities c
-         join public.launch2_instances i
-           on c.bound_asset_key = i.chain_id || ':' || i.meme_address
-         where c.verification_status = 'verified'
-           and ($1::text is null or i.chain_id = $1)
-           and ($2::text is null or i.meme_address = lower($2))
-           and ($3::text is null or c.name ilike $3 or i.ticker ilike $3)
-           and ($4::text is null or (c.name, c.community_id::text) > ($4, $5::text))
-         order by c.name, c.community_id::text
+        `select * from (
+           select c.community_id::text as community_id,
+             c.name as community_name,
+             c.bound_asset_key as asset_id,
+             split_part(c.bound_asset_key, ':', 1) || ':'
+               || split_part(c.bound_asset_key, ':', 2) as chain_id,
+             split_part(c.bound_asset_key, ':', 3) as meme_address,
+             case when i.instance_id is null then 'external' else 'platform'
+               end as kind,
+             coalesce(i.ticker, a.symbol) as ticker,
+             i.instance_id::text as instance_id, i.launch_id,
+             case
+               when i.instance_id is not null then 'launch2'
+               when exists (
+                 select 1 from public.meme_tokens as t
+                 where t.chain_id || ':' || t.token_address = c.bound_asset_key
+               ) then 'meme_v1'
+             end as settlement_source
+           from public.communities c
+           left join public.launch2_instances i
+             on c.bound_asset_key = i.chain_id || ':' || i.meme_address
+           left join public.assets a on a.asset_id = c.bound_asset_key
+           where c.verification_status = 'verified'
+             and c.bound_asset_key is not null
+         ) as candidate
+         where ($1::text is null or chain_id = $1)
+           and ($2::text is null or meme_address = lower($2))
+           and ($3::text is null or community_name ilike $3 or ticker ilike $3)
+           and ($4::text is null or (community_name, community_id) > ($4, $5::text))
+           and ($7::text is null or kind = $7)
+         order by community_name, community_id
          limit $6`,
         [
           input.chainId ?? null,
@@ -807,6 +845,7 @@ export function createPostgresMiningSettlementRepository(
           input.after?.communityName ?? null,
           input.after?.communityId ?? null,
           limit,
+          input.kind ?? null,
         ],
       );
       return Object.freeze(
@@ -817,9 +856,16 @@ export function createPostgresMiningSettlementRepository(
             assetId: text(row, "asset_id"),
             chainId: text(row, "chain_id"),
             memeAddress: text(row, "meme_address"),
-            symbol: text(row, "ticker"),
-            instanceId: text(row, "instance_id"),
-            launchId: text(row, "launch_id"),
+            kind:
+              text(row, "kind") === "platform"
+                ? ("platform" as const)
+                : ("external" as const),
+            symbol: nullableText(row, "ticker"),
+            instanceId: nullableText(row, "instance_id"),
+            launchId: nullableText(row, "launch_id"),
+            settlementSource: settlementSourceOf(
+              nullableText(row, "settlement_source"),
+            ),
           }),
         ),
       );

@@ -123721,6 +123721,16 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "description": "Accounts (members or not, never banned by the community) with positive community power in the hour."
+                                  },
+                                  "avatarRef": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^(avatar:preset/community-(0[1-9]|1[0-2])|logo:media/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+                                      },
+                                      { "type": "null" }
+                                    ],
+                                    "description": "S316 / Decision 0188 (optional key; clients must not require it): the community picture, same source and format as the community resources' `logoRef` — `avatar:preset/community-NN` or `logo:media/{mediaId}`; null when unset."
                                   }
                                 }
                               }

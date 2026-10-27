@@ -48,6 +48,7 @@ import {
   type ReferralRepository,
 } from "../src/features/referral/referral-repository.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
+import { approveMiningPowerList } from "./helpers/mining-power-list.js";
 
 const { Client, Pool } = pg;
 
@@ -970,13 +971,23 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         `,
         values: [current, retired],
       });
-      // Decision 0043: every bound community is listed; a weight reviewed
-      // under another version reads as pending_review with no value.
+      // Decision 0188: the snapshot's community factor is the power list
+      // (the parameter version in force), whatever the formula version; the
+      // reviewed community_mining_weights rows above are no longer read.
+      await approveMiningPowerList(pool, {
+        weights: [
+          {
+            assetId: "eip155:56:0x00000000000000000000000000000000000000aa",
+            weight: "0.5",
+          },
+        ],
+      });
       const byCommunity = (
         rows: readonly {
           communityId: string;
           weight: string | null;
           status: string;
+          rosterExcluded?: boolean;
         }[],
       ) =>
         Object.fromEntries(
@@ -985,34 +996,24 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
               (row) =>
                 row.communityId === current || row.communityId === retired,
             )
-            .map((row) => [row.communityId, [row.status, row.weight]]),
+            .map((row) => [
+              row.communityId,
+              [row.status, row.weight, row.rosterExcluded],
+            ]),
         );
-      expect(
-        byCommunity(
-          await mining.listCommunityWeightInputs("miningFormulaTestOnly"),
-        ),
-      ).toEqual({
-        [current ?? ""]: ["approved", "0.5"],
-        [retired ?? ""]: ["pending_review", null],
-      });
-      expect(
-        byCommunity(
-          await mining.listCommunityWeightInputs(
-            "miningFormulaRetiredTestOnly",
-          ),
-        ),
-      ).toEqual({
-        [current ?? ""]: ["pending_review", null],
-        [retired ?? ""]: ["approved", "0.9"],
-      });
-      expect(
-        byCommunity(
-          await mining.listCommunityWeightInputs("miningFormulaV1-draft"),
-        ),
-      ).toEqual({
-        [current ?? ""]: ["pending_review", null],
-        [retired ?? ""]: ["pending_review", null],
-      });
+      for (const formulaVersion of [
+        "miningFormulaTestOnly",
+        "miningFormulaRetiredTestOnly",
+        "miningFormulaV1-draft",
+      ]) {
+        expect(
+          byCommunity(await mining.listCommunityWeightInputs(formulaVersion)),
+        ).toEqual({
+          [current ?? ""]: ["approved", "0.5", false],
+          // Not let in: out of the list (MINING_POOL_EXCLUDED).
+          [retired ?? ""]: ["pending_review", null, true],
+        });
+      }
       // Retire it again so the seeded draft remains the only visible version.
       await pool.query({
         text: `update public.mining_formula_versions set status = 'retired' where config_version = 'miningFormulaTestOnly'`,
@@ -1192,12 +1193,24 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         text: `delete from public.community_mining_weights where community_id = $1`,
         values: [secondBoundCommunity],
       });
+      // Decision 0188: the reviewed row above no longer reaches the
+      // snapshot; the power list does (CAKE is an external token let in).
+      expect(
+        (await mining.listCommunityWeightInputs(baselineVersion)).find(
+          (row) => row.communityId === boundCommunity,
+        ),
+      ).toMatchObject({ status: "pending_review", weight: null });
+      await approveMiningPowerList(pool, {
+        weights: [{ assetId: cakeAsset, weight: "0.5" }],
+      });
       const inputs = await mining.listCommunityWeightInputs(baselineVersion);
       expect(inputs.find((row) => row.communityId === boundCommunity)).toEqual({
         communityId: boundCommunity,
         assetId: cakeAsset,
         weight: "0.5",
         status: "approved",
+        source: "roster",
+        rosterExcluded: false,
       });
       // Decision 0183: only verified communities are snapshot candidates.
       expect(
@@ -1380,6 +1393,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         communityName: "Cake Holders",
         boundAssetId: cakeAsset,
         weight: "0.5",
+        avatarRef: null,
         power: "92",
         participantCount: 2,
         position: 1,
@@ -1391,13 +1405,15 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           communityId: secondBoundCommunity,
         }),
       ).toBeNull();
+      // Decision 0188: the weight is the power list's, not a review under a
+      // formula version, so another formula version reads the same standing.
       expect(
         await mining.getCommunityStanding({
           snapshotId,
           configVersion: "miningFormulaV1-draft",
           communityId: boundCommunity,
         }),
-      ).toBeNull();
+      ).toMatchObject({ weight: "0.5", power: "92", position: 1 });
       const memberPowers = await mining.listMemberPowers({
         snapshotId,
         publicProfileIds: [

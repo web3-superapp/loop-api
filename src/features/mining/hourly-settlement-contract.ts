@@ -179,6 +179,15 @@ export interface MiningParameterDocument {
    * empty). Sorted, unique.
    */
   readonly excludedCommunities?: readonly string[];
+  /**
+   * Decision 0188 (power list): external-token assets let in by hand — the
+   * asset a verified community binds that is not a launch2 MEME (e.g. a BSC
+   * mainnet token). Such a roster row takes part only while its asset is
+   * listed here (and not excluded); its weight is the `assetWeights` entry,
+   * else 1. Participation is this key, never the presence of a weight.
+   * Absent in documents stored before 0188 (→ empty). Sorted, unique.
+   */
+  readonly includedAssets?: readonly string[];
 }
 
 export class MiningParameterDocumentError extends Error {
@@ -244,6 +253,7 @@ export function parseMiningParameterDocument(
     "defaultCommunityCoefficient",
     "excludedAssets",
     "excludedCommunities",
+    "includedAssets",
   ]);
   for (const key of Object.keys(doc)) {
     if (!allowed.has(key)) throw new MiningParameterDocumentError(key);
@@ -364,6 +374,12 @@ export function parseMiningParameterDocument(
     uuidPattern,
     2_000,
   );
+  const includedAssets = parseIdList(
+    doc["includedAssets"],
+    "includedAssets",
+    assetIdPattern,
+    500,
+  );
   return Object.freeze({
     referralRatiosBps: Object.freeze([...(ratios as number[])]),
     dailyBudgetNftRaw: doc["dailyBudgetNftRaw"] as string,
@@ -384,6 +400,7 @@ export function parseMiningParameterDocument(
     defaultCommunityCoefficient: formatMiningDecimal(defaultCoefficient),
     excludedAssets,
     excludedCommunities,
+    includedAssets,
   });
 }
 
@@ -454,6 +471,8 @@ export const miningDefaultParameterDocument = Object.freeze({
   /** Decision 0187: every roster row participates by default. */
   excludedAssets: Object.freeze([] as string[]),
   excludedCommunities: Object.freeze([] as string[]),
+  /** Decision 0188: no external token takes part until let in. */
+  includedAssets: Object.freeze([] as string[]),
 });
 
 /** Contract caps the defaults are sized to (LoopRewardClaim, S138-contracts). */

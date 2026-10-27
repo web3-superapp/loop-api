@@ -23,6 +23,7 @@ import {
 import {
   resolveMiningPoolEntry,
   type MiningPoolCandidate,
+  type MiningPoolKind,
 } from "../mining/mining-pool-roster.js";
 import { AdminApiError, adminReasonCodes } from "./admin-contract.js";
 import { adminRoleHasPermission } from "./admin-roles.js";
@@ -144,6 +145,7 @@ function projectPoolRow(
     assetId: row.assetId,
     chainId: row.chainId,
     memeAddress: row.memeAddress,
+    kind: row.kind,
     symbol: row.symbol,
     instanceId: row.instanceId,
     launchId: row.launchId,
@@ -340,9 +342,22 @@ export function createAdminMiningSettlementService(dependencies: {
       if (query["cursor"] !== undefined && query["limit"] !== undefined) {
         throw new AdminApiError("INVALID_REQUEST");
       }
+      const rawKind = query["kind"];
+      if (
+        rawKind !== undefined &&
+        rawKind !== "platform" &&
+        rawKind !== "external"
+      ) {
+        throw new AdminApiError("INVALID_REQUEST");
+      }
+      const kind: MiningPoolKind | null = rawKind ?? null;
       const normalizedAddress =
         typeof address === "string" ? address.toLowerCase() : null;
-      const filter = `address=${normalizedAddress ?? ""}&q=${q ?? ""}`;
+      // Decision 0188: `kind` is bound into the cursor only when given, so a
+      // cursor issued before 0188 (no kind) stays valid.
+      const filter = `address=${normalizedAddress ?? ""}&q=${q ?? ""}${
+        kind === null ? "" : `&kind=${kind}`
+      }`;
       let limit = parsePoolLimit(query["limit"]);
       let after: { communityName: string; communityId: string } | null = null;
       if (query["cursor"] !== undefined) {
@@ -366,6 +381,7 @@ export function createAdminMiningSettlementService(dependencies: {
           repo.listMiningPoolCandidates({
             address: normalizedAddress,
             query: q,
+            kind,
             after,
             limit: limit + 1,
           }),
@@ -500,12 +516,26 @@ export function createAdminMiningSettlementService(dependencies: {
               : "excludedCommunities",
           );
         }
-        const unknown = await repo.findUnknownAssetIds([
+        // Decision 0188: an external token let in (`includedAssets`) needs
+        // no settlement source — a verified community binding it is enough;
+        // its weight may then be listed too.
+        const sourced = await repo.findUnknownAssetIds([
           ...new Set([
             ...document.assetWeights.map((entry) => entry.assetId),
             ...(document.excludedAssets ?? []),
+            ...(document.includedAssets ?? []),
           ]),
         ]);
+        const included = new Set(document.includedAssets ?? []);
+        const bound =
+          sourced.length === 0
+            ? new Set<string>()
+            : new Set(
+                await repo.findVerifiedBoundAssetIds(
+                  sourced.filter((assetId) => included.has(assetId)),
+                ),
+              );
+        const unknown = sourced.filter((assetId) => !bound.has(assetId));
         if (unknown.length > 0) {
           throw new AdminApiError("VALIDATION_FAILED", {
             reasonCode: miningSettlementReasonCodes.assetSourceUnknown,

@@ -1,4 +1,7 @@
-import type { MiningPoolCandidate } from "./mining-pool-roster.js";
+import type {
+  MiningPoolCandidate,
+  MiningPoolKind,
+} from "./mining-pool-roster.js";
 import type {
   MiningClaimState,
   MiningEpochState,
@@ -408,14 +411,24 @@ export interface MiningSettlementRepository {
     communityIds: readonly string[],
   ): Promise<readonly string[]>;
   /**
+   * Decision 0188: the given asset ids that a verified community binds
+   * (`communities.bound_asset_key`), in input order.
+   */
+  findVerifiedBoundAssetIds(
+    assetIds: readonly string[],
+  ): Promise<readonly string[]>;
+  /**
    * Decision 0187: the mining pool roster candidates — every verified
    * community × the launch2 MEME it binds, ordered by community name then
-   * id. `chainId` / `address` (MEME, lower-case, exact) / `query` (community
-   * name or ticker, case-insensitive substring) filter; `after` + `limit`
+   * id. Decision 0188: every verified community with any bound asset (an
+   * asset that is not a launch2 MEME is `kind: external`). `chainId` /
+   * `address` (bound token, lower-case, exact) / `query` (community name or
+   * ticker, case-insensitive substring) / `kind` filter; `after` + `limit`
    * page (absent limit: every row).
    */
   listMiningPoolCandidates(input: {
     readonly chainId?: string | null;
+    readonly kind?: MiningPoolKind | null;
     readonly address?: string | null;
     readonly query?: string | null;
     readonly after?: {

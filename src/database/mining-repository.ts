@@ -9,6 +9,7 @@ import {
   miningPoolVersionOfEpochSql,
 } from "./mining-pool-roster-sql.js";
 
+import { communityLogoRefPatternSource } from "../features/community/community-contract.js";
 import { normalizeDecimalString } from "../features/market/market-contract.js";
 import {
   communityWeightStatuses,
@@ -240,6 +241,7 @@ const communityStandingRowSchema = z
     community_name: z.string().min(1),
     bound_asset_id: z.string().min(1),
     weight: decimalSchema,
+    logo_ref: z.string().min(1).nullable(),
     power: numericTextSchema,
     participant_count: countSchema,
     position: positionSchema.nullable(),
@@ -318,6 +320,8 @@ function mapSnapshotAttempt(raw: unknown): MiningSnapshotAttemptRecord {
   });
 }
 
+const communityLogoRefPattern = new RegExp(communityLogoRefPatternSource, "u");
+
 function mapCommunityStanding(raw: unknown): MiningCommunityStandingRecord {
   const row = communityStandingRowSchema.parse(raw);
   return Object.freeze({
@@ -325,6 +329,12 @@ function mapCommunityStanding(raw: unknown): MiningCommunityStandingRecord {
     communityName: row.community_name,
     boundAssetId: row.bound_asset_id,
     weight: row.weight,
+    // S316: the community picture for the rank row (`avatarRef`); only a
+    // well-formed preset / uploaded logo ref is published, anything else null.
+    avatarRef:
+      row.logo_ref !== null && communityLogoRefPattern.test(row.logo_ref)
+        ? row.logo_ref
+        : null,
     power: row.power,
     participantCount: row.participant_count,
     position: row.position,
@@ -475,12 +485,14 @@ const epochCommunityStandingsSql = `
         0
       ) end as coefficient,
       -- Decision 0187 appendix A: a roster community shows its token weight.
-      r.token_weight as roster_weight
+      r.token_weight as roster_weight,
+      c.logo_ref
     from public.communities as c
-    left join pool_roster as r on r.community_id = c.community_id
-    where c.bound_asset_key is not null
-      -- An unticked roster community is not ranked.
-      and r.participate is not false
+    -- Decision 0188: only participating roster communities are ranked (an
+    -- unticked platform MEME, an external token not let in, and any
+    -- community off the roster are not).
+    join pool_roster as r on r.community_id = c.community_id
+    where r.participate
   ),
   member_powers as (
     select
@@ -528,6 +540,7 @@ const epochCommunityStandingsSql = `
       b.community_name,
       b.bound_asset_id,
       coalesce(b.roster_weight, trim_scale(b.coefficient)::text) as weight,
+      b.logo_ref,
       p.total::text as power,
       p.participant_count,
       case
@@ -569,26 +582,15 @@ const communityStandingsSql = `
   ${miningPoolRosterSql},
   bound as (
     -- Decision 0187 appendix A: a roster community is weighted by its token
-    -- weight while it participates (unticked: not ranked); every other
-    -- community keeps its approved community_mining_weights row.
-    select
-      c.community_id,
-      c.name as community_name,
-      c.bound_asset_key as bound_asset_id,
-      w.weight
-    from public.communities as c
-    join public.community_mining_weights as w
-      on w.community_id = c.community_id
-    where c.bound_asset_key is not null
-      and w.status = 'approved'
-      and w.config_version = $2
-      and not exists (
-        select 1 from pool_roster as r where r.community_id = c.community_id
-      )
-    union all
+    -- weight while it participates (unticked: not ranked). Decision 0188:
+    -- the roster is the only rule (external tokens let in by hand included);
+    -- community_mining_weights is no longer read.
     select r.community_id, r.community_name, r.bound_asset_id, r.token_weight
+      as weight, c.logo_ref
     from pool_roster as r
+    join public.communities as c on c.community_id = r.community_id
     where r.participate
+      and $2::text is not null
   ),
   powers as (
     select
@@ -611,6 +613,7 @@ const communityStandingsSql = `
       b.community_name,
       b.bound_asset_id,
       b.weight,
+      b.logo_ref,
       p.total::text as power,
       p.participant_count,
       case
@@ -883,7 +886,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const communityId = opaqueIdSchema.parse(rawCommunityId);
         // Decision 0187 appendix A: a roster community's weight is its
         // token weight under the parameter version in force (approved,
-        // source roster); an unticked one has none. Others: the reviewed row.
+        // source roster); an unticked one has none. Decision 0188: the
+        // roster is the only rule — a community off it (not verified, no
+        // bound asset, or no approved quantity version) has no weight; the
+        // community_mining_weights row is no longer read.
         const result = await pool.query({
           text: `
             with ${miningPoolVersionInForceSql},
@@ -892,29 +898,16 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               c.community_id,
               c.name as community_name,
               c.bound_asset_key as bound_asset_id,
-              case
-                when r.community_id is null
-                  then coalesce(w.status, 'pending_review')
-                when r.participate then 'approved'
-                else 'pending_review'
-              end as status,
-              case
-                when r.community_id is null then w.weight
-                when r.participate then r.token_weight
-              end as weight,
-              case
-                when r.community_id is null then w.config_version
-                when r.participate then r.roster_config_version
-              end as config_version,
-              case
-                when r.community_id is null then w.reviewed_at
-                when r.participate then r.roster_approved_at
-              end as reviewed_at,
+              case when r.participate then 'approved' else 'pending_review'
+                end as status,
+              case when r.participate then r.token_weight end as weight,
+              case when r.participate then r.roster_config_version end
+                as config_version,
+              case when r.participate then r.roster_approved_at end
+                as reviewed_at,
               (r.community_id is not null) as roster,
               coalesce(not r.participate, false) as roster_excluded
             from public.communities as c
-            left join public.community_mining_weights as w
-              on w.community_id = c.community_id
             left join pool_roster as r on r.community_id = c.community_id
             where c.community_id = $1
           `,
@@ -946,41 +939,49 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
 
     async listCommunityWeightInputs(rawConfigVersion: string) {
       try {
-        const configVersion = configVersionSchema.parse(rawConfigVersion);
+        // Decision 0188: the snapshot's community factor is the power list
+        // (the roster under the parameter version in force), not the
+        // community_mining_weights table: a participating roster community
+        // carries its token weight (source roster), any other verified
+        // binding reads as not approved — excluded rows say so.
+        configVersionSchema.parse(rawConfigVersion);
         const result = await pool.query({
           text: `
+            with ${miningPoolVersionInForceSql},
+            ${miningPoolRosterSql}
             select
               c.community_id,
               c.name as community_name,
               c.bound_asset_key as bound_asset_id,
-              case
-                when w.config_version = $1 then w.status
-                else 'pending_review'
-              end as status,
-              case when w.config_version = $1 then w.weight end as weight,
-              case when w.config_version = $1 then w.config_version end
+              case when r.participate then 'approved' else 'pending_review'
+                end as status,
+              case when r.participate then r.token_weight end as weight,
+              case when r.participate then r.roster_config_version end
                 as config_version,
-              case when w.config_version = $1 then w.reviewed_at end
-                as reviewed_at
+              case when r.participate then r.roster_approved_at end
+                as reviewed_at,
+              coalesce(not r.participate, false) as roster_excluded
             from public.communities as c
-            left join public.community_mining_weights as w
-              on w.community_id = c.community_id
+            left join pool_roster as r on r.community_id = c.community_id
             where c.bound_asset_key is not null
               -- Decision 0183: a pending / rejected community's binding
               -- never touches the snapshot.
               and c.verification_status = 'verified'
             order by c.community_id
           `,
-          values: [configVersion],
         });
         return Object.freeze(
           result.rows.map((raw): MiningCommunityWeightInput => {
-            const row = weightRowSchema.parse(raw);
+            const row = weightRowSchema
+              .extend({ roster_excluded: z.boolean() })
+              .parse(raw);
             return Object.freeze({
               communityId: row.community_id,
               assetId: row.bound_asset_id ?? "",
               weight: row.weight,
               status: row.status,
+              source: "roster" as const,
+              rosterExcluded: row.roster_excluded,
             });
           }),
         );

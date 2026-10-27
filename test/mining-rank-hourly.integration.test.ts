@@ -132,8 +132,11 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
     assetId: string | null,
   ): Promise<string> {
     const result = await pool.query<{ community_id: string }>(
-      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id)
-       values ($1, $2, $3, $4) returning community_id`,
+      // Decision 0188: only verified communities are on the power list.
+      `insert into public.communities (name, slug, bound_asset_key, created_by_user_id,
+         verification_status, verified_at, reviewed_at)
+       values ($1, $2, $3, $4, 'verified', '2026-10-01', '2026-10-01')
+       returning community_id`,
       [name, `s205-${randomUUID().slice(0, 8)}`, assetId, users[0]],
     );
     return result.rows[0]!.community_id;
@@ -206,7 +209,11 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         JSON.stringify({
           ...miningDefaultParameterDocument,
           releaseStartAt: "2026-10-01T00:00:00.000Z",
-          assetWeights: [],
+          // Decision 0188: the bound tokens are external (no launch2
+          // instance), so the power list lets them in; the rank's `weight`
+          // is the token weight (A pinned at 1.5, B and C default 1).
+          assetWeights: [{ assetId: assetA, weight: "1.5" }],
+          includedAssets: [assetA, assetB, assetC].sort(),
           // A is listed; B and C fall back to the version default (1).
           communityCoefficients: [
             { communityId: communityA, coefficient: "1.50" },
@@ -415,6 +422,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Alpha Hourly",
         boundAssetId: assetA,
         weight: "1.5",
+        avatarRef: null,
         power: "2",
         participantCount: 1,
         position: 1,
@@ -425,6 +433,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Beta Hourly",
         boundAssetId: assetB,
         weight: "1",
+        avatarRef: null,
         power: "2",
         participantCount: 1,
         position: 1,
@@ -435,6 +444,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         communityName: "Gamma Hourly",
         boundAssetId: assetC,
         weight: "1",
+        avatarRef: null,
         power: "0",
         participantCount: 0,
         position: null,

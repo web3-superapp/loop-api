@@ -640,12 +640,25 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
     expect(inForce?.formula.dailyOutput?.budget).toBe("12345");
     const baseline = await resolveMiningBaseline(mining);
     expect(baseline.status).toBe("approved");
-    const weight = await mining.getCommunityWeight(boundCommunity);
-    expect(weight).toMatchObject({
+    // The draft weights are still written to the (retired) review table …
+    const reviewed = await pool.query<{
+      status: string;
+      weight: string;
+      config_version: string;
+    }>(
+      `select status, weight::text as weight, config_version
+       from public.community_mining_weights where community_id = $1`,
+      [boundCommunity],
+    );
+    expect(reviewed.rows[0]).toMatchObject({
       status: "approved",
-      weight: range.max,
-      configVersion: "s119Next",
+      config_version: "s119Next",
     });
+    expect(Number(reviewed.rows[0]?.weight)).toBe(Number(range.max));
+    // … but Decision 0188: the community weight is the power list's only
+    // (no approved mining parameter version here → no weight).
+    const weight = await mining.getCommunityWeight(boundCommunity);
+    expect(weight).toMatchObject({ status: "pending_review", weight: null });
     const versions = await mining.listFormulaVersions();
     expect(
       versions.find((row) => row.configVersion === "s119Base")?.status,

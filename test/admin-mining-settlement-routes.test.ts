@@ -468,6 +468,7 @@ describe("Operator console mining settlement (Decision 0116)", () => {
           assetId: `eip155:97:${memes[index] as string}`,
           chainId: "eip155:97",
           memeAddress: memes[index] as string,
+          kind: "platform",
           symbol: name.toUpperCase(),
           instanceId: `d0000000-0000-4000-8000-00000000000${String(index + 1)}`,
           launchId: `0x${String(index + 1).repeat(64)}`,
@@ -680,6 +681,146 @@ describe("Operator console mining settlement (Decision 0116)", () => {
             },
           },
         ],
+      });
+    });
+
+    describe("Decision 0188 external tokens on the power list", () => {
+      const cakeAddress = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+      const cake = `eip155:56:${cakeAddress}`;
+      const newsId = "c0000000-0000-4000-8000-000000000004";
+      function seedExternal(settlement: InMemoryMiningSettlement) {
+        seed(settlement);
+        settlement.poolCandidates.push({
+          communityId: newsId,
+          communityName: "BSC News",
+          assetId: cake,
+          chainId: "eip155:56",
+          memeAddress: cakeAddress,
+          kind: "external",
+          symbol: "CAKE",
+          instanceId: null,
+          launchId: null,
+          settlementSource: null,
+        });
+      }
+
+      it("lists an external row out by default and filters by kind", async () => {
+        const { call, settlement } = await harness();
+        seedExternal(settlement);
+        const external = await call(
+          "auditor",
+          "GET",
+          "/admin/v1/mining/pool?kind=external",
+        );
+        expect(external.statusCode, external.body).toBe(200);
+        expect(external.json<{ items: unknown[] }>().items).toEqual([
+          {
+            communityId: newsId,
+            communityName: "BSC News",
+            assetId: cake,
+            chainId: "eip155:56",
+            memeAddress: cakeAddress,
+            kind: "external",
+            symbol: "CAKE",
+            instanceId: null,
+            launchId: null,
+            participate: false,
+            tokenWeight: "0",
+            nftCoefficient: "0",
+            source: "default",
+            pendingDraft: null,
+          },
+        ]);
+        const platform = await call(
+          "auditor",
+          "GET",
+          "/admin/v1/mining/pool?kind=platform",
+        );
+        expect(
+          platform
+            .json<{ items: { kind: string }[] }>()
+            .items.map((row) => row.kind),
+        ).toEqual(["platform", "platform", "platform"]);
+        const byAddress = await call(
+          "auditor",
+          "GET",
+          `/admin/v1/mining/pool?address=${cakeAddress.toUpperCase().replace("0X", "0x")}`,
+        );
+        expect(
+          byAddress
+            .json<{ items: { communityName: string }[] }>()
+            .items.map((row) => row.communityName),
+        ).toEqual(["BSC News"]);
+        expect(
+          (await call("auditor", "GET", "/admin/v1/mining/pool?kind=other"))
+            .statusCode,
+        ).toBe(400);
+      });
+
+      it("accepts includedAssets for a bound external token and shows the draft", async () => {
+        const { call, settlement } = await harness();
+        seedExternal(settlement);
+        // CAKE has no launch2 / MEME v1 source.
+        settlement.findUnknownAssetIds = vi.fn((ids: readonly string[]) =>
+          Promise.resolve(ids.filter((id) => id === cake)),
+        );
+        const created = await call(
+          "platform_admin",
+          "POST",
+          "/admin/v1/mining/parameter-versions",
+          {
+            ...draft,
+            parameters: {
+              ...draft.parameters,
+              communityCoefficients: [],
+              includedAssets: [cake],
+              assetWeights: [{ assetId: cake, weight: "1.5" }],
+            },
+          },
+        );
+        expect(created.statusCode, created.body).toBe(201);
+        expect(created.json()).toMatchObject({
+          version: { document: { includedAssets: [cake] } },
+        });
+        const listed = await call(
+          "platform_admin",
+          "GET",
+          "/admin/v1/mining/pool?kind=external",
+        );
+        expect(listed.json()).toMatchObject({
+          items: [
+            {
+              participate: false,
+              pendingDraft: {
+                participate: true,
+                tokenWeight: "1.5",
+                source: "explicit",
+              },
+            },
+          ],
+        });
+        // A weight alone (not let in) still needs a settlement source.
+        const refused = await call(
+          "platform_admin",
+          "POST",
+          "/admin/v1/mining/parameter-versions",
+          {
+            ...draft,
+            configVersion: "miningHourlyV2",
+            parameters: {
+              ...draft.parameters,
+              communityCoefficients: [],
+              assetWeights: [{ assetId: cake, weight: "1.5" }],
+            },
+          },
+        );
+        expect(refused.statusCode).toBe(422);
+        expect(refused.json()).toMatchObject({
+          detailsSafe: {
+            reasonCode: "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
+            assetId: cake,
+          },
+        });
       });
     });
 
