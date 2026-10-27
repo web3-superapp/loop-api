@@ -22,8 +22,13 @@ import type { MiningRepository } from "./features/mining/mining-repository.js";
 import {
   computeMiningSnapshot,
   type MiningPriceInput,
+  type MiningSnapshotPoolInput,
   type MiningSnapshotSkip,
 } from "./features/mining/mining-snapshot.js";
+import { MiningSettlementInputError } from "./features/mining/hourly-settlement-calculator.js";
+import type { MiningSettlementRepository } from "./features/mining/hourly-settlement-ports.js";
+import { admittedAssetIds } from "./features/mining/hourly-settlement-runner.js";
+import { computeMiningPoolSnapshot } from "./features/mining/mining-pool-snapshot.js";
 
 /**
  * The `mining-snapshot` lane (Decisions 0036 and 0043), default off behind
@@ -118,6 +123,24 @@ export interface CreateMiningSnapshotWorkerOptions {
    * wallets. Default false: embedded and linked external wallets both count.
    */
   readonly embeddedWalletOnly?: boolean;
+  /**
+   * Decision 0187: the mining pool part. With it, every platform MEME a
+   * verified community binds on `chainId` (the launch chain) is valued by
+   * the hourly settlement's rules at the run instant — MEME balance × token
+   * weight + NFTs × NFT coefficient, from the settlement facts — whether or
+   * not the formula version weights it. Absent / null: the pre-0187 lane.
+   */
+  readonly pool?: {
+    readonly repository: Pick<
+      MiningSettlementRepository,
+      | "listApprovedParameterVersions"
+      | "listMiningPoolCandidates"
+      | "readLaunch2Checkpoint"
+      | "readSettlementFacts"
+    >;
+    readonly chainId: string;
+  } | null;
+  readonly now?: () => Date;
   readonly createUuid?: () => string;
   readonly onInfrastructureBackoff?: (
     event: MiningSnapshotInfrastructureBackoff,
@@ -272,6 +295,68 @@ export function createMiningSnapshotWorker(
     });
   }
 
+  /**
+   * Decision 0187: the pool part, or the skips that explain why there is
+   * none (then the formula path keeps the assets, as before 0187).
+   */
+  async function readPool(): Promise<{
+    readonly part: MiningSnapshotPoolInput | null;
+    readonly skipped: readonly MiningSnapshotSkip[];
+  }> {
+    const source = options.pool ?? null;
+    if (source === null) return { part: null, skipped: [] };
+    const candidates = await source.repository.listMiningPoolCandidates({
+      chainId: source.chainId,
+    });
+    const poolAssetIds = [
+      ...new Set(candidates.map((row) => row.assetId)),
+    ].sort();
+    if (poolAssetIds.length === 0) return { part: null, skipped: [] };
+    const at = BigInt(
+      Math.floor((options.now?.() ?? new Date()).getTime() / 1000),
+    );
+    const [versions, block, registered] = await Promise.all([
+      source.repository.listApprovedParameterVersions(),
+      source.repository.readLaunch2Checkpoint(source.chainId),
+      options.registry.listAssets(poolAssetIds),
+    ]);
+    const unavailableAs = (reasonCode: string) => ({
+      part: null,
+      skipped: poolAssetIds.map((assetId) =>
+        Object.freeze({ assetId, reasonCode }),
+      ),
+    });
+    let facts;
+    try {
+      facts = await source.repository.readSettlementFacts({
+        chainId: source.chainId,
+        hourStart: at,
+        hourEnd: at + 1n,
+        assetIds: admittedAssetIds(versions, at, at + 1n, poolAssetIds),
+        embeddedWalletOnly: options.embeddedWalletOnly ?? false,
+      });
+    } catch (error) {
+      if (error instanceof MiningSettlementInputError) {
+        return unavailableAs(error.reasonCode);
+      }
+      throw error;
+    }
+    const part = computeMiningPoolSnapshot({
+      at,
+      versions,
+      poolAssetIds,
+      facts,
+      block,
+      registeredAssetIds: new Set(
+        registered
+          .filter((asset) => asset.status !== "blocked")
+          .map((asset) => asset.assetId),
+      ),
+    });
+    if (part.kind === "unavailable") return unavailableAs(part.reasonCode);
+    return { part, skipped: [] };
+  }
+
   async function execute(
     signal?: AbortSignal,
   ): Promise<MiningSnapshotRunResult> {
@@ -297,19 +382,26 @@ export function createMiningSnapshotWorker(
       }),
       options.repository.listCommunityWeightInputs(formula.configVersion),
     ]);
-    if (balances.length === 0) {
-      return idle(miningReasonCodes.noBalanceInputs);
+    const pool = await readPool();
+    if (balances.length === 0 && (pool.part?.powers.length ?? 0) === 0) {
+      return idle(miningReasonCodes.noBalanceInputs, pool.skipped);
     }
     // Only assets the formula weights can enter a snapshot (a community
     // weight is a second factor, never a weight of its own), so only those
-    // need a price read.
+    // need a price read. Decision 0187: pool-owned assets need none.
     const weightedAssetIds = new Set<string>(
       Object.keys(formula.formula.assetWeights),
     );
+    const poolOwned = new Set(pool.part?.assetIds ?? []);
     const candidateAssetIds = [
       ...new Set(balances.map((balance) => balance.assetId)),
-    ].filter((assetId) => weightedAssetIds.has(assetId));
-    const assets = await options.registry.listAssets(candidateAssetIds);
+    ].filter(
+      (assetId) => weightedAssetIds.has(assetId) && !poolOwned.has(assetId),
+    );
+    const assets =
+      candidateAssetIds.length === 0
+        ? []
+        : await options.registry.listAssets(candidateAssetIds);
     const prices: MiningPriceInput[] = [];
     for (const asset of assets) {
       if (isAborted(signal)) {
@@ -317,10 +409,14 @@ export function createMiningSnapshotWorker(
       }
       prices.push(await readPrice(asset, formula.formula));
     }
-    const computation = computeMiningSnapshot(
-      { balances, prices, communityWeights },
+    const computed = computeMiningSnapshot(
+      { balances, prices, communityWeights, pool: pool.part },
       { configVersion: formula.configVersion, document: formula.formula },
     );
+    const computation = Object.freeze({
+      ...computed,
+      skipped: Object.freeze([...pool.skipped, ...computed.skipped]),
+    });
     if (computation.kind === "unavailable") {
       return idle(computation.reasonCode, computation.skipped);
     }

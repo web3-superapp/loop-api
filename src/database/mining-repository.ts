@@ -442,7 +442,15 @@ const epochCommunityStandingsSql = `
       c.community_id,
       c.name as community_name,
       c.bound_asset_key as bound_asset_id,
-      coalesce(
+      case when exists (
+        -- Decision 0187: an excluded community's NFTs do not take part.
+        select 1
+        from epoch_version as ev,
+          jsonb_array_elements_text(
+            coalesce(ev.document->'excludedCommunities', '[]'::jsonb)
+          ) as excluded
+        where excluded = c.community_id::text
+      ) then 0 else coalesce(
         (
           select (entry->>'coefficient')::numeric
           from epoch_version as ev,
@@ -457,7 +465,7 @@ const epochCommunityStandingsSql = `
           from epoch_version as ev
         ),
         0
-      ) as coefficient
+      ) end as coefficient
     from public.communities as c
     where c.bound_asset_key is not null
   ),

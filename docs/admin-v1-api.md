@@ -422,6 +422,8 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 
 ### 5.6 挖矿系数（公式版本）
 
+> **已弃用（决策 0187，S313）**：以下 `formula-versions` 四个接口保留，但 OpenAPI 已标 `deprecated`，后台隐藏「快照系数」入口。平台 MEME 的结算与 App 快照改由「矿池」表决定：`GET /admin/v1/mining/pool`，保存为挖矿参数草稿，详见 `docs/frontend-admin-mining-pool-api.md`。
+
 **`GET /admin/v1/mining/formula-versions`**
 
 ```json

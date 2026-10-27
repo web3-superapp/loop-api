@@ -1,3 +1,4 @@
+import type { MiningPoolCandidate } from "./mining-pool-roster.js";
 import type {
   MiningClaimState,
   MiningEpochState,
@@ -406,6 +407,31 @@ export interface MiningSettlementRepository {
   findUnverifiedCommunityIds(
     communityIds: readonly string[],
   ): Promise<readonly string[]>;
+  /**
+   * Decision 0187: the mining pool roster candidates — every verified
+   * community × the launch2 MEME it binds, ordered by community name then
+   * id. `chainId` / `address` (MEME, lower-case, exact) / `query` (community
+   * name or ticker, case-insensitive substring) filter; `after` + `limit`
+   * page (absent limit: every row).
+   */
+  listMiningPoolCandidates(input: {
+    readonly chainId?: string | null;
+    readonly address?: string | null;
+    readonly query?: string | null;
+    readonly after?: {
+      readonly communityName: string;
+      readonly communityId: string;
+    } | null;
+    readonly limit?: number | null;
+  }): Promise<readonly MiningPoolCandidate[]>;
+  /**
+   * Decision 0187: the launch2 event lane checkpoint of `chainId` (the block
+   * the snapshot's pool rows are as of); null before the lane's first tick.
+   */
+  readLaunch2Checkpoint(chainId: string): Promise<{
+    readonly blockNumber: string;
+    readonly blockHash: string;
+  } | null>;
   createParameterDraft(input: {
     readonly configVersion: string;
     readonly document: MiningParameterDocument;

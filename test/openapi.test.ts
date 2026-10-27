@@ -1366,6 +1366,7 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/mining/formula-versions",
       "GET /admin/v1/mining/funding",
       "GET /admin/v1/mining/parameter-versions",
+      "GET /admin/v1/mining/pool",
       "GET /admin/v1/overview",
       "GET /admin/v1/session",
       "GET /admin/v1/settings/intel-promotions",

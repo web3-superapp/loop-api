@@ -775,6 +775,72 @@ export function createPostgresMiningSettlementRepository(
       return Object.freeze(unknown);
     },
 
+    async listMiningPoolCandidates(input) {
+      // Decision 0187: verified community × the launch2 MEME it binds.
+      const limit =
+        input.limit === undefined || input.limit === null
+          ? null
+          : Math.max(1, Math.min(Math.trunc(input.limit), 10_000));
+      const pattern =
+        input.query === undefined || input.query === null
+          ? null
+          : `%${input.query.replace(/[\\%_]/gu, (match) => `\\${match}`)}%`;
+      const rows = await query(
+        `select c.community_id::text as community_id, c.name as community_name,
+           i.chain_id || ':' || i.meme_address as asset_id,
+           i.chain_id, i.meme_address, i.ticker,
+           i.instance_id::text as instance_id, i.launch_id
+         from public.communities c
+         join public.launch2_instances i
+           on c.bound_asset_key = i.chain_id || ':' || i.meme_address
+         where c.verification_status = 'verified'
+           and ($1::text is null or i.chain_id = $1)
+           and ($2::text is null or i.meme_address = lower($2))
+           and ($3::text is null or c.name ilike $3 or i.ticker ilike $3)
+           and ($4::text is null or (c.name, c.community_id::text) > ($4, $5::text))
+         order by c.name, c.community_id::text
+         limit $6`,
+        [
+          input.chainId ?? null,
+          input.address ?? null,
+          pattern,
+          input.after?.communityName ?? null,
+          input.after?.communityId ?? null,
+          limit,
+        ],
+      );
+      return Object.freeze(
+        rows.map((row) =>
+          Object.freeze({
+            communityId: text(row, "community_id"),
+            communityName: text(row, "community_name"),
+            assetId: text(row, "asset_id"),
+            chainId: text(row, "chain_id"),
+            memeAddress: text(row, "meme_address"),
+            symbol: text(row, "ticker"),
+            instanceId: text(row, "instance_id"),
+            launchId: text(row, "launch_id"),
+          }),
+        ),
+      );
+    },
+
+    async readLaunch2Checkpoint(chainId) {
+      const rows = await query(
+        `select last_block_number::text as block_number, last_block_hash
+         from public.indexer_checkpoints
+         where lane = 'launch2_event' and chain_id = $1`,
+        [chainId],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : Object.freeze({
+            blockNumber: text(row, "block_number"),
+            blockHash: text(row, "last_block_hash"),
+          });
+    },
+
     async createParameterDraft(input) {
       try {
         return await withV2Transaction(pool, unavailable, async (client) => {
@@ -849,9 +915,15 @@ export function createPostgresMiningSettlementRepository(
           }
           // Decision 0183: every listed community must still exist and be
           // verified when the version is approved.
-          const listed = current.document.communityCoefficients.map(
-            (entry) => entry.communityId,
-          );
+          // Decision 0187: the excluded communities too.
+          const listed = [
+            ...new Set([
+              ...current.document.communityCoefficients.map(
+                (entry) => entry.communityId,
+              ),
+              ...(current.document.excludedCommunities ?? []),
+            ]),
+          ];
           if (listed.length > 0) {
             const found = await client.query<{ community_id: string }>({
               text: `select community_id::text as community_id
