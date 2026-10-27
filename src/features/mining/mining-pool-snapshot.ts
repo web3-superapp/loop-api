@@ -14,7 +14,10 @@ import {
   miningVersionAt,
   prepareMiningHour,
 } from "./hourly-settlement-runner.js";
-import { miningEffectiveAssetWeights } from "./mining-pool-roster.js";
+import {
+  miningEffectiveAssetWeights,
+  type MiningPoolExternalAssets,
+} from "./mining-pool-roster.js";
 import type {
   MiningSnapshotPower,
   MiningSnapshotSkip,
@@ -83,6 +86,11 @@ export function computeMiningPoolSnapshot(input: {
   readonly block: MiningPoolSnapshotBlock | null;
   /** Asset ids with a non-blocked Asset Registry row. */
   readonly registeredAssetIds: ReadonlySet<string>;
+  /**
+   * Decision 0189: the external roster assets — kept out of the pool part
+   * (the formula path values them, weighted by the power list).
+   */
+  readonly external?: MiningPoolExternalAssets | null;
 }): MiningPoolSnapshotPart {
   const version = miningVersionAt(input.versions, input.at);
   if (version === null) {
@@ -106,6 +114,9 @@ export function computeMiningPoolSnapshot(input: {
       versions: input.versions,
       facts: input.facts,
       poolAssetIds,
+      ...(input.external === undefined || input.external === null
+        ? {}
+        : { poolExternal: input.external }),
       windowSeconds: 1n,
     });
     result = settleMiningHour(prepared.input);

@@ -164,11 +164,12 @@ export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
         .filter(
           (row) =>
             (input.chainId == null || row.chainId === input.chainId) &&
+            (input.kind == null || row.kind === input.kind) &&
             (input.address == null ||
               row.memeAddress === input.address.toLowerCase()) &&
             (query === null ||
               row.communityName.toLowerCase().includes(query) ||
-              row.symbol.toLowerCase().includes(query)) &&
+              (row.symbol ?? "").toLowerCase().includes(query)) &&
             (input.after == null ||
               row.communityName > input.after.communityName ||
               (row.communityName === input.after.communityName &&
@@ -188,6 +189,12 @@ export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
       Promise.resolve(repo.versions.find((v) => v.versionId === id) ?? null),
     listApprovedCommunityWeights: () => Promise.resolve([]),
     findUnknownAssetIds: () => Promise.resolve([]),
+    findVerifiedBoundAssetIds: (assetIds) =>
+      Promise.resolve(
+        assetIds.filter((id) =>
+          repo.poolCandidates.some((row) => row.assetId === id),
+        ),
+      ),
     findUnverifiedCommunityIds: () => Promise.resolve([]),
     createParameterDraft: reject,
     approveParameterVersion: reject,

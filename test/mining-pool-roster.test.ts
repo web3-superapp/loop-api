@@ -28,12 +28,15 @@ import {
 import {
   miningEffectiveAssetWeights,
   miningEffectiveCommunityCoefficients,
+  miningPoolExternalFor,
   resolveMiningPoolEntry,
   type MiningPoolCandidate,
 } from "../src/features/mining/mining-pool-roster.js";
 import {
   computeMiningSnapshot,
+  selectMiningWeight,
   type MiningBalanceInput,
+  type MiningCommunityWeightInput,
 } from "../src/features/mining/mining-snapshot.js";
 import { createMiningSnapshotWorker } from "../src/mining-snapshot-worker.js";
 import { projectCommunityWeight } from "../src/features/mining/mining-community-projection.js";
@@ -76,6 +79,7 @@ function candidate(
     assetId: ASSET1,
     chainId: "eip155:97",
     memeAddress: MEME1,
+    kind: "platform",
     symbol: "ALPHA",
     instanceId: I1,
     launchId: `0x${"1".repeat(64)}`,
@@ -900,5 +904,446 @@ describe("Decision 0187 appendix A community weight projection", () => {
       status: "unavailable",
       reasonCode: "MINING_POOL_EXCLUDED",
     });
+  });
+});
+
+/**
+ * Decision 0189 (power list): an external token bound by a verified
+ * community is a roster row that takes part only once `includedAssets` lets
+ * it in; the roster is the only rule (no community_mining_weights).
+ */
+describe("Decision 0189 external tokens", () => {
+  const C3 = "c0000000-0000-4000-8000-000000000003";
+  const CAKE_ADDRESS = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+  const CAKE = `eip155:56:${CAKE_ADDRESS}`;
+  const V1_ADDRESS = "0x4444444444444444444444444444444444446666";
+  const V1 = `eip155:97:${V1_ADDRESS}`;
+  const cake = candidate({
+    communityId: C3,
+    communityName: "BSC News",
+    assetId: CAKE,
+    chainId: "eip155:56",
+    memeAddress: CAKE_ADDRESS,
+    kind: "external",
+    symbol: "CAKE",
+    instanceId: null,
+    launchId: null,
+    settlementSource: null,
+  });
+  const memeV1 = candidate({
+    communityId: C2,
+    communityName: "Old Meme",
+    assetId: V1,
+    memeAddress: V1_ADDRESS,
+    kind: "external",
+    symbol: "OLD",
+    instanceId: null,
+    launchId: null,
+    settlementSource: "meme_v1",
+  });
+
+  it("shows an external row out by default, in once let in, out again when removed", () => {
+    // No approved version: out (a platform row would be in at 1 / 1).
+    expect(resolveMiningPoolEntry(null, cake)).toEqual({
+      participate: false,
+      tokenWeight: "0",
+      nftCoefficient: "0",
+      source: "default",
+    });
+    // Not let in: out even with a weight listed (weight ≠ participation).
+    expect(
+      resolveMiningPoolEntry(
+        documentWith({ assetWeights: [{ assetId: CAKE, weight: "2" }] }),
+        cake,
+      ),
+    ).toMatchObject({ participate: false, tokenWeight: "0" });
+    // Let in: explicit weight, else 1.
+    expect(
+      resolveMiningPoolEntry(documentWith({ includedAssets: [CAKE] }), cake),
+    ).toEqual({
+      participate: true,
+      tokenWeight: "1",
+      nftCoefficient: "1",
+      source: "explicit",
+    });
+    expect(
+      resolveMiningPoolEntry(
+        documentWith({
+          includedAssets: [CAKE],
+          assetWeights: [{ assetId: CAKE, weight: "1.8" }],
+        }),
+        cake,
+      ),
+    ).toMatchObject({ participate: true, tokenWeight: "1.8" });
+    // Excluded wins over let in.
+    expect(
+      resolveMiningPoolEntry(
+        documentWith({ includedAssets: [CAKE], excludedAssets: [CAKE] }),
+        cake,
+      ),
+    ).toMatchObject({ participate: false, tokenWeight: "0" });
+  });
+
+  it("weighs an external asset only while let in (and readable when given)", () => {
+    const external = { assetIds: [CAKE, V1] };
+    const listed = [
+      { assetId: CAKE, weight: "2" },
+      { assetId: V1, weight: "3" },
+    ];
+    expect([
+      ...miningEffectiveAssetWeights(
+        documentWith({ assetWeights: listed }),
+        [ASSET1],
+        external,
+      ).entries(),
+    ]).toEqual([[ASSET1, loop]]);
+    expect([
+      ...miningEffectiveAssetWeights(
+        documentWith({ includedAssets: [V1] }),
+        [],
+        external,
+      ).entries(),
+    ]).toEqual([[V1, loop]]);
+    // A settlement without a source for CAKE never weighs it.
+    expect([
+      ...miningEffectiveAssetWeights(
+        documentWith({ includedAssets: [CAKE, V1], assetWeights: listed }),
+        [],
+        { assetIds: [CAKE, V1], readable: new Set([V1]) },
+      ).entries(),
+    ]).toEqual([[V1, 3n * loop]]);
+  });
+
+  it("gates every external candidate and every let-in asset that is not a platform MEME", () => {
+    const external = miningPoolExternalFor(
+      [candidate(), cake, memeV1],
+      [
+        versionWith({
+          includedAssets: [ASSET1, BTCB],
+        }),
+      ],
+      "eip155:97",
+    );
+    expect(external?.assetIds).toEqual([CAKE, BTCB, V1].sort());
+    expect([...(external?.readable ?? [])]).toEqual([V1]);
+    expect(miningPoolExternalFor([candidate()], [versionWith()], null)).toBe(
+      null,
+    );
+  });
+
+  it("parses includedAssets (absent → empty; sorted; unique; well-formed)", () => {
+    const stored = parseMiningParameterDocument({
+      ...documentWith(),
+      includedAssets: undefined,
+    });
+    expect(stored.includedAssets).toEqual([]);
+    expect(
+      parseMiningParameterDraft({
+        ...documentWith(),
+        includedAssets: [V1, CAKE],
+      }).includedAssets,
+    ).toEqual([CAKE, V1].sort());
+    for (const bad of [[CAKE, CAKE], ["CAKE"], "x"]) {
+      expect(() =>
+        parseMiningParameterDraft({ ...documentWith(), includedAssets: bad }),
+      ).toThrow(MiningParameterDocumentError);
+    }
+  });
+
+  it("settles a let-in MEME v1 token, never an unreadable one, and replays with the stored external roster", async () => {
+    const repo = createInMemoryMiningSettlement();
+    repo.versions.push(
+      versionWith({
+        includedAssets: [CAKE, V1],
+        assetWeights: [{ assetId: CAKE, weight: "2" }],
+      }),
+    );
+    repo.poolCandidates.push(candidate(), cake, memeV1);
+    repo.readIndexerFreshness = vi.fn(() =>
+      Promise.resolve({ lanes: [] as never[] }),
+    );
+    const v1Fact = {
+      assetId: V1,
+      source: "meme_v1" as const,
+      graduatedAt: null,
+      openingPriceE18: 0n,
+      openingBalances: [{ address: B, balanceRaw: 10n * loop }],
+      moves: [],
+    };
+    const reads = vi.fn(() =>
+      Promise.resolve(facts({ assets: [...facts().assets, v1Fact] })),
+    );
+    repo.readSettlementFacts = reads;
+    const commit = vi.fn(() =>
+      Promise.resolve({ created: true, epoch: epochRecord() }),
+    );
+    repo.commitEpoch = commit;
+    const runner = createMiningSettlementRunner({
+      repository: repo,
+      chainId: "eip155:97",
+      indexerGraceSeconds: 120,
+      embeddedWalletOnly: false,
+      now: () => new Date("2026-10-27T11:10:00.000Z"),
+    });
+    expect(
+      (await runner.settleHour({ hourStart: S, trigger: "scheduled" })).kind,
+    ).toBe("settled");
+    // CAKE (BSC mainnet, no settlement source) is never read here.
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1, V1] }),
+    );
+    const committed = (
+      commit.mock.calls as unknown as [
+        { inputSummary: Record<string, unknown>; inputDigest: string },
+      ][]
+    )[0]?.[0];
+    expect(committed?.inputSummary["poolExternalAssetIds"]).toEqual([CAKE, V1]);
+    expect(committed?.inputSummary["poolExternalReadableAssetIds"]).toEqual([
+      V1,
+    ]);
+    // The replay gates the same assets after the roster changed.
+    repo.poolCandidates.length = 0;
+    repo.epochs.push(
+      epochRecord({
+        hourStart: "2026-10-27T10:00:00.000Z",
+        hourEnd: "2026-10-27T11:00:00.000Z",
+        inputDigest: committed?.inputDigest ?? null,
+        inputSummary: committed?.inputSummary ?? {},
+      }),
+    );
+    reads.mockClear();
+    const replay = await runner.replay(epochRecord().epochId);
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1, V1] }),
+    );
+    expect(replay?.reasonCode).toBeNull();
+    expect(replay?.digestMatches).toBe(true);
+  });
+
+  it("gives an external token not let in (or removed by a newer version) nothing in the settlement", () => {
+    const external = { assetIds: [V1], readable: new Set([V1]) };
+    const v1Facts = facts({
+      assets: [
+        {
+          assetId: V1,
+          source: "meme_v1",
+          graduatedAt: null,
+          openingPriceE18: 0n,
+          openingBalances: [{ address: B, balanceRaw: 10n * loop }],
+          moves: [],
+        },
+      ],
+    });
+    const letIn = versionWith({ includedAssets: [V1] });
+    const removed = parameterVersion({
+      versionId: "22222222-2222-4222-8222-222222222222",
+      configVersion: "removed",
+      effectiveFrom: "2026-10-27T10:00:00.000Z",
+      document: documentWith({
+        assetWeights: [{ assetId: V1, weight: "5" }],
+      }),
+    });
+    const power = (versions: ReturnType<typeof versionWith>[]) =>
+      settleMiningHour(
+        prepareMiningHour({
+          hourStart: S,
+          versions,
+          facts: v1Facts,
+          poolAssetIds: [],
+          poolExternal: external,
+        }).input,
+      ).users.find((row) => row.userId === U2)?.assetSelfPower ?? 0n;
+    expect(power([letIn])).toBe(10n * loop);
+    expect(power([letIn, removed])).toBe(0n);
+    expect(
+      settleMiningHour(
+        prepareMiningHour({
+          hourStart: S,
+          versions: [
+            versionWith({ assetWeights: [{ assetId: V1, weight: "5" }] }),
+          ],
+          facts: v1Facts,
+          poolAssetIds: [],
+          poolExternal: external,
+        }).input,
+      ).users.find((row) => row.userId === U2)?.assetSelfPower ?? 0n,
+    ).toBe(0n);
+  });
+
+  it("values an external token in the snapshot by the power list only while let in", () => {
+    const formula = {
+      configVersion: "miningFormulaTestOnly",
+      document: {
+        kind: "holding_times_reference_price_times_weight" as const,
+        expressionKey: "mining.rules.formula.holdingTimesWeight",
+        dailyOutputKey: "mining.rules.dailyOutput.shareOfNetworkPower",
+        assetWeights: { [CAKE]: "1" },
+        referralBoost: { status: "pending_approval" as const },
+      },
+    };
+    const roster = (
+      participate: boolean,
+      weight: string | null,
+    ): MiningCommunityWeightInput[] => [
+      {
+        communityId: C3,
+        assetId: CAKE,
+        weight: participate ? weight : null,
+        status: participate ? "approved" : "pending_review",
+        source: "roster",
+        rosterExcluded: !participate,
+      },
+    ];
+    // Not let in (or removed): MINING_POOL_EXCLUDED, never the old 1.8.
+    expect(
+      selectMiningWeight(CAKE, formula.document, roster(false, null)),
+    ).toEqual({ kind: "skip", reasonCode: "MINING_POOL_EXCLUDED" });
+    // Let in: the list's weight is the weight (not × the formula entry).
+    expect(
+      selectMiningWeight(CAKE, formula.document, roster(true, "1.8")),
+    ).toEqual({ kind: "weight", weight: "1.8" });
+    const balances: MiningBalanceInput[] = [
+      {
+        ownerUserId: U1,
+        walletId: "e0000000-0000-4000-8000-000000000001",
+        assetId: CAKE,
+        decimals: 18,
+        rawValue: (10n * loop).toString(),
+        blockNumber: "100",
+        blockHash: hash,
+        source: "chain",
+      },
+    ];
+    const prices = [
+      {
+        assetId: CAKE,
+        priceUsd: "2",
+        quality: "fresh" as const,
+        fetchedAt: "2026-10-27T10:00:00.000Z",
+        source: "dexscreener",
+      },
+    ];
+    const included = computeMiningSnapshot(
+      { balances, prices, communityWeights: roster(true, "1.8") },
+      formula,
+    );
+    expect(included.kind).toBe("computed");
+    if (included.kind === "computed") {
+      expect(included.powers.map((row) => [row.weight, row.power])).toEqual([
+        ["1.8", "18"],
+      ]);
+    }
+    const out = computeMiningSnapshot(
+      { balances, prices, communityWeights: roster(false, null) },
+      formula,
+    );
+    expect(out).toMatchObject({
+      kind: "unavailable",
+      skipped: [{ assetId: CAKE, reasonCode: "MINING_POOL_EXCLUDED" }],
+    });
+  });
+
+  it("keeps external tokens out of the snapshot pool part and does not price one not let in", async () => {
+    const repository: MiningRepository = {
+      ...createUnavailableMiningRepository(),
+      getApprovedFormula: vi.fn(() =>
+        Promise.resolve({
+          configVersion: "miningFormulaTestOnly",
+          formula: {
+            kind: "holding_times_reference_price_times_weight" as const,
+            expressionKey: "k",
+            dailyOutputKey: "k",
+            assetWeights: { [CAKE]: "1" },
+            referralBoost: { status: "pending_approval" as const },
+          },
+          weightRange: {
+            loop: { status: "approved" as const, descriptionKey: "k" },
+            community: {
+              status: "pending_approval" as const,
+              descriptionKey: "k",
+            },
+            reviewFactorKeys: [],
+          },
+          priceGuardRules: [],
+          status: "approved" as const,
+          effectiveAt: "2026-09-08T00:00:00.000Z",
+          approvedAt: "2026-09-08T00:00:00.000Z",
+          createdAt: "2026-09-08T00:00:00.000Z",
+        }),
+      ),
+      listBalanceInputs: vi.fn(() =>
+        Promise.resolve([
+          {
+            ownerUserId: U1,
+            walletId: "e0000000-0000-4000-8000-000000000001",
+            assetId: CAKE,
+            decimals: 18,
+            rawValue: (10n * loop).toString(),
+            blockNumber: "100",
+            blockHash: hash,
+            source: "chain" as const,
+          },
+        ]),
+      ),
+      listCommunityWeightInputs: vi.fn(() =>
+        Promise.resolve([
+          {
+            communityId: C3,
+            assetId: CAKE,
+            weight: null,
+            status: "pending_review" as const,
+            source: "roster" as const,
+            rosterExcluded: true,
+          },
+        ]),
+      ),
+    };
+    const settlement = createInMemoryMiningSettlement();
+    // CAKE carries an explicit weight but is not let in.
+    settlement.versions.push(
+      versionWith({ assetWeights: [{ assetId: CAKE, weight: "2" }] }),
+    );
+    settlement.poolCandidates.push(candidate(), cake);
+    settlement.launch2Checkpoint = { blockNumber: "900", blockHash: hash };
+    const reads = vi.fn(() =>
+      Promise.resolve(
+        facts({
+          walletKinds: "all" as const,
+          nftInstances: [],
+          nftOpenings: [],
+        }),
+      ),
+    );
+    settlement.readSettlementFacts = reads;
+    const readAssetPrice = vi.fn(() => Promise.reject(new Error("unused")));
+    const writeSnapshot = vi.fn((input: WriteMiningSnapshotInput) =>
+      Promise.resolve({
+        snapshotId: input.snapshotId,
+        blockNumber: input.blockNumber,
+        blockHash: input.blockHash,
+        formulaVersion: input.formulaVersion,
+        priceVersion: input.priceVersion,
+        totalPower: input.totalPower,
+        accountCount: 2,
+        computedAt: "2026-10-27T10:00:00.000Z",
+        holdingsSource: input.holdingsSource,
+      }),
+    );
+    const worker = createMiningSnapshotWorker({
+      repository: { ...repository, writeSnapshot },
+      registry: { listAssets: vi.fn(() => Promise.resolve([])) },
+      prices: {
+        readAssetPrice,
+        readPair: vi.fn(() => Promise.reject(new Error("unused"))),
+      },
+      pool: { repository: settlement, chainId: "eip155:97" },
+      now: () => new Date("2026-10-27T10:00:00.000Z"),
+    });
+    await worker.runOnce();
+    // The pool part reads ASSET1 only — never the external CAKE.
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1] }),
+    );
+    expect(readAssetPrice).not.toHaveBeenCalled();
   });
 });

@@ -39,6 +39,9 @@ import { isDerivedPriceAllowed } from "./mining-reference-pricing.js";
 
 export const miningPowerFractionDigits = 18;
 
+/** Decision 0189: the price version of a snapshot that read no price. */
+export const miningUnpricedPriceVersion = "unpriced";
+
 export interface MiningBalanceInput {
   readonly ownerUserId: string;
   readonly walletId: string;
@@ -76,6 +79,15 @@ export interface MiningCommunityWeightInput {
   readonly assetId: string;
   readonly weight: string | null;
   readonly status: "pending_review" | "approved";
+  /**
+   * Decision 0189: `roster` = the row is the power list's (the community's
+   * token weight under the parameter version in force) — the weight then
+   * replaces the formula's asset weight instead of multiplying it. Absent:
+   * a pre-0189 reviewed community weight (second factor).
+   */
+  readonly source?: "roster";
+  /** Decision 0189: a roster row that does not participate. */
+  readonly rosterExcluded?: boolean;
 }
 
 /**
@@ -98,15 +110,26 @@ export interface MiningSnapshotInputs {
   readonly prices: readonly MiningPriceInput[];
   readonly communityWeights: readonly MiningCommunityWeightInput[];
   readonly pool?: MiningSnapshotPoolInput | null;
+  /**
+   * Decision 0189 (`MINING_SNAPSHOT_UNPRICED_POWER_EMIT`): a power-list
+   * asset without a usable price still counts holding × weight, published
+   * with a null price, quality `unavailable` and the price reason code (the
+   * hourly settlement pays the same holding). Off: it is skipped with the
+   * price reason code.
+   */
+  readonly unpricedRosterPower?: boolean;
 }
 
 export interface MiningSnapshotPower {
   readonly ownerUserId: string;
   readonly assetId: string;
   readonly holding: string;
-  readonly referencePriceUsd: string;
+  /** Null only with quality `unavailable` (Decision 0189). */
+  readonly referencePriceUsd: string | null;
   /** `proxied` when the price is a declared proxy asset's (Decision 0044). */
   readonly referencePriceQuality: MiningReferencePriceQuality;
+  /** Decision 0189: the price reason of an `unavailable` row; else absent / null. */
+  readonly referencePriceReasonCode?: string | null;
   readonly referencePriceProxyAssetId: string | null;
   /** The pair the reference price was read from; required when `derived`. */
   readonly referencePricePairAddress: string | null;
@@ -178,6 +201,10 @@ type WeightSelection =
  * factor on the community's bound asset. A bound asset whose weight is not
  * approved under this version is excluded rather than weighted by the asset
  * weight alone, so a community binding never silently drops its factor.
+ * Decision 0189: a power-list (roster) binding is the asset's weight itself;
+ * a roster row that does not participate is skipped as MINING_POOL_EXCLUDED.
+ * Decision 0189: a roster binding no longer needs a formula `assetWeights`
+ * entry (the console has no formula editor; the power list is the rule).
  */
 export function selectMiningWeight(
   assetId: string,
@@ -185,16 +212,19 @@ export function selectMiningWeight(
   communityWeights: readonly MiningCommunityWeightInput[],
 ): WeightSelection {
   const assetWeight = formula.assetWeights[assetId];
-  if (!isUnsignedDecimalString(assetWeight)) {
+  const bindings = communityWeights.filter(
+    (weight) => weight.assetId === assetId,
+  );
+  // Decision 0189: a power-list (roster) binding needs no formula entry —
+  // the approved power list alone admits and weights the asset.
+  const roster = bindings.some((weight) => weight.source === "roster");
+  if (!roster && !isUnsignedDecimalString(assetWeight)) {
     return {
       kind: "skip",
       reasonCode: miningReasonCodes.assetWeightNotConfigured,
     };
   }
-  const bindings = communityWeights.filter(
-    (weight) => weight.assetId === assetId,
-  );
-  if (bindings.length === 0) {
+  if (bindings.length === 0 && isUnsignedDecimalString(assetWeight)) {
     return { kind: "weight", weight: assetWeight };
   }
   const approvedWeights = bindings.flatMap((weight) =>
@@ -206,7 +236,9 @@ export function selectMiningWeight(
   if (communityWeight === undefined) {
     return {
       kind: "skip",
-      reasonCode: miningReasonCodes.communityWeightPendingReview,
+      reasonCode: bindings.some((weight) => weight.rosterExcluded === true)
+        ? miningReasonCodes.poolExcluded
+        : miningReasonCodes.communityWeightPendingReview,
     };
   }
   if (others.length > 0) {
@@ -215,6 +247,18 @@ export function selectMiningWeight(
     return {
       kind: "skip",
       reasonCode: miningReasonCodes.communityWeightAmbiguous,
+    };
+  }
+  if (roster) {
+    // Decision 0189: the power list's token weight is the asset's
+    // weight (quantity × weight); a formula entry is neither required nor
+    // multiplied in.
+    return { kind: "weight", weight: communityWeight };
+  }
+  if (!isUnsignedDecimalString(assetWeight)) {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.assetWeightNotConfigured,
     };
   }
   return {
@@ -410,7 +454,52 @@ export function computeMiningSnapshot(
     if (price.kind === "skip") {
       // A positive holding without a price is an unread holding; a zero
       // balance without a price changes no number and is only skipped.
-      if (BigInt(balance.rawValue) > 0n) {
+      // Decision 0189: a power-list asset (weighted by quantity, its price
+      // only published) without a price is skipped with the price reason —
+      // one external token's missing quote does not hold back the snapshot.
+      const rosterAsset = inputs.communityWeights.some(
+        (weight) =>
+          weight.assetId === balance.assetId && weight.source === "roster",
+      );
+      if (rosterAsset && inputs.unpricedRosterPower === true) {
+        // Decision 0189: quantity basis — the power does not need the price.
+        const holding = scaleRawHolding(balance.rawValue, balance.decimals);
+        const power = multiplyDecimalStrings(holding, weight);
+        const key = `${balance.ownerUserId}|${balance.assetId}`;
+        const existing = perAccountAsset.get(key);
+        snapshotHoldingsSource = mergeHoldingsSource(
+          snapshotHoldingsSource,
+          balance.source,
+        );
+        perAccountAsset.set(
+          key,
+          Object.freeze({
+            ownerUserId: balance.ownerUserId,
+            assetId: balance.assetId,
+            holding:
+              existing === undefined
+                ? holding
+                : addDecimalStrings(existing.holding, holding),
+            referencePriceUsd: null,
+            referencePriceQuality: "unavailable" as const,
+            referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
+            referencePriceReasonCode: price.reasonCode,
+            weight,
+            power:
+              existing === undefined
+                ? power
+                : addDecimalStrings(existing.power, power),
+            blockNumber:
+              existing === undefined ||
+              compareBlocks(balance.blockNumber, existing.blockNumber) > 0
+                ? balance.blockNumber
+                : existing.blockNumber,
+          }),
+        );
+        continue;
+      }
+      if (BigInt(balance.rawValue) > 0n && !rosterAsset) {
         if (!unreadAssets.has(balance.assetId)) {
           unreadAssets.add(balance.assetId);
           unread.push({
@@ -514,6 +603,16 @@ export function computeMiningSnapshot(
       perAccountAsset.set(`${row.ownerUserId}|${row.assetId}`, row);
     }
     priceVersion ??= pool.priceVersion;
+  }
+  // Decision 0189: a snapshot whose only rows are unpriced power-list rows
+  // used no price at all; it says so instead of naming a Provider read.
+  if (
+    priceVersion === null &&
+    [...perAccountAsset.values()].some(
+      (row) => row.referencePriceQuality === "unavailable",
+    )
+  ) {
+    priceVersion = miningUnpricedPriceVersion;
   }
 
   if (

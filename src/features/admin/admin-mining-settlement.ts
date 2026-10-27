@@ -21,8 +21,10 @@ import {
   type MiningSettlementRunner,
 } from "../mining/hourly-settlement-runner.js";
 import {
+  miningPoolSettleability,
   resolveMiningPoolEntry,
   type MiningPoolCandidate,
+  type MiningPoolKind,
 } from "../mining/mining-pool-roster.js";
 import { AdminApiError, adminReasonCodes } from "./admin-contract.js";
 import { adminRoleHasPermission } from "./admin-roles.js";
@@ -134,8 +136,12 @@ function projectPoolRow(
   row: MiningPoolCandidate,
   inForce: MiningParameterVersionRecord["document"] | null,
   pending: MiningParameterVersionRecord | null,
+  settlementChainId: string | null,
 ): Resource {
   const entry = resolveMiningPoolEntry(inForce, row);
+  // Decision 0189: whether the hourly settlement can read the row's
+  // holdings (else the snapshot alone values it).
+  const settleability = miningPoolSettleability(row, settlementChainId);
   const draft =
     pending === null ? null : resolveMiningPoolEntry(pending.document, row);
   return Object.freeze({
@@ -144,6 +150,7 @@ function projectPoolRow(
     assetId: row.assetId,
     chainId: row.chainId,
     memeAddress: row.memeAddress,
+    kind: row.kind,
     symbol: row.symbol,
     instanceId: row.instanceId,
     launchId: row.launchId,
@@ -151,6 +158,8 @@ function projectPoolRow(
     tokenWeight: entry.tokenWeight,
     nftCoefficient: entry.nftCoefficient,
     source: entry.source,
+    settleable: settleability.settleable,
+    settleableReasonCode: settleability.reasonCode,
     pendingDraft:
       pending === null || draft === null
         ? null
@@ -225,6 +234,12 @@ export function createAdminMiningSettlementService(dependencies: {
    * Without it the first page is served and `nextCursor` is null.
    */
   readonly cursorSecret?: string | null;
+  /**
+   * Decision 0189: the chain the hourly settlement runs on (the launch
+   * chain), for the pool rows' `settleable`. Null: only `erc20` external
+   * rows are settleable.
+   */
+  readonly settlementChainId?: string | null;
   readonly now?: () => Date;
 }): AdminMiningSettlementService {
   const now = dependencies.now ?? ((): Date => new Date());
@@ -340,9 +355,22 @@ export function createAdminMiningSettlementService(dependencies: {
       if (query["cursor"] !== undefined && query["limit"] !== undefined) {
         throw new AdminApiError("INVALID_REQUEST");
       }
+      const rawKind = query["kind"];
+      if (
+        rawKind !== undefined &&
+        rawKind !== "platform" &&
+        rawKind !== "external"
+      ) {
+        throw new AdminApiError("INVALID_REQUEST");
+      }
+      const kind: MiningPoolKind | null = rawKind ?? null;
       const normalizedAddress =
         typeof address === "string" ? address.toLowerCase() : null;
-      const filter = `address=${normalizedAddress ?? ""}&q=${q ?? ""}`;
+      // Decision 0189: `kind` is bound into the cursor only when given, so a
+      // cursor issued before 0189 (no kind) stays valid.
+      const filter = `address=${normalizedAddress ?? ""}&q=${q ?? ""}${
+        kind === null ? "" : `&kind=${kind}`
+      }`;
       let limit = parsePoolLimit(query["limit"]);
       let after: { communityName: string; communityId: string } | null = null;
       if (query["cursor"] !== undefined) {
@@ -366,6 +394,7 @@ export function createAdminMiningSettlementService(dependencies: {
           repo.listMiningPoolCandidates({
             address: normalizedAddress,
             query: q,
+            kind,
             after,
             limit: limit + 1,
           }),
@@ -401,7 +430,12 @@ export function createAdminMiningSettlementService(dependencies: {
                   effectiveFrom: pending.effectiveFrom,
                 }),
           items: page.map((row) =>
-            projectPoolRow(row, inForce?.document ?? null, pending),
+            projectPoolRow(
+              row,
+              inForce?.document ?? null,
+              pending,
+              dependencies.settlementChainId ?? null,
+            ),
           ),
           nextCursor:
             rows.length > limit && last !== undefined
@@ -500,12 +534,26 @@ export function createAdminMiningSettlementService(dependencies: {
               : "excludedCommunities",
           );
         }
-        const unknown = await repo.findUnknownAssetIds([
+        // Decision 0189: an external token let in (`includedAssets`) needs
+        // no settlement source — a verified community binding it is enough;
+        // its weight may then be listed too.
+        const sourced = await repo.findUnknownAssetIds([
           ...new Set([
             ...document.assetWeights.map((entry) => entry.assetId),
             ...(document.excludedAssets ?? []),
+            ...(document.includedAssets ?? []),
           ]),
         ]);
+        const included = new Set(document.includedAssets ?? []);
+        const bound =
+          sourced.length === 0
+            ? new Set<string>()
+            : new Set(
+                await repo.findVerifiedBoundAssetIds(
+                  sourced.filter((assetId) => included.has(assetId)),
+                ),
+              );
+        const unknown = sourced.filter((assetId) => !bound.has(assetId));
         if (unknown.length > 0) {
           throw new AdminApiError("VALIDATION_FAILED", {
             reasonCode: miningSettlementReasonCodes.assetSourceUnknown,

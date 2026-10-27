@@ -520,6 +520,208 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
     ).toBeNull();
   });
 
+  it("Decision 0189: an external token is a candidate, out until let in, in by its weight, out again when removed", async () => {
+    const mining = createPostgresMiningRepository(pool);
+    const CAKE_ADDRESS = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
+    const CAKE = `eip155:56:${CAKE_ADDRESS}`;
+    const formulaVersion = "s313-formula";
+    const delta = await community("Delta Mainnet", CAKE, "verified");
+    await pool.query(
+      `update public.communities set logo_ref = 'avatar:preset/community-07'
+       where community_id = $1`,
+      [communities["alpha"]],
+    );
+    for (const index of [1, 3]) {
+      await pool.query(
+        `insert into public.community_memberships (community_id, owner_user_id, role, status,
+           joined_at, updated_at)
+         values ($1, $2, 'member', 'active', '2026-10-01', '2026-10-01')`,
+        [delta, users[index]],
+      );
+    }
+    // A pre-0189 reviewed weight must no longer count.
+    await pool.query(
+      `insert into public.community_mining_weights (community_id, status, weight,
+         config_version, reviewed_at)
+       values ($1, 'approved', '1.8', $2, now())`,
+      [delta, formulaVersion],
+    );
+    await pool.query(
+      `insert into public.assets (asset_id, chain_id, address, symbol, name, decimals,
+         status, source_kind, source_block_number, source_verified_at)
+       values ($1, 'eip155:56', $2, 'CAKE', 'PancakeSwap', 18, 'pending', 'chain_call', 1, now())`,
+      [CAKE, CAKE_ADDRESS],
+    );
+    const snapshotId = randomUUID();
+    await pool.query(
+      `insert into public.mining_snapshots (snapshot_id, block_number, block_hash,
+         formula_version, price_version, total_power, account_count, status, holdings_source)
+       values ($1, 4322, $2, $3, 'dexscreener:2026-10-26T10:30:00.000Z', '30', 2,
+         'complete', 'chain')`,
+      [snapshotId, hex(4322), formulaVersion],
+    );
+    for (const [index, power] of [
+      [1, "10"],
+      [2, "20"],
+    ] as const) {
+      await pool.query(
+        `insert into public.mining_snapshot_powers (snapshot_id, owner_user_id, asset_id,
+           holding, reference_price_usd, reference_price_quality, weight, power, block_number)
+         values ($1, $2, $3, $4, '2', 'fresh', '1', $4, 4322)`,
+        [snapshotId, users[index], CAKE, power],
+      );
+    }
+
+    // The candidate list: external row, kind filter, no launch2 facts.
+    const externalRows = await repository.listMiningPoolCandidates({
+      kind: "external",
+    });
+    expect(externalRows).toEqual([
+      {
+        communityId: delta,
+        communityName: "Delta Mainnet",
+        assetId: CAKE,
+        chainId: "eip155:56",
+        memeAddress: CAKE_ADDRESS,
+        kind: "external",
+        symbol: "CAKE",
+        instanceId: null,
+        launchId: null,
+        settlementSource: null,
+      },
+    ]);
+    expect(
+      (await repository.listMiningPoolCandidates({ kind: "platform" })).map(
+        (row) => row.kind,
+      ),
+    ).toEqual(["platform", "platform"]);
+    expect(
+      (await repository.listMiningPoolCandidates({ query: "cake" })).map(
+        (row) => row.communityName,
+      ),
+    ).toEqual(["Delta Mainnet"]);
+    expect(await repository.findVerifiedBoundAssetIds([CAKE, ASSET_B])).toEqual(
+      [CAKE],
+    );
+
+    const standing = () =>
+      mining.getCommunityStanding({
+        snapshotId,
+        configVersion: formulaVersion,
+        communityId: delta,
+      });
+    const snapshotFactor = async () =>
+      (await mining.listCommunityWeightInputs(formulaVersion)).find(
+        (row) => row.communityId === delta,
+      );
+
+    // 1. Not let in (the in-force version has no includedAssets): no
+    //    weight, no standing, the snapshot skips it — the old 1.8 is gone.
+    expect(await mining.getCommunityWeight(delta)).toMatchObject({
+      status: "pending_review",
+      weight: null,
+      source: "roster",
+      rosterExcluded: true,
+    });
+    expect(await standing()).toBeNull();
+    expect(await snapshotFactor()).toMatchObject({
+      assetId: CAKE,
+      status: "pending_review",
+      weight: null,
+      source: "roster",
+      rosterExcluded: true,
+    });
+
+    // 2. Let in at weight 1.8: approved, members only (users[2] is not one).
+    await insertVersion(
+      {
+        ...miningDefaultParameterDocument,
+        releaseStartAt: "2026-10-01T00:00:00.000Z",
+        assetWeights: [{ assetId: CAKE, weight: "1.8" }],
+        communityCoefficients: [],
+        includedAssets: [CAKE],
+      },
+      "2026-10-03T00:00:00Z",
+    );
+    expect(await mining.getCommunityWeight(delta)).toMatchObject({
+      status: "approved",
+      weight: "1.8",
+      source: "roster",
+      rosterExcluded: false,
+    });
+    expect(await standing()).toMatchObject({
+      weight: "1.8",
+      power: "10",
+      participantCount: 1,
+      position: 1,
+    });
+    expect(await snapshotFactor()).toMatchObject({
+      status: "approved",
+      weight: "1.8",
+      source: "roster",
+      rosterExcluded: false,
+    });
+
+    // The hourly settlement gates CAKE (no settlement source on the launch
+    // chain): the next hour settles without ASSET_SOURCE_UNKNOWN.
+    await pool.query(
+      `update public.indexer_checkpoints set updated_at = '2026-10-26T12:05:00Z'
+       where lane = 'launch2_event' and chain_id = $1`,
+      [CHAIN],
+    );
+    const settlement = createMiningSettlementRunner({
+      repository,
+      chainId: CHAIN,
+      indexerGraceSeconds: 120,
+      embeddedWalletOnly: false,
+      now: () => new Date("2026-10-26T12:10:00.000Z"),
+    });
+    const outcome = await settlement.settleHour({
+      hourStart: HOUR_S + 3_600n,
+      trigger: "scheduled",
+    });
+    expect(outcome.kind, JSON.stringify(outcome)).toBe("settled");
+    if (outcome.kind === "settled") {
+      expect(outcome.epoch.inputSummary["poolExternalAssetIds"]).toEqual([
+        CAKE,
+      ]);
+      expect(
+        outcome.epoch.inputSummary["poolExternalReadableAssetIds"],
+      ).toEqual([]);
+      const replay = await settlement.replay(outcome.epoch.epochId);
+      expect(replay).toMatchObject({ digestMatches: true, rewardsMatch: true });
+    }
+
+    // S316: the settled hour's community rank carries the community logo.
+    const ranking = await mining.listCommunityRanking({
+      epochId: settledEpochId,
+      limit: 10,
+    });
+    expect(
+      ranking.find((row) => row.communityId === communities["alpha"]),
+    ).toMatchObject({ avatarRef: "avatar:preset/community-07" });
+    // An external token not let in under that hour's version is not ranked.
+    expect(ranking.some((row) => row.communityId === delta)).toBe(false);
+
+    // 3. Removed by a newer version (weight kept, not let in): out again.
+    await insertVersion(
+      {
+        ...miningDefaultParameterDocument,
+        releaseStartAt: "2026-10-01T00:00:00.000Z",
+        assetWeights: [{ assetId: CAKE, weight: "1.8" }],
+        communityCoefficients: [],
+      },
+      "2026-10-04T00:00:00Z",
+    );
+    expect(await mining.getCommunityWeight(delta)).toMatchObject({
+      status: "pending_review",
+      weight: null,
+      rosterExcluded: true,
+    });
+    expect(await standing()).toBeNull();
+    expect(await snapshotFactor()).toMatchObject({ rosterExcluded: true });
+  });
+
   it("refuses to approve a draft excluding a community that is not verified", async () => {
     const hash = await hashAdminPassword("s313-password-0123");
     const reviewerUser = await user(9);

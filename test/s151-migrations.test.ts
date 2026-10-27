@@ -76,7 +76,7 @@ describe("000072 official-pool market trades apart from buybacks (Decision 0127)
   });
 
   it("is the latest migration and the counter table is a schema table", () => {
-    expect(latestMigrationName).toBe("000102_account_wallet_archived_reason");
+    expect(latestMigrationName).toBe("000103_mining_snapshot_unpriced_power");
     expect(requiredDatabaseRelations).toContain(
       "public.hooks_launch_owner_config_versions",
     );

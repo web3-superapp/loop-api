@@ -189,7 +189,13 @@ export interface MiningIncludedAssetProjection {
   /** Display picture of the asset (Decision 0072); never an identifier. */
   readonly logo: TokenLogoProjection;
   readonly holding: string;
-  readonly referencePriceUsd: string;
+  /**
+   * Null only with quality `unavailable` (Decision 0189, written only under
+   * `MINING_SNAPSHOT_UNPRICED_POWER_EMIT`).
+   */
+  readonly referencePriceUsd: string | null;
+  /** Decision 0189: present only on an `unavailable` row. */
+  readonly referencePriceReasonCode?: string;
   /**
    * `proxied` = the declared proxy asset's price (Decision 0044);
    * `derived` = the inverted quote side of `referencePricePairAddress`,
@@ -989,6 +995,11 @@ export function createMiningService(dependencies: {
                 referencePriceQuality: row.referencePriceQuality,
                 referencePriceProxyAssetId: row.referencePriceProxyAssetId,
                 referencePricePairAddress: row.referencePricePairAddress,
+                // Decision 0189: only on an unpriced power-list row.
+                ...(row.referencePriceReasonCode === undefined ||
+                row.referencePriceReasonCode === null
+                  ? {}
+                  : { referencePriceReasonCode: row.referencePriceReasonCode }),
                 weight: row.weight,
                 power: row.power,
                 blockNumber: row.blockNumber,

@@ -1,4 +1,7 @@
-import type { MiningPoolCandidate } from "./mining-pool-roster.js";
+import type {
+  MiningPoolCandidate,
+  MiningPoolKind,
+} from "./mining-pool-roster.js";
 import type {
   MiningClaimState,
   MiningEpochState,
@@ -118,7 +121,30 @@ export interface MiningNftMoveFact {
   readonly logIndex: number;
 }
 
-export type MiningAssetSource = "launch2" | "meme_v1";
+/**
+ * Decision 0189: `erc20` = a registered ERC-20 (typically a BSC mainnet
+ * token a verified community binds, let in by `includedAssets`) whose
+ * holdings are rolled forward from a pinned `wallet_balance_snapshots`
+ * reading with the `erc20_transfer` lane's `indexed_transfers`.
+ */
+export type MiningAssetSource = "launch2" | "meme_v1" | "erc20";
+
+/**
+ * Decision 0189: the reading an `erc20` opening balance was rolled forward
+ * from (one `wallet_balance_snapshots` row). Stored in the epoch summary so
+ * a replay reads exactly the same rows.
+ */
+export interface MiningErc20OpeningPin {
+  readonly assetId: string;
+  readonly walletId: string;
+  readonly blockNumber: string;
+}
+
+/** Decision 0189: a holder address whose `erc20` balance is not knowable. */
+export interface MiningErc20UnknownHolder {
+  readonly address: string;
+  readonly reasonCode: string;
+}
 
 export interface MiningAssetFact {
   readonly assetId: string;
@@ -158,6 +184,15 @@ export interface MiningAssetFact {
       readonly at: bigint;
     }[];
   } | null;
+  /**
+   * Decision 0189 (`erc20` only): holder addresses whose balance cannot be
+   * reconstructed for the hour (no coverage, no pinned opening reading, an
+   * inconsistent roll-forward). Every user owning one of them counts 0 for
+   * this asset in the hour — nothing is guessed.
+   */
+  readonly unknownHolders?: readonly MiningErc20UnknownHolder[];
+  /** Decision 0189 (`erc20` only): the readings the openings rest on. */
+  readonly openingPins?: readonly MiningErc20OpeningPin[];
 }
 
 export interface MiningWalletOwnerFact {
@@ -212,6 +247,15 @@ export interface MiningSettlementFacts {
   readonly assets: readonly MiningAssetFact[];
   /** Admitted asset ids with no launch2 / MEME v1 source. */
   readonly unknownAssetIds: readonly string[];
+  /**
+   * Decision 0189: external assets (`external.assetIds` of the read) left
+   * out of this hour with a reason (lane stale, no holdings source) instead
+   * of failing the hour. Absent on reads without an external set.
+   */
+  readonly externalExcludedAssets?: readonly {
+    readonly assetId: string;
+    readonly reasonCode: string;
+  }[];
   readonly walletOwners: readonly MiningWalletOwnerFact[];
   readonly referralEdges: readonly MiningReferralEdgeFact[];
   readonly membershipGate?: MiningMembershipGateFacts;
@@ -228,6 +272,13 @@ export interface MiningIndexerFreshness {
     readonly lane: string;
     readonly hasSources: boolean;
     readonly updatedAt: string | null;
+    /**
+     * Decision 0189: an `erc20_transfer` lane (any chain) that only feeds
+     * external assets. When stale it does not hold the hour back: these
+     * assets are left out of the hour (MINING_SETTLEMENT_SOURCE_STALE).
+     */
+    readonly chainId?: string;
+    readonly externalAssetIds?: readonly string[];
   }[];
 }
 
@@ -408,14 +459,24 @@ export interface MiningSettlementRepository {
     communityIds: readonly string[],
   ): Promise<readonly string[]>;
   /**
+   * Decision 0189: the given asset ids that a verified community binds
+   * (`communities.bound_asset_key`), in input order.
+   */
+  findVerifiedBoundAssetIds(
+    assetIds: readonly string[],
+  ): Promise<readonly string[]>;
+  /**
    * Decision 0187: the mining pool roster candidates — every verified
    * community × the launch2 MEME it binds, ordered by community name then
-   * id. `chainId` / `address` (MEME, lower-case, exact) / `query` (community
-   * name or ticker, case-insensitive substring) filter; `after` + `limit`
+   * id. Decision 0189: every verified community with any bound asset (an
+   * asset that is not a launch2 MEME is `kind: external`). `chainId` /
+   * `address` (bound token, lower-case, exact) / `query` (community name or
+   * ticker, case-insensitive substring) / `kind` filter; `after` + `limit`
    * page (absent limit: every row).
    */
   listMiningPoolCandidates(input: {
     readonly chainId?: string | null;
+    readonly kind?: MiningPoolKind | null;
     readonly address?: string | null;
     readonly query?: string | null;
     readonly after?: {
@@ -462,10 +523,16 @@ export interface MiningSettlementRepository {
   recordAudit(input: MiningAuditInput): Promise<MiningAuditRecord>;
 
   // Settlement.
-  /** launch2_event always (NFT track); meme_event when an admitted asset is MEME v1. */
+  /**
+   * launch2_event always (NFT track); meme_event when an admitted asset is
+   * MEME v1; Decision 0189: erc20_transfer (per chain) when an admitted
+   * external asset is an `erc20` source.
+   */
   readIndexerFreshness(input: {
     readonly chainId: string;
     readonly assetIds: readonly string[];
+    /** Decision 0189: the external assets among `assetIds`. */
+    readonly externalAssetIds?: readonly string[];
   }): Promise<MiningIndexerFreshness>;
   readSettlementFacts(input: {
     readonly chainId: string;
@@ -474,6 +541,17 @@ export interface MiningSettlementRepository {
     readonly assetIds: readonly string[];
     /** Decision 0184: attribute only `kind = 'embedded'` wallets when true. */
     readonly embeddedWalletOnly: boolean;
+    /**
+     * Decision 0189: the external assets among `assetIds`. One without a
+     * launch2 / MEME v1 / erc20 source, or in `staleAssetIds`, is left out
+     * (`externalExcludedAssets`) instead of failing the hour; `pins` (a
+     * replay) fixes the opening readings of `erc20` assets.
+     */
+    readonly external?: {
+      readonly assetIds: readonly string[];
+      readonly staleAssetIds: readonly string[];
+      readonly pins?: readonly MiningErc20OpeningPin[] | null;
+    };
   }): Promise<MiningSettlementFacts>;
   getEpochByHour(hourStart: string): Promise<MiningEpochRecord | null>;
   getEpoch(epochId: string): Promise<MiningEpochRecord | null>;

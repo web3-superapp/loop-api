@@ -1434,7 +1434,9 @@ export function createPostgresCommunityRepository(
               -- number the cursor carries. Only a community without an
               -- approved weight has no row here at all. Decision 0187
               -- appendix A: a roster community is weighted by its token
-              -- weight while it participates (unticked: no row).
+              -- weight while it participates (unticked: no row). Decision
+              -- 0189: the roster is the only rule (community_mining_weights
+              -- is no longer read; an external token counts once let in).
               coalesce(sum(power.power::numeric), 0) as mining_power,
               count(power.owner_user_id)
                 filter (where power.power::numeric > 0)::int
@@ -1443,22 +1445,13 @@ export function createPostgresCommunityRepository(
               weight.config_version as mining_weight_config_version,
               weight.reviewed_at as mining_weight_reviewed_at
             from (
-              select w.weight, w.config_version, w.reviewed_at
-              from public.community_mining_weights as w
-              where w.community_id = community.community_id
-                and w.status = 'approved'
-                and w.config_version = $8::text
-                and community.bound_asset_key is not null
-                and not exists (
-                  select 1 from pool_roster as r
-                  where r.community_id = community.community_id
-                )
-              union all
-              select r.token_weight, r.roster_config_version,
-                r.roster_approved_at
+              select r.token_weight as weight,
+                r.roster_config_version as config_version,
+                r.roster_approved_at as reviewed_at
               from pool_roster as r
               where r.community_id = community.community_id
                 and r.participate
+                and $8::text is not null
             ) as weight
             left join public.community_memberships as member
               on member.community_id = community.community_id

@@ -422,7 +422,7 @@ cookie 在重启后仍会重新有效（决策 0105）；账号会话由 `creden
 
 ### 5.6 挖矿系数（公式版本）
 
-> **已弃用（决策 0187，S313）**：以下 `formula-versions` 四个接口保留，但 OpenAPI 已标 `deprecated`，后台隐藏「快照系数」入口。平台 MEME 的结算与 App 快照改由「矿池」表决定：`GET /admin/v1/mining/pool`，保存为挖矿参数草稿，详见 `docs/frontend-admin-mining-pool-api.md`。
+> **已弃用（决策 0187，S313）**：以下 `formula-versions` 四个接口保留，但 OpenAPI 已标 `deprecated`，后台隐藏「快照系数」入口。平台 MEME 的结算与 App 快照改由「矿池」表决定：`GET /admin/v1/mining/pool`，保存为挖矿参数草稿，详见 `docs/frontend-admin-mining-pool-api.md`。决策 0189（S316 / S317）起该表为「算力名单」：外部代币社区也列出（`kind = external`，默认不参与，`includedAssets` 放行），名单是社区权重 / 站位 / 榜单 / 结算 / 快照的唯一口径。
 
 **`GET /admin/v1/mining/formula-versions`**
 

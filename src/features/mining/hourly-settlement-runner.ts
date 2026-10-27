@@ -22,10 +22,13 @@ import {
 import {
   miningEffectiveAssetWeights,
   miningEffectiveCommunityCoefficients,
+  miningPoolExternalFor,
+  type MiningPoolExternalAssets,
 } from "./mining-pool-roster.js";
 import type {
   CommitMiningEpochInput,
   MiningEpochRecord,
+  MiningErc20OpeningPin,
   MiningMembershipFact,
   MiningParameterVersionRecord,
   MiningSettlementFacts,
@@ -102,6 +105,7 @@ function sliceOf(
   from: bigint,
   to: bigint,
   poolAssetIds: readonly string[],
+  external: MiningPoolExternalAssets | null,
 ): MiningParameterSlice {
   return Object.freeze({
     from,
@@ -110,20 +114,26 @@ function sliceOf(
     coefficients: miningEffectiveCommunityCoefficients(version.document),
     defaultCoefficient:
       parseMiningDecimal(version.document.defaultCommunityCoefficient) ?? 0n,
-    assetWeights: miningEffectiveAssetWeights(version.document, poolAssetIds),
+    assetWeights: miningEffectiveAssetWeights(
+      version.document,
+      poolAssetIds,
+      external,
+    ),
     assetPowerBasis: version.document.assetPowerBasis,
   });
 }
 
 /**
  * Version slices tiling [start, end). `poolAssetIds` (Decision 0187) are the
- * roster's platform MEMEs on the settled chain.
+ * roster's platform MEMEs on the settled chain; `external` (Decision 0189)
+ * the external roster assets, out unless let in (and readable).
  */
 export function miningParameterSlices(
   versions: readonly MiningParameterVersionRecord[],
   start: bigint,
   end: bigint,
   poolAssetIds: readonly string[] = [],
+  external: MiningPoolExternalAssets | null = null,
 ): readonly MiningParameterSlice[] {
   const first = miningVersionAt(versions, start);
   if (first === null) return [];
@@ -137,12 +147,12 @@ export function miningParameterSlices(
   let cursor = start;
   for (const change of changes) {
     if (change.at > cursor) {
-      slices.push(sliceOf(current, cursor, change.at, poolAssetIds));
+      slices.push(sliceOf(current, cursor, change.at, poolAssetIds, external));
       cursor = change.at;
     }
     current = change.version;
   }
-  slices.push(sliceOf(current, cursor, end, poolAssetIds));
+  slices.push(sliceOf(current, cursor, end, poolAssetIds, external));
   return slices;
 }
 
@@ -300,6 +310,13 @@ export function prepareMiningHour(input: {
    */
   readonly poolAssetIds?: readonly string[];
   /**
+   * Decision 0189: the external roster assets (gated by `includedAssets`)
+   * and the ones the settlement can read. Absent when there are none, and
+   * when replaying an hour settled before 0189 (its summary has no
+   * `poolExternalAssetIds`).
+   */
+  readonly poolExternal?: MiningPoolExternalAssets;
+  /**
    * Decision 0187: the snapshot lane prepares a 1-second window at "now"
    * through the same rules (no budget is computed for a window that is not
    * a whole UTC hour). Default: one hour.
@@ -312,6 +329,7 @@ export function prepareMiningHour(input: {
   const wholeHour =
     windowSeconds === miningHourSeconds && start % miningHourSeconds === 0n;
   const poolAssetIds = [...new Set(input.poolAssetIds ?? [])].sort();
+  const external = normalizedExternal(input.poolExternal);
   const version = miningVersionAt(input.versions, start);
   if (version === null) {
     throw new MiningSettlementInputError(
@@ -330,12 +348,16 @@ export function prepareMiningHour(input: {
     start,
     end,
     poolAssetIds,
+    external,
   );
   const releaseStart = seconds(version.document.releaseStartAt);
 
   // Attribution.
   const ownerOf = new Map<string, string>();
   const ambiguous: string[] = [];
+  const ownersOf = new Map<string, readonly string[]>(
+    input.facts.walletOwners.map((owner) => [owner.address, owner.userIds]),
+  );
   for (const owner of input.facts.walletOwners) {
     if (owner.userIds.length === 1) {
       ownerOf.set(owner.address, owner.userIds[0] as string);
@@ -487,6 +509,22 @@ export function prepareMiningHour(input: {
     reasonCode: string;
     from: string;
   }> = [];
+  // Decision 0189: external assets left out of the hour (lane stale, no
+  // holdings source) — recorded, never estimated.
+  for (const excluded of input.facts.externalExcludedAssets ?? []) {
+    excludedAssets.push({
+      assetId: excluded.assetId,
+      reasonCode: excluded.reasonCode,
+      from: iso(start),
+    });
+  }
+  const erc20Pins: Array<{
+    assetId: string;
+    walletId: string;
+    blockNumber: string;
+  }> = [];
+  const erc20Unknown = new Map<string, Set<string>>();
+  let erc20Read = false;
   for (const asset of [...input.facts.assets].sort((a, b) =>
     a.assetId < b.assetId ? -1 : 1,
   )) {
@@ -585,6 +623,22 @@ export function prepareMiningHour(input: {
         priceE18: price,
       });
     }
+    // Decision 0189: a user owning an `erc20` holder address whose balance
+    // is unknown counts 0 for this asset in the hour (all their wallets).
+    const unknownUsers = new Set<string>();
+    if (asset.source === "erc20") {
+      erc20Read = true;
+      for (const pin of asset.openingPins ?? []) erc20Pins.push({ ...pin });
+      for (const holder of asset.unknownHolders ?? []) {
+        for (const userId of ownersOf.get(holder.address) ?? []) {
+          unknownUsers.add(userId);
+          const key = `${asset.assetId}|${holder.reasonCode}`;
+          const users = erc20Unknown.get(key) ?? new Set<string>();
+          users.add(userId);
+          erc20Unknown.set(key, users);
+        }
+      }
+    }
     const byAddress = new Map<string, Timeline<string>>();
     for (const opening of asset.openingBalances) {
       byAddress.set(opening.address, {
@@ -612,6 +666,7 @@ export function prepareMiningHour(input: {
         unattributed += 1;
         continue;
       }
+      if (unknownUsers.has(userId)) continue;
       for (const segment of segments) {
         // Decision 0183: a MEME bound by a verified community counts only
         // while its holder is a member of it; an unbound MEME is not gated.
@@ -699,6 +754,48 @@ export function prepareMiningHour(input: {
       ...(input.poolAssetIds === undefined
         ? {}
         : { poolRosterAssetIds: poolAssetIds }),
+      // Decision 0189: the rank projection rule of this hour (participating
+      // roster communities only); hours without it keep the 0187 rule.
+      poolRosterRule: "participating",
+      // Decision 0189: the readings the erc20 openings rest on (a replay
+      // reads exactly these rows) and the users counted 0 per reason.
+      ...(erc20Read
+        ? {
+            externalOpeningPins: erc20Pins.sort((a, b) =>
+              `${a.assetId}|${a.walletId}|${a.blockNumber}` <
+              `${b.assetId}|${b.walletId}|${b.blockNumber}`
+                ? -1
+                : 1,
+            ),
+            externalUnknownHolders: [...erc20Unknown.entries()]
+              .sort(([a], [b]) => (a < b ? -1 : 1))
+              .map(([key, users]) => {
+                const [assetId, reasonCode] = key.split("|");
+                return { assetId, reasonCode, userCount: users.size };
+              }),
+          }
+        : {}),
+      ...((input.facts.externalExcludedAssets ?? []).some(
+        (row) => row.reasonCode === miningSettlementReasonCodes.sourceStale,
+      )
+        ? {
+            externalStaleAssetIds: (input.facts.externalExcludedAssets ?? [])
+              .filter(
+                (row) =>
+                  row.reasonCode === miningSettlementReasonCodes.sourceStale,
+              )
+              .map((row) => row.assetId)
+              .sort(),
+          }
+        : {}),
+      // Decision 0189: the external roster (only when there is one), so a
+      // replay gates the same assets.
+      ...(external === null
+        ? {}
+        : {
+            poolExternalAssetIds: external.assetIds,
+            poolExternalReadableAssetIds: [...(external.readable ?? [])].sort(),
+          }),
     }),
   });
 }
@@ -747,11 +844,80 @@ function rewardsOf(
 }
 
 /** Asset ids with a positive (effective) weight anywhere in [start, end). */
+/** Decision 0189: sorted, unique; null when there is no external asset. */
+function normalizedExternal(
+  external: MiningPoolExternalAssets | undefined,
+): MiningPoolExternalAssets | null {
+  if (external === undefined || external.assetIds.length === 0) return null;
+  return Object.freeze({
+    assetIds: Object.freeze([...new Set(external.assetIds)].sort()),
+    readable: new Set(
+      [...(external.readable ?? [])].filter((assetId) =>
+        external.assetIds.includes(assetId),
+      ),
+    ),
+  });
+}
+
+function stringList(value: unknown): readonly string[] | null {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : null;
+}
+
+/** Decision 0189: the external roster an epoch was settled with, if any. */
+function storedExternal(
+  summary: Readonly<Record<string, unknown>>,
+): MiningPoolExternalAssets | null {
+  const assetIds = stringList(summary["poolExternalAssetIds"]);
+  if (assetIds === null) return null;
+  return normalizedExternal({
+    assetIds,
+    readable: new Set(
+      stringList(summary["poolExternalReadableAssetIds"]) ?? [],
+    ),
+  });
+}
+
+/**
+ * Decision 0189: the erc20 inputs an epoch was settled with — the assets
+ * left out as stale and the pinned opening readings (null before 0189: a
+ * fresh selection, which reads nothing because no erc20 asset was admitted).
+ */
+function storedErc20(summary: Readonly<Record<string, unknown>>): {
+  readonly staleAssetIds: readonly string[];
+  readonly pins: readonly MiningErc20OpeningPin[] | null;
+} {
+  const rawPins = summary["externalOpeningPins"];
+  const pins = Array.isArray(rawPins)
+    ? rawPins.flatMap((entry: unknown) => {
+        if (typeof entry !== "object" || entry === null) return [];
+        const row = entry as Record<string, unknown>;
+        return typeof row["assetId"] === "string" &&
+          typeof row["walletId"] === "string" &&
+          typeof row["blockNumber"] === "string"
+          ? [
+              Object.freeze({
+                assetId: row["assetId"],
+                walletId: row["walletId"],
+                blockNumber: row["blockNumber"],
+              }),
+            ]
+          : [];
+      })
+    : null;
+  return {
+    staleAssetIds: stringList(summary["externalStaleAssetIds"]) ?? [],
+    pins,
+  };
+}
+
 export function admittedAssetIds(
   versions: readonly MiningParameterVersionRecord[],
   start: bigint,
   end: bigint,
   poolAssetIds: readonly string[] = [],
+  external: MiningPoolExternalAssets | null = null,
 ): readonly string[] {
   const assetIds = new Set<string>();
   for (const slice of miningParameterSlices(
@@ -759,6 +925,7 @@ export function admittedAssetIds(
     start,
     end,
     poolAssetIds,
+    normalizedExternal(external ?? undefined),
   )) {
     for (const [assetId, weight] of slice.assetWeights) {
       if (weight > 0n) assetIds.add(assetId);
@@ -793,23 +960,77 @@ export function createMiningSettlementRunner(dependencies: {
     hourStart: bigint,
     versions: readonly MiningParameterVersionRecord[],
     poolAssetIds: readonly string[],
+    external: MiningPoolExternalAssets | null,
+    erc20: {
+      readonly staleAssetIds: readonly string[];
+      readonly pins: readonly MiningErc20OpeningPin[] | null;
+    } = { staleAssetIds: [], pins: null },
   ): Promise<MiningSettlementFacts> {
     const end = hourStart + miningHourSeconds;
+    const assetIds = admittedAssetIds(
+      versions,
+      hourStart,
+      end,
+      poolAssetIds,
+      external,
+    );
+    // Decision 0189: the admitted external assets are read leniently (a
+    // stale lane or a missing source leaves the asset out of the hour).
+    const externalIds =
+      external === null
+        ? []
+        : assetIds.filter((assetId) => external.assetIds.includes(assetId));
     return repository.readSettlementFacts({
       chainId: dependencies.chainId,
       hourStart,
       hourEnd: end,
-      assetIds: admittedAssetIds(versions, hourStart, end, poolAssetIds),
+      assetIds,
       embeddedWalletOnly: dependencies.embeddedWalletOnly,
+      ...(externalIds.length === 0
+        ? {}
+        : {
+            external: {
+              assetIds: externalIds,
+              staleAssetIds: erc20.staleAssetIds.filter((assetId) =>
+                externalIds.includes(assetId),
+              ),
+              pins: erc20.pins,
+            },
+          }),
     });
   }
 
-  /** Decision 0187: the roster's platform MEMEs on the settled chain. */
-  async function readPoolAssetIds(): Promise<readonly string[]> {
-    const candidates = await repository.listMiningPoolCandidates({
-      chainId: dependencies.chainId,
-    });
-    return [...new Set(candidates.map((row) => row.assetId))].sort();
+  /**
+   * Decision 0187: the roster's platform MEMEs on the settled chain.
+   * Decision 0189: plus the external roster (every chain), gated by
+   * `includedAssets`; only an external token the settlement has a source
+   * for on the settled chain (a MEME v1 token) can weigh here.
+   */
+  async function readRoster(
+    versions: readonly MiningParameterVersionRecord[],
+  ): Promise<{
+    readonly poolAssetIds: readonly string[];
+    readonly external: MiningPoolExternalAssets | null;
+  }> {
+    const candidates = await repository.listMiningPoolCandidates({});
+    const poolAssetIds = [
+      ...new Set(
+        candidates
+          .filter(
+            (row) =>
+              row.kind !== "external" && row.chainId === dependencies.chainId,
+          )
+          .map((row) => row.assetId),
+      ),
+    ].sort();
+    return {
+      poolAssetIds,
+      external: miningPoolExternalFor(
+        candidates,
+        versions,
+        dependencies.chainId,
+      ),
+    };
   }
 
   return Object.freeze<MiningSettlementRunner>({
@@ -865,7 +1086,7 @@ export function createMiningSettlementRunner(dependencies: {
           reasonCode: miningSettlementReasonCodes.outsideRelease,
         };
       }
-      const poolAssetIds = await readPoolAssetIds();
+      const { poolAssetIds, external } = await readRoster(versions);
       const freshness = await repository.readIndexerFreshness({
         chainId: dependencies.chainId,
         assetIds: admittedAssetIds(
@@ -873,26 +1094,43 @@ export function createMiningSettlementRunner(dependencies: {
           hourStart,
           hourStart + miningHourSeconds,
           poolAssetIds,
+          external,
         ),
+        ...(external === null ? {} : { externalAssetIds: external.assetIds }),
       });
+      const staleAssetIds: string[] = [];
       for (const lane of freshness.lanes) {
         if (!lane.hasSources) continue;
-        if (lane.updatedAt === null || seconds(lane.updatedAt) < readyAt) {
-          return {
-            kind: "skipped",
-            reasonCode: miningSettlementReasonCodes.indexerBehind,
-          };
+        const stale =
+          lane.updatedAt === null || seconds(lane.updatedAt) < readyAt;
+        if (!stale) continue;
+        if (lane.externalAssetIds !== undefined) {
+          // Decision 0189: a stale erc20_transfer lane only takes its
+          // external assets out of this hour; the platform MEMEs settle.
+          staleAssetIds.push(...lane.externalAssetIds);
+          continue;
         }
+        return {
+          kind: "skipped",
+          reasonCode: miningSettlementReasonCodes.indexerBehind,
+        };
       }
       let prepared: PreparedMiningHour;
       let result: MiningHourlySettlementResult;
       try {
-        const facts = await readFacts(hourStart, versions, poolAssetIds);
+        const facts = await readFacts(
+          hourStart,
+          versions,
+          poolAssetIds,
+          external,
+          { staleAssetIds, pins: null },
+        );
         prepared = prepareMiningHour({
           hourStart,
           versions,
           facts,
           poolAssetIds,
+          ...(external === null ? {} : { poolExternal: external }),
         });
         result = settleMiningHour(prepared.input);
       } catch (error) {
@@ -944,13 +1182,23 @@ export function createMiningSettlementRunner(dependencies: {
             (value): value is string => typeof value === "string",
           )
         : undefined;
+      // Decision 0189: likewise the stored external roster.
+      const external = storedExternal(epoch.inputSummary);
       try {
-        const facts = await readFacts(hourStart, versions, poolAssetIds ?? []);
+        const facts = await readFacts(
+          hourStart,
+          versions,
+          poolAssetIds ?? [],
+          external,
+          // Decision 0189: the same stale set and the pinned readings.
+          storedErc20(epoch.inputSummary),
+        );
         const prepared = prepareMiningHour({
           hourStart,
           versions,
           facts,
           ...(poolAssetIds === undefined ? {} : { poolAssetIds }),
+          ...(external === null ? {} : { poolExternal: external }),
         });
         const result = settleMiningHour(prepared.input);
         const stored = await repository.listEpochRewards({ epochId });

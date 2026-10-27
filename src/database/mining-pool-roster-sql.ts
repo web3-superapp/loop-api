@@ -6,18 +6,22 @@
  *
  * `pool_version(config_version, approved_at, document)` is the parameter
  * version the roster is read under; `pool_roster` lists every verified
- * community that binds a launch2 MEME (any chain) under a `quantity`
- * document, with
+ * community with a bound asset under a `quantity` document (Decision 0189:
+ * external tokens too), with
  *
- * - `token_weight` — the document's `assetWeights` entry for the MEME, else
+ * - `kind` — `platform` when the bound asset is a launch2 MEME (any chain),
+ *   else `external`;
+ * - `token_weight` — the document's `assetWeights` entry for the asset, else
  *   "1" (the same rule as `mining-pool-roster.ts`);
- * - `participate` — neither the MEME is in `excludedAssets` nor the
- *   community in `excludedCommunities`.
+ * - `participate` — neither the asset is in `excludedAssets` nor the
+ *   community in `excludedCommunities`, and (external only) the asset is in
+ *   `includedAssets`.
  *
  * A roster community's weight projection is its token weight (approved,
  * versioned by the parameter version); a non-participating roster community
- * is not ranked. Without a `pool_version` row the roster is empty and every
- * community keeps the `community_mining_weights` rule.
+ * is not ranked. Decision 0189: the roster is the only rule — without a
+ * `pool_version` row it is empty and no community has a weight (the
+ * `community_mining_weights` table is no longer read).
  */
 
 /** The approved parameter version in force now. */
@@ -51,6 +55,7 @@ export const miningPoolRosterSql = `
       c.community_id,
       c.name as community_name,
       c.bound_asset_key as bound_asset_id,
+      k.kind,
       pv.config_version as roster_config_version,
       pv.approved_at as roster_approved_at,
       coalesce(
@@ -76,10 +81,24 @@ export const miningPoolRosterSql = `
           coalesce(pv.document->'excludedCommunities', '[]'::jsonb)
         ) as excluded
         where excluded = c.community_id::text
+      ) and (
+        k.kind = 'platform' or exists (
+          select 1
+          from jsonb_array_elements_text(
+            coalesce(pv.document->'includedAssets', '[]'::jsonb)
+          ) as included
+          where included = c.bound_asset_key
+        )
       ) as participate
     from pool_version as pv
-    join public.communities as c on c.verification_status = 'verified'
-    join public.launch2_instances as i
-      on c.bound_asset_key = i.chain_id || ':' || i.meme_address
+    join public.communities as c
+      on c.verification_status = 'verified'
+      and c.bound_asset_key is not null
+    cross join lateral (
+      select case when exists (
+        select 1 from public.launch2_instances as i
+        where c.bound_asset_key = i.chain_id || ':' || i.meme_address
+      ) then 'platform' else 'external' end as kind
+    ) as k
     where pv.document->>'assetPowerBasis' = 'quantity'
   )`;

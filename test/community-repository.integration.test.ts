@@ -42,6 +42,7 @@ import { deriveStreamUserId } from "../src/features/identity/loop-identifiers.js
 import { createTokenLogoProjector } from "../src/features/market/token-logo.js";
 import { createAliasPolicy } from "../src/features/profile/alias-policy.js";
 import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js";
+import { approveMiningPowerList } from "./helpers/mining-power-list.js";
 
 const { Client, Pool } = pg;
 
@@ -2852,19 +2853,14 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         ],
       });
       // Only the two weighted communities carry an approved weight; the
-      // stronger one weights its members' power higher.
-      await pool.query({
-        text: `
-          insert into public.community_mining_weights (
-            community_id, status, weight, config_version, reviewed_at
-          )
-          values ($1, 'approved', '2', $3, now()), ($2, 'approved', '0.5', $3, now())
-          on conflict (community_id) do update set
-            status = excluded.status, weight = excluded.weight,
-            config_version = excluded.config_version,
-            reviewed_at = excluded.reviewed_at
-        `,
-        values: [strong, weak, configVersion],
+      // stronger one weights its members' power higher. Decision 0189: the
+      // weight is the power list's (an external token let in), not a
+      // community_mining_weights row.
+      const powerList = await approveMiningPowerList(pool, {
+        weights: [
+          { assetId: boundAsset, weight: "2" },
+          { assetId: weakAsset, weight: "0.5" },
+        ],
       });
       // The stronger community keeps both members' power; the weaker one
       // keeps only the member's, so the order is strong, weak, unweighted.
@@ -2902,7 +2898,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         miningPower: "35",
         miningParticipantCount: 2,
         miningWeight: "2",
-        miningWeightConfigVersion: configVersion,
+        miningWeightConfigVersion: powerList.configVersion,
       });
       // A community without an approved weight carries no number at all.
       expect(

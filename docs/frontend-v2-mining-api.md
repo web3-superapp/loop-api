@@ -70,6 +70,22 @@ CAPABILITY_UNAVAILABLE` 都不是"账号没数据"，而是仓储/Registry 不�
 BNB 行 `referencePriceQuality: "proxied"`、代理 WBNB、`713.42`。要看到非零数字需要真实持仓，后端不会造
 （`wallet_balance_snapshots` 没有来源字段，写一行等于伪造链上观测）。
 
+## 0.0 S317（决策 0189）：`referencePriceQuality: "unavailable"`、`referencePriceUsd` 可为 null —— **客户端先行，服务端开关默认关**
+
+**背景**：算力名单里放行的代币（平台 MEME / 外部代币）按数量计算力（数量 × 币权重，决策 0125），参考价只展示。外部代币取不到参考价时，小时结算照样按持仓分 LOOP；快照若因此把这行算 0 会两边不一致。
+
+**变化**（只在 `GET /v2/mining/assets` 的 `included[]`，且只在服务端开 `MINING_SNAPSHOT_UNPRICED_POWER_EMIT=true` 后出现；默认关，关着时行为与之前完全相同——这类资产在 `excluded[]` 里带价格原因码）：
+
+| 字段                       | 变化                                                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| `referencePriceUsd`        | `string` → `string \| null`；仅当 `referencePriceQuality = "unavailable"` 时为 null                 |
+| `referencePriceQuality`    | 枚举加 `unavailable`                                                                                |
+| `referencePriceReasonCode` | **新增可选键**，仅 `unavailable` 行出现，如 `MINING_PRICE_NOT_FRESH`、`MINING_PRICE_PAIR_NOT_FOUND` |
+
+`holding` / `weight` / `power` 照常，`power` 计入 `totalPower`。快照若只有这类行，`referencePrice.priceVersion` 为 `"unpriced"`。
+
+**客户端要求**：codec 先接受 `referencePriceUsd: null`、未知 quality 值与可选键 `referencePriceReasonCode`（价格栏显示「—」，不要拿 null 做乘法），发版后再由主代理在 staging 开开关。
+
 ## 0.1 S51c（决策 0059）：`referencePriceQuality: "derived"` —— 一个**可能的破坏性变更**
 
 **背景**：DexScreener 自 2026-09-18 起对 BSC USDT 只返回 USDT 作 **quote** 的交易对

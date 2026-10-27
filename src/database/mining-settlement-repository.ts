@@ -6,6 +6,11 @@ import { adminReasonCodes } from "../features/admin/admin-contract.js";
 import { launch2PriceAt } from "../features/launch2/launch2-curve-math.js";
 import { MiningSettlementInputError } from "../features/mining/hourly-settlement-calculator.js";
 import {
+  miningErc20OpeningMaxAgeSeconds,
+  rollMiningErc20Holder,
+  type MiningErc20TransferMove,
+} from "../features/mining/mining-erc20-holdings.js";
+import {
   miningSettlementReasonCodes,
   parseMiningParameterDocument,
   type MiningClaimState,
@@ -24,6 +29,7 @@ import {
   type MiningClaimRecord,
   type MiningEpochRecord,
   type MiningEpochRewardRecord,
+  type MiningErc20OpeningPin,
   type MiningParameterVersionRecord,
   type MiningSettlementRepository,
 } from "../features/mining/hourly-settlement-ports.js";
@@ -316,6 +322,15 @@ function splitAssetId(assetId: string): { chainId: string; address: string } {
   };
 }
 
+/** Decision 0189: the settlement source column of a roster candidate. */
+function settlementSourceOf(
+  value: string | null,
+): "launch2" | "meme_v1" | "erc20" | null {
+  return value === "launch2" || value === "meme_v1" || value === "erc20"
+    ? value
+    : null;
+}
+
 export function createPostgresMiningSettlementRepository(
   pool: Pool,
 ): MiningSettlementRepository {
@@ -344,20 +359,329 @@ export function createPostgresMiningSettlementRepository(
     return result.rows[0] === undefined ? null : mapVersion(result.rows[0]);
   }
 
+  /**
+   * Decision 0189: the `erc20` holdings of one external token for
+   * [hourStart, hourEnd) — null when the token has no such source (not a
+   * registered unblocked asset, or no `erc20_transfer` lane on its chain).
+   *
+   * Holders = the active wallets (Decision 0184 kind scope, first seen
+   * before the hour end) of the members (and creators) of the verified
+   * communities bound to the token during the hour — anyone else is gated
+   * to 0 by Decision 0183 anyway. Per address:
+   *
+   * - opening reading = the latest chain `wallet_balance_snapshots` row
+   *   taken for one of the current holder's wallet rows of the address,
+   *   observed before the hour start and at most 7 days earlier, whose block
+   *   is at or after the address's `indexer_wallet_coverage.from_block_number`
+   *   − 1 (every later transfer of the address is indexed; the coverage row
+   *   is deleted when the address leaves every active wallet, so a re-link
+   *   starts a new coverage), or the pinned row on replay;
+   * - opening = reading + the indexed transfers with block > reading block
+   *   observed before the hour start; moves = those observed inside the
+   *   hour, at their `observed_at` second (the lane's own clock: the table
+   *   has no block time), never earlier than the previous transfer in chain
+   *   order — `rollMiningErc20Holder`;
+   * - no coverage / no reading / a negative roll-forward (chain order) →
+   *   unknown holder.
+   */
+  async function erc20Facts(input: {
+    readonly assetId: string;
+    readonly hourStart: bigint;
+    readonly hourEnd: bigint;
+    readonly embeddedWalletOnly: boolean;
+    readonly pins: readonly MiningErc20OpeningPin[] | null;
+  }): Promise<MiningAssetFact | null> {
+    const { chainId } = splitAssetId(input.assetId);
+    const start = isoOf(input.hourStart);
+    const end = isoOf(input.hourEnd);
+    const source = await query(
+      `select exists (
+         select 1 from public.assets where asset_id = $1 and status <> 'blocked'
+       ) and exists (
+         select 1 from public.indexer_checkpoints
+         where lane = 'erc20_transfer' and chain_id = $2
+       ) as readable`,
+      [input.assetId, chainId],
+    );
+    if (source[0]?.["readable"] !== true) return null;
+    const holders = await query(
+      `with gated as (
+         select community_id, created_by_user_id, created_at
+         from public.communities
+         where verification_status = 'verified' and bound_asset_key = $1
+       ), members as (
+         select h.user_id from public.community_membership_history h
+         join gated g on g.community_id = h.community_id
+         where h.joined_at < $3::timestamptz
+           and (h.left_at is null or h.left_at > $2::timestamptz)
+         union
+         select g.created_by_user_id from gated g
+         where g.created_at < $3::timestamptz
+       )
+       select distinct w.address, w.wallet_id::text as wallet_id
+       from public.account_wallets w
+       join members m on m.user_id = w.owner_user_id
+       where w.status = 'active'
+         and ($4::boolean is false or w.kind = 'embedded')
+         and w.first_seen_at < $3::timestamptz
+       order by w.address, wallet_id`,
+      [input.assetId, start, end, input.embeddedWalletOnly],
+    );
+    const addresses = [...new Set(holders.map((row) => text(row, "address")))];
+    // Decision 0189: a reading counts only when it was taken for a wallet
+    // row of a current holder (never one of a previous owner of the address).
+    const holderWalletIds = holders.map((row) => text(row, "wallet_id"));
+    const unknownHolders: { address: string; reasonCode: string }[] = [];
+    const empty = (): MiningAssetFact =>
+      Object.freeze({
+        assetId: input.assetId,
+        source: "erc20" as const,
+        graduatedAt: null,
+        openingPriceE18: 0n,
+        openingBalances: Object.freeze([]),
+        moves: Object.freeze([]),
+        unknownHolders: Object.freeze(
+          unknownHolders.map((row) => Object.freeze(row)),
+        ),
+        openingPins: Object.freeze([]),
+      });
+    if (addresses.length === 0) return empty();
+    const coverageRows = await query(
+      `select address, from_block_number::text as from_block
+       from public.indexer_wallet_coverage
+       where chain_id = $1 and lane = 'erc20_transfer' and address = any($2::text[])`,
+      [chainId, addresses],
+    );
+    const coverage = new Map(
+      coverageRows.map((row) => [
+        text(row, "address"),
+        BigInt(text(row, "from_block")),
+      ]),
+    );
+    const pinnedByWallet =
+      input.pins === null
+        ? null
+        : input.pins.filter((pin) => pin.assetId === input.assetId);
+    const readings =
+      pinnedByWallet === null
+        ? await query(
+            `select distinct on (w.address) w.address, s.wallet_id::text as wallet_id,
+               s.block_number::text as block_number, s.raw_value::text as raw_value
+             from public.wallet_balance_snapshots s
+             join public.account_wallets w on w.wallet_id = s.wallet_id
+             where s.asset_id = $1 and s.source = 'chain'
+               and w.address = any($2::text[])
+               and s.wallet_id = any($5::uuid[])
+               and s.observed_at < $3::timestamptz
+               -- Decision 0189: at most 7 days old at the hour start.
+               and s.observed_at >= $4::timestamptz
+             order by w.address, s.block_number desc, s.wallet_id`,
+            [
+              input.assetId,
+              addresses,
+              start,
+              isoOf(input.hourStart - miningErc20OpeningMaxAgeSeconds),
+              holderWalletIds,
+            ],
+          )
+        : pinnedByWallet.length === 0
+          ? []
+          : await query(
+              `select w.address, s.wallet_id::text as wallet_id,
+                 s.block_number::text as block_number, s.raw_value::text as raw_value
+               from unnest($2::uuid[], $3::bigint[]) as pin(wallet_id, block_number)
+               join public.wallet_balance_snapshots s
+                 on s.wallet_id = pin.wallet_id and s.block_number = pin.block_number
+                 and s.asset_id = $1
+               join public.account_wallets w on w.wallet_id = s.wallet_id
+               where w.address = any($4::text[])
+               order by w.address, s.block_number desc, s.wallet_id`,
+              [
+                input.assetId,
+                pinnedByWallet.map((pin) => pin.walletId),
+                pinnedByWallet.map((pin) => pin.blockNumber),
+                addresses,
+              ],
+            );
+    const readingOf = new Map<
+      string,
+      { walletId: string; block: bigint; raw: bigint }
+    >();
+    for (const row of readings) {
+      const holder = text(row, "address");
+      if (readingOf.has(holder)) continue;
+      readingOf.set(holder, {
+        walletId: text(row, "wallet_id"),
+        block: BigInt(text(row, "block_number")),
+        raw: BigInt(text(row, "raw_value")),
+      });
+    }
+    const known: string[] = [];
+    for (const holder of addresses) {
+      const from = coverage.get(holder);
+      if (from === undefined) {
+        unknownHolders.push({
+          address: holder,
+          reasonCode: miningSettlementReasonCodes.externalBalanceUncovered,
+        });
+        continue;
+      }
+      const reading = readingOf.get(holder);
+      if (reading === undefined || reading.block + 1n < from) {
+        unknownHolders.push({
+          address: holder,
+          reasonCode: miningSettlementReasonCodes.externalOpeningMissing,
+        });
+        continue;
+      }
+      known.push(holder);
+    }
+    if (known.length === 0) return empty();
+    const transfers = await query(
+      `with reading(address, block_number) as (
+         select * from unnest($3::text[], $4::bigint[])
+       )
+       select t.from_address, t.to_address, t.raw_value::text as amount,
+         t.block_number::text as block_number, t.log_index,
+         extract(epoch from t.observed_at)::bigint::text as at
+       from public.indexed_transfers t
+       where t.chain_id = $1 and t.asset_id = $2 and not t.removed
+         and t.observed_at < $5::timestamptz
+         and exists (
+           select 1 from reading r
+           where (r.address = t.from_address or r.address = t.to_address)
+             and t.block_number > r.block_number
+         )
+       order by t.block_number, t.log_index`,
+      [
+        chainId,
+        input.assetId,
+        known,
+        known.map((holder) => (readingOf.get(holder)?.block ?? 0n).toString()),
+        end,
+      ],
+    );
+    const transfersOf = new Map<string, MiningErc20TransferMove[]>();
+    for (const row of transfers) {
+      const amount = BigInt(text(row, "amount"));
+      const sides: Array<[string, bigint]> = [
+        [text(row, "from_address"), -amount],
+        [text(row, "to_address"), amount],
+      ];
+      for (const [holder, delta] of sides) {
+        if (!readingOf.has(holder)) continue;
+        const list = transfersOf.get(holder) ?? [];
+        list.push({
+          blockNumber: BigInt(text(row, "block_number")),
+          logIndex: Number(row["log_index"]),
+          deltaRaw: delta,
+          at: epochSeconds(row, "at"),
+        });
+        transfersOf.set(holder, list);
+      }
+    }
+    const openingBalances: { address: string; balanceRaw: bigint }[] = [];
+    const moves: {
+      address: string;
+      deltaRaw: bigint;
+      at: bigint;
+      priceAfterE18: bigint;
+    }[] = [];
+    const pins: MiningErc20OpeningPin[] = [];
+    for (const holder of known) {
+      const reading = readingOf.get(holder);
+      if (reading === undefined) continue;
+      const roll = rollMiningErc20Holder({
+        hourStart: input.hourStart,
+        readingRaw: reading.raw,
+        readingBlock: reading.block,
+        transfers: transfersOf.get(holder) ?? [],
+      });
+      if (roll.kind === "inconsistent") {
+        unknownHolders.push({
+          address: holder,
+          reasonCode: miningSettlementReasonCodes.externalBalanceInconsistent,
+        });
+        continue;
+      }
+      pins.push(
+        Object.freeze({
+          assetId: input.assetId,
+          walletId: reading.walletId,
+          blockNumber: reading.block.toString(),
+        }),
+      );
+      openingBalances.push(
+        Object.freeze({ address: holder, balanceRaw: roll.openingRaw }),
+      );
+      for (const move of roll.moves) {
+        moves.push(
+          Object.freeze({
+            address: holder,
+            deltaRaw: move.deltaRaw,
+            at: move.at,
+            priceAfterE18: 0n,
+          }),
+        );
+      }
+    }
+    return Object.freeze({
+      assetId: input.assetId,
+      source: "erc20" as const,
+      graduatedAt: null,
+      openingPriceE18: 0n,
+      openingBalances: Object.freeze(openingBalances),
+      moves: Object.freeze(moves),
+      unknownHolders: Object.freeze(
+        unknownHolders
+          .sort((a, b) => (a.address < b.address ? -1 : 1))
+          .map((row) => Object.freeze(row)),
+      ),
+      openingPins: Object.freeze(
+        pins.sort((a, b) =>
+          a.walletId === b.walletId
+            ? a.blockNumber < b.blockNumber
+              ? -1
+              : 1
+            : a.walletId < b.walletId
+              ? -1
+              : 1,
+        ),
+      ),
+    });
+  }
+
   async function assetFacts(input: {
     readonly chainId: string;
     readonly hourStart: bigint;
     readonly hourEnd: bigint;
     readonly assetIds: readonly string[];
+    readonly embeddedWalletOnly: boolean;
+    readonly external?: {
+      readonly assetIds: readonly string[];
+      readonly staleAssetIds: readonly string[];
+      readonly pins?: readonly MiningErc20OpeningPin[] | null;
+    };
   }): Promise<{
     readonly assets: MiningAssetFact[];
     readonly unknown: string[];
+    readonly externalExcluded: { assetId: string; reasonCode: string }[];
   }> {
     const assets: MiningAssetFact[] = [];
     const unknown: string[] = [];
+    const externalExcluded: { assetId: string; reasonCode: string }[] = [];
+    const externalIds = new Set(input.external?.assetIds ?? []);
+    const staleIds = new Set(input.external?.staleAssetIds ?? []);
     const start = isoOf(input.hourStart);
     const end = isoOf(input.hourEnd);
     for (const assetId of input.assetIds) {
+      if (externalIds.has(assetId) && staleIds.has(assetId)) {
+        externalExcluded.push({
+          assetId,
+          reasonCode: miningSettlementReasonCodes.sourceStale,
+        });
+        continue;
+      }
       const { chainId, address } = splitAssetId(assetId);
       const launch2 =
         chainId === input.chainId
@@ -536,7 +860,26 @@ export function createPostgresMiningSettlementRepository(
             )
           : [];
       if (meme[0] === undefined) {
-        unknown.push(assetId);
+        // Decision 0189: an external token read from its ERC-20 transfers.
+        const erc20 = externalIds.has(assetId)
+          ? await erc20Facts({
+              assetId,
+              hourStart: input.hourStart,
+              hourEnd: input.hourEnd,
+              embeddedWalletOnly: input.embeddedWalletOnly,
+              pins: input.external?.pins ?? null,
+            })
+          : null;
+        if (erc20 !== null) {
+          assets.push(erc20);
+        } else if (externalIds.has(assetId)) {
+          externalExcluded.push({
+            assetId,
+            reasonCode: miningSettlementReasonCodes.assetSourceUnknown,
+          });
+        } else {
+          unknown.push(assetId);
+        }
         continue;
       }
       const tokenId = text(meme[0], "meme_token_id");
@@ -595,7 +938,7 @@ export function createPostgresMiningSettlementRepository(
         }),
       );
     }
-    return { assets, unknown };
+    return { assets, unknown, externalExcluded };
   }
 
   async function applyClaimTransition(
@@ -775,8 +1118,21 @@ export function createPostgresMiningSettlementRepository(
       return Object.freeze(unknown);
     },
 
+    async findVerifiedBoundAssetIds(assetIds) {
+      if (assetIds.length === 0) return Object.freeze([]);
+      const rows = await query(
+        `select distinct bound_asset_key from public.communities
+         where verification_status = 'verified'
+           and bound_asset_key = any($1::text[])`,
+        [[...assetIds]],
+      );
+      const bound = new Set(rows.map((row) => text(row, "bound_asset_key")));
+      return Object.freeze(assetIds.filter((id) => bound.has(id)));
+    },
+
     async listMiningPoolCandidates(input) {
       // Decision 0187: verified community × the launch2 MEME it binds.
+      // Decision 0189: every other bound asset is an `external` row.
       const limit =
         input.limit === undefined || input.limit === null
           ? null
@@ -786,19 +1142,44 @@ export function createPostgresMiningSettlementRepository(
           ? null
           : `%${input.query.replace(/[\\%_]/gu, (match) => `\\${match}`)}%`;
       const rows = await query(
-        `select c.community_id::text as community_id, c.name as community_name,
-           i.chain_id || ':' || i.meme_address as asset_id,
-           i.chain_id, i.meme_address, i.ticker,
-           i.instance_id::text as instance_id, i.launch_id
-         from public.communities c
-         join public.launch2_instances i
-           on c.bound_asset_key = i.chain_id || ':' || i.meme_address
-         where c.verification_status = 'verified'
-           and ($1::text is null or i.chain_id = $1)
-           and ($2::text is null or i.meme_address = lower($2))
-           and ($3::text is null or c.name ilike $3 or i.ticker ilike $3)
-           and ($4::text is null or (c.name, c.community_id::text) > ($4, $5::text))
-         order by c.name, c.community_id::text
+        `select * from (
+           select c.community_id::text as community_id,
+             c.name as community_name,
+             c.bound_asset_key as asset_id,
+             split_part(c.bound_asset_key, ':', 1) || ':'
+               || split_part(c.bound_asset_key, ':', 2) as chain_id,
+             split_part(c.bound_asset_key, ':', 3) as meme_address,
+             case when i.instance_id is null then 'external' else 'platform'
+               end as kind,
+             coalesce(i.ticker, a.symbol) as ticker,
+             i.instance_id::text as instance_id, i.launch_id,
+             case
+               when i.instance_id is not null then 'launch2'
+               when exists (
+                 select 1 from public.meme_tokens as t
+                 where t.chain_id || ':' || t.token_address = c.bound_asset_key
+               ) then 'meme_v1'
+               -- Decision 0189: a registered, unblocked token on a chain the
+               -- erc20_transfer lane indexes (openings + indexed transfers).
+               when a.status is not null and a.status <> 'blocked'
+                 and exists (
+                   select 1 from public.indexer_checkpoints as k
+                   where k.lane = 'erc20_transfer' and k.chain_id = a.chain_id
+                 ) then 'erc20'
+             end as settlement_source
+           from public.communities c
+           left join public.launch2_instances i
+             on c.bound_asset_key = i.chain_id || ':' || i.meme_address
+           left join public.assets a on a.asset_id = c.bound_asset_key
+           where c.verification_status = 'verified'
+             and c.bound_asset_key is not null
+         ) as candidate
+         where ($1::text is null or chain_id = $1)
+           and ($2::text is null or meme_address = lower($2))
+           and ($3::text is null or community_name ilike $3 or ticker ilike $3)
+           and ($4::text is null or (community_name, community_id) > ($4, $5::text))
+           and ($7::text is null or kind = $7)
+         order by community_name, community_id
          limit $6`,
         [
           input.chainId ?? null,
@@ -807,6 +1188,7 @@ export function createPostgresMiningSettlementRepository(
           input.after?.communityName ?? null,
           input.after?.communityId ?? null,
           limit,
+          input.kind ?? null,
         ],
       );
       return Object.freeze(
@@ -817,9 +1199,16 @@ export function createPostgresMiningSettlementRepository(
             assetId: text(row, "asset_id"),
             chainId: text(row, "chain_id"),
             memeAddress: text(row, "meme_address"),
-            symbol: text(row, "ticker"),
-            instanceId: text(row, "instance_id"),
-            launchId: text(row, "launch_id"),
+            kind:
+              text(row, "kind") === "platform"
+                ? ("platform" as const)
+                : ("external" as const),
+            symbol: nullableText(row, "ticker"),
+            instanceId: nullableText(row, "instance_id"),
+            launchId: nullableText(row, "launch_id"),
+            settlementSource: settlementSourceOf(
+              nullableText(row, "settlement_source"),
+            ),
           }),
         ),
       );
@@ -1066,6 +1455,36 @@ export function createPostgresMiningSettlementRepository(
         [input.chainId, memeAddresses],
       );
       const row = rows[0] as Row;
+      // Decision 0189: the erc20_transfer lane of every chain an admitted
+      // external `erc20` token lives on (separate: stale → those assets
+      // leave the hour, nothing else waits).
+      const externalIds = [...new Set(input.externalAssetIds ?? [])].filter(
+        (assetId) => input.assetIds.includes(assetId),
+      );
+      const erc20Lanes =
+        externalIds.length === 0
+          ? []
+          : await query(
+              `select a.chain_id, k.updated_at,
+                 array_agg(a.asset_id order by a.asset_id) as asset_ids
+               from public.assets a
+               join public.indexer_checkpoints k
+                 on k.lane = 'erc20_transfer' and k.chain_id = a.chain_id
+               where a.asset_id = any($1::text[]) and a.status <> 'blocked'
+                 and not exists (
+                   select 1 from public.meme_tokens t
+                   where t.chain_id = $2
+                     and t.chain_id || ':' || t.token_address = a.asset_id
+                 )
+                 and not exists (
+                   select 1 from public.launch2_instances i
+                   where i.chain_id = $2
+                     and i.chain_id || ':' || i.meme_address = a.asset_id
+                 )
+               group by a.chain_id, k.updated_at
+               order by a.chain_id`,
+              [externalIds.sort(), input.chainId],
+            );
       return Object.freeze({
         lanes: Object.freeze([
           Object.freeze({
@@ -1078,6 +1497,17 @@ export function createPostgresMiningSettlementRepository(
             hasSources: row["meme_sources"] === true,
             updatedAt: nullableIso(row, "meme_at"),
           }),
+          ...erc20Lanes.map((lane) =>
+            Object.freeze({
+              lane: "erc20_transfer",
+              hasSources: true,
+              updatedAt: nullableIso(lane, "updated_at"),
+              chainId: text(lane, "chain_id"),
+              externalAssetIds: Object.freeze(
+                [...(lane["asset_ids"] as string[])].sort(),
+              ),
+            }),
+          ),
         ]),
       });
     },
@@ -1142,7 +1572,14 @@ export function createPostgresMiningSettlementRepository(
           );
         }
       }
-      const { assets, unknown } = await assetFacts(input);
+      const { assets, unknown, externalExcluded } = await assetFacts({
+        chainId: input.chainId,
+        hourStart: input.hourStart,
+        hourEnd: input.hourEnd,
+        assetIds: input.assetIds,
+        embeddedWalletOnly,
+        ...(input.external === undefined ? {} : { external: input.external }),
+      });
       const addresses = new Set<string>();
       for (const row of openings) addresses.add(text(row, "holder"));
       for (const row of moves) {
@@ -1156,6 +1593,9 @@ export function createPostgresMiningSettlementRepository(
           addresses.add(opening.address);
         }
         for (const move of asset.moves) addresses.add(move.address);
+        for (const holder of asset.unknownHolders ?? []) {
+          addresses.add(holder.address);
+        }
       }
       const owners = await query(
         `select address, array_agg(distinct owner_user_id::text order by owner_user_id::text) as users
@@ -1266,6 +1706,13 @@ export function createPostgresMiningSettlementRepository(
         }),
         assets,
         unknownAssetIds: unknown,
+        ...(input.external === undefined
+          ? {}
+          : {
+              externalExcludedAssets: externalExcluded.map((row) =>
+                Object.freeze(row),
+              ),
+            }),
         walletOwners: owners.map((row) =>
           Object.freeze({
             address: text(row, "address"),

@@ -771,9 +771,31 @@ document keys `assetWeights` / `communityCoefficients` override,
 the snapshot (pool part valued by the settlement rules on the launch chain:
 MEME balance × token weight + NFTs × NFT coefficient, no new `/v2` key).
 
-| Method and path             | Request                                            | Success projection                                                                                                                                                                        | Interface     | Capability                                                                                                             |
-| --------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `GET /admin/v1/mining/pool` | session cookie; `address`, `q`, `cursor` / `limit` | `inForce`, `pendingDraftVersion`, roster rows (`communityId`, `assetId`, `memeAddress`, `symbol`, `participate`, `tokenWeight`, `nftCoefficient`, `source`, `pendingDraft`), `nextCursor` | `implemented` | `implemented`; saved through `POST /admin/v1/mining/parameter-versions` (see `docs/frontend-admin-mining-pool-api.md`) |
+Decision 0189 (S316 / S317): the power list — external tokens (a verified community's
+bound asset that is not a launch2 MEME) are roster rows too, out until the
+parameter document's `includedAssets` lets them in (weight = `assetWeights`
+entry, else 1). The list is the only rule for community weight / standing /
+discover `sort=miningPower` / hourly community rank (hours settled before 0189
+keep the 0187 projection) / snapshot factor (no formula `assetWeights` entry
+needed); `community_mining_weights` is no longer read. Pool rows carry `kind`
+(`platform` | `external`) and `settleable` / `settleableReasonCode`; query
+`kind` filters. S317: a let-in external token that is a registered ERC-20 on a
+chain with an `erc20_transfer` lane (BSC mainnet) is settled hourly — pinned
+`wallet_balance_snapshots` opening reading + `indexed_transfers`, members only;
+a holder whose balance cannot be reconstructed counts 0 with a reason in the
+epoch summary; a stale lane leaves only the external assets out of the hour
+(`MINING_SETTLEMENT_SOURCE_STALE`). The opening reading must belong to a
+current holder's wallet row and be at most 7 days old; the wallet sync deletes
+an address's `indexer_wallet_coverage` row once it is nobody's active wallet.
+Migration 000103: a snapshot power row may be unpriced (`referencePriceUsd`
+null, `referencePriceQuality: "unavailable"`, optional `referencePriceReasonCode`
+on `GET /v2/mining/assets` `included[]`) — written only under the worker switch
+`MINING_SNAPSHOT_UNPRICED_POWER_EMIT` (default false, client first; see
+`docs/frontend-v2-mining-api.md` §0.0).
+
+| Method and path             | Request                                                    | Success projection                                                                                                                                                                                                                      | Interface     | Capability                                                                                                             |
+| --------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/v1/mining/pool` | session cookie; `address`, `q`, `kind`, `cursor` / `limit` | `inForce`, `pendingDraftVersion`, roster rows (`communityId`, `assetId`, `memeAddress`, `kind`, `symbol`, `participate`, `tokenWeight`, `nftCoefficient`, `source`, `settleable`, `settleableReasonCode`, `pendingDraft`), `nextCursor` | `implemented` | `implemented`; saved through `POST /admin/v1/mining/parameter-versions` (see `docs/frontend-admin-mining-pool-api.md`) |
 
 Decision 0125 (S148): the S7 snapshot lane computes asset power as holding × weight
 (no price); `GET /v2/mining/summary` / `assets` carry `assetPowerBasis: "quantity"`;

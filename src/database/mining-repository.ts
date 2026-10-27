@@ -158,8 +158,12 @@ const powerRowSchema = z
     owner_user_id: opaqueIdSchema,
     asset_id: z.string().min(1),
     holding: decimalSchema,
-    reference_price_usd: decimalSchema,
+    reference_price_usd: decimalSchema.nullable(),
     reference_price_quality: z.enum(miningReferencePriceQualities),
+    reference_price_reason_code: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+      .nullable(),
     reference_price_proxy_asset_id: z.string().min(1).nullable(),
     reference_price_pair_address: z
       .string()
@@ -179,6 +183,14 @@ const powerRowSchema = z
     (row) =>
       row.reference_price_quality !== "derived" ||
       row.reference_price_pair_address !== null,
+  )
+  .refine(
+    // Decision 0189: null price exactly on unavailable rows, with a reason.
+    (row) =>
+      (row.reference_price_usd === null) ===
+        (row.reference_price_quality === "unavailable") &&
+      (row.reference_price_reason_code === null) ===
+        (row.reference_price_usd !== null),
   );
 
 /** `numeric::text` may carry trailing zeros; the wire form is canonical. */
@@ -449,6 +461,14 @@ const epochAccountTotalsSql = `
 const epochCommunityStandingsSql = `
   ${miningPoolVersionOfEpochSql("$1")},
   ${miningPoolRosterSql},
+  epoch_rule as (
+    select not (
+      e.input_summary ? 'poolRosterRule'
+      or e.input_summary ? 'poolExternalAssetIds'
+    ) as legacy
+    from public.mining_epochs as e
+    where e.epoch_id = $1
+  ),
   epoch_version as (
     select v.document
     from public.mining_epochs as e
@@ -484,14 +504,26 @@ const epochCommunityStandingsSql = `
         ),
         0
       ) end as coefficient,
-      -- Decision 0187 appendix A: a roster community shows its token weight.
-      r.token_weight as roster_weight,
+      -- Decision 0187 appendix A: a roster community shows its token weight
+      -- (Decision 0189: under the 0187 rule only a platform row does).
+      case when er.legacy and r.kind is distinct from 'platform' then null
+        else r.token_weight end as roster_weight,
       c.logo_ref
     from public.communities as c
+    cross join epoch_rule as er
     left join pool_roster as r on r.community_id = c.community_id
     where c.bound_asset_key is not null
-      -- An unticked roster community is not ranked.
-      and r.participate is not false
+      and case
+        -- Decision 0189: only participating roster communities are
+        -- ranked (an unticked platform MEME, an external token not let in,
+        -- and any community off the roster are not).
+        when not er.legacy then coalesce(r.participate, false)
+        -- Decision 0189: an hour settled before the participating rule
+        -- (its summary has neither poolRosterRule nor poolExternalAssetIds)
+        -- keeps the 0187 projection — every bound community except an
+        -- unticked platform MEME — so history is not rewritten.
+        else r.kind is distinct from 'platform' or r.participate
+      end
   ),
   member_powers as (
     select
@@ -581,29 +613,15 @@ const communityStandingsSql = `
   ${miningPoolRosterSql},
   bound as (
     -- Decision 0187 appendix A: a roster community is weighted by its token
-    -- weight while it participates (unticked: not ranked); every other
-    -- community keeps its approved community_mining_weights row.
-    select
-      c.community_id,
-      c.name as community_name,
-      c.bound_asset_key as bound_asset_id,
-      w.weight,
-      c.logo_ref
-    from public.communities as c
-    join public.community_mining_weights as w
-      on w.community_id = c.community_id
-    where c.bound_asset_key is not null
-      and w.status = 'approved'
-      and w.config_version = $2
-      and not exists (
-        select 1 from pool_roster as r where r.community_id = c.community_id
-      )
-    union all
-    select r.community_id, r.community_name, r.bound_asset_id, r.token_weight,
-      c.logo_ref
+    -- weight while it participates (unticked: not ranked). Decision 0189:
+    -- the roster is the only rule (external tokens let in by hand included);
+    -- community_mining_weights is no longer read.
+    select r.community_id, r.community_name, r.bound_asset_id, r.token_weight
+      as weight, c.logo_ref
     from pool_roster as r
     join public.communities as c on c.community_id = r.community_id
     where r.participate
+      and $2::text is not null
   ),
   powers as (
     select
@@ -899,7 +917,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const communityId = opaqueIdSchema.parse(rawCommunityId);
         // Decision 0187 appendix A: a roster community's weight is its
         // token weight under the parameter version in force (approved,
-        // source roster); an unticked one has none. Others: the reviewed row.
+        // source roster); an unticked one has none. Decision 0189: the
+        // roster is the only rule — a community off it (not verified, no
+        // bound asset, or no approved quantity version) has no weight; the
+        // community_mining_weights row is no longer read.
         const result = await pool.query({
           text: `
             with ${miningPoolVersionInForceSql},
@@ -908,29 +929,16 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               c.community_id,
               c.name as community_name,
               c.bound_asset_key as bound_asset_id,
-              case
-                when r.community_id is null
-                  then coalesce(w.status, 'pending_review')
-                when r.participate then 'approved'
-                else 'pending_review'
-              end as status,
-              case
-                when r.community_id is null then w.weight
-                when r.participate then r.token_weight
-              end as weight,
-              case
-                when r.community_id is null then w.config_version
-                when r.participate then r.roster_config_version
-              end as config_version,
-              case
-                when r.community_id is null then w.reviewed_at
-                when r.participate then r.roster_approved_at
-              end as reviewed_at,
+              case when r.participate then 'approved' else 'pending_review'
+                end as status,
+              case when r.participate then r.token_weight end as weight,
+              case when r.participate then r.roster_config_version end
+                as config_version,
+              case when r.participate then r.roster_approved_at end
+                as reviewed_at,
               (r.community_id is not null) as roster,
               coalesce(not r.participate, false) as roster_excluded
             from public.communities as c
-            left join public.community_mining_weights as w
-              on w.community_id = c.community_id
             left join pool_roster as r on r.community_id = c.community_id
             where c.community_id = $1
           `,
@@ -962,41 +970,49 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
 
     async listCommunityWeightInputs(rawConfigVersion: string) {
       try {
-        const configVersion = configVersionSchema.parse(rawConfigVersion);
+        // Decision 0189: the snapshot's community factor is the power list
+        // (the roster under the parameter version in force), not the
+        // community_mining_weights table: a participating roster community
+        // carries its token weight (source roster), any other verified
+        // binding reads as not approved — excluded rows say so.
+        configVersionSchema.parse(rawConfigVersion);
         const result = await pool.query({
           text: `
+            with ${miningPoolVersionInForceSql},
+            ${miningPoolRosterSql}
             select
               c.community_id,
               c.name as community_name,
               c.bound_asset_key as bound_asset_id,
-              case
-                when w.config_version = $1 then w.status
-                else 'pending_review'
-              end as status,
-              case when w.config_version = $1 then w.weight end as weight,
-              case when w.config_version = $1 then w.config_version end
+              case when r.participate then 'approved' else 'pending_review'
+                end as status,
+              case when r.participate then r.token_weight end as weight,
+              case when r.participate then r.roster_config_version end
                 as config_version,
-              case when w.config_version = $1 then w.reviewed_at end
-                as reviewed_at
+              case when r.participate then r.roster_approved_at end
+                as reviewed_at,
+              coalesce(not r.participate, false) as roster_excluded
             from public.communities as c
-            left join public.community_mining_weights as w
-              on w.community_id = c.community_id
+            left join pool_roster as r on r.community_id = c.community_id
             where c.bound_asset_key is not null
               -- Decision 0183: a pending / rejected community's binding
               -- never touches the snapshot.
               and c.verification_status = 'verified'
             order by c.community_id
           `,
-          values: [configVersion],
         });
         return Object.freeze(
           result.rows.map((raw): MiningCommunityWeightInput => {
-            const row = weightRowSchema.parse(raw);
+            const row = weightRowSchema
+              .extend({ roster_excluded: z.boolean() })
+              .parse(raw);
             return Object.freeze({
               communityId: row.community_id,
               assetId: row.bound_asset_id ?? "",
               weight: row.weight,
               status: row.status,
+              source: "roster" as const,
+              rosterExcluded: row.roster_excluded,
             });
           }),
         );
@@ -1226,16 +1242,18 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                   snapshot_id, owner_user_id, asset_id, holding,
                   reference_price_usd, reference_price_quality,
                   reference_price_proxy_asset_id, reference_price_pair_address,
-                  weight, power, block_number
+                  weight, power, block_number, reference_price_reason_code
                 )
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
               `,
               values: [
                 snapshotId,
                 opaqueIdSchema.parse(power.ownerUserId),
                 power.assetId,
                 decimalSchema.parse(power.holding),
-                decimalSchema.parse(power.referencePriceUsd),
+                power.referencePriceUsd === null
+                  ? null
+                  : decimalSchema.parse(power.referencePriceUsd),
                 z
                   .enum(miningReferencePriceQualities)
                   .parse(power.referencePriceQuality),
@@ -1246,6 +1264,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 decimalSchema.parse(power.weight),
                 decimalSchema.parse(power.power),
                 blockNumberSchema.parse(power.blockNumber),
+                power.referencePriceReasonCode ?? null,
               ],
             });
           }
@@ -1411,8 +1430,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             select
               owner_user_id, asset_id, holding, reference_price_usd,
               reference_price_quality, reference_price_proxy_asset_id,
-              reference_price_pair_address, weight,
-              power, block_number::text as block_number
+              reference_price_pair_address, reference_price_reason_code,
+              weight, power, block_number::text as block_number
             from public.mining_snapshot_powers
             where snapshot_id = $1 and owner_user_id = $2
             order by asset_id
@@ -1430,6 +1449,11 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               referencePriceQuality: row.reference_price_quality,
               referencePriceProxyAssetId: row.reference_price_proxy_asset_id,
               referencePricePairAddress: row.reference_price_pair_address,
+              ...(row.reference_price_reason_code === null
+                ? {}
+                : {
+                    referencePriceReasonCode: row.reference_price_reason_code,
+                  }),
               weight: row.weight,
               power: row.power,
               blockNumber: row.block_number,
