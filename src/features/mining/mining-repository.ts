@@ -191,6 +191,12 @@ export interface MiningCommunityStandingRecord {
   readonly communityName: string;
   readonly boundAssetId: string;
   readonly weight: string;
+  /**
+   * S316: the community's logo ref (`avatar:preset/community-NN` or
+   * `logo:media/{uuid}`), null when unset or malformed. Optional on older
+   * fixtures.
+   */
+  readonly avatarRef?: string | null;
   readonly power: string;
   /** Members with positive power on the bound asset. */
   readonly participantCount: number;

@@ -17,7 +17,10 @@ import {
   priceVersionPatternSource,
   unsignedDecimalPatternSource,
 } from "../../features/mining/mining-contract.js";
-import { storedAvatarRefPatternSource } from "../../features/community/community-contract.js";
+import {
+  communityLogoRefPatternSource,
+  storedAvatarRefPatternSource,
+} from "../../features/community/community-contract.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { tokenLogoSchema } from "./token-logo-schema.js";
 import { unavailableSchema } from "./launch-schemas.js";
@@ -611,6 +614,14 @@ const rankingSchema = {
                 minimum: 0,
                 description:
                   "Accounts (members or not, never banned by the community) with positive community power in the hour.",
+              },
+              avatarRef: {
+                anyOf: [
+                  { type: "string", pattern: communityLogoRefPatternSource },
+                  { type: "null" },
+                ],
+                description:
+                  "S316 / Decision 0188 (optional key; clients must not require it): the community picture, same source and format as the community resources' `logoRef` — `avatar:preset/community-NN` or `logo:media/{mediaId}`; null when unset.",
               },
             },
           },
