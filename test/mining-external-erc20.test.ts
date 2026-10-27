@@ -11,6 +11,7 @@ import {
   createMiningSettlementRunner,
   prepareMiningHour,
 } from "../src/features/mining/hourly-settlement-runner.js";
+import { rollMiningErc20Holder } from "../src/features/mining/mining-erc20-holdings.js";
 import {
   miningPoolExternalFor,
   miningPoolSettleability,
@@ -510,6 +511,48 @@ describe("Decision 0189 power-list assets in the snapshot", () => {
     });
   });
 
+  it("keeps a power-list asset's power without a price under MINING_SNAPSHOT_UNPRICED_POWER_EMIT", () => {
+    const computed = computeMiningSnapshot(
+      {
+        balances,
+        prices: [],
+        communityWeights: roster,
+        unpricedRosterPower: true,
+      },
+      formula,
+    );
+    expect(computed.kind).toBe("computed");
+    if (computed.kind !== "computed") return;
+    expect(computed.priceVersion).toBe("unpriced");
+    expect(computed.totalPower).toBe("15");
+    expect(computed.powers).toEqual([
+      expect.objectContaining({
+        assetId: CAKE,
+        holding: "10",
+        weight: "1.5",
+        power: "15",
+        referencePriceUsd: null,
+        referencePriceQuality: "unavailable",
+        referencePriceReasonCode: "MINING_PRICE_NOT_FRESH",
+      }),
+    ]);
+    // An asset no verified community binds still needs its price.
+    expect(
+      computeMiningSnapshot(
+        {
+          balances,
+          prices: [],
+          communityWeights: [],
+          unpricedRosterPower: true,
+        },
+        {
+          ...formula,
+          document: { ...formula.document, assetWeights: { [CAKE]: "1" } },
+        },
+      ).kind,
+    ).toBe("incomplete");
+  });
+
   it("skips (not unread) a power-list asset without a price", () => {
     const computed = computeMiningSnapshot(
       { balances, prices: [], communityWeights: roster },
@@ -519,5 +562,90 @@ describe("Decision 0189 power-list assets in the snapshot", () => {
     expect(computed.skipped).toEqual([
       { assetId: CAKE, reasonCode: "MINING_PRICE_NOT_FRESH" },
     ]);
+  });
+});
+
+describe("Decision 0189 erc20 roll-forward of one holder", () => {
+  const move = (
+    blockNumber: bigint,
+    logIndex: number,
+    deltaRaw: bigint,
+    at: bigint,
+  ) => ({ blockNumber, logIndex, deltaRaw, at });
+
+  it("rolls the reading forward, ignoring transfers at or below its block", () => {
+    expect(
+      rollMiningErc20Holder({
+        hourStart: S,
+        readingRaw: 10n,
+        readingBlock: 100n,
+        transfers: [
+          move(90n, 0, 7n, S - 900n),
+          move(110n, 0, 5n, S - 600n),
+          move(120n, 0, -3n, S + 1800n),
+        ],
+      }),
+    ).toEqual({
+      kind: "known",
+      openingRaw: 15n,
+      moves: [{ deltaRaw: -3n, at: S + 1800n }],
+    });
+  });
+
+  it("marks a negative balance in chain order inconsistent", () => {
+    expect(
+      rollMiningErc20Holder({
+        hourStart: S,
+        readingRaw: 10n,
+        readingBlock: 100n,
+        transfers: [move(110n, 0, -12n, S + 60n), move(111n, 0, 20n, S + 30n)],
+      }),
+    ).toEqual({ kind: "inconsistent" });
+  });
+
+  it("checks in block / log order, not observed order (a reorg replay re-stamps observed_at)", () => {
+    // Chain order: +20 (block 110) then −25 (block 111) → never negative.
+    // The replayed +20 was re-observed later than the −25: it is not judged
+    // inconsistent, and the −25 is placed no earlier than the +20.
+    expect(
+      rollMiningErc20Holder({
+        hourStart: S,
+        readingRaw: 10n,
+        readingBlock: 100n,
+        transfers: [move(111n, 0, -25n, S + 60n), move(110n, 3, 20n, S + 120n)],
+      }),
+    ).toEqual({
+      kind: "known",
+      openingRaw: 10n,
+      moves: [
+        { deltaRaw: 20n, at: S + 120n },
+        { deltaRaw: -25n, at: S + 120n },
+      ],
+    });
+    // A re-stamped log that moves into the hour carries its successors.
+    expect(
+      rollMiningErc20Holder({
+        hourStart: S,
+        readingRaw: 10n,
+        readingBlock: 100n,
+        transfers: [move(110n, 0, 5n, S + 30n), move(111n, 0, -15n, S - 60n)],
+      }),
+    ).toEqual({
+      kind: "known",
+      openingRaw: 10n,
+      moves: [
+        { deltaRaw: 5n, at: S + 30n },
+        { deltaRaw: -15n, at: S + 30n },
+      ],
+    });
+    // Same-block transfers follow the log index.
+    expect(
+      rollMiningErc20Holder({
+        hourStart: S,
+        readingRaw: 0n,
+        readingBlock: 100n,
+        transfers: [move(110n, 2, -5n, S + 60n), move(110n, 1, 5n, S + 60n)],
+      }).kind,
+    ).toBe("known");
   });
 });

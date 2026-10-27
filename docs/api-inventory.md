@@ -784,7 +784,14 @@ chain with an `erc20_transfer` lane (BSC mainnet) is settled hourly — pinned
 `wallet_balance_snapshots` opening reading + `indexed_transfers`, members only;
 a holder whose balance cannot be reconstructed counts 0 with a reason in the
 epoch summary; a stale lane leaves only the external assets out of the hour
-(`MINING_SETTLEMENT_SOURCE_STALE`). No `/v2` key change.
+(`MINING_SETTLEMENT_SOURCE_STALE`). The opening reading must belong to a
+current holder's wallet row and be at most 7 days old; the wallet sync deletes
+an address's `indexer_wallet_coverage` row once it is nobody's active wallet.
+Migration 000103: a snapshot power row may be unpriced (`referencePriceUsd`
+null, `referencePriceQuality: "unavailable"`, optional `referencePriceReasonCode`
+on `GET /v2/mining/assets` `included[]`) — written only under the worker switch
+`MINING_SNAPSHOT_UNPRICED_POWER_EMIT` (default false, client first; see
+`docs/frontend-v2-mining-api.md` §0.0).
 
 | Method and path             | Request                                                    | Success projection                                                                                                                                                                                                                      | Interface     | Capability                                                                                                             |
 | --------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |

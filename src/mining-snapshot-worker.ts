@@ -121,6 +121,11 @@ export interface CreateMiningSnapshotWorkerOptions {
    */
   readonly includeMockSeedHoldings?: boolean;
   /**
+   * Decision 0189 (`MINING_SNAPSHOT_UNPRICED_POWER_EMIT`): keep a power-list
+   * asset's power without a price (null price, quality `unavailable`).
+   */
+  readonly unpricedRosterPower?: boolean;
+  /**
    * Decision 0184 (`MINING_EMBEDDED_WALLET_ONLY`): count only LOOP embedded
    * wallets. Default false: embedded and linked external wallets both count.
    */
@@ -438,7 +443,13 @@ export function createMiningSnapshotWorker(
       prices.push(await readPrice(asset, formula.formula));
     }
     const computed = computeMiningSnapshot(
-      { balances, prices, communityWeights, pool: pool.part },
+      {
+        balances,
+        prices,
+        communityWeights,
+        pool: pool.part,
+        unpricedRosterPower: options.unpricedRosterPower ?? false,
+      },
       { configVersion: formula.configVersion, document: formula.formula },
     );
     const computation = Object.freeze({

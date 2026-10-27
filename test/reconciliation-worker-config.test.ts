@@ -136,6 +136,7 @@ describe("loadReconciliationWorkerConfig", () => {
       },
       walletIntentReconcile: null,
       miningSnapshotEnabled: false,
+      miningSnapshotUnpricedPowerEmit: false,
       push: null,
       miningMockHoldingsEnabled: false,
       miningSettlement: {

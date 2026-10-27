@@ -39,6 +39,9 @@ import { isDerivedPriceAllowed } from "./mining-reference-pricing.js";
 
 export const miningPowerFractionDigits = 18;
 
+/** Decision 0189: the price version of a snapshot that read no price. */
+export const miningUnpricedPriceVersion = "unpriced";
+
 export interface MiningBalanceInput {
   readonly ownerUserId: string;
   readonly walletId: string;
@@ -107,15 +110,26 @@ export interface MiningSnapshotInputs {
   readonly prices: readonly MiningPriceInput[];
   readonly communityWeights: readonly MiningCommunityWeightInput[];
   readonly pool?: MiningSnapshotPoolInput | null;
+  /**
+   * Decision 0189 (`MINING_SNAPSHOT_UNPRICED_POWER_EMIT`): a power-list
+   * asset without a usable price still counts holding × weight, published
+   * with a null price, quality `unavailable` and the price reason code (the
+   * hourly settlement pays the same holding). Off: it is skipped with the
+   * price reason code.
+   */
+  readonly unpricedRosterPower?: boolean;
 }
 
 export interface MiningSnapshotPower {
   readonly ownerUserId: string;
   readonly assetId: string;
   readonly holding: string;
-  readonly referencePriceUsd: string;
+  /** Null only with quality `unavailable` (Decision 0189). */
+  readonly referencePriceUsd: string | null;
   /** `proxied` when the price is a declared proxy asset's (Decision 0044). */
   readonly referencePriceQuality: MiningReferencePriceQuality;
+  /** Decision 0189: the price reason of an `unavailable` row; else absent / null. */
+  readonly referencePriceReasonCode?: string | null;
   readonly referencePriceProxyAssetId: string | null;
   /** The pair the reference price was read from; required when `derived`. */
   readonly referencePricePairAddress: string | null;
@@ -447,6 +461,44 @@ export function computeMiningSnapshot(
         (weight) =>
           weight.assetId === balance.assetId && weight.source === "roster",
       );
+      if (rosterAsset && inputs.unpricedRosterPower === true) {
+        // Decision 0189: quantity basis — the power does not need the price.
+        const holding = scaleRawHolding(balance.rawValue, balance.decimals);
+        const power = multiplyDecimalStrings(holding, weight);
+        const key = `${balance.ownerUserId}|${balance.assetId}`;
+        const existing = perAccountAsset.get(key);
+        snapshotHoldingsSource = mergeHoldingsSource(
+          snapshotHoldingsSource,
+          balance.source,
+        );
+        perAccountAsset.set(
+          key,
+          Object.freeze({
+            ownerUserId: balance.ownerUserId,
+            assetId: balance.assetId,
+            holding:
+              existing === undefined
+                ? holding
+                : addDecimalStrings(existing.holding, holding),
+            referencePriceUsd: null,
+            referencePriceQuality: "unavailable" as const,
+            referencePriceProxyAssetId: null,
+            referencePricePairAddress: null,
+            referencePriceReasonCode: price.reasonCode,
+            weight,
+            power:
+              existing === undefined
+                ? power
+                : addDecimalStrings(existing.power, power),
+            blockNumber:
+              existing === undefined ||
+              compareBlocks(balance.blockNumber, existing.blockNumber) > 0
+                ? balance.blockNumber
+                : existing.blockNumber,
+          }),
+        );
+        continue;
+      }
       if (BigInt(balance.rawValue) > 0n && !rosterAsset) {
         if (!unreadAssets.has(balance.assetId)) {
           unreadAssets.add(balance.assetId);
@@ -551,6 +603,16 @@ export function computeMiningSnapshot(
       perAccountAsset.set(`${row.ownerUserId}|${row.assetId}`, row);
     }
     priceVersion ??= pool.priceVersion;
+  }
+  // Decision 0189: a snapshot whose only rows are unpriced power-list rows
+  // used no price at all; it says so instead of naming a Provider read.
+  if (
+    priceVersion === null &&
+    [...perAccountAsset.values()].some(
+      (row) => row.referencePriceQuality === "unavailable",
+    )
+  ) {
+    priceVersion = miningUnpricedPriceVersion;
   }
 
   if (

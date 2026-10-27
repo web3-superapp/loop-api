@@ -352,6 +352,27 @@ export function createPostgresAccountWalletRepository(
           ],
         });
 
+        // Decision 0189: an address that is no longer any account's active
+        // wallet leaves the erc20_transfer lane's filter, so its coverage row
+        // stops being true. Delete it: a later re-link (same or another
+        // account) gets a new coverage start from the indexer, and a balance
+        // reading taken before the gap can no longer open a mining hour.
+        await client.query<Record<string, unknown>>({
+          text: `
+            delete from public.indexer_wallet_coverage as c
+            where c.lane = 'erc20_transfer'
+              and c.address in (
+                select address from public.account_wallets
+                where owner_user_id = $1 and status = 'archived'
+              )
+              and not exists (
+                select 1 from public.account_wallets as a
+                where a.address = c.address and a.status = 'active'
+              )
+          `,
+          values: [input.ownerUserId],
+        });
+
         // Exactly one active wallet: when nothing is selected yet (or the
         // selected wallet disappeared) the earliest still-active wallet wins.
         await client.query<Record<string, unknown>>({

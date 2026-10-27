@@ -340,12 +340,22 @@ export const miningAssetsResourceSchema = {
           symbol: symbolSchema,
           logo: tokenLogoSchema,
           holding: decimalSchema,
-          referencePriceUsd: decimalSchema,
+          referencePriceUsd: {
+            anyOf: [decimalSchema, { type: "null" }],
+            description:
+              "Decision 0189: null only when referencePriceQuality is unavailable (a power-list asset whose price could not be read; its power is still holding × weight). Emitted only under MINING_SNAPSHOT_UNPRICED_POWER_EMIT (default off): until then it is always a decimal.",
+          },
           referencePriceQuality: {
             type: "string",
             enum: [...miningReferencePriceQualities],
             description:
-              "fresh = the asset is the base token of the pair that was read; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044); derived = the asset is the quote token of referencePricePairAddress and the price is that pair's inverted price, accepted only under a reference pricing rule the version declares and only inside its guard band (Decision 0059).",
+              "fresh = the asset is the base token of the pair that was read; proxied = the price of referencePriceProxyAssetId, a proxy the formula version declares (native BNB via WBNB, Decision 0044); derived = the asset is the quote token of referencePricePairAddress and the price is that pair's inverted price, accepted only under a reference pricing rule the version declares and only inside its guard band (Decision 0059); unavailable = Decision 0189, no price could be read (referencePriceUsd null, referencePriceReasonCode set; only under MINING_SNAPSHOT_UNPRICED_POWER_EMIT).",
+          },
+          referencePriceReasonCode: {
+            type: "string",
+            pattern: "^[A-Z][A-Z0-9_]{0,63}$",
+            description:
+              "Decision 0189 (optional key; clients must not require it): present only when referencePriceQuality is unavailable — why no price was read (e.g. MINING_PRICE_NOT_FRESH, MINING_PRICE_PAIR_NOT_FOUND).",
           },
           referencePriceProxyAssetId: {
             anyOf: [

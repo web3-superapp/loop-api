@@ -1453,6 +1453,7 @@ const reconciliationWorkerEnvironmentSchema = z
     MINING_SETTLEMENT_CATCHUP_HOURS: positiveIntegerString(1, 720),
     ...miningSettlementEnvironmentShape,
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
+    MINING_SNAPSHOT_UNPRICED_POWER_EMIT: booleanString,
     PRIVY_APP_ID: optionalCredential(255),
     PRIVY_APP_SECRET: optionalCredential(4_096),
     FIREBASE_SERVICE_ACCOUNT_JSON_PATH: optionalCredential(1_024),
@@ -2429,6 +2430,13 @@ export interface ReconciliationWorkerConfig {
    * `NODE_ENV=production`.
    */
   readonly miningMockHoldingsEnabled: boolean;
+  /**
+   * Decision 0189 (`MINING_SNAPSHOT_UNPRICED_POWER_EMIT`, default false): a
+   * power-list asset without a usable price keeps its snapshot power with a
+   * null price (quality `unavailable`). Off until the `/v2` client reads the
+   * nullable price; while off such an asset is skipped.
+   */
+  readonly miningSnapshotUnpricedPowerEmit: boolean;
   /**
    * Push channel credential slot (Decision 0067). The `alert_evaluator` lane
    * sends `price_alert_triggered` only when it is configured; otherwise the
@@ -4981,6 +4989,8 @@ export function loadReconciliationWorkerConfig(
     ...miningSettlementEnvironmentDefaults(environment),
     MINING_MOCK_HOLDINGS_ENABLED:
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
+    MINING_SNAPSHOT_UNPRICED_POWER_EMIT:
+      environment["MINING_SNAPSHOT_UNPRICED_POWER_EMIT"] ?? "false",
     PRIVY_APP_ID: environment["PRIVY_APP_ID"],
     PRIVY_APP_SECRET: environment["PRIVY_APP_SECRET"],
     FIREBASE_SERVICE_ACCOUNT_JSON_PATH:
@@ -5273,6 +5283,8 @@ export function loadReconciliationWorkerConfig(
       catchupHours: parsed.data.MINING_SETTLEMENT_CATCHUP_HOURS,
     }),
     miningMockHoldingsEnabled: parsed.data.MINING_MOCK_HOLDINGS_ENABLED,
+    miningSnapshotUnpricedPowerEmit:
+      parsed.data.MINING_SNAPSHOT_UNPRICED_POWER_EMIT,
     communityChatRealIdentity: parsed.data.COMMUNITY_CHAT_REAL_IDENTITY,
     publicBaseUrl: parseUrl(
       "PUBLIC_BASE_URL",

@@ -6,6 +6,7 @@ import { runner } from "node-pg-migrate";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createPostgresAccountWalletRepository } from "../src/database/account-wallet-repository.js";
 import { createPostgresMiningRepository } from "../src/database/mining-repository.js";
 import { createPostgresMiningSettlementRepository } from "../src/database/mining-settlement-repository.js";
 import {
@@ -409,6 +410,23 @@ describe("Decision 0189 erc20 external tokens on PostgreSQL", () => {
       rewardsMatch: true,
       reasonCode: null,
     });
+
+    // The asset blocked in the registry since: the replay can no longer
+    // read it (source unknown → left out) and says the digest differs.
+    await pool.query(
+      `update public.assets set status = 'blocked' where asset_id = $1`,
+      [CAKE],
+    );
+    try {
+      const blocked = await runner.replay(firstEpochId);
+      // (Rewards may still match: users[1] is the only asset holder.)
+      expect(blocked).toMatchObject({ digestMatches: false, reasonCode: null });
+    } finally {
+      await pool.query(
+        `update public.assets set status = 'pending' where asset_id = $1`,
+        [CAKE],
+      );
+    }
   });
 
   it("leaves the token out of an hour whose erc20 lane is stale, the platform MEME still settles", async () => {
@@ -452,6 +470,69 @@ describe("Decision 0189 erc20 external tokens on PostgreSQL", () => {
     expect(holders).toEqual([users[1], users[4]].sort());
   });
 
+  it("stores and reads an unpriced power-list row (migration 000103)", async () => {
+    const mining = createPostgresMiningRepository(pool);
+    await pool.query(
+      `insert into public.mining_formula_versions (config_version, formula, weight_range,
+         price_guard_rules, status, effective_at, approved_at)
+       values ('s317-formula', $1::jsonb, '{}'::jsonb, '[]'::jsonb, 'approved', now(), now())`,
+      [
+        JSON.stringify({
+          kind: "holding_times_reference_price_times_weight",
+          expressionKey: "k",
+          dailyOutputKey: "k",
+          assetWeights: {},
+          referralBoost: { status: "pending_approval" },
+        }),
+      ],
+    );
+    const snapshotId = randomUUID();
+    await mining.writeSnapshot({
+      snapshotId,
+      blockNumber: "4000",
+      blockHash: hex(4000),
+      formulaVersion: "s317-formula",
+      priceVersion: "unpriced",
+      totalPower: "15",
+      powers: [
+        {
+          ownerUserId: users[1]!,
+          assetId: CAKE,
+          holding: "10",
+          referencePriceUsd: null,
+          referencePriceQuality: "unavailable",
+          referencePriceProxyAssetId: null,
+          referencePricePairAddress: null,
+          referencePriceReasonCode: "MINING_PRICE_NOT_FRESH",
+          weight: "1.5",
+          power: "15",
+          blockNumber: "4000",
+        },
+      ],
+      holdingsSource: "chain",
+    });
+    expect(
+      await mining.listAccountPowers({ snapshotId, ownerUserId: users[1]! }),
+    ).toEqual([
+      expect.objectContaining({
+        assetId: CAKE,
+        referencePriceUsd: null,
+        referencePriceQuality: "unavailable",
+        referencePriceReasonCode: "MINING_PRICE_NOT_FRESH",
+        power: "15",
+      }),
+    ]);
+    // A null price is only allowed as `unavailable` with a reason.
+    await expect(
+      pool.query(
+        `insert into public.mining_snapshot_powers (snapshot_id, owner_user_id, asset_id,
+           holding, reference_price_usd, reference_price_quality, weight, power, block_number)
+         values ($1, $2, $3, '1', null, 'fresh', '1', '1', 4000)`,
+        [snapshotId, users[2], CAKE],
+      ),
+    ).rejects.toThrow(/mining_snapshot_powers_unpriced_check/u);
+  });
+
   it("keeps the 0187 community rank projection for an hour settled before 0189", async () => {
     const mining = createPostgresMiningRepository(pool);
     const ranked = async () =>
@@ -482,5 +563,177 @@ describe("Decision 0189 erc20 external tokens on PostgreSQL", () => {
     expect(await ranked()).toEqual(
       [communities["alpha"], communities["news"], communities["owls"]].sort(),
     );
+  });
+
+  describe("opening readings across unlink / re-link (Decision 0189 §5)", () => {
+    const H3 = BigInt(Date.parse("2026-10-26T14:00:00.000Z") / 1000);
+    // Rows a sync creates are first seen "now"; the fixtures settle a past
+    // hour, so they are dated back like the seeded wallets.
+    async function backdate() {
+      await pool.query(
+        `update public.account_wallets set first_seen_at = '2026-01-01'
+         where first_seen_at > '2026-01-01'`,
+      );
+    }
+    const wallet = {
+      sync: (
+        input: Parameters<
+          ReturnType<typeof createPostgresAccountWalletRepository>["sync"]
+        >[0],
+      ) => createPostgresAccountWalletRepository(pool).sync(input),
+    };
+    async function embedded(index: number) {
+      const row = await pool.query<{ provider_wallet_id: string }>(
+        `select provider_wallet_id from public.account_wallets where wallet_id = $1`,
+        [wallets[index]],
+      );
+      return {
+        address: address(0xa0 + index),
+        kind: "embedded" as const,
+        providerWalletId: row.rows[0]!.provider_wallet_id,
+      };
+    }
+    const external = (n: number) => ({
+      address: address(n),
+      kind: "external" as const,
+      providerWalletId: null,
+    });
+    async function coverageOf(addr: string) {
+      const rows = await pool.query<{ from_block: string }>(
+        `select from_block_number::text as from_block from public.indexer_wallet_coverage
+         where chain_id = $1 and lane = 'erc20_transfer' and address = $2`,
+        [MAINNET, addr],
+      );
+      return rows.rows[0]?.from_block ?? null;
+    }
+    async function walletIdOf(owner: number, addr: string) {
+      const rows = await pool.query<{ wallet_id: string }>(
+        `select wallet_id from public.account_wallets
+         where owner_user_id = $1 and address = $2`,
+        [users[owner], addr],
+      );
+      return rows.rows[0]!.wallet_id;
+    }
+    async function facts(hourStart: bigint) {
+      const read = await repository.readSettlementFacts({
+        chainId: CHAIN,
+        hourStart,
+        hourEnd: hourStart + 3600n,
+        assetIds: [CAKE],
+        embeddedWalletOnly: false,
+        external: { assetIds: [CAKE], staleAssetIds: [], pins: null },
+      });
+      const cake = read.assets.find((asset) => asset.assetId === CAKE);
+      return {
+        unknown: Object.fromEntries(
+          (cake?.unknownHolders ?? []).map((row) => [
+            row.address,
+            row.reasonCode,
+          ]),
+        ),
+        opening: Object.fromEntries(
+          (cake?.openingBalances ?? []).map((row) => [
+            row.address,
+            row.balanceRaw,
+          ]),
+        ),
+      };
+    }
+
+    it("unlink → transfer out (unindexed) → re-link: the old reading no longer opens the hour", async () => {
+      const C1 = address(0xc1);
+      await wallet.sync({
+        ownerUserId: users[1]!,
+        observed: [await embedded(1), external(0xc1)],
+      });
+      await backdate();
+      await pool.query(
+        `insert into public.indexer_wallet_coverage (chain_id, lane, address, from_block_number)
+         values ($1, 'erc20_transfer', $2, 1000)`,
+        [MAINNET, C1],
+      );
+      const c1Wallet = await walletIdOf(1, C1);
+      await pool.query(
+        `insert into public.wallet_balance_snapshots (wallet_id, asset_id, block_number,
+           block_hash, raw_value, observed_at, source)
+         values ($1, $2, 1500, $3, $4, '2026-10-26T12:40:00Z', 'chain')`,
+        [c1Wallet, CAKE, hex(1500), (100n * loop).toString()],
+      );
+      expect((await facts(H3)).opening[C1]).toBe(100n * loop);
+
+      // Unlink: the address is nobody's active wallet → coverage dropped.
+      await wallet.sync({
+        ownerUserId: users[1]!,
+        observed: [await embedded(1)],
+      });
+      await backdate();
+      expect(await coverageOf(C1)).toBeNull();
+      // (The 100 CAKE leave while unlinked: the lane never sees it.)
+      // Re-link the same row; the indexer covers it again from now on.
+      await wallet.sync({
+        ownerUserId: users[1]!,
+        observed: [await embedded(1), external(0xc1)],
+      });
+      await backdate();
+      expect(await walletIdOf(1, C1)).toBe(c1Wallet);
+      await pool.query(
+        `insert into public.indexer_wallet_coverage (chain_id, lane, address, from_block_number)
+         values ($1, 'erc20_transfer', $2, 2000)`,
+        [MAINNET, C1],
+      );
+      const after = await facts(H3);
+      expect(after.opening[C1]).toBeUndefined();
+      expect(after.unknown[C1]).toBe("MINING_EXTERNAL_OPENING_MISSING");
+      // users[1] therefore counts 0 for CAKE in that hour.
+    });
+
+    it("does not reuse a previous owner's reading after the address changes hands", async () => {
+      const D1 = address(0xd1);
+      // users[3] (not a member) links D1 and is read: 50 CAKE.
+      await wallet.sync({
+        ownerUserId: users[3]!,
+        observed: [await embedded(3), external(0xd1)],
+      });
+      await backdate();
+      const oldRow = await walletIdOf(3, D1);
+      await pool.query(
+        `insert into public.wallet_balance_snapshots (wallet_id, asset_id, block_number,
+           block_hash, raw_value, observed_at, source)
+         values ($1, $2, 1500, $3, $4, '2026-10-26T12:40:00Z', 'chain')`,
+        [oldRow, CAKE, hex(1500), (50n * loop).toString()],
+      );
+      // users[3] unlinks, users[4] (a member) links it.
+      await wallet.sync({
+        ownerUserId: users[3]!,
+        observed: [await embedded(3)],
+      });
+      await backdate();
+      await wallet.sync({
+        ownerUserId: users[4]!,
+        observed: [await embedded(4), external(0xd1)],
+      });
+      await backdate();
+      // Even with coverage reaching below the old reading, users[3]'s
+      // reading is not users[4]'s.
+      await pool.query(
+        `insert into public.indexer_wallet_coverage (chain_id, lane, address, from_block_number)
+         values ($1, 'erc20_transfer', $2, 1000)
+         on conflict (chain_id, lane, address) do update set from_block_number = 1000`,
+        [MAINNET, D1],
+      );
+      const read = await facts(H3);
+      expect(read.opening[D1]).toBeUndefined();
+      expect(read.unknown[D1]).toBe("MINING_EXTERNAL_OPENING_MISSING");
+    });
+
+    it("does not use a reading older than 7 days at the hour start", async () => {
+      const A1 = address(0xa1);
+      // users[1]'s newest reading of A1 was observed 2026-10-26T12:30.
+      expect((await facts(H3)).opening[A1]).toBeDefined();
+      const late = BigInt(Date.parse("2026-11-02T13:00:00.000Z") / 1000);
+      expect((await facts(late)).unknown[A1]).toBe(
+        "MINING_EXTERNAL_OPENING_MISSING",
+      );
+    });
   });
 });

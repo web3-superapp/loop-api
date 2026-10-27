@@ -158,8 +158,12 @@ const powerRowSchema = z
     owner_user_id: opaqueIdSchema,
     asset_id: z.string().min(1),
     holding: decimalSchema,
-    reference_price_usd: decimalSchema,
+    reference_price_usd: decimalSchema.nullable(),
     reference_price_quality: z.enum(miningReferencePriceQualities),
+    reference_price_reason_code: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+      .nullable(),
     reference_price_proxy_asset_id: z.string().min(1).nullable(),
     reference_price_pair_address: z
       .string()
@@ -179,6 +183,14 @@ const powerRowSchema = z
     (row) =>
       row.reference_price_quality !== "derived" ||
       row.reference_price_pair_address !== null,
+  )
+  .refine(
+    // Decision 0189: null price exactly on unavailable rows, with a reason.
+    (row) =>
+      (row.reference_price_usd === null) ===
+        (row.reference_price_quality === "unavailable") &&
+      (row.reference_price_reason_code === null) ===
+        (row.reference_price_usd !== null),
   );
 
 /** `numeric::text` may carry trailing zeros; the wire form is canonical. */
@@ -1230,16 +1242,18 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                   snapshot_id, owner_user_id, asset_id, holding,
                   reference_price_usd, reference_price_quality,
                   reference_price_proxy_asset_id, reference_price_pair_address,
-                  weight, power, block_number
+                  weight, power, block_number, reference_price_reason_code
                 )
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
               `,
               values: [
                 snapshotId,
                 opaqueIdSchema.parse(power.ownerUserId),
                 power.assetId,
                 decimalSchema.parse(power.holding),
-                decimalSchema.parse(power.referencePriceUsd),
+                power.referencePriceUsd === null
+                  ? null
+                  : decimalSchema.parse(power.referencePriceUsd),
                 z
                   .enum(miningReferencePriceQualities)
                   .parse(power.referencePriceQuality),
@@ -1250,6 +1264,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 decimalSchema.parse(power.weight),
                 decimalSchema.parse(power.power),
                 blockNumberSchema.parse(power.blockNumber),
+                power.referencePriceReasonCode ?? null,
               ],
             });
           }
@@ -1415,8 +1430,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
             select
               owner_user_id, asset_id, holding, reference_price_usd,
               reference_price_quality, reference_price_proxy_asset_id,
-              reference_price_pair_address, weight,
-              power, block_number::text as block_number
+              reference_price_pair_address, reference_price_reason_code,
+              weight, power, block_number::text as block_number
             from public.mining_snapshot_powers
             where snapshot_id = $1 and owner_user_id = $2
             order by asset_id
@@ -1434,6 +1449,11 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               referencePriceQuality: row.reference_price_quality,
               referencePriceProxyAssetId: row.reference_price_proxy_asset_id,
               referencePricePairAddress: row.reference_price_pair_address,
+              ...(row.reference_price_reason_code === null
+                ? {}
+                : {
+                    referencePriceReasonCode: row.reference_price_reason_code,
+                  }),
               weight: row.weight,
               power: row.power,
               blockNumber: row.block_number,

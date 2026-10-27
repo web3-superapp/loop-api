@@ -216,11 +216,17 @@ export interface MiningDailyOutputDocument {
  *                and the price is `priceUsd / priceNative` of that pair,
  *                accepted only under a reference pricing rule the version
  *                declares and only inside that rule's guard band.
+ * - `unavailable` — Decision 0189: a quantity-basis power-list asset whose
+ *                price could not be read; the price is null, the row
+ *                carries the price reason code, and the power (holding ×
+ *                weight) still counts. Written only under
+ *                `MINING_SNAPSHOT_UNPRICED_POWER_EMIT`.
  */
 export const miningReferencePriceQualities = [
   "fresh",
   "proxied",
   "derived",
+  "unavailable",
 ] as const;
 export type MiningReferencePriceQuality =
   (typeof miningReferencePriceQualities)[number];

@@ -6,6 +6,11 @@ import { adminReasonCodes } from "../features/admin/admin-contract.js";
 import { launch2PriceAt } from "../features/launch2/launch2-curve-math.js";
 import { MiningSettlementInputError } from "../features/mining/hourly-settlement-calculator.js";
 import {
+  miningErc20OpeningMaxAgeSeconds,
+  rollMiningErc20Holder,
+  type MiningErc20TransferMove,
+} from "../features/mining/mining-erc20-holdings.js";
+import {
   miningSettlementReasonCodes,
   parseMiningParameterDocument,
   type MiningClaimState,
@@ -364,15 +369,20 @@ export function createPostgresMiningSettlementRepository(
    * communities bound to the token during the hour — anyone else is gated
    * to 0 by Decision 0183 anyway. Per address:
    *
-   * - opening reading = the latest chain `wallet_balance_snapshots` row of
-   *   the address observed before the hour start whose block is at or after
-   *   the address's `indexer_wallet_coverage.from_block_number` − 1 (every
-   *   later transfer of the address is indexed), or the pinned row on replay;
+   * - opening reading = the latest chain `wallet_balance_snapshots` row
+   *   taken for one of the current holder's wallet rows of the address,
+   *   observed before the hour start and at most 7 days earlier, whose block
+   *   is at or after the address's `indexer_wallet_coverage.from_block_number`
+   *   − 1 (every later transfer of the address is indexed; the coverage row
+   *   is deleted when the address leaves every active wallet, so a re-link
+   *   starts a new coverage), or the pinned row on replay;
    * - opening = reading + the indexed transfers with block > reading block
    *   observed before the hour start; moves = those observed inside the
    *   hour, at their `observed_at` second (the lane's own clock: the table
-   *   has no block time);
-   * - no coverage / no reading / a negative roll-forward → unknown holder.
+   *   has no block time), never earlier than the previous transfer in chain
+   *   order — `rollMiningErc20Holder`;
+   * - no coverage / no reading / a negative roll-forward (chain order) →
+   *   unknown holder.
    */
   async function erc20Facts(input: {
     readonly assetId: string;
@@ -408,16 +418,19 @@ export function createPostgresMiningSettlementRepository(
          select g.created_by_user_id from gated g
          where g.created_at < $3::timestamptz
        )
-       select distinct w.address
+       select distinct w.address, w.wallet_id::text as wallet_id
        from public.account_wallets w
        join members m on m.user_id = w.owner_user_id
        where w.status = 'active'
          and ($4::boolean is false or w.kind = 'embedded')
          and w.first_seen_at < $3::timestamptz
-       order by w.address`,
+       order by w.address, wallet_id`,
       [input.assetId, start, end, input.embeddedWalletOnly],
     );
-    const addresses = holders.map((row) => text(row, "address"));
+    const addresses = [...new Set(holders.map((row) => text(row, "address")))];
+    // Decision 0189: a reading counts only when it was taken for a wallet
+    // row of a current holder (never one of a previous owner of the address).
+    const holderWalletIds = holders.map((row) => text(row, "wallet_id"));
     const unknownHolders: { address: string; reasonCode: string }[] = [];
     const empty = (): MiningAssetFact =>
       Object.freeze({
@@ -458,9 +471,18 @@ export function createPostgresMiningSettlementRepository(
              join public.account_wallets w on w.wallet_id = s.wallet_id
              where s.asset_id = $1 and s.source = 'chain'
                and w.address = any($2::text[])
+               and s.wallet_id = any($5::uuid[])
                and s.observed_at < $3::timestamptz
+               -- Decision 0189: at most 7 days old at the hour start.
+               and s.observed_at >= $4::timestamptz
              order by w.address, s.block_number desc, s.wallet_id`,
-            [input.assetId, addresses, start],
+            [
+              input.assetId,
+              addresses,
+              start,
+              isoOf(input.hourStart - miningErc20OpeningMaxAgeSeconds),
+              holderWalletIds,
+            ],
           )
         : pinnedByWallet.length === 0
           ? []
@@ -520,49 +542,42 @@ export function createPostgresMiningSettlementRepository(
          select * from unnest($3::text[], $4::bigint[])
        )
        select t.from_address, t.to_address, t.raw_value::text as amount,
-         t.block_number::text as block_number,
-         extract(epoch from t.observed_at)::bigint::text as at,
-         t.observed_at < $5::timestamptz as before_hour
+         t.block_number::text as block_number, t.log_index,
+         extract(epoch from t.observed_at)::bigint::text as at
        from public.indexed_transfers t
        where t.chain_id = $1 and t.asset_id = $2 and not t.removed
-         and t.observed_at < $6::timestamptz
+         and t.observed_at < $5::timestamptz
          and exists (
            select 1 from reading r
            where (r.address = t.from_address or r.address = t.to_address)
              and t.block_number > r.block_number
          )
-       order by t.observed_at, t.block_number, t.log_index`,
+       order by t.block_number, t.log_index`,
       [
         chainId,
         input.assetId,
         known,
         known.map((holder) => (readingOf.get(holder)?.block ?? 0n).toString()),
-        start,
         end,
       ],
     );
-    const opening = new Map<string, bigint>(
-      known.map((holder) => [holder, readingOf.get(holder)?.raw ?? 0n]),
-    );
-    const movesOf = new Map<string, { deltaRaw: bigint; at: bigint }[]>();
+    const transfersOf = new Map<string, MiningErc20TransferMove[]>();
     for (const row of transfers) {
       const amount = BigInt(text(row, "amount"));
-      const block = BigInt(text(row, "block_number"));
       const sides: Array<[string, bigint]> = [
         [text(row, "from_address"), -amount],
         [text(row, "to_address"), amount],
       ];
       for (const [holder, delta] of sides) {
-        const reading = readingOf.get(holder);
-        if (!opening.has(holder) || reading === undefined) continue;
-        if (block <= reading.block) continue;
-        if (row["before_hour"] === true) {
-          opening.set(holder, (opening.get(holder) ?? 0n) + delta);
-        } else {
-          const list = movesOf.get(holder) ?? [];
-          list.push({ deltaRaw: delta, at: epochSeconds(row, "at") });
-          movesOf.set(holder, list);
-        }
+        if (!readingOf.has(holder)) continue;
+        const list = transfersOf.get(holder) ?? [];
+        list.push({
+          blockNumber: BigInt(text(row, "block_number")),
+          logIndex: Number(row["log_index"]),
+          deltaRaw: delta,
+          at: epochSeconds(row, "at"),
+        });
+        transfersOf.set(holder, list);
       }
     }
     const openingBalances: { address: string; balanceRaw: bigint }[] = [];
@@ -574,37 +589,32 @@ export function createPostgresMiningSettlementRepository(
     }[] = [];
     const pins: MiningErc20OpeningPin[] = [];
     for (const holder of known) {
-      let balance = opening.get(holder) ?? 0n;
-      let consistent = balance >= 0n;
-      const list = movesOf.get(holder) ?? [];
-      for (const move of list) {
-        balance += move.deltaRaw;
-        if (balance < 0n) consistent = false;
-      }
-      if (!consistent) {
+      const reading = readingOf.get(holder);
+      if (reading === undefined) continue;
+      const roll = rollMiningErc20Holder({
+        hourStart: input.hourStart,
+        readingRaw: reading.raw,
+        readingBlock: reading.block,
+        transfers: transfersOf.get(holder) ?? [],
+      });
+      if (roll.kind === "inconsistent") {
         unknownHolders.push({
           address: holder,
           reasonCode: miningSettlementReasonCodes.externalBalanceInconsistent,
         });
         continue;
       }
-      const reading = readingOf.get(holder);
-      if (reading !== undefined) {
-        pins.push(
-          Object.freeze({
-            assetId: input.assetId,
-            walletId: reading.walletId,
-            blockNumber: reading.block.toString(),
-          }),
-        );
-      }
-      openingBalances.push(
+      pins.push(
         Object.freeze({
-          address: holder,
-          balanceRaw: opening.get(holder) ?? 0n,
+          assetId: input.assetId,
+          walletId: reading.walletId,
+          blockNumber: reading.block.toString(),
         }),
       );
-      for (const move of list) {
+      openingBalances.push(
+        Object.freeze({ address: holder, balanceRaw: roll.openingRaw }),
+      );
+      for (const move of roll.moves) {
         moves.push(
           Object.freeze({
             address: holder,
