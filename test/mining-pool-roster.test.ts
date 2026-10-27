@@ -908,11 +908,11 @@ describe("Decision 0187 appendix A community weight projection", () => {
 });
 
 /**
- * Decision 0188 (power list): an external token bound by a verified
+ * Decision 0189 (power list): an external token bound by a verified
  * community is a roster row that takes part only once `includedAssets` lets
  * it in; the roster is the only rule (no community_mining_weights).
  */
-describe("Decision 0188 external tokens", () => {
+describe("Decision 0189 external tokens", () => {
   const C3 = "c0000000-0000-4000-8000-000000000003";
   const CAKE_ADDRESS = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
   const CAKE = `eip155:56:${CAKE_ADDRESS}`;

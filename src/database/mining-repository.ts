@@ -449,6 +449,14 @@ const epochAccountTotalsSql = `
 const epochCommunityStandingsSql = `
   ${miningPoolVersionOfEpochSql("$1")},
   ${miningPoolRosterSql},
+  epoch_rule as (
+    select not (
+      e.input_summary ? 'poolRosterRule'
+      or e.input_summary ? 'poolExternalAssetIds'
+    ) as legacy
+    from public.mining_epochs as e
+    where e.epoch_id = $1
+  ),
   epoch_version as (
     select v.document
     from public.mining_epochs as e
@@ -484,15 +492,26 @@ const epochCommunityStandingsSql = `
         ),
         0
       ) end as coefficient,
-      -- Decision 0187 appendix A: a roster community shows its token weight.
-      r.token_weight as roster_weight,
+      -- Decision 0187 appendix A: a roster community shows its token weight
+      -- (Decision 0189: under the 0187 rule only a platform row does).
+      case when er.legacy and r.kind is distinct from 'platform' then null
+        else r.token_weight end as roster_weight,
       c.logo_ref
     from public.communities as c
-    -- Decision 0188: only participating roster communities are ranked (an
-    -- unticked platform MEME, an external token not let in, and any
-    -- community off the roster are not).
-    join pool_roster as r on r.community_id = c.community_id
-    where r.participate
+    cross join epoch_rule as er
+    left join pool_roster as r on r.community_id = c.community_id
+    where c.bound_asset_key is not null
+      and case
+        -- Decision 0189: only participating roster communities are
+        -- ranked (an unticked platform MEME, an external token not let in,
+        -- and any community off the roster are not).
+        when not er.legacy then coalesce(r.participate, false)
+        -- Decision 0189: an hour settled before the participating rule
+        -- (its summary has neither poolRosterRule nor poolExternalAssetIds)
+        -- keeps the 0187 projection — every bound community except an
+        -- unticked platform MEME — so history is not rewritten.
+        else r.kind is distinct from 'platform' or r.participate
+      end
   ),
   member_powers as (
     select
@@ -582,7 +601,7 @@ const communityStandingsSql = `
   ${miningPoolRosterSql},
   bound as (
     -- Decision 0187 appendix A: a roster community is weighted by its token
-    -- weight while it participates (unticked: not ranked). Decision 0188:
+    -- weight while it participates (unticked: not ranked). Decision 0189:
     -- the roster is the only rule (external tokens let in by hand included);
     -- community_mining_weights is no longer read.
     select r.community_id, r.community_name, r.bound_asset_id, r.token_weight
@@ -886,7 +905,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         const communityId = opaqueIdSchema.parse(rawCommunityId);
         // Decision 0187 appendix A: a roster community's weight is its
         // token weight under the parameter version in force (approved,
-        // source roster); an unticked one has none. Decision 0188: the
+        // source roster); an unticked one has none. Decision 0189: the
         // roster is the only rule — a community off it (not verified, no
         // bound asset, or no approved quantity version) has no weight; the
         // community_mining_weights row is no longer read.
@@ -939,7 +958,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
 
     async listCommunityWeightInputs(rawConfigVersion: string) {
       try {
-        // Decision 0188: the snapshot's community factor is the power list
+        // Decision 0189: the snapshot's community factor is the power list
         // (the roster under the parameter version in force), not the
         // community_mining_weights table: a participating roster community
         // carries its token weight (source roster), any other verified

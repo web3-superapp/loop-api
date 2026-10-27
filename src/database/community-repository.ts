@@ -1435,7 +1435,7 @@ export function createPostgresCommunityRepository(
               -- approved weight has no row here at all. Decision 0187
               -- appendix A: a roster community is weighted by its token
               -- weight while it participates (unticked: no row). Decision
-              -- 0188: the roster is the only rule (community_mining_weights
+              -- 0189: the roster is the only rule (community_mining_weights
               -- is no longer read; an external token counts once let in).
               coalesce(sum(power.power::numeric), 0) as mining_power,
               count(power.owner_user_id)

@@ -655,7 +655,7 @@ describe("Decision 0102 operator console on PostgreSQL", () => {
       config_version: "s119Next",
     });
     expect(Number(reviewed.rows[0]?.weight)).toBe(Number(range.max));
-    // … but Decision 0188: the community weight is the power list's only
+    // … but Decision 0189: the community weight is the power list's only
     // (no approved mining parameter version here → no weight).
     const weight = await mining.getCommunityWeight(boundCommunity);
     expect(weight).toMatchObject({ status: "pending_review", weight: null });

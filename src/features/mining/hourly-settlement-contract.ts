@@ -75,6 +75,22 @@ export const miningSettlementReasonCodes = Object.freeze({
    * had not completed for that hour. No price is involved.
    */
   assetGraduatedBalancePending: "MINING_ASSET_GRADUATED_BALANCE_PENDING",
+  /**
+   * Decision 0189: an external asset left out of one hour because the
+   * `erc20_transfer` lane of its chain had not ticked past the hour end
+   * (+ grace) when the hour was settled. Platform assets are unaffected.
+   */
+  sourceStale: "MINING_SETTLEMENT_SOURCE_STALE",
+  /**
+   * Decision 0189: per holder of an `erc20` asset (the user counts 0 for
+   * that asset in the hour): the wallet address has no `erc20_transfer`
+   * coverage row; no `wallet_balance_snapshots` reading observed before the
+   * hour at or after the coverage start; or the rolled-forward balance went
+   * negative (a transfer the lane never saw).
+   */
+  externalBalanceUncovered: "MINING_EXTERNAL_BALANCE_UNCOVERED",
+  externalOpeningMissing: "MINING_EXTERNAL_OPENING_MISSING",
+  externalBalanceInconsistent: "MINING_EXTERNAL_BALANCE_INCONSISTENT",
   // Claim (prepare / report).
   claimSignerNotConfigured: "MINING_CLAIM_SIGNER_NOT_CONFIGURED",
   claimContractNotConfigured: "MINING_CLAIM_CONTRACT_NOT_CONFIGURED",
@@ -180,12 +196,12 @@ export interface MiningParameterDocument {
    */
   readonly excludedCommunities?: readonly string[];
   /**
-   * Decision 0188 (power list): external-token assets let in by hand — the
+   * Decision 0189 (power list): external-token assets let in by hand — the
    * asset a verified community binds that is not a launch2 MEME (e.g. a BSC
    * mainnet token). Such a roster row takes part only while its asset is
    * listed here (and not excluded); its weight is the `assetWeights` entry,
    * else 1. Participation is this key, never the presence of a weight.
-   * Absent in documents stored before 0188 (→ empty). Sorted, unique.
+   * Absent in documents stored before 0189 (→ empty). Sorted, unique.
    */
   readonly includedAssets?: readonly string[];
 }
@@ -471,7 +487,7 @@ export const miningDefaultParameterDocument = Object.freeze({
   /** Decision 0187: every roster row participates by default. */
   excludedAssets: Object.freeze([] as string[]),
   excludedCommunities: Object.freeze([] as string[]),
-  /** Decision 0188: no external token takes part until let in. */
+  /** Decision 0189: no external token takes part until let in. */
   includedAssets: Object.freeze([] as string[]),
 });
 

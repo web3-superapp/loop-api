@@ -132,7 +132,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
     assetId: string | null,
   ): Promise<string> {
     const result = await pool.query<{ community_id: string }>(
-      // Decision 0188: only verified communities are on the power list.
+      // Decision 0189: only verified communities are on the power list.
       `insert into public.communities (name, slug, bound_asset_key, created_by_user_id,
          verification_status, verified_at, reviewed_at)
        values ($1, $2, $3, $4, 'verified', '2026-10-01', '2026-10-01')
@@ -209,7 +209,7 @@ describe("Decision 0148 power ranks on the settled hour (PostgreSQL)", () => {
         JSON.stringify({
           ...miningDefaultParameterDocument,
           releaseStartAt: "2026-10-01T00:00:00.000Z",
-          // Decision 0188: the bound tokens are external (no launch2
+          // Decision 0189: the bound tokens are external (no launch2
           // instance), so the power list lets them in; the rank's `weight`
           // is the token weight (A pinned at 1.5, B and C default 1).
           assetWeights: [{ assetId: assetA, weight: "1.5" }],

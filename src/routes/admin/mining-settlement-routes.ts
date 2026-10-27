@@ -166,7 +166,7 @@ const poolValueSource = {
   type: "string",
   enum: ["default", "explicit"],
 } as const;
-/** Decision 0187: one roster row (Decision 0188: platform or external). */
+/** Decision 0187: one roster row (Decision 0189: platform or external). */
 const poolRowSchema = {
   type: "object",
   additionalProperties: false,
@@ -184,6 +184,8 @@ const poolRowSchema = {
     "tokenWeight",
     "nftCoefficient",
     "source",
+    "settleable",
+    "settleableReasonCode",
     "pendingDraft",
   ],
   properties: {
@@ -204,7 +206,7 @@ const poolRowSchema = {
       type: "string",
       enum: ["platform", "external"],
       description:
-        "Decision 0188: platform = the bound asset is a launch2 MEME (default in); external = any other bound token (default out, let in by `includedAssets`).",
+        "Decision 0189: platform = the bound asset is a launch2 MEME (default in); external = any other bound token (default out, let in by `includedAssets`).",
     },
     symbol: {
       anyOf: [{ type: "string" }, { type: "null" }],
@@ -228,6 +230,22 @@ const poolRowSchema = {
     tokenWeight: decimalString,
     nftCoefficient: decimalString,
     source: poolValueSource,
+    settleable: {
+      type: "boolean",
+      description:
+        "Decision 0189: whether the hourly settlement can read the row's holdings — a platform MEME or an external MEME v1 token on the settlement chain, or an external registered ERC-20 on a chain with an erc20_transfer lane (opening readings + indexed transfers). false: the snapshot alone values it (no LOOP reward). A settleable row can still count 0 for a holder whose balance is not reconstructable that hour (see the epoch summary externalUnknownHolders).",
+    },
+    settleableReasonCode: {
+      anyOf: [
+        {
+          type: "string",
+          enum: ["MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN"],
+        },
+        { type: "null" },
+      ],
+      description:
+        "Decision 0189: null when settleable; MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN when the settlement has no holdings source for the row.",
+    },
     pendingDraft: {
       anyOf: [
         {
@@ -363,7 +381,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "listAdminMiningPool",
         summary: "Mining power list (verified community × bound token)",
         description:
-          'Decision 0187 / 0188 (power list): one row per verified community with a bound asset (`communities.bound_asset_key`). `kind` = platform when the asset is a launch2 instance MEME (any chain): it takes part without registration; kind = external for any other bound token (e.g. a BSC mainnet asset): it takes part only once let in — `includedAssets` lists the asset (and neither excluded list names it); its weight is then `assetWeights[assetId]` if listed, else "1"; not let in, it shows participate false, tokenWeight "0", nftCoefficient "0". The list is the only rule for bound assets (the community_mining_weights table is no longer read). Values are those of the approved parameter version in force now (`inForce`; null = none yet: every row shows the defaults) and, per row, of the newest pending draft (`pendingDraft`, null without one). Effective rule (also what settlement and snapshot apply): tokenWeight = `assetWeights[assetId]` if listed, else "1"; NFT coefficient = `communityCoefficients[communityId]` if listed, else `defaultCommunityCoefficient` ("1"); an asset in `excludedAssets` has weight "0", a community in `excludedCommunities` has coefficient "0"; `participate` = neither excluded. `source` = "explicit" when the document names the asset or community in any of those four keys, else "default". Filters: `address` = bound token contract address, exact, case-insensitive; `q` = community name or ticker / symbol, case-insensitive substring (≤ 64); `kind` = platform | external (absent: both). Ordered by community name then id; `cursor` / `limit` (1-100, default 20, not together). Saving: build ONE parameter draft from the whole table with `POST /admin/v1/mining/parameter-versions` — carry the other keys of the in-force document unchanged and fold every row: participate unticked → add assetId to `excludedAssets` AND communityId to `excludedCommunities` (drop both from the explicit tables); ticked → leave both out of the excluded lists, put `{assetId, weight}` in `assetWeights` only when tokenWeight ≠ "1" (or to pin it), and `{communityId, coefficient}` in `communityCoefficients` only when the coefficient ≠ defaultCommunityCoefficient (or to pin it); external rows: ticked → assetId in `includedAssets` (weight as above), unticked → assetId out of `includedAssets` and `assetWeights` (not into excludedAssets); keep explicit rows of non-roster assets / communities as they are. A reviewer approves it as any parameter draft. Readable with console.read or formula.approve.',
+          'Decision 0187 / 0189 (power list): one row per verified community with a bound asset (`communities.bound_asset_key`). `kind` = platform when the asset is a launch2 instance MEME (any chain): it takes part without registration; kind = external for any other bound token (e.g. a BSC mainnet asset): it takes part only once let in — `includedAssets` lists the asset (and neither excluded list names it); its weight is then `assetWeights[assetId]` if listed, else "1"; not let in, it shows participate false, tokenWeight "0", nftCoefficient "0". The list is the only rule for bound assets (the community_mining_weights table is no longer read). Values are those of the approved parameter version in force now (`inForce`; null = none yet: every row shows the defaults) and, per row, of the newest pending draft (`pendingDraft`, null without one). Effective rule (also what settlement and snapshot apply): tokenWeight = `assetWeights[assetId]` if listed, else "1"; NFT coefficient = `communityCoefficients[communityId]` if listed, else `defaultCommunityCoefficient` ("1"); an asset in `excludedAssets` has weight "0", a community in `excludedCommunities` has coefficient "0"; `participate` = neither excluded. `source` = "explicit" when the document names the asset or community in any of those four keys, else "default". Filters: `address` = bound token contract address, exact, case-insensitive; `q` = community name or ticker / symbol, case-insensitive substring (≤ 64); `kind` = platform | external (absent: both). Ordered by community name then id; `cursor` / `limit` (1-100, default 20, not together). Saving: build ONE parameter draft from the whole table with `POST /admin/v1/mining/parameter-versions` — carry the other keys of the in-force document unchanged and fold every row: participate unticked → add assetId to `excludedAssets` AND communityId to `excludedCommunities` (drop both from the explicit tables); ticked → leave both out of the excluded lists, put `{assetId, weight}` in `assetWeights` only when tokenWeight ≠ "1" (or to pin it), and `{communityId, coefficient}` in `communityCoefficients` only when the coefficient ≠ defaultCommunityCoefficient (or to pin it); external rows: ticked → assetId in `includedAssets` (weight as above), unticked → assetId out of `includedAssets` and `assetWeights` (not into excludedAssets); keep explicit rows of non-roster assets / communities as they are. A reviewer approves it as any parameter draft. Readable with console.read or formula.approve.',
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: {
@@ -405,7 +423,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "createAdminMiningParameterDraft",
         summary: "Draft a hourly settlement parameter version",
         description:
-          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis), Decision 0187: excludedAssets [assetId] (optional, ≤ 500, unique: weight 0 even if listed or a roster MEME), excludedCommunities [communityId] (optional, ≤ 2000, unique: NFT coefficient 0), Decision 0188: includedAssets [assetId] (optional, ≤ 500, unique: the external tokens let in to the power list)). Decision 0187 mining pool roster: a launch2 MEME bound by a verified community weighs 1 unless assetWeights lists it or excludedAssets names it — this is how the console pool table is saved (see GET /admin/v1/mining/pool for the folding rule). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN (Decision 0188: an includedAssets id, or an assetWeights id also in includedAssets, may instead be the bound asset of a verified community); Decision 0183: a communityCoefficients or excludedCommunities id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[], detailsSafe.field: communityCoefficients | excludedCommunities), an assetWeights or excludedAssets id without a source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN, and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
+          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis), Decision 0187: excludedAssets [assetId] (optional, ≤ 500, unique: weight 0 even if listed or a roster MEME), excludedCommunities [communityId] (optional, ≤ 2000, unique: NFT coefficient 0), Decision 0189: includedAssets [assetId] (optional, ≤ 500, unique: the external tokens let in to the power list)). Decision 0187 mining pool roster: a launch2 MEME bound by a verified community weighs 1 unless assetWeights lists it or excludedAssets names it — this is how the console pool table is saved (see GET /admin/v1/mining/pool for the folding rule). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN (Decision 0189: an includedAssets id, or an assetWeights id also in includedAssets, may instead be the bound asset of a verified community); Decision 0183: a communityCoefficients or excludedCommunities id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[], detailsSafe.field: communityCoefficients | excludedCommunities), an assetWeights or excludedAssets id without a source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN, and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,

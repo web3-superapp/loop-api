@@ -971,7 +971,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         `,
         values: [current, retired],
       });
-      // Decision 0188: the snapshot's community factor is the power list
+      // Decision 0189: the snapshot's community factor is the power list
       // (the parameter version in force), whatever the formula version; the
       // reviewed community_mining_weights rows above are no longer read.
       await approveMiningPowerList(pool, {
@@ -1193,7 +1193,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
         text: `delete from public.community_mining_weights where community_id = $1`,
         values: [secondBoundCommunity],
       });
-      // Decision 0188: the reviewed row above no longer reaches the
+      // Decision 0189: the reviewed row above no longer reaches the
       // snapshot; the power list does (CAKE is an external token let in).
       expect(
         (await mining.listCommunityWeightInputs(baselineVersion)).find(
@@ -1405,7 +1405,7 @@ describe("PostgreSQL S7 repositories (launch, mining, referral)", () => {
           communityId: secondBoundCommunity,
         }),
       ).toBeNull();
-      // Decision 0188: the weight is the power list's, not a review under a
+      // Decision 0189: the weight is the power list's, not a review under a
       // formula version, so another formula version reads the same standing.
       expect(
         await mining.getCommunityStanding({

@@ -20,7 +20,7 @@ import {
  * - "participates" = neither the asset nor the community is excluded; the
  *   console unticks a row by adding both.
  *
- * Decision 0188 (power list): every other asset a verified community binds
+ * Decision 0189 (power list): every other asset a verified community binds
  * (an **external** token, e.g. a BSC mainnet asset or a MEME v1 token) is a
  * roster row too, but let in by hand: it participates only while its asset
  * is in `includedAssets` and neither it nor the community is excluded; its
@@ -38,7 +38,7 @@ import {
 export const miningPoolDefaultTokenWeight = "1" as const;
 
 /**
- * Decision 0188: `platform` = the bound asset is a launch2 MEME (default in);
+ * Decision 0189: `platform` = the bound asset is a launch2 MEME (default in);
  * `external` = any other bound asset (default out, let in by hand).
  */
 export type MiningPoolKind = "platform" | "external";
@@ -63,15 +63,17 @@ export interface MiningPoolCandidate {
   /** On-chain launch id (`0x` + 64 hex); null for an external row. */
   readonly launchId: string | null;
   /**
-   * Decision 0188: where the hourly settlement reads the asset's holdings —
-   * `launch2` (platform), `meme_v1` (an external MEME v1 token), or null
+   * Decision 0189: where the hourly settlement reads the asset's holdings —
+   * `launch2` (platform), `meme_v1` (an external MEME v1 token), `erc20`
+   * (Decision 0189: a registered, unblocked token on a chain with an
+   * `erc20_transfer` lane — opening readings + indexed transfers), or null
    * (no settlement source: the snapshot alone values it). Optional on older
    * fixtures (→ launch2 for platform, null for external).
    */
-  readonly settlementSource?: "launch2" | "meme_v1" | null;
+  readonly settlementSource?: "launch2" | "meme_v1" | "erc20" | null;
 }
 
-/** Decision 0188: the external rows of a candidate list, by asset id. */
+/** Decision 0189: the external rows of a candidate list, by asset id. */
 export function miningPoolExternalAssetIds(
   candidates: readonly Pick<MiningPoolCandidate, "assetId" | "kind">[],
 ): readonly string[] {
@@ -119,7 +121,7 @@ export function miningPoolRosterApplies(
 }
 
 /**
- * Decision 0188: the external roster rows a weight map is built with.
+ * Decision 0189: the external roster rows a weight map is built with.
  * `assetIds` are the external assets (gated: out unless `includedAssets`
  * lists them); `readable`, when given, narrows the ones that may weigh at
  * all (the hourly settlement passes the assets it has a source for — an
@@ -131,12 +133,13 @@ export interface MiningPoolExternalAssets {
 }
 
 /**
- * Decision 0188: the external roster a settlement (or the snapshot's pool
+ * Decision 0189: the external roster a settlement (or the snapshot's pool
  * part) gates — every external candidate plus every asset some version lets
  * in (`includedAssets`) that is not a platform MEME, so an asset let in
  * whose community later left the roster still never reaches a reader that
- * has no source for it. `readable` = the external candidates on `chainId`
- * with a MEME v1 source (pass `chainId` null for none). Null when empty.
+ * has no source for it. `readable` = the external candidates the settlement
+ * of `chainId` can read (`miningPoolSettleability`; pass `chainId` null for
+ * none). Null when empty.
  */
 export function miningPoolExternalFor(
   candidates: readonly Pick<
@@ -164,8 +167,7 @@ export function miningPoolExternalFor(
         (row) =>
           row.kind === "external" &&
           chainId !== null &&
-          row.chainId === chainId &&
-          row.settlementSource === "meme_v1",
+          miningPoolSettleability(row, chainId).settleable,
       )
       .map((row) => row.assetId),
   );
@@ -176,9 +178,38 @@ export function miningPoolExternalFor(
 }
 
 /**
+ * Decision 0189: whether the hourly settlement of `settlementChainId` can
+ * read a roster row's holdings: a platform MEME on the settled chain; an
+ * external MEME v1 token on the settled chain; an external `erc20` token
+ * (any chain with an `erc20_transfer` lane). Otherwise the row is valued
+ * by the snapshot only and its reason is MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN.
+ * Settleable does not promise every holder is readable (Decision 0189 §A:
+ * a holder without coverage / opening reading counts 0 for the hour).
+ */
+export function miningPoolSettleability(
+  candidate: Pick<MiningPoolCandidate, "kind" | "chainId"> & {
+    readonly settlementSource?: MiningPoolCandidate["settlementSource"];
+  },
+  settlementChainId: string | null,
+): { readonly settleable: boolean; readonly reasonCode: string | null } {
+  const sameChain =
+    settlementChainId !== null && candidate.chainId === settlementChainId;
+  const source =
+    candidate.settlementSource ??
+    (candidate.kind === "platform" ? "launch2" : null);
+  const settleable =
+    source === "erc20" ||
+    (sameChain && (source === "launch2" || source === "meme_v1"));
+  return Object.freeze({
+    settleable,
+    reasonCode: settleable ? null : "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
+  });
+}
+
+/**
  * The effective asset weights (1e18) of a document: the explicit table,
  * every candidate asset it does not list at weight 1 (quantity documents
- * only), every excluded asset at 0. Decision 0188: an external roster asset
+ * only), every excluded asset at 0. Decision 0189: an external roster asset
  * is in the map only while `includedAssets` lists it (explicit weight, else
  * 1) and, with `readable`, only when readable. An asset absent from the map
  * weighs 0.
@@ -239,7 +270,7 @@ export function miningEffectiveCommunityCoefficients(
 /**
  * One roster row as the console shows it. `document` null (no approved
  * version yet) shows the defaults: a platform row participating at 1 and 1,
- * an external row (Decision 0188) not participating. A row that does not
+ * an external row (Decision 0189) not participating. A row that does not
  * participate shows "0" for both values.
  */
 export function resolveMiningPoolEntry(

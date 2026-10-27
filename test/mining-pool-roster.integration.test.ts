@@ -520,7 +520,7 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
     ).toBeNull();
   });
 
-  it("Decision 0188: an external token is a candidate, out until let in, in by its weight, out again when removed", async () => {
+  it("Decision 0189: an external token is a candidate, out until let in, in by its weight, out again when removed", async () => {
     const mining = createPostgresMiningRepository(pool);
     const CAKE_ADDRESS = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
     const CAKE = `eip155:56:${CAKE_ADDRESS}`;
@@ -539,7 +539,7 @@ describe("Decision 0187 mining pool roster on PostgreSQL", () => {
         [delta, users[index]],
       );
     }
-    // A pre-0188 reviewed weight must no longer count.
+    // A pre-0189 reviewed weight must no longer count.
     await pool.query(
       `insert into public.community_mining_weights (community_id, status, weight,
          config_version, reviewed_at)

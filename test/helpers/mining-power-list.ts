@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { miningDefaultParameterDocument } from "../../src/features/mining/hourly-settlement-contract.js";
 
 /**
- * Decision 0188: the power list (roster) is the only rule for a bound
+ * Decision 0189: the power list (roster) is the only rule for a bound
  * asset's community weight — fixtures that used to approve a
  * `community_mining_weights` row approve a mining parameter version that
  * lets the external tokens in (`includedAssets`) at the given weights.

@@ -1,4 +1,4 @@
-# loop-admin 对接：「算力名单」（S313 / 决策 0187；S316 / 决策 0188 修订）
+# loop-admin 对接：「算力名单」（S313 / 决策 0187；S316 + S317 / 决策 0189 修订）
 
 ## 1. 基址、请求头、权限
 
@@ -14,10 +14,12 @@
 | 行类型 `kind`                                                    | 默认   | 参与                                                                            | 币权重                                                                           | NFT 系数                                                                              |
 | ---------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `platform`：绑定的是 LOOP 发射 MEME（任何链）                    | 参与   | 资产不在 `excludedAssets`、社区不在 `excludedCommunities`                       | `assetWeights` 里有就用，没有 = **1**；排除 → 0                                  | `communityCoefficients` 里有就用，没有 = `defaultCommunityCoefficient`（1）；排除 → 0 |
-| `external`：绑定的是其它代币（如 BSC 主网 CAKE），决策 0188 新增 | 不参与 | 资产在 **`includedAssets`** 里，且不在 `excludedAssets` / `excludedCommunities` | 参与时 `assetWeights` 里有就用，没有 = 1；不参与 → 0（哪怕 `assetWeights` 有值） | 参与时同左；不参与 → 0（外部代币社区没有平台 NFT，实际不产生 NFT 算力）               |
+| `external`：绑定的是其它代币（如 BSC 主网 CAKE），决策 0189 新增 | 不参与 | 资产在 **`includedAssets`** 里，且不在 `excludedAssets` / `excludedCommunities` | 参与时 `assetWeights` 里有就用，没有 = 1；不参与 → 0（哪怕 `assetWeights` 有值） | 参与时同左；不参与 → 0（外部代币社区没有平台 NFT，实际不产生 NFT 算力）               |
 
 - 算力口径：持币数量 × 币权重 + NFT 数 × NFT 系数，不按美元。只算该社区成员（含创建者）的持仓。
-- 外部代币的持仓来自现有快照（快照公式 `assetWeights` 里登记过的主网资产，余额与参考价照常读取）；名单只决定参与与币权重（权重直接作为该资产的权重，不再乘公式权重或旧社区权重）。小时结算只结算它有数据源的资产（平台 MEME、本链 MEME v1），BSC 主网代币不进小时结算。
+- 外部代币的**快照**算力：勾选并批准后即生效，不需要快照公式里登记该资产（S317）；名单权重直接作为该资产的权重。取不到参考价时该资产在快照里跳过（不影响其它资产）。
+- 外部代币的**小时结算**（分 LOOP，S317）：行上 `settleable = true` 才会结算——BSC 主网等已登记、且该链有 `erc20_transfer` 索引 lane 的代币即为 `true`。持仓 = 社区成员计入钱包在「最近一次余额读数 + 之后的索引转账」滚出的余额（时间加权）。某成员任一钱包没有可用读数（从未打开过钱包页、或读数早于该钱包被索引的起点）时，该成员本小时该代币算 0，原因记在该小时的 `inputSummary.externalUnknownHolders`（按原因计数）；索引 lane 滞后时该小时跳过外部代币（`inputSummary.excludedAssets[].reasonCode = MINING_SETTLEMENT_SOURCE_STALE`），平台 MEME 照常结算。
+- `settleable = false`（`settleableReasonCode = MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`）：结算读不到该代币的持仓（未登记 / 被封禁 / 该链没有索引 lane；或平台 MEME 不在结算链上）——勾选后只有快照算力，不分 LOOP。后台应在该行标「尚无持仓来源」。
 - 未参与的外部代币社区：社区页 `weight` = `unavailable` + `MINING_POOL_EXCLUDED`，不进社区榜。
 
 ## 3. `GET /admin/v1/mining/pool`
@@ -26,7 +28,7 @@
 | --------- | -------------------------------------------------------------------------- |
 | `address` | 可选，代币合约地址 `0x` + 40 hex，精确匹配，大小写不敏感（搜索框）         |
 | `q`       | 可选，≤ 64 字，社区名或 ticker / 代币符号子串，大小写不敏感                |
-| `kind`    | 可选，`platform` \| `external`；缺省两类都返回（决策 0188）                |
+| `kind`    | 可选，`platform` \| `external`；缺省两类都返回（决策 0189）                |
 | `limit`   | 可选，1–100，默认 20；不可与 `cursor` 同时给                               |
 | `cursor`  | 可选，上一页的 `nextCursor`（绑定 `address` / `q` / `kind`，换条件后作废） |
 
@@ -55,6 +57,8 @@
       "tokenWeight": "1",
       "nftCoefficient": "1",
       "source": "default",
+      "settleable": true,
+      "settleableReasonCode": null,
       "pendingDraft": null
     },
     {
@@ -71,6 +75,8 @@
       "tokenWeight": "0",
       "nftCoefficient": "0",
       "source": "default",
+      "settleable": true,
+      "settleableReasonCode": null,
       "pendingDraft": null
     }
   ],
@@ -78,8 +84,9 @@
 }
 ```
 
-- `kind`：`platform` / `external`（决策 0188）。外部行 `instanceId` / `launchId` 为 `null`，`symbol` 取资产登记的符号（没登记为 `null`），`memeAddress` 是该代币的合约地址。
+- `kind`：`platform` / `external`（决策 0189）。外部行 `instanceId` / `launchId` 为 `null`，`symbol` 取资产登记的符号（没登记为 `null`），`memeAddress` 是该代币的合约地址。
 - 不参与的行 `tokenWeight` / `nftCoefficient` 显示 `"0"`；勾选外部行时，表单应让运营填币权重（留空按 1）。
+- `settleable`（S317 新增，必有）：小时结算能否读到这行代币的持仓。`true` = 参与后成员既有快照算力也分 LOOP；`false` = 只有快照算力。`settleableReasonCode`：`true` 时为 `null`，`false` 时为 `MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`。与勾选状态无关（未勾选的行也会显示）。
 
 - `inForce`：当前生效的参数版本；`null` = 还没有批准过任何版本，每行显示默认值（参与 / 1 / 1）。
 - `source`：`explicit` = 文档在 `assetWeights` / `communityCoefficients` / `excludedAssets` / `excludedCommunities` / `includedAssets` 任一处点名了这行的资产或社区；`default` = 全部默认。
@@ -123,7 +130,7 @@
 2. 每个平台行（`kind = platform`）：
    - 取消勾选：`assetId` 进 `excludedAssets`，`communityId` 进 `excludedCommunities`；同时从 `assetWeights` / `communityCoefficients` 去掉这两项。
    - 勾选：两项都不出现在 excluded；币权重 ≠ 1 时写入 `assetWeights`；NFT 系数 ≠ `defaultCommunityCoefficient` 时写入 `communityCoefficients`（等于默认值可省略）。
-     每个外部行（`kind = external`，决策 0188）：
+     每个外部行（`kind = external`，决策 0189）：
    - 勾选：`assetId` 进 `includedAssets`，且不在 `excludedAssets`、`communityId` 不在 `excludedCommunities`；币权重 / NFT 系数写法同平台行。
    - 取消勾选：`assetId` 从 `includedAssets` 移除，并从 `assetWeights` / `communityCoefficients` 去掉这两项；**不要**放进 excluded。
 3. 不在矿池表里的显式行（例如其它资产权重）原样保留。
@@ -153,4 +160,4 @@
 
 ## 6. 「快照系数」页
 
-`/admin/v1/mining/formula-versions` 已在 OpenAPI 标 `deprecated`，请隐藏入口（接口保留）。结算与 App 显示都只看本表（决策 0188 起外部代币也一样）。
+`/admin/v1/mining/formula-versions` 已在 OpenAPI 标 `deprecated`，请隐藏入口（接口保留）。结算与 App 显示都只看本表（决策 0189 起外部代币也一样）。

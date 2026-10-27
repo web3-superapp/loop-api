@@ -77,13 +77,13 @@ export interface MiningCommunityWeightInput {
   readonly weight: string | null;
   readonly status: "pending_review" | "approved";
   /**
-   * Decision 0188: `roster` = the row is the power list's (the community's
+   * Decision 0189: `roster` = the row is the power list's (the community's
    * token weight under the parameter version in force) — the weight then
    * replaces the formula's asset weight instead of multiplying it. Absent:
-   * a pre-0188 reviewed community weight (second factor).
+   * a pre-0189 reviewed community weight (second factor).
    */
   readonly source?: "roster";
-  /** Decision 0188: a roster row that does not participate. */
+  /** Decision 0189: a roster row that does not participate. */
   readonly rosterExcluded?: boolean;
 }
 
@@ -187,8 +187,10 @@ type WeightSelection =
  * factor on the community's bound asset. A bound asset whose weight is not
  * approved under this version is excluded rather than weighted by the asset
  * weight alone, so a community binding never silently drops its factor.
- * Decision 0188: a power-list (roster) binding is the asset's weight itself;
+ * Decision 0189: a power-list (roster) binding is the asset's weight itself;
  * a roster row that does not participate is skipped as MINING_POOL_EXCLUDED.
+ * Decision 0189: a roster binding no longer needs a formula `assetWeights`
+ * entry (the console has no formula editor; the power list is the rule).
  */
 export function selectMiningWeight(
   assetId: string,
@@ -196,16 +198,19 @@ export function selectMiningWeight(
   communityWeights: readonly MiningCommunityWeightInput[],
 ): WeightSelection {
   const assetWeight = formula.assetWeights[assetId];
-  if (!isUnsignedDecimalString(assetWeight)) {
+  const bindings = communityWeights.filter(
+    (weight) => weight.assetId === assetId,
+  );
+  // Decision 0189: a power-list (roster) binding needs no formula entry —
+  // the approved power list alone admits and weights the asset.
+  const roster = bindings.some((weight) => weight.source === "roster");
+  if (!roster && !isUnsignedDecimalString(assetWeight)) {
     return {
       kind: "skip",
       reasonCode: miningReasonCodes.assetWeightNotConfigured,
     };
   }
-  const bindings = communityWeights.filter(
-    (weight) => weight.assetId === assetId,
-  );
-  if (bindings.length === 0) {
+  if (bindings.length === 0 && isUnsignedDecimalString(assetWeight)) {
     return { kind: "weight", weight: assetWeight };
   }
   const approvedWeights = bindings.flatMap((weight) =>
@@ -230,11 +235,17 @@ export function selectMiningWeight(
       reasonCode: miningReasonCodes.communityWeightAmbiguous,
     };
   }
-  if (bindings.some((weight) => weight.source === "roster")) {
-    // Decision 0188: the power list's token weight is the asset's weight
-    // (quantity × weight); the formula entry only admits the asset (its
-    // holdings and reference price are read).
+  if (roster) {
+    // Decision 0189: the power list's token weight is the asset's
+    // weight (quantity × weight); a formula entry is neither required nor
+    // multiplied in.
     return { kind: "weight", weight: communityWeight };
+  }
+  if (!isUnsignedDecimalString(assetWeight)) {
+    return {
+      kind: "skip",
+      reasonCode: miningReasonCodes.assetWeightNotConfigured,
+    };
   }
   return {
     kind: "weight",
@@ -429,7 +440,14 @@ export function computeMiningSnapshot(
     if (price.kind === "skip") {
       // A positive holding without a price is an unread holding; a zero
       // balance without a price changes no number and is only skipped.
-      if (BigInt(balance.rawValue) > 0n) {
+      // Decision 0189: a power-list asset (weighted by quantity, its price
+      // only published) without a price is skipped with the price reason —
+      // one external token's missing quote does not hold back the snapshot.
+      const rosterAsset = inputs.communityWeights.some(
+        (weight) =>
+          weight.assetId === balance.assetId && weight.source === "roster",
+      );
+      if (BigInt(balance.rawValue) > 0n && !rosterAsset) {
         if (!unreadAssets.has(balance.assetId)) {
           unreadAssets.add(balance.assetId);
           unread.push({

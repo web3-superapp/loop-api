@@ -2853,7 +2853,7 @@ describe("PostgreSQL V2 community and social graph repository", () => {
         ],
       });
       // Only the two weighted communities carry an approved weight; the
-      // stronger one weights its members' power higher. Decision 0188: the
+      // stronger one weights its members' power higher. Decision 0189: the
       // weight is the power list's (an external token let in), not a
       // community_mining_weights row.
       const powerList = await approveMiningPowerList(pool, {

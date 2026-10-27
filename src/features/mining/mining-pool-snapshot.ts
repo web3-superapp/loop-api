@@ -87,7 +87,7 @@ export function computeMiningPoolSnapshot(input: {
   /** Asset ids with a non-blocked Asset Registry row. */
   readonly registeredAssetIds: ReadonlySet<string>;
   /**
-   * Decision 0188: the external roster assets — kept out of the pool part
+   * Decision 0189: the external roster assets — kept out of the pool part
    * (the formula path values them, weighted by the power list).
    */
   readonly external?: MiningPoolExternalAssets | null;

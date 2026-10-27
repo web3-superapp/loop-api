@@ -307,7 +307,7 @@ export function createMiningSnapshotWorker(
   }> {
     const source = options.pool ?? null;
     if (source === null) return { part: null, skipped: [] };
-    // Decision 0188: the pool part values the platform MEMEs only; an
+    // Decision 0189: the pool part values the platform MEMEs only; an
     // external roster token keeps the formula path (its observed balance),
     // weighted by the power list (`listCommunityWeightInputs`).
     const [candidates, externalCandidates] = await Promise.all([
@@ -339,7 +339,7 @@ export function createMiningSnapshotWorker(
         Object.freeze({ assetId, reasonCode }),
       ),
     });
-    // Decision 0188: external roster assets never enter the pool part.
+    // Decision 0189: external roster assets never enter the pool part.
     const external = miningPoolExternalFor(
       externalCandidates.filter((row) => row.kind === "external"),
       versions,
@@ -412,21 +412,17 @@ export function createMiningSnapshotWorker(
     if (balances.length === 0 && (pool.part?.powers.length ?? 0) === 0) {
       return idle(miningReasonCodes.noBalanceInputs, pool.skipped);
     }
-    // Only assets the formula weights can enter a snapshot (a community
-    // weight is a second factor, never a weight of its own), so only those
-    // need a price read. Decision 0187: pool-owned assets need none.
-    const weightedAssetIds = new Set<string>(
-      Object.keys(formula.formula.assetWeights),
-    );
+    // Only assets that are weighted can enter a snapshot, so only those
+    // need a price read: a formula-weighted asset, or (Decision 0189) a
+    // participating power-list asset — no formula entry needed. Decision
+    // 0187: pool-owned assets need none; Decision 0189: a power-list row
+    // that does not take part is not valued, so its price is not read.
     const poolOwned = new Set(pool.part?.assetIds ?? []);
     const candidateAssetIds = [
       ...new Set(balances.map((balance) => balance.assetId)),
     ].filter(
       (assetId) =>
-        weightedAssetIds.has(assetId) &&
         !poolOwned.has(assetId) &&
-        // Decision 0188: a power-list row that does not take part is not
-        // valued, so its price is not read either.
         selectMiningWeight(assetId, formula.formula, communityWeights).kind ===
           "weight",
     );

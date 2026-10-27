@@ -6,7 +6,7 @@
  *
  * `pool_version(config_version, approved_at, document)` is the parameter
  * version the roster is read under; `pool_roster` lists every verified
- * community with a bound asset under a `quantity` document (Decision 0188:
+ * community with a bound asset under a `quantity` document (Decision 0189:
  * external tokens too), with
  *
  * - `kind` — `platform` when the bound asset is a launch2 MEME (any chain),
@@ -19,7 +19,7 @@
  *
  * A roster community's weight projection is its token weight (approved,
  * versioned by the parameter version); a non-participating roster community
- * is not ranked. Decision 0188: the roster is the only rule — without a
+ * is not ranked. Decision 0189: the roster is the only rule — without a
  * `pool_version` row it is empty and no community has a weight (the
  * `community_mining_weights` table is no longer read).
  */

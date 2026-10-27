@@ -3186,6 +3186,8 @@ export async function buildApp(
         testTrigger: config.miningSettlement.testTrigger,
         // Decision 0187: signs the mining pool list cursors.
         cursorSecret: adminConfig.sessionSecret,
+        // Decision 0189: the pool rows' `settleable` is judged on this chain.
+        settlementChainId: config.launchChain.chainId,
         now: options.walletIntentNow ?? ((): Date => new Date()),
       }),
       // Decision 0109: individual accounts with fixed roles; without a

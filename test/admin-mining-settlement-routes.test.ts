@@ -684,7 +684,7 @@ describe("Operator console mining settlement (Decision 0116)", () => {
       });
     });
 
-    describe("Decision 0188 external tokens on the power list", () => {
+    describe("Decision 0189 external tokens on the power list", () => {
       const cakeAddress = "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82";
       const cake = `eip155:56:${cakeAddress}`;
       const newsId = "c0000000-0000-4000-8000-000000000004";
@@ -728,6 +728,8 @@ describe("Operator console mining settlement (Decision 0116)", () => {
             tokenWeight: "0",
             nftCoefficient: "0",
             source: "default",
+            settleable: false,
+            settleableReasonCode: "MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN",
             pendingDraft: null,
           },
         ]);
@@ -755,6 +757,37 @@ describe("Operator console mining settlement (Decision 0116)", () => {
           (await call("auditor", "GET", "/admin/v1/mining/pool?kind=other"))
             .statusCode,
         ).toBe(400);
+      });
+
+      it("Decision 0189: marks an erc20-sourced external row and a platform row settleable", async () => {
+        const { call, settlement } = await harness({ LAUNCH_CHAIN_ID: "97" });
+        seedExternal(settlement);
+        const row = settlement.poolCandidates.find(
+          (candidate) => candidate.assetId === cake,
+        );
+        settlement.poolCandidates.splice(
+          settlement.poolCandidates.indexOf(row!),
+          1,
+          { ...row!, settlementSource: "erc20" },
+        );
+        const listed = await call("auditor", "GET", "/admin/v1/mining/pool");
+        expect(listed.statusCode, listed.body).toBe(200);
+        const items = listed.json<{
+          items: {
+            kind: string;
+            chainId: string;
+            settleable: boolean;
+            settleableReasonCode: string | null;
+          }[];
+        }>().items;
+        expect(
+          items
+            .filter((item) => item.kind === "external")
+            .map((item) => [item.settleable, item.settleableReasonCode]),
+        ).toEqual([[true, null]]);
+        for (const item of items.filter((entry) => entry.kind === "platform")) {
+          expect(item.settleable).toBe(item.chainId === "eip155:97");
+        }
       });
 
       it("accepts includedAssets for a bound external token and shows the draft", async () => {
