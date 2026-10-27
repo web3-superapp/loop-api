@@ -7,6 +7,7 @@ import { loadConfig } from "../src/config.js";
 import { createPostgresChainRegistryRepository } from "../src/database/chain-registry-repository.js";
 import { createPostgresMarketFactCacheRepository } from "../src/database/market-fact-cache-repository.js";
 import { createPostgresMiningRepository } from "../src/database/mining-repository.js";
+import { createPostgresMiningSettlementRepository } from "../src/database/mining-settlement-repository.js";
 import { createMarketFactService } from "../src/features/market/market-fact-service.js";
 import { createMarketProviders } from "../src/integrations/market/provider-factory.js";
 import {
@@ -89,6 +90,11 @@ function defaultCreateDependencies(
       includeMockSeedHoldings: config.miningMockHoldingsEnabled,
       // Decision 0184: MINING_EMBEDDED_WALLET_ONLY, default false.
       embeddedWalletOnly: config.miningSettlement.embeddedWalletOnly,
+      // Decision 0187: the mining pool part on the launch chain.
+      pool: {
+        repository: createPostgresMiningSettlementRepository(pool),
+        chainId: config.launchChain.chainId,
+      },
     },
     close: () => pool.end(),
   };

@@ -143,6 +143,100 @@ const epochSchema = {
   },
 } as const;
 
+const decimalString = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$",
+} as const;
+const poolVersionReference = {
+  anyOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["versionId", "configVersion", "effectiveFrom"],
+      properties: {
+        versionId: { type: "string", pattern: uuidPattern },
+        configVersion: { type: "string" },
+        effectiveFrom: { type: "string", format: "date-time" },
+      },
+    },
+    { type: "null" },
+  ],
+} as const;
+const poolValueSource = {
+  type: "string",
+  enum: ["default", "explicit"],
+} as const;
+/** Decision 0187: one roster row. */
+const poolRowSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "communityId",
+    "communityName",
+    "assetId",
+    "chainId",
+    "memeAddress",
+    "symbol",
+    "instanceId",
+    "launchId",
+    "participate",
+    "tokenWeight",
+    "nftCoefficient",
+    "source",
+    "pendingDraft",
+  ],
+  properties: {
+    communityId: { type: "string", pattern: uuidPattern },
+    communityName: { type: "string" },
+    assetId: {
+      type: "string",
+      pattern: "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$",
+    },
+    chainId: { type: "string", pattern: "^eip155:[1-9][0-9]{0,9}$" },
+    memeAddress: { type: "string", pattern: "^0x[0-9a-f]{40}$" },
+    symbol: { type: "string", description: "The launch2 instance ticker." },
+    instanceId: {
+      type: "string",
+      pattern: uuidPattern,
+      description: "Opaque launch2 instance id (the console launch2 pages).",
+    },
+    launchId: {
+      type: "string",
+      pattern: "^0x[0-9a-f]{64}$",
+      description: "On-chain launch id of the instance.",
+    },
+    participate: { type: "boolean" },
+    tokenWeight: decimalString,
+    nftCoefficient: decimalString,
+    source: poolValueSource,
+    pendingDraft: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "versionId",
+            "configVersion",
+            "participate",
+            "tokenWeight",
+            "nftCoefficient",
+            "source",
+          ],
+          properties: {
+            versionId: { type: "string", pattern: uuidPattern },
+            configVersion: { type: "string" },
+            participate: { type: "boolean" },
+            tokenWeight: decimalString,
+            nftCoefficient: decimalString,
+            source: poolValueSource,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
 function resource(properties: Record<string, unknown>) {
   return {
     type: "object",
@@ -243,6 +337,47 @@ export function registerAdminMiningSettlementRoutes(
     },
   );
 
+  app.get(
+    `${prefix}/pool`,
+    {
+      schema: {
+        operationId: "listAdminMiningPool",
+        summary: "Mining pool roster (verified community × platform MEME)",
+        description:
+          'Decision 0187: one row per verified community whose bound asset (`communities.bound_asset_key`) is a launch2 instance MEME (any chain) — the platform MEMEs that take part in the hourly settlement and the snapshot without registration. Values are those of the approved parameter version in force now (`inForce`; null = none yet: every row shows the defaults) and, per row, of the newest pending draft (`pendingDraft`, null without one). Effective rule (also what settlement and snapshot apply): tokenWeight = `assetWeights[assetId]` if listed, else "1"; NFT coefficient = `communityCoefficients[communityId]` if listed, else `defaultCommunityCoefficient` ("1"); an asset in `excludedAssets` has weight "0", a community in `excludedCommunities` has coefficient "0"; `participate` = neither excluded. `source` = "explicit" when the document names the asset or community in any of those four keys, else "default". Filters: `address` = MEME contract address, exact, case-insensitive; `q` = community name or ticker, case-insensitive substring (≤ 64). Ordered by community name then id; `cursor` / `limit` (1-100, default 20, not together). Saving: build ONE parameter draft from the whole table with `POST /admin/v1/mining/parameter-versions` — carry the other keys of the in-force document unchanged and fold every row: participate unticked → add assetId to `excludedAssets` AND communityId to `excludedCommunities` (drop both from the explicit tables); ticked → leave both out of the excluded lists, put `{assetId, weight}` in `assetWeights` only when tokenWeight ≠ "1" (or to pin it), and `{communityId, coefficient}` in `communityCoefficients` only when the coefficient ≠ defaultCommunityCoefficient (or to pin it); keep explicit rows of non-roster assets / communities as they are. A reviewer approves it as any parameter draft. Readable with console.read or formula.approve.',
+        tags: ["admin-mining"],
+        security: adminSecurity,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            address: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+            q: { type: "string", maxLength: 64 },
+            cursor: { type: "string", minLength: 1, maxLength: 1024 },
+            limit: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        },
+        response: {
+          200: resource({
+            inForce: poolVersionReference,
+            pendingDraftVersion: poolVersionReference,
+            items: { type: "array", maxItems: 100, items: poolRowSchema },
+            nextCursor: nullableString,
+          }),
+          ...adminErrors(...guardedSessionErrors, "CAPABILITY_UNAVAILABLE"),
+        },
+      },
+      ...guardAny(["console.read", "formula.approve"]),
+    },
+    async (request, reply) => {
+      const result = await service.listPool(
+        request.query as Record<string, unknown>,
+      );
+      noStore(reply);
+      return reply.code(200).send(result);
+    },
+  );
+
   app.post(
     `${prefix}/parameter-versions`,
     {
@@ -250,7 +385,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "createAdminMiningParameterDraft",
         summary: "Draft a hourly settlement parameter version",
         description:
-          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[]), and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
+          'Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default "1": every unlisted community), assetPowerBasis (optional, only "quantity"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis), Decision 0187: excludedAssets [assetId] (optional, ≤ 500, unique: weight 0 even if listed or a roster MEME), excludedCommunities [communityId] (optional, ≤ 2000, unique: NFT coefficient 0)). Decision 0187 mining pool roster: a launch2 MEME bound by a verified community weighs 1 unless assetWeights lists it or excludedAssets names it — this is how the console pool table is saved (see GET /admin/v1/mining/pool for the folding rule). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients or excludedCommunities id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[], detailsSafe.field: communityCoefficients | excludedCommunities), an assetWeights or excludedAssets id without a source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN, and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.',
         tags: ["admin-mining"],
         security: adminSecurity,
         querystring: emptyQuerySchema,
@@ -294,7 +429,7 @@ export function registerAdminMiningSettlementRoutes(
         operationId: "approveAdminMiningParameterVersion",
         summary: "Approve a parameter version (in force at effectiveFrom)",
         description:
-          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
+          "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community (communityCoefficients or, Decision 0187, excludedCommunities) no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
         tags: ["admin-mining"],
         security: adminSecurity,
         params: versionParams,

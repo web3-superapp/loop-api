@@ -3184,6 +3184,8 @@ export async function buildApp(
         chain: miningClaimChain,
         contractAddress: config.miningSettlement.claimContractAddress,
         testTrigger: config.miningSettlement.testTrigger,
+        // Decision 0187: signs the mining pool list cursors.
+        cursorSecret: adminConfig.sessionSecret,
         now: options.walletIntentNow ?? ((): Date => new Date()),
       }),
       // Decision 0109: individual accounts with fixed roles; without a

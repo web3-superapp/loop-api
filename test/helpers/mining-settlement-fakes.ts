@@ -16,6 +16,7 @@ import {
   type MiningSettlementRepository,
 } from "../../src/features/mining/hourly-settlement-ports.js";
 import { miningDefaultParameterDocument } from "../../src/features/mining/hourly-settlement-contract.js";
+import type { MiningPoolCandidate } from "../../src/features/mining/mining-pool-roster.js";
 
 export const loop = 10n ** 18n;
 export const claimContract = "0x7777777777777777777777777777777777777777";
@@ -121,6 +122,9 @@ export interface InMemoryMiningSettlement extends MiningSettlementRepository {
   claims: Map<string, MiningClaimRecord>;
   claimedEvents: Set<string>;
   unavailable: boolean;
+  /** Decision 0187 roster candidates (verified community × launch2 MEME). */
+  poolCandidates: MiningPoolCandidate[];
+  launch2Checkpoint: { blockNumber: string; blockHash: string } | null;
 }
 
 export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
@@ -140,6 +144,41 @@ export function createInMemoryMiningSettlement(): InMemoryMiningSettlement {
     claims: new Map(),
     claimedEvents: new Set(),
     unavailable: false,
+    poolCandidates: [],
+    launch2Checkpoint: null,
+    listMiningPoolCandidates: (input) => {
+      if (repo.unavailable) {
+        return Promise.reject(new MiningSettlementUnavailableError());
+      }
+      const query = input.query?.toLowerCase() ?? null;
+      const rows = [...repo.poolCandidates]
+        .sort((a, b) =>
+          a.communityName === b.communityName
+            ? a.communityId < b.communityId
+              ? -1
+              : 1
+            : a.communityName < b.communityName
+              ? -1
+              : 1,
+        )
+        .filter(
+          (row) =>
+            (input.chainId == null || row.chainId === input.chainId) &&
+            (input.address == null ||
+              row.memeAddress === input.address.toLowerCase()) &&
+            (query === null ||
+              row.communityName.toLowerCase().includes(query) ||
+              row.symbol.toLowerCase().includes(query)) &&
+            (input.after == null ||
+              row.communityName > input.after.communityName ||
+              (row.communityName === input.after.communityName &&
+                row.communityId > input.after.communityId)),
+        );
+      return Promise.resolve(
+        input.limit == null ? rows : rows.slice(0, input.limit),
+      );
+    },
+    readLaunch2Checkpoint: () => Promise.resolve(repo.launch2Checkpoint),
     listApprovedParameterVersions: () =>
       repo.unavailable
         ? Promise.reject(new MiningSettlementUnavailableError())

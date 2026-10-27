@@ -449,4 +449,267 @@ describe("Operator console mining settlement (Decision 0116)", () => {
       ).statusCode,
     ).toBe(403);
   });
+  describe("Decision 0187 mining pool roster", () => {
+    const communities = [
+      "c0000000-0000-4000-8000-000000000001",
+      "c0000000-0000-4000-8000-000000000002",
+      "c0000000-0000-4000-8000-000000000003",
+    ];
+    const memes = [
+      "0x1111111111111111111111111111111111116666",
+      "0x2222222222222222222222222222222222226666",
+      "0x3333333333333333333333333333333333336666",
+    ];
+    function seed(settlement: InMemoryMiningSettlement) {
+      ["Alpha", "Beta", "Gamma"].forEach((name, index) => {
+        settlement.poolCandidates.push({
+          communityId: communities[index] as string,
+          communityName: name,
+          assetId: `eip155:97:${memes[index] as string}`,
+          chainId: "eip155:97",
+          memeAddress: memes[index] as string,
+          symbol: name.toUpperCase(),
+          instanceId: `d0000000-0000-4000-8000-00000000000${String(index + 1)}`,
+          launchId: `0x${String(index + 1).repeat(64)}`,
+        });
+      });
+      settlement.versions.push({
+        versionId: "11111111-1111-4111-8111-111111111111",
+        configVersion: "inForce",
+        status: "approved",
+        document: {
+          referralRatiosBps: [1000, 500, 300, 200, 100],
+          dailyBudgetNftRaw: "0",
+          dailyBudgetAssetRaw: "0",
+          releaseStartAt: "2026-10-10T00:00:00.000Z",
+          releaseDays: 900,
+          timezone: "UTC",
+          minimumClaimRaw: "1",
+          assetWeights: [
+            { assetId: `eip155:97:${memes[1] as string}`, weight: "2" },
+          ],
+          communityCoefficients: [],
+          assetPowerBasis: "quantity",
+          defaultCommunityCoefficient: "1",
+          excludedAssets: [`eip155:97:${memes[2] as string}`],
+          excludedCommunities: [communities[2] as string],
+        },
+        effectiveFrom: "2026-10-10T00:00:00.000Z",
+        draftAuthor: { actor: "admin", accountId: null },
+        approvedBy: "reviewer",
+        approvedAt: "2026-10-09T00:00:00.000Z",
+        createdAt: "2026-10-09T00:00:00.000Z",
+      });
+    }
+
+    it("lists every roster row with the in-force values (default / explicit / excluded)", async () => {
+      const { call, settlement } = await harness();
+      seed(settlement);
+      for (const role of ["platform_admin", "auditor", "reviewer"] as const) {
+        const listed = await call(role, "GET", "/admin/v1/mining/pool");
+        expect(listed.statusCode, role).toBe(200);
+      }
+      const listed = await call("auditor", "GET", "/admin/v1/mining/pool");
+      expect(listed.headers["cache-control"]).toBe("no-store");
+      expect(listed.json()).toEqual({
+        inForce: {
+          versionId: "11111111-1111-4111-8111-111111111111",
+          configVersion: "inForce",
+          effectiveFrom: "2026-10-10T00:00:00.000Z",
+        },
+        pendingDraftVersion: null,
+        items: [
+          expect.objectContaining({
+            communityName: "Alpha",
+            participate: true,
+            tokenWeight: "1",
+            nftCoefficient: "1",
+            source: "default",
+            pendingDraft: null,
+          }),
+          expect.objectContaining({
+            communityName: "Beta",
+            participate: true,
+            tokenWeight: "2",
+            nftCoefficient: "1",
+            source: "explicit",
+          }),
+          expect.objectContaining({
+            communityName: "Gamma",
+            memeAddress: memes[2],
+            symbol: "GAMMA",
+            participate: false,
+            tokenWeight: "0",
+            nftCoefficient: "0",
+            source: "explicit",
+          }),
+        ],
+        nextCursor: null,
+      });
+    });
+
+    it("refuses a role without console.read / formula.approve", async () => {
+      const { call } = await harness();
+      expect(
+        (await call("testnet_acceptor", "GET", "/admin/v1/mining/pool"))
+          .statusCode,
+      ).toBe(403);
+    });
+
+    it("filters by contract address (exact, case-insensitive) and by q", async () => {
+      const { call, settlement } = await harness();
+      seed(settlement);
+      const upper = `0x${(memes[1] as string).slice(2).toUpperCase()}`;
+      const byAddress = await call(
+        "platform_admin",
+        "GET",
+        `/admin/v1/mining/pool?address=${upper}`,
+      );
+      expect(byAddress.statusCode, byAddress.body).toBe(200);
+      expect(
+        byAddress
+          .json<{ items: { communityName: string }[] }>()
+          .items.map((row) => row.communityName),
+      ).toEqual(["Beta"]);
+      const byQ = await call(
+        "platform_admin",
+        "GET",
+        "/admin/v1/mining/pool?q=gam",
+      );
+      expect(
+        byQ
+          .json<{ items: { communityName: string }[] }>()
+          .items.map((row) => row.communityName),
+      ).toEqual(["Gamma"]);
+      const bad = await call(
+        "platform_admin",
+        "GET",
+        "/admin/v1/mining/pool?address=0x12",
+      );
+      expect(bad.statusCode).toBe(400);
+    });
+
+    it("pages with a signed cursor bound to the filter", async () => {
+      const { call, settlement } = await harness();
+      seed(settlement);
+      const first = await call(
+        "platform_admin",
+        "GET",
+        "/admin/v1/mining/pool?limit=2",
+      );
+      const page1 = first.json<{
+        items: { communityName: string }[];
+        nextCursor: string;
+      }>();
+      expect(page1.items.map((row) => row.communityName)).toEqual([
+        "Alpha",
+        "Beta",
+      ]);
+      expect(page1.nextCursor).toEqual(expect.any(String));
+      const second = await call(
+        "platform_admin",
+        "GET",
+        `/admin/v1/mining/pool?cursor=${encodeURIComponent(page1.nextCursor)}`,
+      );
+      expect(second.statusCode, second.body).toBe(200);
+      expect(
+        second.json<{
+          items: { communityName: string }[];
+          nextCursor: string | null;
+        }>(),
+      ).toMatchObject({
+        items: [{ communityName: "Gamma" }],
+        nextCursor: null,
+      });
+      const otherFilter = await call(
+        "platform_admin",
+        "GET",
+        `/admin/v1/mining/pool?q=a&cursor=${encodeURIComponent(page1.nextCursor)}`,
+      );
+      expect(otherFilter.statusCode).toBe(400);
+      const both = await call(
+        "platform_admin",
+        "GET",
+        `/admin/v1/mining/pool?limit=2&cursor=${encodeURIComponent(page1.nextCursor)}`,
+      );
+      expect(both.statusCode).toBe(400);
+    });
+
+    it("shows the pending draft per row and accepts the excluded keys in a draft", async () => {
+      const { call, settlement } = await harness();
+      seed(settlement);
+      const created = await call(
+        "platform_admin",
+        "POST",
+        "/admin/v1/mining/parameter-versions",
+        {
+          ...draft,
+          parameters: {
+            ...draft.parameters,
+            communityCoefficients: [],
+            excludedAssets: [`eip155:97:${memes[0] as string}`],
+            excludedCommunities: [communities[0]],
+          },
+        },
+      );
+      expect(created.statusCode, created.body).toBe(201);
+      expect(created.json()).toMatchObject({
+        version: {
+          document: {
+            excludedAssets: [`eip155:97:${memes[0] as string}`],
+            excludedCommunities: [communities[0]],
+          },
+        },
+      });
+      const listed = await call(
+        "platform_admin",
+        "GET",
+        `/admin/v1/mining/pool?address=${memes[0] as string}`,
+      );
+      expect(listed.json()).toMatchObject({
+        pendingDraftVersion: { configVersion: "miningHourlyV1" },
+        items: [
+          {
+            participate: true,
+            pendingDraft: {
+              configVersion: "miningHourlyV1",
+              participate: false,
+              tokenWeight: "0",
+              nftCoefficient: "0",
+              source: "explicit",
+            },
+          },
+        ],
+      });
+    });
+
+    it("refuses an unknown excluded community as MINING_COMMUNITY_UNKNOWN", async () => {
+      const { call, settlement } = await harness();
+      const unknown = "c0000000-0000-4000-8000-0000000000ff";
+      settlement.findUnverifiedCommunityIds = vi.fn((ids: readonly string[]) =>
+        Promise.resolve(ids.filter((id) => id === unknown)),
+      );
+      const refused = await call(
+        "platform_admin",
+        "POST",
+        "/admin/v1/mining/parameter-versions",
+        {
+          ...draft,
+          parameters: {
+            ...draft.parameters,
+            communityCoefficients: [],
+            excludedCommunities: [unknown],
+          },
+        },
+      );
+      expect(refused.statusCode).toBe(422);
+      expect(refused.json()).toMatchObject({
+        code: "MINING_COMMUNITY_UNKNOWN",
+        detailsSafe: {
+          field: "excludedCommunities",
+          unknownCommunityIds: [unknown],
+        },
+      });
+    });
+  });
 });

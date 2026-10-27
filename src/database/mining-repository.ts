@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { z } from "zod";
 
+import {
+  miningPoolRosterSql,
+  miningPoolVersionInForceSql,
+  miningPoolVersionOfEpochSql,
+} from "./mining-pool-roster-sql.js";
+
 import { normalizeDecimalString } from "../features/market/market-contract.js";
 import {
   communityWeightStatuses,
@@ -431,6 +437,8 @@ const epochAccountTotalsSql = `
  * `participant_count` = contributing accounts with positive community power.
  */
 const epochCommunityStandingsSql = `
+  ${miningPoolVersionOfEpochSql("$1")},
+  ${miningPoolRosterSql},
   epoch_version as (
     select v.document
     from public.mining_epochs as e
@@ -442,7 +450,15 @@ const epochCommunityStandingsSql = `
       c.community_id,
       c.name as community_name,
       c.bound_asset_key as bound_asset_id,
-      coalesce(
+      case when exists (
+        -- Decision 0187: an excluded community's NFTs do not take part.
+        select 1
+        from epoch_version as ev,
+          jsonb_array_elements_text(
+            coalesce(ev.document->'excludedCommunities', '[]'::jsonb)
+          ) as excluded
+        where excluded = c.community_id::text
+      ) then 0 else coalesce(
         (
           select (entry->>'coefficient')::numeric
           from epoch_version as ev,
@@ -457,9 +473,14 @@ const epochCommunityStandingsSql = `
           from epoch_version as ev
         ),
         0
-      ) as coefficient
+      ) end as coefficient,
+      -- Decision 0187 appendix A: a roster community shows its token weight.
+      r.token_weight as roster_weight
     from public.communities as c
+    left join pool_roster as r on r.community_id = c.community_id
     where c.bound_asset_key is not null
+      -- An unticked roster community is not ranked.
+      and r.participate is not false
   ),
   member_powers as (
     select
@@ -506,7 +527,7 @@ const epochCommunityStandingsSql = `
       b.community_id,
       b.community_name,
       b.bound_asset_id,
-      trim_scale(b.coefficient)::text as weight,
+      coalesce(b.roster_weight, trim_scale(b.coefficient)::text) as weight,
       p.total::text as power,
       p.participant_count,
       case
@@ -544,7 +565,12 @@ const rankEpochRowSchema = z
  * communities with positive power.
  */
 const communityStandingsSql = `
+  ${miningPoolVersionInForceSql},
+  ${miningPoolRosterSql},
   bound as (
+    -- Decision 0187 appendix A: a roster community is weighted by its token
+    -- weight while it participates (unticked: not ranked); every other
+    -- community keeps its approved community_mining_weights row.
     select
       c.community_id,
       c.name as community_name,
@@ -556,6 +582,13 @@ const communityStandingsSql = `
     where c.bound_asset_key is not null
       and w.status = 'approved'
       and w.config_version = $2
+      and not exists (
+        select 1 from pool_roster as r where r.community_id = c.community_id
+      )
+    union all
+    select r.community_id, r.community_name, r.bound_asset_id, r.token_weight
+    from pool_roster as r
+    where r.participate
   ),
   powers as (
     select
@@ -848,19 +881,41 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
     ) {
       try {
         const communityId = opaqueIdSchema.parse(rawCommunityId);
+        // Decision 0187 appendix A: a roster community's weight is its
+        // token weight under the parameter version in force (approved,
+        // source roster); an unticked one has none. Others: the reviewed row.
         const result = await pool.query({
           text: `
+            with ${miningPoolVersionInForceSql},
+            ${miningPoolRosterSql}
             select
               c.community_id,
               c.name as community_name,
               c.bound_asset_key as bound_asset_id,
-              coalesce(w.status, 'pending_review') as status,
-              w.weight,
-              w.config_version,
-              w.reviewed_at
+              case
+                when r.community_id is null
+                  then coalesce(w.status, 'pending_review')
+                when r.participate then 'approved'
+                else 'pending_review'
+              end as status,
+              case
+                when r.community_id is null then w.weight
+                when r.participate then r.token_weight
+              end as weight,
+              case
+                when r.community_id is null then w.config_version
+                when r.participate then r.roster_config_version
+              end as config_version,
+              case
+                when r.community_id is null then w.reviewed_at
+                when r.participate then r.roster_approved_at
+              end as reviewed_at,
+              (r.community_id is not null) as roster,
+              coalesce(not r.participate, false) as roster_excluded
             from public.communities as c
             left join public.community_mining_weights as w
               on w.community_id = c.community_id
+            left join pool_roster as r on r.community_id = c.community_id
             where c.community_id = $1
           `,
           values: [communityId],
@@ -869,7 +924,9 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
         if (raw === undefined) {
           return null;
         }
-        const row = weightRowSchema.parse(raw);
+        const row = weightRowSchema
+          .extend({ roster: z.boolean(), roster_excluded: z.boolean() })
+          .parse(raw);
         const record: CommunityWeightRecord = Object.freeze({
           communityId: row.community_id,
           communityName: row.community_name,
@@ -878,6 +935,8 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
           weight: row.weight,
           configVersion: row.config_version,
           reviewedAt: toNullableIsoString(row.reviewed_at),
+          source: row.roster ? ("roster" as const) : ("review" as const),
+          rosterExcluded: row.roster_excluded,
         });
         return record;
       } catch (error) {

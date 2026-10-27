@@ -1,3 +1,5 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import {
   MiningParameterDocumentError,
   miningDefaultParameterDocument,
@@ -14,7 +16,14 @@ import {
   type MiningParameterVersionRecord,
   type MiningSettlementRepository,
 } from "../mining/hourly-settlement-ports.js";
-import type { MiningSettlementRunner } from "../mining/hourly-settlement-runner.js";
+import {
+  miningVersionAt,
+  type MiningSettlementRunner,
+} from "../mining/hourly-settlement-runner.js";
+import {
+  resolveMiningPoolEntry,
+  type MiningPoolCandidate,
+} from "../mining/mining-pool-roster.js";
 import { AdminApiError, adminReasonCodes } from "./admin-contract.js";
 import { adminRoleHasPermission } from "./admin-roles.js";
 import type { AdminWriteContext } from "./admin-service.js";
@@ -32,6 +41,8 @@ type Resource = Record<string, unknown>;
 
 export interface AdminMiningSettlementService {
   listParameterVersions(): Promise<Resource>;
+  /** Decision 0187: the mining pool roster table. */
+  listPool(query: Record<string, unknown>): Promise<Resource>;
   createParameterDraft(
     context: AdminWriteContext,
     body: Record<string, unknown>,
@@ -64,10 +75,14 @@ const permissionReasons: ReadonlySet<string> = new Set([
 ]);
 
 /** Decision 0183: 422 MINING_COMMUNITY_UNKNOWN with the offending ids. */
-function communityUnknown(communityIds: readonly string[]): AdminApiError {
+function communityUnknown(
+  communityIds: readonly string[],
+  field:
+    "communityCoefficients" | "excludedCommunities" = "communityCoefficients",
+): AdminApiError {
   return new AdminApiError("MINING_COMMUNITY_UNKNOWN", {
     reasonCode: "MINING_COMMUNITY_UNKNOWN",
-    field: "communityCoefficients",
+    field,
     unknownCommunityIds: Object.freeze([...communityIds]),
   });
 }
@@ -95,6 +110,58 @@ function translate(error: unknown): never {
   }
   throw new AdminApiError("CAPABILITY_UNAVAILABLE", {
     reasonCode: miningSettlementReasonCodes.claimChainReadFailed,
+  });
+}
+
+const addressPattern = /^0x[0-9a-fA-F]{40}$/u;
+
+function parsePoolLimit(value: unknown): number {
+  if (value === undefined) return 20;
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[1-9][0-9]{0,2}$/u.test(value)
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+    throw new AdminApiError("INVALID_REQUEST");
+  }
+  return parsed;
+}
+
+/** Decision 0187: one roster row, in force and (if any) as the draft has it. */
+function projectPoolRow(
+  row: MiningPoolCandidate,
+  inForce: MiningParameterVersionRecord["document"] | null,
+  pending: MiningParameterVersionRecord | null,
+): Resource {
+  const entry = resolveMiningPoolEntry(inForce, row);
+  const draft =
+    pending === null ? null : resolveMiningPoolEntry(pending.document, row);
+  return Object.freeze({
+    communityId: row.communityId,
+    communityName: row.communityName,
+    assetId: row.assetId,
+    chainId: row.chainId,
+    memeAddress: row.memeAddress,
+    symbol: row.symbol,
+    instanceId: row.instanceId,
+    launchId: row.launchId,
+    participate: entry.participate,
+    tokenWeight: entry.tokenWeight,
+    nftCoefficient: entry.nftCoefficient,
+    source: entry.source,
+    pendingDraft:
+      pending === null || draft === null
+        ? null
+        : Object.freeze({
+            versionId: pending.versionId,
+            configVersion: pending.configVersion,
+            participate: draft.participate,
+            tokenWeight: draft.tokenWeight,
+            nftCoefficient: draft.nftCoefficient,
+            source: draft.source,
+          }),
   });
 }
 
@@ -153,9 +220,74 @@ export function createAdminMiningSettlementService(dependencies: {
   readonly chain: MiningClaimChain | null;
   readonly contractAddress: string | null;
   readonly testTrigger: boolean;
+  /**
+   * Decision 0187: signs the pool list cursors (the console session secret).
+   * Without it the first page is served and `nextCursor` is null.
+   */
+  readonly cursorSecret?: string | null;
   readonly now?: () => Date;
 }): AdminMiningSettlementService {
   const now = dependencies.now ?? ((): Date => new Date());
+  const cursorKey =
+    dependencies.cursorSecret === undefined ||
+    dependencies.cursorSecret === null
+      ? null
+      : createHmac("sha256", "loop-admin-mining-pool-cursor-v1")
+          .update(dependencies.cursorSecret)
+          .digest();
+
+  function encodePoolCursor(
+    filter: string,
+    payload: Readonly<Record<string, string | number>>,
+  ): string | null {
+    if (cursorKey === null) return null;
+    const body = Buffer.from(
+      JSON.stringify({ f: filter, p: payload }),
+    ).toString("base64url");
+    const mac = createHmac("sha256", cursorKey)
+      .update(body)
+      .digest("base64url");
+    return `${body}.${mac}`;
+  }
+
+  function decodePoolCursor(
+    filter: string,
+    cursor: unknown,
+  ): Readonly<Record<string, unknown>> {
+    // Without a key no cursor was ever minted: any cursor is foreign.
+    if (cursorKey === null) throw new AdminApiError("INVALID_REQUEST");
+    if (typeof cursor !== "string" || cursor.length > 1_024) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    const [body, mac, extra] = cursor.split(".");
+    if (body === undefined || mac === undefined || extra !== undefined) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    const expected = Buffer.from(
+      createHmac("sha256", cursorKey).update(body).digest("base64url"),
+    );
+    const given = Buffer.from(mac);
+    if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    } catch {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    const record = parsed as Record<string, unknown> | null;
+    if (
+      record === null ||
+      typeof record !== "object" ||
+      record["f"] !== filter ||
+      typeof record["p"] !== "object" ||
+      record["p"] === null
+    ) {
+      throw new AdminApiError("INVALID_REQUEST");
+    }
+    return record["p"] as Record<string, unknown>;
+  }
 
   function repository(): MiningSettlementRepository {
     if (dependencies.repository === null) {
@@ -182,6 +314,103 @@ export function createAdminMiningSettlementService(dependencies: {
         return Object.freeze({
           items: versions.map(projectVersion),
           defaults: miningDefaultParameterDocument,
+        });
+      } catch (error) {
+        return translate(error);
+      }
+    },
+
+    async listPool(query) {
+      const address = query["address"];
+      if (
+        address !== undefined &&
+        (typeof address !== "string" || !addressPattern.test(address))
+      ) {
+        throw new AdminApiError("INVALID_REQUEST");
+      }
+      const rawQ = query["q"];
+      if (
+        rawQ !== undefined &&
+        (typeof rawQ !== "string" || rawQ.trim().length > 64)
+      ) {
+        throw new AdminApiError("INVALID_REQUEST");
+      }
+      const q =
+        typeof rawQ === "string" && rawQ.trim() !== "" ? rawQ.trim() : null;
+      if (query["cursor"] !== undefined && query["limit"] !== undefined) {
+        throw new AdminApiError("INVALID_REQUEST");
+      }
+      const normalizedAddress =
+        typeof address === "string" ? address.toLowerCase() : null;
+      const filter = `address=${normalizedAddress ?? ""}&q=${q ?? ""}`;
+      let limit = parsePoolLimit(query["limit"]);
+      let after: { communityName: string; communityId: string } | null = null;
+      if (query["cursor"] !== undefined) {
+        const payload = decodePoolCursor(filter, query["cursor"]);
+        if (
+          typeof payload["communityName"] !== "string" ||
+          typeof payload["communityId"] !== "string" ||
+          !uuidPattern.test(payload["communityId"])
+        ) {
+          throw new AdminApiError("INVALID_REQUEST");
+        }
+        after = {
+          communityName: payload["communityName"],
+          communityId: payload["communityId"],
+        };
+        limit = parsePoolLimit(payload["limit"]);
+      }
+      try {
+        const repo = repository();
+        const [rows, versions] = await Promise.all([
+          repo.listMiningPoolCandidates({
+            address: normalizedAddress,
+            query: q,
+            after,
+            limit: limit + 1,
+          }),
+          repo.listParameterVersions(),
+        ]);
+        const nowSeconds = BigInt(Math.floor(now().getTime() / 1000));
+        const inForce = miningVersionAt(
+          versions.filter((version) => version.status === "approved"),
+          nowSeconds,
+        );
+        // The newest pending draft (what a reviewer would approve next).
+        const pending =
+          [...versions]
+            .filter((version) => version.status === "pending_approval")
+            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0] ?? null;
+        const page = rows.slice(0, limit);
+        const last = page.at(-1);
+        return Object.freeze({
+          inForce:
+            inForce === null
+              ? null
+              : Object.freeze({
+                  versionId: inForce.versionId,
+                  configVersion: inForce.configVersion,
+                  effectiveFrom: inForce.effectiveFrom,
+                }),
+          pendingDraftVersion:
+            pending === null
+              ? null
+              : Object.freeze({
+                  versionId: pending.versionId,
+                  configVersion: pending.configVersion,
+                  effectiveFrom: pending.effectiveFrom,
+                }),
+          items: page.map((row) =>
+            projectPoolRow(row, inForce?.document ?? null, pending),
+          ),
+          nextCursor:
+            rows.length > limit && last !== undefined
+              ? encodePoolCursor(filter, {
+                  communityName: last.communityName,
+                  communityId: last.communityId,
+                  limit,
+                })
+              : null,
         });
       } catch (error) {
         return translate(error);
@@ -252,13 +481,31 @@ export function createAdminMiningSettlementService(dependencies: {
           }
           throw error;
         }
-        const unverified = await repo.findUnverifiedCommunityIds(
-          document.communityCoefficients.map((entry) => entry.communityId),
+        // Decision 0187: the excluded communities / assets are checked the
+        // same way as the explicit tables.
+        const coefficientIds = document.communityCoefficients.map(
+          (entry) => entry.communityId,
         );
-        if (unverified.length > 0) throw communityUnknown(unverified);
-        const unknown = await repo.findUnknownAssetIds(
-          document.assetWeights.map((entry) => entry.assetId),
-        );
+        const unverified = await repo.findUnverifiedCommunityIds([
+          ...new Set([
+            ...coefficientIds,
+            ...(document.excludedCommunities ?? []),
+          ]),
+        ]);
+        if (unverified.length > 0) {
+          throw communityUnknown(
+            unverified,
+            unverified.some((id) => coefficientIds.includes(id))
+              ? "communityCoefficients"
+              : "excludedCommunities",
+          );
+        }
+        const unknown = await repo.findUnknownAssetIds([
+          ...new Set([
+            ...document.assetWeights.map((entry) => entry.assetId),
+            ...(document.excludedAssets ?? []),
+          ]),
+        ]);
         if (unknown.length > 0) {
           throw new AdminApiError("VALIDATION_FAILED", {
             reasonCode: miningSettlementReasonCodes.assetSourceUnknown,

@@ -5957,7 +5957,8 @@
         "operationId": "listAdminFormulaVersions",
         "summary": "List mining formula versions",
         "tags": ["admin-mining"],
-        "description": "Newest 50 versions (Decision 0046 table) with their editable parameters. `approval.available: false` (reasonCode MINING_APPROVE_FORBIDDEN_IN_PRODUCTION) greys the approve button. Decision 0110: readable with `console.read` (platform_admin, auditor) or `formula.approve` (reviewer). `draftAuthor` names who saved a draft (null = unknown author: the draft cannot be approved and must be saved again); `approvedBy` names the approving reviewer.",
+        "description": "Deprecated (Decision 0187): the console hides the snapshot coefficient page; the mining pool roster (GET /admin/v1/mining/pool, saved as a mining parameter draft) decides platform MEMEs in both settlement and snapshot. Kept for the formula / asset weights of non-roster assets. Newest 50 versions (Decision 0046 table) with their editable parameters. `approval.available: false` (reasonCode MINING_APPROVE_FORBIDDEN_IN_PRODUCTION) greys the approve button. Decision 0110: readable with `console.read` (platform_admin, auditor) or `formula.approve` (reviewer). `draftAuthor` names who saved a draft (null = unknown author: the draft cannot be approved and must be saved again); `approvedBy` names the approving reviewer.",
+        "deprecated": true,
         "security": [{ "adminSession": [] }],
         "responses": {
           "200": {
@@ -6529,7 +6530,7 @@
         "operationId": "createAdminFormulaDraft",
         "summary": "Create a draft mining formula version",
         "tags": ["admin-mining"],
-        "description": "Copies `baseVersion` and applies the editable parameters; the draft is `pending_approval` and changes no number until approved. An existing configVersion is 409 ADMIN_CONFLICT (ADMIN_FORMULA_VERSION_EXISTS). Decision 0110: the caller is stored as the draft's `draftAuthor`; saving a draft is submitting it for a reviewer's approval.",
+        "description": "Deprecated (Decision 0187): the console hides the snapshot coefficient page; the mining pool roster (GET /admin/v1/mining/pool, saved as a mining parameter draft) decides platform MEMEs in both settlement and snapshot. Kept for the formula / asset weights of non-roster assets. Copies `baseVersion` and applies the editable parameters; the draft is `pending_approval` and changes no number until approved. An existing configVersion is 409 ADMIN_CONFLICT (ADMIN_FORMULA_VERSION_EXISTS). Decision 0110: the caller is stored as the draft's `draftAuthor`; saving a draft is submitting it for a reviewer's approval.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6605,6 +6606,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [{ "adminSession": [] }],
         "responses": {
           "201": {
@@ -7290,7 +7292,7 @@
         "operationId": "approveAdminFormulaVersion",
         "summary": "Approve a draft: it becomes the version in force",
         "tags": ["admin-mining"],
-        "description": "Decision 0110: needs `formula.approve` (reviewer only; platform_admin and the bootstrap administrator are 403 ADMIN_ROLE_FORBIDDEN). The approver must not be the draft's author (403 PERMISSION_DENIED, reasonCode ADMIN_FORMULA_SELF_APPROVAL); a draft without a recorded author is 409 ADMIN_CONFLICT (ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN; save it again as a new draft). Decision 0111: the reviewer's bound ops operator must be enabled (revoked or account disabled meanwhile: 403 PERMISSION_DENIED, reasonCode ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit: `mining.formula.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing approved), then `mining.formula.approve` in the approving transaction or `mining.formula.approve.failed`. Same semantics as the break-glass `pnpm mining:approve-formula` (Decisions 0046, 0111; it records `cli:<name>`, which `approvedBy` shows as null): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
+        "description": "Deprecated (Decision 0187): the console hides the snapshot coefficient page; the mining pool roster (GET /admin/v1/mining/pool, saved as a mining parameter draft) decides platform MEMEs in both settlement and snapshot. Kept for the formula / asset weights of non-roster assets. Decision 0110: needs `formula.approve` (reviewer only; platform_admin and the bootstrap administrator are 403 ADMIN_ROLE_FORBIDDEN). The approver must not be the draft's author (403 PERMISSION_DENIED, reasonCode ADMIN_FORMULA_SELF_APPROVAL); a draft without a recorded author is 409 ADMIN_CONFLICT (ADMIN_FORMULA_DRAFT_AUTHOR_UNKNOWN; save it again as a new draft). Decision 0111: the reviewer's bound ops operator must be enabled (revoked or account disabled meanwhile: 403 PERMISSION_DENIED, reasonCode ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit: `mining.formula.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE, nothing approved), then `mining.formula.approve` in the approving transaction or `mining.formula.approve.failed`. Same semantics as the break-glass `pnpm mining:approve-formula` (Decisions 0046, 0111; it records `cli:<name>`, which `approvedBy` shows as null): only `pending_approval` can be approved; the approved version is retired; effectiveAt = now; the draft's community weights are applied in the same transaction. The snapshot lane computes under it from its next run. Refused under NODE_ENV=production (503 MINING_APPROVE_FORBIDDEN_IN_PRODUCTION).",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 128 },
@@ -7299,6 +7301,7 @@
             "required": true
           }
         ],
+        "deprecated": true,
         "security": [{ "adminSession": [] }],
         "responses": {
           "200": {
@@ -8048,7 +8051,7 @@
         "operationId": "withdrawAdminFormulaVersion",
         "summary": "Withdraw a draft",
         "tags": ["admin-mining"],
-        "description": "`pending_approval → retired`. The version in force cannot be withdrawn here (409); approve another version instead.",
+        "description": "Deprecated (Decision 0187): the console hides the snapshot coefficient page; the mining pool roster (GET /admin/v1/mining/pool, saved as a mining parameter draft) decides platform MEMEs in both settlement and snapshot. Kept for the formula / asset weights of non-roster assets. `pending_approval → retired`. The version in force cannot be withdrawn here (409); approve another version instead.",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 128 },
@@ -8057,6 +8060,7 @@
             "required": true
           }
         ],
+        "deprecated": true,
         "security": [{ "adminSession": [] }],
         "responses": {
           "200": {
@@ -12757,7 +12761,7 @@
         "operationId": "createAdminMiningParameterDraft",
         "summary": "Draft a hourly settlement parameter version",
         "tags": ["admin-mining"],
-        "description": "Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default \"1\": every unlisted community), assetPowerBasis (optional, only \"quantity\"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis)). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[]), and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.",
+        "description": "Decision 0116 / 0123: `parameters` overrides the defaults (referralRatiosBps[5], dailyBudgetNftRaw, dailyBudgetAssetRaw, releaseStartAt (UTC midnight, required), releaseDays, minimumClaimRaw, assetWeights [{assetId, weight}], communityCoefficients [{communityId, coefficient}] — omitted: a frozen copy of the approved community_mining_weights, defaultCommunityCoefficient (decimal, default \"1\": every unlisted community), assetPowerBasis (optional, only \"quantity\"; stored as quantity: asset power = balance TWAB × weight, no price — there is no price / reference-price field; anything else is 422 field assetPowerBasis), Decision 0187: excludedAssets [assetId] (optional, ≤ 500, unique: weight 0 even if listed or a roster MEME), excludedCommunities [communityId] (optional, ≤ 2000, unique: NFT coefficient 0)). Decision 0187 mining pool roster: a launch2 MEME bound by a verified community weighs 1 unless assetWeights lists it or excludedAssets names it — this is how the console pool table is saved (see GET /admin/v1/mining/pool for the folding rule). effectiveFrom must be in the future. An asset without a launch2 / MEME v1 source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN; Decision 0183: a communityCoefficients or excludedCommunities id that does not exist or is not verified is 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds: string[], detailsSafe.field: communityCoefficients | excludedCommunities), an assetWeights or excludedAssets id without a source is 422 MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN, and the frozen copy drops non-verified communities and lists them in the optional skippedCommunityIds; a malformed field is 422 ADMIN_MINING_PARAMETERS_INVALID (field). The caller is the draft author; a reviewer other than the author approves.",
         "requestBody": {
           "required": true,
           "content": {
@@ -13291,12 +13295,538 @@
         }
       }
     },
+    "/admin/v1/mining/pool": {
+      "get": {
+        "operationId": "listAdminMiningPool",
+        "summary": "Mining pool roster (verified community × platform MEME)",
+        "tags": ["admin-mining"],
+        "description": "Decision 0187: one row per verified community whose bound asset (`communities.bound_asset_key`) is a launch2 instance MEME (any chain) — the platform MEMEs that take part in the hourly settlement and the snapshot without registration. Values are those of the approved parameter version in force now (`inForce`; null = none yet: every row shows the defaults) and, per row, of the newest pending draft (`pendingDraft`, null without one). Effective rule (also what settlement and snapshot apply): tokenWeight = `assetWeights[assetId]` if listed, else \"1\"; NFT coefficient = `communityCoefficients[communityId]` if listed, else `defaultCommunityCoefficient` (\"1\"); an asset in `excludedAssets` has weight \"0\", a community in `excludedCommunities` has coefficient \"0\"; `participate` = neither excluded. `source` = \"explicit\" when the document names the asset or community in any of those four keys, else \"default\". Filters: `address` = MEME contract address, exact, case-insensitive; `q` = community name or ticker, case-insensitive substring (≤ 64). Ordered by community name then id; `cursor` / `limit` (1-100, default 20, not together). Saving: build ONE parameter draft from the whole table with `POST /admin/v1/mining/parameter-versions` — carry the other keys of the in-force document unchanged and fold every row: participate unticked → add assetId to `excludedAssets` AND communityId to `excludedCommunities` (drop both from the explicit tables); ticked → leave both out of the excluded lists, put `{assetId, weight}` in `assetWeights` only when tokenWeight ≠ \"1\" (or to pin it), and `{communityId, coefficient}` in `communityCoefficients` only when the coefficient ≠ defaultCommunityCoefficient (or to pin it); keep explicit rows of non-roster assets / communities as they are. A reviewer approves it as any parameter draft. Readable with console.read or formula.approve.",
+        "parameters": [
+          {
+            "schema": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+            "in": "query",
+            "name": "address",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "maxLength": 64 },
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [{ "adminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "inForce",
+                    "pendingDraftVersion",
+                    "items",
+                    "nextCursor"
+                  ],
+                  "properties": {
+                    "inForce": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "versionId",
+                            "configVersion",
+                            "effectiveFrom"
+                          ],
+                          "properties": {
+                            "versionId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "configVersion": { "type": "string" },
+                            "effectiveFrom": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "pendingDraftVersion": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "versionId",
+                            "configVersion",
+                            "effectiveFrom"
+                          ],
+                          "properties": {
+                            "versionId": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            },
+                            "configVersion": { "type": "string" },
+                            "effectiveFrom": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "items": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "communityId",
+                          "communityName",
+                          "assetId",
+                          "chainId",
+                          "memeAddress",
+                          "symbol",
+                          "instanceId",
+                          "launchId",
+                          "participate",
+                          "tokenWeight",
+                          "nftCoefficient",
+                          "source",
+                          "pendingDraft"
+                        ],
+                        "properties": {
+                          "communityId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                          },
+                          "communityName": { "type": "string" },
+                          "assetId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}:0x[0-9a-f]{40}$"
+                          },
+                          "chainId": {
+                            "type": "string",
+                            "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                          },
+                          "memeAddress": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{40}$"
+                          },
+                          "symbol": {
+                            "type": "string",
+                            "description": "The launch2 instance ticker."
+                          },
+                          "instanceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                            "description": "Opaque launch2 instance id (the console launch2 pages)."
+                          },
+                          "launchId": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$",
+                            "description": "On-chain launch id of the instance."
+                          },
+                          "participate": { "type": "boolean" },
+                          "tokenWeight": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "nftCoefficient": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": ["default", "explicit"]
+                          },
+                          "pendingDraft": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "versionId",
+                                  "configVersion",
+                                  "participate",
+                                  "tokenWeight",
+                                  "nftCoefficient",
+                                  "source"
+                                ],
+                                "properties": {
+                                  "versionId": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                  },
+                                  "configVersion": { "type": "string" },
+                                  "participate": { "type": "boolean" },
+                                  "tokenWeight": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  },
+                                  "nftCoefficient": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,40})(\\.[0-9]{1,18})?$"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["default", "explicit"]
+                                  }
+                                }
+                              },
+                              { "type": "null" }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "anyOf": [{ "type": "string" }, { "type": "null" }]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["ADMIN_SESSION_REQUIRED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["PERMISSION_DENIED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CAPABILITY_UNAVAILABLE", "REQUEST_TIMEOUT"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": { "type": "null" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/v1/mining/parameter-versions/{versionId}/approve": {
       "post": {
         "operationId": "approveAdminMiningParameterVersion",
         "summary": "Approve a parameter version (in force at effectiveFrom)",
         "tags": ["admin-mining"],
-        "description": "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
+        "description": "Decision 0116 (0110/0111 rules): formula.approve only (reviewer); not the draft author (403 ADMIN_FORMULA_SELF_APPROVAL); bound operator enabled (403 ADMIN_OPERATOR_DISABLED / ADMIN_ACCOUNT_DISABLED). Audit `mining.parameters.approve.requested` first (cannot be written: 503 ADMIN_AUDIT_UNAVAILABLE), then `mining.parameters.approve` or `.failed`. 409 ADMIN_MINING_PARAMETERS_STATE (not pending) | ADMIN_MINING_PARAMETERS_BASIS_RETIRED (Decision 0123: a draft stored without assetPowerBasis = quantity — withdraw and redraft) | ADMIN_MINING_PARAMETERS_EFFECTIVE_PASSED | ADMIN_MINING_PARAMETERS_EFFECTIVE_TAKEN. Decision 0183: 422 MINING_COMMUNITY_UNKNOWN (detailsSafe.unknownCommunityIds) when a listed community (communityCoefficients or, Decision 0187, excludedCommunities) no longer exists or is not verified. Approved versions are immutable; history is never rewritten.",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 64 },

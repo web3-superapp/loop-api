@@ -39,6 +39,15 @@ export interface CommunityWeightRecord {
   readonly weight: string | null;
   readonly configVersion: string | null;
   readonly reviewedAt: string | null;
+  /**
+   * Decision 0187 appendix A: `roster` = a mining pool community (weight =
+   * its token weight under the parameter version in force, `configVersion`
+   * = that version, `reviewedAt` = its approval); `review` = the
+   * `community_mining_weights` row. Absent on older fixtures (= review).
+   */
+  readonly source?: "review" | "roster";
+  /** Decision 0187: a roster community unticked in the pool table. */
+  readonly rosterExcluded?: boolean;
 }
 
 /** A complete snapshot: the only kind a read path publishes numbers from. */

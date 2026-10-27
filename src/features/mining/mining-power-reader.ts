@@ -160,7 +160,9 @@ export function createMiningPowerReader(dependencies: {
           return unavailable(
             weight === null || weight.boundAssetId === null
               ? miningReasonCodes.communityAssetNotBound
-              : miningReasonCodes.communityWeightPendingReview,
+              : weight.rosterExcluded === true
+                ? miningReasonCodes.poolExcluded
+                : miningReasonCodes.communityWeightPendingReview,
           );
         }
         if (weight === null) {

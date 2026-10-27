@@ -2387,6 +2387,15 @@ export async function runReconciliationWorker(
             // Decision 0184: MINING_EMBEDDED_WALLET_ONLY, default false.
             embeddedWalletOnly:
               options.config.miningSettlement.embeddedWalletOnly,
+            // Decision 0187: the roster's platform MEMEs on the launch chain
+            // are valued by the hourly settlement's rules.
+            pool:
+              database.miningSettlement === undefined
+                ? null
+                : {
+                    repository: database.miningSettlement,
+                    chainId: options.config.launchChain.chainId,
+                  },
             prices: createMarketFactService({
               config: options.config.market,
               cache: database.marketFacts,

@@ -166,6 +166,19 @@ export interface MiningParameterDocument {
    * Absent in documents stored before 0123 (→ "0", the 0116 rule).
    */
   readonly defaultCommunityCoefficient: string;
+  /**
+   * Decision 0187 (mining pool roster): asset ids that do not take part —
+   * weight 0 even when `assetWeights` lists them or the asset is a platform
+   * MEME of a verified community (default weight 1). Absent in documents
+   * stored before 0187 (→ empty). Sorted, unique.
+   */
+  readonly excludedAssets?: readonly string[];
+  /**
+   * Decision 0187: community ids whose NFTs do not take part — coefficient 0
+   * even when `communityCoefficients` lists them. Absent before 0187 (→
+   * empty). Sorted, unique.
+   */
+  readonly excludedCommunities?: readonly string[];
 }
 
 export class MiningParameterDocumentError extends Error {
@@ -229,6 +242,8 @@ export function parseMiningParameterDocument(
     "communityCoefficients",
     "assetPowerBasis",
     "defaultCommunityCoefficient",
+    "excludedAssets",
+    "excludedCommunities",
   ]);
   for (const key of Object.keys(doc)) {
     if (!allowed.has(key)) throw new MiningParameterDocumentError(key);
@@ -337,6 +352,18 @@ export function parseMiningParameterDocument(
   if (defaultCoefficient === null) {
     throw new MiningParameterDocumentError("defaultCommunityCoefficient");
   }
+  const excludedAssets = parseIdList(
+    doc["excludedAssets"],
+    "excludedAssets",
+    assetIdPattern,
+    500,
+  );
+  const excludedCommunities = parseIdList(
+    doc["excludedCommunities"],
+    "excludedCommunities",
+    uuidPattern,
+    2_000,
+  );
   return Object.freeze({
     referralRatiosBps: Object.freeze([...(ratios as number[])]),
     dailyBudgetNftRaw: doc["dailyBudgetNftRaw"] as string,
@@ -355,7 +382,30 @@ export function parseMiningParameterDocument(
     ),
     assetPowerBasis: basis as MiningAssetPowerBasis,
     defaultCommunityCoefficient: formatMiningDecimal(defaultCoefficient),
+    excludedAssets,
+    excludedCommunities,
   });
+}
+
+/** Decision 0187: an optional, unique id list (absent → empty), sorted. */
+function parseIdList(
+  value: unknown,
+  field: string,
+  pattern: RegExp,
+  maximum: number,
+): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > maximum) {
+    throw new MiningParameterDocumentError(field);
+  }
+  const seen = new Set<string>();
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "string" || !pattern.test(entry) || seen.has(entry)) {
+      throw new MiningParameterDocumentError(field);
+    }
+    seen.add(entry);
+  }
+  return Object.freeze([...seen].sort());
 }
 
 /**
@@ -401,6 +451,9 @@ export const miningDefaultParameterDocument = Object.freeze({
   minimumClaimRaw: miningFixedScale.toString(),
   assetPowerBasis: miningCurrentAssetPowerBasis,
   defaultCommunityCoefficient: miningDefaultCommunityCoefficient,
+  /** Decision 0187: every roster row participates by default. */
+  excludedAssets: Object.freeze([] as string[]),
+  excludedCommunities: Object.freeze([] as string[]),
 });
 
 /** Contract caps the defaults are sized to (LoopRewardClaim, S138-contracts). */

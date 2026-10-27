@@ -78,10 +78,26 @@ export interface MiningCommunityWeightInput {
   readonly status: "pending_review" | "approved";
 }
 
+/**
+ * Decision 0187: the pool part (`mining-pool-snapshot.ts`) — rows already
+ * computed by the settlement rules for the roster's platform MEMEs. Its
+ * asset ids are owned by it: the formula path skips their observed
+ * balances, whether or not the formula weights them.
+ */
+export interface MiningSnapshotPoolInput {
+  readonly assetIds: readonly string[];
+  readonly powers: readonly MiningSnapshotPower[];
+  readonly blockNumber: string;
+  readonly blockHash: string;
+  readonly priceVersion: string;
+  readonly skipped: readonly MiningSnapshotSkip[];
+}
+
 export interface MiningSnapshotInputs {
   readonly balances: readonly MiningBalanceInput[];
   readonly prices: readonly MiningPriceInput[];
   readonly communityWeights: readonly MiningCommunityWeightInput[];
+  readonly pool?: MiningSnapshotPoolInput | null;
 }
 
 export interface MiningSnapshotPower {
@@ -339,8 +355,13 @@ export function computeMiningSnapshot(
     readonly document: MiningFormulaDocument;
   },
 ): MiningSnapshotComputation {
-  const skipped: MiningSnapshotSkip[] = [];
-  if (inputs.balances.length === 0) {
+  const pool = inputs.pool ?? null;
+  const poolAssetIds = new Set(pool?.assetIds ?? []);
+  const skipped: MiningSnapshotSkip[] = [...(pool?.skipped ?? [])];
+  const formulaBalances = inputs.balances.filter(
+    (balance) => !poolAssetIds.has(balance.assetId),
+  );
+  if (formulaBalances.length === 0 && (pool?.powers.length ?? 0) === 0) {
     return Object.freeze({
       kind: "unavailable",
       reasonCode: miningReasonCodes.noBalanceInputs,
@@ -358,7 +379,7 @@ export function computeMiningSnapshot(
   let priceSource: string | null = null;
   let snapshotHoldingsSource: MiningHoldingsSource | null = null;
 
-  for (const balance of inputs.balances) {
+  for (const balance of formulaBalances) {
     if (
       snapshotBlock === null ||
       compareBlocks(balance.blockNumber, snapshotBlock.number) > 0
@@ -470,11 +491,35 @@ export function computeMiningSnapshot(
     });
   }
 
+  // Decision 0187: the pool rows are chain observations as of the launch2
+  // lane checkpoint; they join the formula rows (disjoint asset ids). A
+  // snapshot with no formula row takes the pool's price version.
+  const poolPowers = pool?.powers ?? [];
+  let priceVersion =
+    latestPriceFetchedAt === null || priceSource === null
+      ? null
+      : `${priceSource}:${latestPriceFetchedAt}`;
+  if (pool !== null && poolPowers.length > 0) {
+    if (
+      snapshotBlock === null ||
+      compareBlocks(pool.blockNumber, snapshotBlock.number) > 0
+    ) {
+      snapshotBlock = { number: pool.blockNumber, hash: pool.blockHash };
+    }
+    snapshotHoldingsSource = mergeHoldingsSource(
+      snapshotHoldingsSource,
+      "chain",
+    );
+    for (const row of poolPowers) {
+      perAccountAsset.set(`${row.ownerUserId}|${row.assetId}`, row);
+    }
+    priceVersion ??= pool.priceVersion;
+  }
+
   if (
     perAccountAsset.size === 0 ||
     snapshotBlock === null ||
-    latestPriceFetchedAt === null ||
-    priceSource === null
+    priceVersion === null
   ) {
     // Every asset was skipped: report the first skip's reason when all skips
     // share it, otherwise the generic weight reason.
@@ -508,7 +553,7 @@ export function computeMiningSnapshot(
     formulaVersion: formula.configVersion,
     blockNumber: snapshotBlock.number,
     blockHash: snapshotBlock.hash,
-    priceVersion: `${priceSource}:${latestPriceFetchedAt}`,
+    priceVersion,
     totalPower,
     powers: Object.freeze(powers),
     // Only the rows that produced power decide the word: a mock balance of

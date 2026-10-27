@@ -90,6 +90,10 @@ import {
   type SearchUserRecord,
   type SearchUsersInput,
 } from "../features/community/community-repository.js";
+import {
+  miningPoolRosterSql,
+  miningPoolVersionInForceSql,
+} from "./mining-pool-roster-sql.js";
 
 /**
  * PostgreSQL implementation of the V2 community, follow-graph, block-list,
@@ -1428,26 +1432,41 @@ export function createPostgresCommunityRepository(
               -- A weighted community with no member power is a zero, not an
               -- absence: it must order as 0 and project as "0", the same
               -- number the cursor carries. Only a community without an
-              -- approved weight has no row here at all.
+              -- approved weight has no row here at all. Decision 0187
+              -- appendix A: a roster community is weighted by its token
+              -- weight while it participates (unticked: no row).
               coalesce(sum(power.power::numeric), 0) as mining_power,
               count(power.owner_user_id)
                 filter (where power.power::numeric > 0)::int
                 as mining_participant_count,
-              weight.weight::text as mining_weight,
+              weight.weight as mining_weight,
               weight.config_version as mining_weight_config_version,
               weight.reviewed_at as mining_weight_reviewed_at
-            from public.community_mining_weights as weight
+            from (
+              select w.weight, w.config_version, w.reviewed_at
+              from public.community_mining_weights as w
+              where w.community_id = community.community_id
+                and w.status = 'approved'
+                and w.config_version = $8::text
+                and community.bound_asset_key is not null
+                and not exists (
+                  select 1 from pool_roster as r
+                  where r.community_id = community.community_id
+                )
+              union all
+              select r.token_weight, r.roster_config_version,
+                r.roster_approved_at
+              from pool_roster as r
+              where r.community_id = community.community_id
+                and r.participate
+            ) as weight
             left join public.community_memberships as member
-              on member.community_id = weight.community_id
+              on member.community_id = community.community_id
               and member.status <> 'banned'
             left join public.mining_snapshot_powers as power
               on power.snapshot_id = $7::uuid
               and power.owner_user_id = member.owner_user_id
               and power.asset_id = community.bound_asset_key
-            where weight.community_id = community.community_id
-              and weight.status = 'approved'
-              and weight.config_version = $8::text
-              and community.bound_asset_key is not null
             group by weight.weight, weight.config_version, weight.reviewed_at
           ) as ordering on true`
         : input.sort === "activity"
@@ -1489,6 +1508,7 @@ export function createPostgresCommunityRepository(
     // the row, so a departed account is never listed.
     const result = await client.query<Record<string, unknown>>({
       text: `
+        ${input.sort === "miningPower" ? `with ${miningPoolVersionInForceSql}, ${miningPoolRosterSql}` : ""}
         select ${communityColumns}${orderingColumns}
         from public.communities as community
         ${orderingJoin}
