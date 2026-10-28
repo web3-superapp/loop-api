@@ -170,6 +170,7 @@ export function registerV2SessionRoutes(
   app: FastifyInstance,
   authenticatePrivyBearer: preHandlerAsyncHookHandler,
   authenticateLoopBearer: preHandlerAsyncHookHandler,
+  authenticateLoopBearerAllowingRevokedSession: preHandlerAsyncHookHandler,
   sessionService: V2SessionService,
 ): void {
   app.post(
@@ -250,7 +251,7 @@ export function registerV2SessionRoutes(
         operationId: "logoutV2Session",
         summary: "Revoke the current LOOP device-session projection",
         description:
-          "Revokes the owner-bound LOOP device-session audit projection. The client must still call the Privy SDK logout operation.",
+          "Revokes the owner-bound LOOP device-session audit projection. The client must still call the Privy SDK logout operation. Logging out of a session that is already revoked is idempotent: it returns 200 with status revoked and the original revokedAt, for the original or a new Idempotency-Key.",
         tags: ["identity"],
         security: [{ privyBearer: [] }],
         headers: v2SessionLogoutHeadersSchema,
@@ -268,7 +269,7 @@ export function registerV2SessionRoutes(
       },
       onRequest: validateLogoutHeaders,
       preValidation: assertNoBodyOrQuery,
-      preHandler: authenticateLoopBearer,
+      preHandler: authenticateLoopBearerAllowingRevokedSession,
     },
     async (request, reply) => {
       const result = await sessionService.logout({

@@ -59,6 +59,14 @@ export interface AuthenticatedLoopPrincipal {
 export interface AuthenticationHooks {
   readonly authenticatePrivyBearer: preHandlerAsyncHookHandler;
   readonly authenticateLoopBearer: preHandlerAsyncHookHandler;
+  /**
+   * Decision 0190: the same check as `authenticateLoopBearer` except that an
+   * `X-Loop-Session-ID` naming an already-revoked session is not refused.
+   * Only `POST /v2/session/logout` uses it, so logging out of a session that
+   * is already revoked stays idempotent; every other route keeps the
+   * Decision 0037 closure.
+   */
+  readonly authenticateLoopBearerAllowingRevokedSession: preHandlerAsyncHookHandler;
 }
 
 declare module "fastify" {
@@ -74,7 +82,17 @@ export interface AuthenticationService {
   ): Promise<VerifiedPrivyPrincipal>;
   authenticateLoopBearer(
     rawHeaders: readonly string[],
+    options?: LoopBearerAuthenticationOptions,
   ): Promise<AuthenticatedLoopPrincipal>;
+}
+
+export interface LoopBearerAuthenticationOptions {
+  /**
+   * Decision 0190: skip the revoked-session refusal. The Privy bearer is
+   * still verified and the LOOP account must still exist; ownership of the
+   * named session is enforced by the route's own owner-bound command.
+   */
+  readonly allowRevokedSession?: boolean;
 }
 
 function readBearerToken(rawHeaders: readonly string[]): string {
@@ -154,6 +172,7 @@ export function createAuthenticationService(
     authenticatePrivyBearer,
     async authenticateLoopBearer(
       rawHeaders: readonly string[],
+      authenticationOptions: LoopBearerAuthenticationOptions = {},
     ): Promise<AuthenticatedLoopPrincipal> {
       const privyPrincipal = await authenticatePrivyBearer(rawHeaders);
       const internalUser = await internalUsers.findByPrivyUserId(
@@ -165,7 +184,11 @@ export function createAuthenticationService(
       }
 
       const sessionId = readSessionIdHeader(rawHeaders);
-      if (sessionId !== null && options.deviceSessions !== undefined) {
+      if (
+        sessionId !== null &&
+        options.deviceSessions !== undefined &&
+        authenticationOptions.allowRevokedSession !== true
+      ) {
         let session;
         try {
           session = await options.deviceSessions.findById(
@@ -202,6 +225,15 @@ export function registerAuthenticationHooks(
     async authenticateLoopBearer(request: FastifyRequest): Promise<void> {
       const principal = await service.authenticateLoopBearer(
         request.raw.rawHeaders,
+      );
+      request.setDecorator("authenticatedLoopPrincipal", principal);
+    },
+    async authenticateLoopBearerAllowingRevokedSession(
+      request: FastifyRequest,
+    ): Promise<void> {
+      const principal = await service.authenticateLoopBearer(
+        request.raw.rawHeaders,
+        { allowRevokedSession: true },
       );
       request.setDecorator("authenticatedLoopPrincipal", principal);
     },

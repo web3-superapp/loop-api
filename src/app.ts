@@ -3058,6 +3058,8 @@ export async function buildApp(
       }),
       authenticatePrivyBearer: authenticationHooks.authenticatePrivyBearer,
       authenticateLoopBearer: authenticationHooks.authenticateLoopBearer,
+      authenticateLoopBearerAllowingRevokedSession:
+        authenticationHooks.authenticateLoopBearerAllowingRevokedSession,
       sessionService: v2SessionService,
       profileService: profileV2Service,
       mediaService,

@@ -787,6 +787,45 @@ describe("PostgreSQL V2 device-session migration and repository", () => {
     });
   });
 
+  it("returns the original revocation for an already-revoked session under a new logout key (Decision 0190)", async () => {
+    const ownerUserId = await createOwner("logout-already-revoked");
+    const session = await repository.create(
+      createInput(ownerUserId, "logout-already-revoked"),
+    );
+    const first = await repository.revoke(
+      revokeInput(ownerUserId, session.sessionId, "logout-already-revoked:a"),
+    );
+    if (first === null) {
+      throw new Error("Expected the first logout to resolve the session");
+    }
+    const second = await repository.revoke(
+      revokeInput(ownerUserId, session.sessionId, "logout-already-revoked:b"),
+    );
+
+    expect(second).toEqual(first);
+    expect(second?.revokedAt).toBe(first.revokedAt);
+    const events = await pool.query<{ count: string }>({
+      text: `
+        select count(*)::text as count
+        from public.device_session_events
+        where owner_user_id = $1 and event_type = 'session_revoked'
+      `,
+      values: [ownerUserId],
+    });
+    expect(events.rows[0]?.count).toBe("1");
+
+    const foreignOwner = await createOwner("logout-already-revoked:foreign");
+    await expect(
+      repository.revoke(
+        revokeInput(
+          foreignOwner,
+          session.sessionId,
+          "logout-already-revoked:foreign",
+        ),
+      ),
+    ).resolves.toBeNull();
+  });
+
   it("replays the original active bootstrap projection after the durable session is revoked", async () => {
     const ownerUserId = await createOwner("bootstrap-replay-after-logout");
     const bootstrap = createInput(ownerUserId, "bootstrap-replay-after-logout");

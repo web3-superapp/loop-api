@@ -247,8 +247,13 @@ X-Loop-Session-ID: <sessionId returned by bootstrap>
 ```
 
 `providerLogoutRequired=true` 时必须继续执行 Privy SDK logout。已撤销的本地
-sessionId 不是 API credential；只要当前 Privy Bearer 仍有效，受保护请求仍按
-Privy token 鉴权。
+sessionId 不是 API credential；带着已撤销 `X-Loop-Session-ID` 的普通受保护请求
+返回 `401 AUTH_INVALID`（决策 0037），不带该 header 时仍按 Privy token 鉴权。
+
+对已撤销 session 再次 logout 是幂等的（决策 0190）：logout 路由不因
+`X-Loop-Session-ID` 已撤销而返回 401；只要 Privy Bearer 有效且 session 属于
+当前账号，原 key replay 或新 key 都返回 `200`，`status: "revoked"`，
+`revokedAt` 为最初撤销时间。新 key 仍计入每 session 5 次/24 小时限额。
 
 Logout 的同一逻辑重试必须复用同一 key。新 logout command 限额为每账号
 40 次/滚动 24 小时、同一个 requested session 5 次/滚动 24 小时；exact-key
