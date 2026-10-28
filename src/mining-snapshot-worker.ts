@@ -362,6 +362,7 @@ export function createMiningSnapshotWorker(
           at + 1n,
           poolAssetIds,
           external,
+          "roster",
         ),
         embeddedWalletOnly: options.embeddedWalletOnly ?? false,
       });

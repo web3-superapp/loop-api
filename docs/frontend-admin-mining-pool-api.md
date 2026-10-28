@@ -20,6 +20,7 @@
 - 外部代币的**快照**算力：勾选并批准后即生效，不需要快照公式里登记该资产（S317）；名单权重直接作为该资产的权重。取不到参考价时该资产在快照里跳过（不影响其它资产）。
 - 外部代币的**小时结算**（分 LOOP，S317）：行上 `settleable = true` 才会结算——BSC 主网等已登记、且该链有 `erc20_transfer` 索引 lane 的代币即为 `true`。持仓 = 社区成员计入钱包在「最近一次余额读数 + 之后的索引转账」滚出的余额（时间加权）。某成员任一钱包没有可用读数（从未打开过钱包页、或读数早于该钱包被索引的起点）时，该成员本小时该代币算 0，原因记在该小时的 `inputSummary.externalUnknownHolders`（按原因计数）；索引 lane 滞后时该小时跳过外部代币（`inputSummary.excludedAssets[].reasonCode = MINING_SETTLEMENT_SOURCE_STALE`），平台 MEME 照常结算。
 - `settleable = false`（`settleableReasonCode = MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`）：结算读不到该代币的持仓（未登记 / 被封禁 / 该链没有索引 lane；或平台 MEME 不在结算链上）——勾选后只有快照算力，不分 LOOP。后台应在该行标「尚无持仓来源」。
+- 决策 0191（S321）：`assetWeights` 里写了、但**不是名单行**的资产（例如社区仍是 `pending` 的 MEME、未被任何已验证社区绑定的代币）在快照和小时结算里都**不计算力**（名单之外不再「显式权重即计」）；每个结算小时的 `inputSummary.ignoredNonRosterAssetIds` 列出被忽略的资产。后台可在名单页 / 参数版本详情里把这类条目标成「名单外，不生效」（`assetWeights` 资产 id 不在名单行 `assetId` 里即是），保存时可顺手删掉。
 - 未参与的外部代币社区：社区页 `weight` = `unavailable` + `MINING_POOL_EXCLUDED`，不进社区榜。
 
 ## 3. `GET /admin/v1/mining/pool`
@@ -133,7 +134,7 @@
      每个外部行（`kind = external`，决策 0189）：
    - 勾选：`assetId` 进 `includedAssets`，且不在 `excludedAssets`、`communityId` 不在 `excludedCommunities`；币权重 / NFT 系数写法同平台行。
    - 取消勾选：`assetId` 从 `includedAssets` 移除，并从 `assetWeights` / `communityCoefficients` 去掉这两项；**不要**放进 excluded。
-3. 不在矿池表里的显式行（例如其它资产权重）原样保留。
+3. 不在矿池表里的显式行（例如其它资产权重）原样保留——但决策 0191 起名单外的 `assetWeights` 条目不计任何算力（见 §2），保留只为不丢运营数据。
 4. `communityCoefficients` 必须显式给出（哪怕 `[]`）：省略时后端会按旧规则「冻结复制快照权重」。
 5. 生效时间须在未来；草稿由另一名审核员在「挖矿参数」待批列表批准后生效（下一个整点结算起）。
 

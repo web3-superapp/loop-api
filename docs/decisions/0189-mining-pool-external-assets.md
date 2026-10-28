@@ -52,6 +52,7 @@
   - 本链 MEME v1（`settlementSource = meme_v1`，读 `meme_trades`）；或
   - **`erc20`**：资产在 `assets` 登记且未 `blocked`，且其链有 `erc20_transfer` lane 的 checkpoint（BSC 主网代币即此类，任何链，不要求与结算链相同）。
 - `input_summary` 在有外部集合时记 `poolExternalAssetIds` / `poolExternalReadableAssetIds`；回放用存下的集合。没有外部候选时切片与 0187 逐字节相同。
+- 决策 0191（S321）：`assetWeights` 里既非平台名单行、也不在外部集合的资产（如 pending 社区的 MEME）在 0191 起结算的小时不计任何算力，记入 `input_summary.ignoredNonRosterAssetIds`；名单之外不再有「显式权重即计」。
 - 读事实时外部资产走「宽松」路径：没有来源 / lane 滞后 → 该资产记进 `excludedAssets`（带原因码）离开本小时，**不让整小时失败**（平台 MEME 照常结算）；非外部资产没有来源仍是整小时 `MINING_SETTLEMENT_ASSET_SOURCE_UNKNOWN`（原规则）。
 
 ## 5. `erc20` 持仓来源（S317，核心）

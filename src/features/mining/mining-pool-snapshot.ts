@@ -118,6 +118,7 @@ export function computeMiningPoolSnapshot(input: {
         ? {}
         : { poolExternal: input.external }),
       windowSeconds: 1n,
+      assetRule: "roster",
     });
     result = settleMiningHour(prepared.input);
   } catch (error) {
@@ -129,7 +130,12 @@ export function computeMiningPoolSnapshot(input: {
     }
     throw error;
   }
-  const weights = miningEffectiveAssetWeights(version.document, poolAssetIds);
+  const weights = miningEffectiveAssetWeights(
+    version.document,
+    poolAssetIds,
+    input.external ?? null,
+    "roster",
+  );
   const memeOf = new Map(
     input.facts.nftInstances.map((row) => [row.instanceId, row.memeAssetId]),
   );
