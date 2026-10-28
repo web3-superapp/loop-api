@@ -1,4 +1,4 @@
-export const latestMigrationName = "000103_mining_snapshot_unpriced_power";
+export const latestMigrationName = "000104_mining_snapshot_nft_power";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

@@ -2346,6 +2346,8 @@ export async function buildApp(
           registry: chainRegistryRepository,
           tokenLogos,
           cursorCodec: v2CursorCodec,
+          // Decision 0192: MINING_POOL_SPLIT_EMIT, default off.
+          poolSplitEmit: config.miningPoolSplitEmit,
         })
       : createUnavailableMiningService());
   // Decision 0043: the `communityMining` capability reads the formula fact

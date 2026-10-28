@@ -70,6 +70,33 @@ CAPABILITY_UNAVAILABLE` 都不是"账号没数据"，而是仓储/Registry 不�
 BNB 行 `referencePriceQuality: "proxied"`、代理 WBNB、`713.42`。要看到非零数字需要真实持仓，后端不会造
 （`wallet_balance_snapshots` 没有来源字段，写一行等于伪造链上观测）。
 
+## 0.0 S323（决策 0192）：快照算力拆成「代币池 / NFT 池」—— **新增可选键，客户端先行，服务端开关默认关**
+
+**背景**：产品要求分开显示代币算力（持仓 × 币权重）与 NFT 算力（NFT 数 × 社区系数）。快照的平台 MEME 行把 NFT 算力并在 `power` 里；0192 起快照另存这部分，读接口可以拆开发。
+
+**变化**（只在服务端开 `MINING_POOL_SPLIT_EMIT=on` 后出现；默认 off，off 时两个响应与之前逐字节相同）：
+
+| 接口                     | 键                    | 说明                                                                                                            |
+| ------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GET /v2/mining/summary` | 顶层 `assetPower`     | 十进制字符串：我的快照自有算力中代币池部分                                                                      |
+| `GET /v2/mining/summary` | 顶层 `nftPower`       | 十进制字符串：NFT 池部分；与 `assetPower` 同时出现或同时缺省；`assetPower + nftPower = power.value`（数值相等） |
+| `GET /v2/mining/assets`  | `included[].nftPower` | 十进制字符串：该行 `power` 中并入的 NFT 算力；无 NFT 的行为 `"0"`；`power − nftPower` 即代币部分                |
+
+示例（summary 片段）：
+
+```json
+{
+  "power": { "status": "available", "value": "1000" },
+  "assetPower": "985",
+  "nftPower": "15",
+  "networkPower": { "status": "available", "value": "4000" }
+}
+```
+
+**缺省（键不出现）**：`power` 为 `unavailable`（如 `MINING_SNAPSHOT_PENDING`）；当前快照写于 0192 之前（旧快照不改写，下一次 5 分钟快照后自然出现）；开关关闭。缺省时客户端按决策 0253 回退上一结算小时两轨数值并标注。全网拆分（`networkPower` 的两池拆分）**不发**。
+
+**客户端要求**：codec 把三个键当可选键（loop-mobile `62c1129c` 已落）；更早的客户端 codec 键集严格，收到未知键会拒绝整包，所以只有在受支持客户端都 ≥ 62c1129c 后主代理才在 staging 开开关。
+
 ## 0.0 S317（决策 0189）：`referencePriceQuality: "unavailable"`、`referencePriceUsd` 可为 null —— **客户端先行，服务端开关默认关**
 
 **背景**：算力名单里放行的代币（平台 MEME / 外部代币）按数量计算力（数量 × 币权重，决策 0125），参考价只展示。外部代币取不到参考价时，小时结算照样按持仓分 LOOP；快照若因此把这行算 0 会两边不一致。

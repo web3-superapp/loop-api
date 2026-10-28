@@ -922,6 +922,25 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses MINING_POOL_SPLIT_EMIT as off|on, default off, and refuses anything else (Decision 0192)", () => {
+    expect(loadConfig(validEnvironment()).miningPoolSplitEmit).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["MINING_POOL_SPLIT_EMIT"] = value;
+      expect(loadConfig(environment).miningPoolSplitEmit).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["MINING_POOL_SPLIT_EMIT"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /MINING_POOL_SPLIT_EMIT/,
+      );
+    }
+  });
+
   it("parses WALLET_LINK_POLICY_EMIT as off|on and EXTERNAL_WALLET_ADDRESS_PUBLIC as a strict boolean, both default off (Decision 0185)", () => {
     const defaults = loadConfig(validEnvironment());
     expect(defaults.walletLinkPolicyEmit).toBe(false);

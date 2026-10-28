@@ -430,6 +430,7 @@ describe("selectMiningPrice with a derived price (Decisions 0057 and 0059)", () 
         referencePricePairAddress: wbnbPairAddress,
         weight: "1",
         power: "2.99",
+        nftPower: "0",
         blockNumber: "123001455",
       },
     ]);

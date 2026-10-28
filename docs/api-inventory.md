@@ -799,6 +799,13 @@ null, `referencePriceQuality: "unavailable"`, optional `referencePriceReasonCode
 on `GET /v2/mining/assets` `included[]`) — written only under the worker switch
 `MINING_SNAPSHOT_UNPRICED_POWER_EMIT` (default false, client first; see
 `docs/frontend-v2-mining-api.md` §0.0).
+Migration 000104 (Decision 0192): each snapshot power row stores `nft_power`,
+the NFT share folded into a platform MEME row's power (`0` on formula-path
+rows, null on rows stored before 0192). Under `MINING_POOL_SPLIT_EMIT=on`
+(default off, client first) `GET /v2/mining/summary` adds optional
+`assetPower` / `nftPower` (sum = `power`) and `GET /v2/mining/assets` adds
+optional `included[].nftPower`; a pre-0192 snapshot or an unavailable power
+sends neither (see `docs/frontend-v2-mining-api.md` §0.0 S323).
 
 | Method and path             | Request                                                    | Success projection                                                                                                                                                                                                                      | Interface     | Capability                                                                                                             |
 | --------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |

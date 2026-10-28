@@ -121,6 +121,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "1",
         power: "0.5",
+        nftPower: "0",
         blockNumber: "118",
       },
       {
@@ -133,6 +134,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "1",
         power: "2",
+        nftPower: "0",
         blockNumber: "120",
       },
     ]);
@@ -218,6 +220,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "1",
         power: "3",
+        nftPower: "0",
         blockNumber: "100",
       },
       {
@@ -230,6 +233,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "0.5",
         power: "5",
+        nftPower: "0",
         blockNumber: "100",
       },
     ]);
@@ -400,6 +404,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "1",
         power: "0.25",
+        nftPower: "0",
         blockNumber: "100",
       },
     ]);
@@ -588,6 +593,7 @@ describe("computeMiningSnapshot (pure)", () => {
         referencePricePairAddress: null,
         weight: "1",
         power: "4",
+        nftPower: "0",
         blockNumber: "12",
       },
     ]);
