@@ -22,8 +22,10 @@ import {
 import {
   miningEffectiveAssetWeights,
   miningEffectiveCommunityCoefficients,
+  miningIgnoredNonRosterAssetIds,
   miningPoolExternalFor,
   type MiningPoolExternalAssets,
+  type MiningSettlementAssetRule,
 } from "./mining-pool-roster.js";
 import type {
   CommitMiningEpochInput,
@@ -98,7 +100,8 @@ export function miningVersionAt(
  * table, the pool roster's platform MEMEs at weight 1 unless listed, and the
  * excluded assets / communities at 0 (`mining-pool-roster.ts`). With no
  * roster asset and no exclusion the maps equal the pre-0187 ones, so those
- * hours digest as before.
+ * hours digest as before. Decision 0191: under the `roster` rule an
+ * explicit weight of a non-roster asset is dropped.
  */
 function sliceOf(
   version: MiningParameterVersionRecord,
@@ -106,6 +109,7 @@ function sliceOf(
   to: bigint,
   poolAssetIds: readonly string[],
   external: MiningPoolExternalAssets | null,
+  rule: MiningSettlementAssetRule,
 ): MiningParameterSlice {
   return Object.freeze({
     from,
@@ -118,6 +122,7 @@ function sliceOf(
       version.document,
       poolAssetIds,
       external,
+      rule,
     ),
     assetPowerBasis: version.document.assetPowerBasis,
   });
@@ -126,7 +131,9 @@ function sliceOf(
 /**
  * Version slices tiling [start, end). `poolAssetIds` (Decision 0187) are the
  * roster's platform MEMEs on the settled chain; `external` (Decision 0189)
- * the external roster assets, out unless let in (and readable).
+ * the external roster assets, out unless let in (and readable). `rule`
+ * (Decision 0191): `roster` for every hour settled from 0191 on; `document`
+ * replays an earlier hour.
  */
 export function miningParameterSlices(
   versions: readonly MiningParameterVersionRecord[],
@@ -134,6 +141,7 @@ export function miningParameterSlices(
   end: bigint,
   poolAssetIds: readonly string[] = [],
   external: MiningPoolExternalAssets | null = null,
+  rule: MiningSettlementAssetRule = "document",
 ): readonly MiningParameterSlice[] {
   const first = miningVersionAt(versions, start);
   if (first === null) return [];
@@ -147,12 +155,14 @@ export function miningParameterSlices(
   let cursor = start;
   for (const change of changes) {
     if (change.at > cursor) {
-      slices.push(sliceOf(current, cursor, change.at, poolAssetIds, external));
+      slices.push(
+        sliceOf(current, cursor, change.at, poolAssetIds, external, rule),
+      );
       cursor = change.at;
     }
     current = change.version;
   }
-  slices.push(sliceOf(current, cursor, end, poolAssetIds, external));
+  slices.push(sliceOf(current, cursor, end, poolAssetIds, external, rule));
   return slices;
 }
 
@@ -322,6 +332,13 @@ export function prepareMiningHour(input: {
    * a whole UTC hour). Default: one hour.
    */
   readonly windowSeconds?: bigint;
+  /**
+   * Decision 0191: `roster` (every hour settled from 0191 on, and the
+   * snapshot) admits roster assets only and records
+   * `ignoredNonRosterAssetIds`; `document` (default: replay of an earlier
+   * hour, whose summary has no such key) keeps every explicit weight.
+   */
+  readonly assetRule?: MiningSettlementAssetRule;
 }): PreparedMiningHour {
   const start = input.hourStart;
   const windowSeconds = input.windowSeconds ?? miningHourSeconds;
@@ -330,6 +347,7 @@ export function prepareMiningHour(input: {
     windowSeconds === miningHourSeconds && start % miningHourSeconds === 0n;
   const poolAssetIds = [...new Set(input.poolAssetIds ?? [])].sort();
   const external = normalizedExternal(input.poolExternal);
+  const assetRule = input.assetRule ?? "document";
   const version = miningVersionAt(input.versions, start);
   if (version === null) {
     throw new MiningSettlementInputError(
@@ -349,8 +367,31 @@ export function prepareMiningHour(input: {
     end,
     poolAssetIds,
     external,
+    assetRule,
   );
   const releaseStart = seconds(version.document.releaseStartAt);
+  // Decision 0191: the assetWeights ids of the hour's versions that are no
+  // roster asset; under the roster rule their facts are never used, even
+  // when a reader returns them.
+  const ignoredNonRoster =
+    assetRule === "roster"
+      ? [
+          ...new Set(
+            input.versions
+              .filter((candidate) =>
+                slices.some((slice) => slice.versionId === candidate.versionId),
+              )
+              .flatMap((candidate) =>
+                miningIgnoredNonRosterAssetIds(
+                  candidate.document,
+                  poolAssetIds,
+                  external,
+                ),
+              ),
+          ),
+        ].sort()
+      : [];
+  const ignoredNonRosterSet = new Set(ignoredNonRoster);
 
   // Attribution.
   const ownerOf = new Map<string, string>();
@@ -525,9 +566,9 @@ export function prepareMiningHour(input: {
   }> = [];
   const erc20Unknown = new Map<string, Set<string>>();
   let erc20Read = false;
-  for (const asset of [...input.facts.assets].sort((a, b) =>
-    a.assetId < b.assetId ? -1 : 1,
-  )) {
+  for (const asset of [...input.facts.assets]
+    .filter((row) => !ignoredNonRosterSet.has(row.assetId))
+    .sort((a, b) => (a.assetId < b.assetId ? -1 : 1))) {
     let cutoff = end;
     // Decision 0125: after graduation a quantity hour reads the indexed
     // ERC-20 balances; a valuation hour (replay) still has no price there.
@@ -757,6 +798,11 @@ export function prepareMiningHour(input: {
       // Decision 0189: the rank projection rule of this hour (participating
       // roster communities only); hours without it keep the 0187 rule.
       poolRosterRule: "participating",
+      // Decision 0191: the assetWeights ids the roster rule ignored (the
+      // key's presence marks the rule, so a replay applies it again).
+      ...(assetRule === "roster"
+        ? { ignoredNonRosterAssetIds: ignoredNonRoster }
+        : {}),
       // Decision 0189: the readings the erc20 openings rest on (a replay
       // reads exactly these rows) and the users counted 0 per reason.
       ...(erc20Read
@@ -918,6 +964,7 @@ export function admittedAssetIds(
   end: bigint,
   poolAssetIds: readonly string[] = [],
   external: MiningPoolExternalAssets | null = null,
+  rule: MiningSettlementAssetRule = "document",
 ): readonly string[] {
   const assetIds = new Set<string>();
   for (const slice of miningParameterSlices(
@@ -926,6 +973,7 @@ export function admittedAssetIds(
     end,
     poolAssetIds,
     normalizedExternal(external ?? undefined),
+    rule,
   )) {
     for (const [assetId, weight] of slice.assetWeights) {
       if (weight > 0n) assetIds.add(assetId);
@@ -964,7 +1012,8 @@ export function createMiningSettlementRunner(dependencies: {
     erc20: {
       readonly staleAssetIds: readonly string[];
       readonly pins: readonly MiningErc20OpeningPin[] | null;
-    } = { staleAssetIds: [], pins: null },
+    },
+    rule: MiningSettlementAssetRule,
   ): Promise<MiningSettlementFacts> {
     const end = hourStart + miningHourSeconds;
     const assetIds = admittedAssetIds(
@@ -973,6 +1022,7 @@ export function createMiningSettlementRunner(dependencies: {
       end,
       poolAssetIds,
       external,
+      rule,
     );
     // Decision 0189: the admitted external assets are read leniently (a
     // stale lane or a missing source leaves the asset out of the hour).
@@ -1095,6 +1145,7 @@ export function createMiningSettlementRunner(dependencies: {
           hourStart + miningHourSeconds,
           poolAssetIds,
           external,
+          "roster",
         ),
         ...(external === null ? {} : { externalAssetIds: external.assetIds }),
       });
@@ -1124,6 +1175,7 @@ export function createMiningSettlementRunner(dependencies: {
           poolAssetIds,
           external,
           { staleAssetIds, pins: null },
+          "roster",
         );
         prepared = prepareMiningHour({
           hourStart,
@@ -1131,6 +1183,7 @@ export function createMiningSettlementRunner(dependencies: {
           facts,
           poolAssetIds,
           ...(external === null ? {} : { poolExternal: external }),
+          assetRule: "roster",
         });
         result = settleMiningHour(prepared.input);
       } catch (error) {
@@ -1184,6 +1237,13 @@ export function createMiningSettlementRunner(dependencies: {
         : undefined;
       // Decision 0189: likewise the stored external roster.
       const external = storedExternal(epoch.inputSummary);
+      // Decision 0191: an hour settled under the roster rule records the
+      // ignored ids; an earlier hour replays under the document rule.
+      const assetRule: MiningSettlementAssetRule = Array.isArray(
+        epoch.inputSummary["ignoredNonRosterAssetIds"],
+      )
+        ? "roster"
+        : "document";
       try {
         const facts = await readFacts(
           hourStart,
@@ -1192,6 +1252,7 @@ export function createMiningSettlementRunner(dependencies: {
           external,
           // Decision 0189: the same stale set and the pinned readings.
           storedErc20(epoch.inputSummary),
+          assetRule,
         );
         const prepared = prepareMiningHour({
           hourStart,
@@ -1199,6 +1260,7 @@ export function createMiningSettlementRunner(dependencies: {
           facts,
           ...(poolAssetIds === undefined ? {} : { poolAssetIds }),
           ...(external === null ? {} : { poolExternal: external }),
+          assetRule,
         });
         const result = settleMiningHour(prepared.input);
         const stored = await repository.listEpochRewards({ epochId });

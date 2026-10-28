@@ -29,10 +29,16 @@ import {
  * `community_mining_weights` table is no longer read.
  *
  * The roster default (1) applies only to `quantity` documents; a Decision
- * 0116 `valuation` document (replay only) keeps its own table. An asset no
- * verified community binds (BTCB, USDT, an unbound or pending-community
- * MEME) keeps the pre-0187 rule: its explicit weight or nothing. Pure: no
- * clock, database, or network.
+ * 0116 `valuation` document (replay only) keeps its own table.
+ *
+ * Decision 0191 (S321): the settleable asset set **is** the roster. Under
+ * the `roster` asset rule an `assetWeights` entry for an asset that is no
+ * roster row (BTCB, USDT, an unbound or pending-community MEME, a MEME of
+ * another chain) weighs nothing — no holdings, no referral power — and is
+ * reported in `ignoredNonRosterAssetIds`. Hours settled before 0191 (their
+ * summary has no `ignoredNonRosterAssetIds`) replay under the `document`
+ * rule: such an asset keeps its explicit weight (history is never
+ * rewritten). Pure: no clock, database, or network.
  */
 
 export const miningPoolDefaultTokenWeight = "1" as const;
@@ -207,17 +213,52 @@ export function miningPoolSettleability(
 }
 
 /**
+ * Decision 0191: which assets a document's `assetWeights` may admit.
+ * `roster` (every hour settled from 0191 on, and the snapshot): only roster
+ * assets — `candidateAssetIds` (the platform MEMEs) and the external roster
+ * (`external.assetIds`, still gated by `includedAssets` / `readable`).
+ * `document` (replay of an hour settled before 0191): every listed asset.
+ */
+export type MiningSettlementAssetRule = "roster" | "document";
+
+/**
+ * Decision 0191: the `assetWeights` ids of a `quantity` document that the
+ * `roster` rule ignores — neither a candidate (platform MEME) nor in the
+ * external roster. Sorted, unique; empty for a `valuation` document.
+ */
+export function miningIgnoredNonRosterAssetIds(
+  document: MiningParameterDocument,
+  candidateAssetIds: readonly string[],
+  external: MiningPoolExternalAssets | null = null,
+): readonly string[] {
+  if (!miningPoolRosterApplies(document)) return Object.freeze([]);
+  const roster = new Set([...candidateAssetIds, ...(external?.assetIds ?? [])]);
+  return Object.freeze(
+    [
+      ...new Set(
+        document.assetWeights
+          .map((entry) => entry.assetId)
+          .filter((assetId) => !roster.has(assetId)),
+      ),
+    ].sort(),
+  );
+}
+
+/**
  * The effective asset weights (1e18) of a document: the explicit table,
  * every candidate asset it does not list at weight 1 (quantity documents
  * only), every excluded asset at 0. Decision 0189: an external roster asset
  * is in the map only while `includedAssets` lists it (explicit weight, else
- * 1) and, with `readable`, only when readable. An asset absent from the map
- * weighs 0.
+ * 1) and, with `readable`, only when readable. Decision 0191: under the
+ * `roster` rule (quantity documents) an explicit entry for a non-roster
+ * asset is dropped (`miningIgnoredNonRosterAssetIds`). An asset absent from
+ * the map weighs 0. Snapshot and settlement both fold through here.
  */
 export function miningEffectiveAssetWeights(
   document: MiningParameterDocument,
   candidateAssetIds: readonly string[],
   external: MiningPoolExternalAssets | null = null,
+  rule: MiningSettlementAssetRule = "document",
 ): ReadonlyMap<string, bigint> {
   const weights = new Map<string, bigint>(
     document.assetWeights.map((entry) => [
@@ -226,6 +267,15 @@ export function miningEffectiveAssetWeights(
     ]),
   );
   if (miningPoolRosterApplies(document)) {
+    if (rule === "roster") {
+      for (const assetId of miningIgnoredNonRosterAssetIds(
+        document,
+        candidateAssetIds,
+        external,
+      )) {
+        weights.delete(assetId);
+      }
+    }
     for (const assetId of [...candidateAssetIds].sort()) {
       if (!weights.has(assetId)) weights.set(assetId, miningFixedScale);
     }

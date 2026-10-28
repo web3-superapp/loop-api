@@ -28,6 +28,7 @@ import {
 import {
   miningEffectiveAssetWeights,
   miningEffectiveCommunityCoefficients,
+  miningIgnoredNonRosterAssetIds,
   miningPoolExternalFor,
   resolveMiningPoolEntry,
   type MiningPoolCandidate,
@@ -190,7 +191,8 @@ describe("Decision 0187 roster rule (pure)", () => {
     const weights = miningEffectiveAssetWeights(document, [ASSET1]);
     expect(weights.has(ASSET2)).toBe(false);
     expect(weights.has(BTCB)).toBe(false);
-    // A non-platform asset keeps its explicit weight (pre-0187 rule).
+    // Document rule (replay of an hour settled before 0191): a non-roster
+    // asset keeps its explicit weight; the roster rule drops it.
     expect(
       miningEffectiveAssetWeights(
         documentWith({ assetWeights: [{ assetId: BTCB, weight: "1" }] }),
@@ -1345,5 +1347,200 @@ describe("Decision 0189 external tokens", () => {
       expect.objectContaining({ assetIds: [ASSET1] }),
     );
     expect(readAssetPrice).not.toHaveBeenCalled();
+  });
+});
+
+describe("Decision 0191 settlement asset set is the roster (S321)", () => {
+  const U3 = "a0000000-0000-4000-8000-000000000003";
+  const X = "0x00000000000000000000000000000000000000c3";
+  // ASSET2 is listed in assetWeights but no verified community binds it
+  // (staging 2026-10-28: a pending community's MEME).
+  const stale = { assetWeights: [{ assetId: ASSET2, weight: "1" }] };
+
+  function factsWithStale(): MiningSettlementFacts {
+    const base = facts();
+    return {
+      ...base,
+      assets: [
+        ...base.assets,
+        {
+          assetId: ASSET2,
+          source: "launch2",
+          graduatedAt: null,
+          openingPriceE18: loop / 100n,
+          openingBalances: [{ address: X, balanceRaw: 30n * loop }],
+          moves: [],
+        },
+      ],
+      walletOwners: [...base.walletOwners, { address: X, userIds: [U3] }],
+      referralEdges: [
+        { inviterUserId: U1, inviteeUserId: U3, depth: 1, from: 0n, to: null },
+      ],
+    };
+  }
+
+  it("drops an assetWeights entry for a non-roster asset under the roster rule only", () => {
+    const document = documentWith(stale);
+    const roster = miningEffectiveAssetWeights(
+      document,
+      [ASSET1],
+      null,
+      "roster",
+    );
+    expect([...roster.keys()]).toEqual([ASSET1]);
+    expect(miningIgnoredNonRosterAssetIds(document, [ASSET1])).toEqual([
+      ASSET2,
+    ]);
+    // The document rule (replay of an hour settled before 0191) keeps it.
+    expect(miningEffectiveAssetWeights(document, [ASSET1]).get(ASSET2)).toBe(
+      loop,
+    );
+    // A valuation document has no roster: nothing is reported ignored.
+    expect(
+      miningIgnoredNonRosterAssetIds(
+        documentWith({ ...stale, assetPowerBasis: "valuation" }),
+        [ASSET1],
+      ),
+    ).toEqual([]);
+    expect(
+      admittedAssetIds(
+        [versionWith(stale)],
+        S,
+        S + 3_600n,
+        [ASSET1],
+        null,
+        "roster",
+      ),
+    ).toEqual([ASSET1]);
+  });
+
+  it("gives a non-roster assetWeights asset no holdings, no self and no referral power", () => {
+    const roster = prepareMiningHour({
+      hourStart: S,
+      versions: [versionWith(stale)],
+      facts: factsWithStale(),
+      poolAssetIds: [ASSET1],
+      assetRule: "roster",
+    });
+    const result = settleMiningHour(roster.input);
+    expect(
+      roster.input.assetHoldings.some((row) => row.assetId === ASSET2),
+    ).toBe(false);
+    const u3 = result.users.find((row) => row.userId === U3);
+    expect(u3?.assetSelfPower ?? 0n).toBe(0n);
+    expect(u3?.assetHoldings ?? []).toEqual([]);
+    const u1 = result.users.find((row) => row.userId === U1);
+    expect(u1?.assetReferralPower ?? 0n).toBe(0n);
+    // Only the roster MEME counts: 100 + 50 tokens × 1.
+    expect(result.asset.denominatorPower).toBe(150n * loop);
+    expect(roster.summary["ignoredNonRosterAssetIds"]).toEqual([ASSET2]);
+
+    // The pre-0191 rule (what staging settled): the listed asset counted.
+    const legacy = prepareMiningHour({
+      hourStart: S,
+      versions: [versionWith(stale)],
+      facts: factsWithStale(),
+      poolAssetIds: [ASSET1],
+    });
+    const before = settleMiningHour(legacy.input);
+    expect(before.users.find((row) => row.userId === U3)?.assetSelfPower).toBe(
+      30n * loop,
+    );
+    expect(
+      before.users.find((row) => row.userId === U1)?.assetReferralPower,
+    ).toBeGreaterThan(0n);
+    expect(legacy.summary["ignoredNonRosterAssetIds"]).toBeUndefined();
+  });
+
+  it("settles the roster only, records the ignored ids, and replays each hour under its own rule", async () => {
+    const repo = createInMemoryMiningSettlement();
+    repo.versions.push(versionWith(stale));
+    repo.poolCandidates.push(candidate());
+    repo.readIndexerFreshness = vi.fn(() =>
+      Promise.resolve({
+        lanes: [
+          {
+            lane: "launch2_event",
+            hasSources: true,
+            updatedAt: "2026-10-27T11:05:00.000Z",
+          },
+        ],
+      }),
+    );
+    const reads = vi.fn(() => Promise.resolve(factsWithStale()));
+    repo.readSettlementFacts = reads;
+    const commit = vi.fn(() =>
+      Promise.resolve({ created: true, epoch: epochRecord() }),
+    );
+    repo.commitEpoch = commit;
+    const runner = createMiningSettlementRunner({
+      repository: repo,
+      chainId: "eip155:97",
+      indexerGraceSeconds: 120,
+      embeddedWalletOnly: false,
+      now: () => new Date("2026-10-27T11:10:00.000Z"),
+    });
+    const outcome = await runner.settleHour({
+      hourStart: S,
+      trigger: "scheduled",
+    });
+    expect(outcome.kind).toBe("settled");
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1] }),
+    );
+    const committed = (
+      commit.mock.calls as unknown as [
+        {
+          inputSummary: Record<string, unknown>;
+          inputDigest: string;
+          denominatorAssetPower: string;
+          rewards: readonly { userId: string; assetHoldings: unknown[] }[];
+        },
+      ][]
+    )[0]?.[0];
+    expect(committed?.inputSummary["ignoredNonRosterAssetIds"]).toEqual([
+      ASSET2,
+    ]);
+    expect(committed?.denominatorAssetPower).toBe("150");
+    expect(
+      committed?.rewards.find((row) => row.userId === U3)?.assetHoldings ?? [],
+    ).toEqual([]);
+
+    // Replay under the roster rule reproduces the digest.
+    repo.epochs.push(
+      epochRecord({
+        hourStart: "2026-10-27T10:00:00.000Z",
+        hourEnd: "2026-10-27T11:00:00.000Z",
+        inputDigest: committed?.inputDigest ?? null,
+        inputSummary: committed?.inputSummary ?? {},
+      }),
+    );
+    reads.mockClear();
+    const replay = await runner.replay(epochRecord().epochId);
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1] }),
+    );
+    expect(replay?.digestMatches).toBe(true);
+
+    // An hour settled before 0191 (roster stored, no ignored key) replays
+    // under the document rule: history is never rewritten.
+    const older = Object.fromEntries(
+      Object.entries(committed?.inputSummary ?? {}).filter(
+        ([key]) => key !== "ignoredNonRosterAssetIds",
+      ),
+    );
+    repo.epochs.length = 0;
+    repo.epochs.push(
+      epochRecord({
+        hourStart: "2026-10-27T10:00:00.000Z",
+        hourEnd: "2026-10-27T11:00:00.000Z",
+        inputSummary: older,
+      }),
+    );
+    reads.mockClear();
+    await runner.replay(epochRecord().epochId);
+    expect(reads).toHaveBeenCalledWith(
+      expect.objectContaining({ assetIds: [ASSET1, ASSET2] }),
+    );
   });
 });

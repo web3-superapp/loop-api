@@ -771,6 +771,13 @@ document keys `assetWeights` / `communityCoefficients` override,
 the snapshot (pool part valued by the settlement rules on the launch chain:
 MEME balance × token weight + NFTs × NFT coefficient, no new `/v2` key).
 
+Decision 0191 (S321): the hourly settlement's asset set is exactly the power
+list — an `assetWeights` entry for an asset that is no roster row (e.g. a
+pending community's MEME) weighs nothing (no holdings, no self or referral
+power) in hours settled from 0191 on; `mining_epochs.input_summary
+.ignoredNonRosterAssetIds` lists them; earlier hours replay unchanged. No `/v2`
+key change.
+
 Decision 0189 (S316 / S317): the power list — external tokens (a verified community's
 bound asset that is not a launch2 MEME) are roster rows too, out until the
 parameter document's `includedAssets` lets them in (weight = `assetWeights`
