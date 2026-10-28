@@ -20,7 +20,10 @@ import {
   type DeviceSessionRepository,
 } from "../src/features/session/device-session-repository.js";
 import { LoopIdAllocationExhaustedError } from "../src/features/identity/loop-id.js";
-import type { PrivyAccessTokenVerifier } from "../src/integrations/privy/access-token-verifier.js";
+import {
+  InvalidAccessTokenError,
+  type PrivyAccessTokenVerifier,
+} from "../src/integrations/privy/access-token-verifier.js";
 
 const accountId = "6d12a86e-4134-47e6-9312-c5ef75a30f55";
 const streamUserId = "loop_6d12a86e413447e69312c5ef75a30f55";
@@ -478,6 +481,105 @@ describe("LOOP API V2 account sessions", () => {
     expect(revokeInput?.requestSha256).toBe(
       "dc507491fe9bc7aa6a6a5f26a26b647c281325aa1460d4b53f2d6a04819e59d8",
     );
+  });
+
+  describe("logout of an already-revoked session (Decision 0190)", () => {
+    const revokedSession = {
+      sessionId,
+      ownerUserId: accountId,
+      deviceId,
+      clientPlatform: "ios" as const,
+      clientVersion: "1.2.3",
+      authStrength: "providerAuthenticated" as const,
+      policyVersion: "sessionPolicyV1" as const,
+      status: "revoked" as const,
+      createdAt,
+      lastSeenAt: createdAt,
+      revokedAt,
+    };
+
+    function revokedFakes() {
+      const dependencies = fakes();
+      dependencies.database.deviceSessions.findById.mockImplementation(
+        (ownerUserId, requestedSessionId) =>
+          Promise.resolve(
+            ownerUserId === accountId && requestedSessionId === sessionId
+              ? revokedSession
+              : null,
+          ),
+      );
+      return dependencies;
+    }
+
+    it("returns 200 revoked with the original revokedAt for the original and a new idempotency key", async () => {
+      const { app, revokeSession } = await createApp(revokedFakes());
+      const freshKey = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+      for (const key of [idempotencyKey, freshKey]) {
+        const response = await app.inject({
+          method: "POST",
+          url: "/v2/session/logout",
+          headers: requestHeaders({
+            "idempotency-key": key,
+            "x-loop-session-id": sessionId,
+          }),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({
+          session: { sessionId, status: "revoked", revokedAt },
+          providerLogoutRequired: true,
+          contractVersion: "2.0",
+        });
+      }
+      expect(revokeSession).toHaveBeenCalledTimes(2);
+      expect(revokeSession.mock.calls.map(([input]) => input)).toEqual([
+        expect.objectContaining({
+          ownerUserId: accountId,
+          sessionId,
+          idempotencyKey,
+        }),
+        expect.objectContaining({
+          ownerUserId: accountId,
+          sessionId,
+          idempotencyKey: freshKey,
+        }),
+      ]);
+    });
+
+    it("still answers 404 for a session id that belongs to another owner", async () => {
+      const dependencies = revokedFakes();
+      dependencies.revokeSession.mockResolvedValueOnce(null);
+      const { app } = await createApp(dependencies);
+      const foreignSessionId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/session/logout",
+        headers: requestHeaders({ "x-loop-session-id": foreignSessionId }),
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ code: "SESSION_NOT_FOUND" });
+      expect(dependencies.revokeSession.mock.calls[0]?.[0]).toMatchObject({
+        ownerUserId: accountId,
+        sessionId: foreignSessionId,
+      });
+    });
+
+    it("still rejects an unverified Privy bearer", async () => {
+      const dependencies = revokedFakes();
+      dependencies.verifyAccessToken.mockRejectedValueOnce(
+        new InvalidAccessTokenError(),
+      );
+      const { app, revokeSession } = await createApp(dependencies);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v2/session/logout",
+        headers: requestHeaders({ "x-loop-session-id": sessionId }),
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(revokeSession).not.toHaveBeenCalled();
+    });
   });
 
   it("uses one non-enumerating not-found result for missing and foreign sessions", async () => {

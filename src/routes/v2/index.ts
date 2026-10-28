@@ -74,6 +74,8 @@ export interface V2RouteDependencies {
   readonly runtime: V2ProductPolicyRuntime;
   readonly authenticatePrivyBearer: preHandlerAsyncHookHandler;
   readonly authenticateLoopBearer: preHandlerAsyncHookHandler;
+  /** Decision 0190: logout only; tolerates an already-revoked session id. */
+  readonly authenticateLoopBearerAllowingRevokedSession: preHandlerAsyncHookHandler;
   readonly sessionService: V2SessionService;
   readonly profileService: ProfileV2Service;
   /** Avatar / community logo upload and read (Decision 0095). */
@@ -196,6 +198,7 @@ export function registerV2Routes(
     app,
     dependencies.authenticatePrivyBearer,
     dependencies.authenticateLoopBearer,
+    dependencies.authenticateLoopBearerAllowingRevokedSession,
     dependencies.sessionService,
   );
   for (const moduleId of registeredV2ModuleIds(dependencies.config)) {

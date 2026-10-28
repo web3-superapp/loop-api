@@ -155,6 +155,25 @@ describe("Native Privy Bearer authentication", () => {
       service.authenticateLoopBearer(validRawHeaders),
     ).resolves.toMatchObject({ userId: loopUserId });
     expect(findById).toHaveBeenCalledTimes(2);
+
+    // Decision 0190: the logout-only variant lets the revoked id through
+    // without consulting the session store; the bearer is still verified.
+    await expect(
+      service.authenticateLoopBearer(
+        [...validRawHeaders, "x-loop-session-id", revokedSessionId],
+        { allowRevokedSession: true },
+      ),
+    ).resolves.toMatchObject({ userId: loopUserId });
+    expect(findById).toHaveBeenCalledTimes(2);
+    inputs.verifyAccessToken.mockRejectedValueOnce(
+      new InvalidAccessTokenError(),
+    );
+    await expect(
+      service.authenticateLoopBearer(
+        [...validRawHeaders, "x-loop-session-id", revokedSessionId],
+        { allowRevokedSession: true },
+      ),
+    ).rejects.toMatchObject({ statusCode: 401, code: "invalid_access_token" });
   });
 
   it("requires bootstrap for a verified identity without an internal user", async () => {

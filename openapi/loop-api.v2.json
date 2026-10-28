@@ -2604,7 +2604,7 @@
         "operationId": "logoutV2Session",
         "summary": "Revoke the current LOOP device-session projection",
         "tags": ["identity"],
-        "description": "Revokes the owner-bound LOOP device-session audit projection. The client must still call the Privy SDK logout operation.",
+        "description": "Revokes the owner-bound LOOP device-session audit projection. The client must still call the Privy SDK logout operation. Logging out of a session that is already revoked is idempotent: it returns 200 with status revoked and the original revokedAt, for the original or a new Idempotency-Key.",
         "parameters": [
           {
             "schema": {

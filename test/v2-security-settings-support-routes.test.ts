@@ -847,6 +847,65 @@ describe("LOOP API V2 security, settings, and support modules", () => {
       expectEnvelope(noKey, 400, "INVALID_REQUEST");
     });
 
+    it("lets only logout through for a revoked session id and answers it idempotently (Decision 0190)", async () => {
+      const originalRevokedAt = "2026-09-08T21:00:00.000Z";
+      const foreignSessionId = "99999999-9999-4999-8999-999999999999";
+      const { app } = await createApp(
+        fakes({
+          sessions: [
+            session({
+              status: "revoked",
+              revokedAt: originalRevokedAt,
+            }),
+            session({
+              sessionId: foreignSessionId,
+              ownerUserId: "7e23b97f-5245-48f7-8423-d6f086b41f66",
+              deviceId: otherDeviceId,
+            }),
+          ],
+        }),
+      );
+
+      const ordinary = await app.inject({
+        method: "GET",
+        url: "/v2/devices",
+        headers: { ...readHeaders, "x-loop-session-id": currentSessionId },
+      });
+      expectEnvelope(ordinary, 401, "AUTH_INVALID");
+
+      for (const key of [
+        idempotencyKey,
+        "12345678-1234-4234-8234-123456789abc",
+      ]) {
+        const logout = await app.inject({
+          method: "POST",
+          url: "/v2/session/logout",
+          headers: { ...commandHeaders, "idempotency-key": key },
+        });
+        expect(logout.statusCode).toBe(200);
+        expect(logout.json()).toEqual({
+          session: {
+            sessionId: currentSessionId,
+            status: "revoked",
+            revokedAt: originalRevokedAt,
+          },
+          providerLogoutRequired: true,
+          contractVersion: "2.0",
+        });
+      }
+
+      const foreign = await app.inject({
+        method: "POST",
+        url: "/v2/session/logout",
+        headers: {
+          ...commandHeaders,
+          "x-loop-session-id": foreignSessionId,
+          "idempotency-key": "abcdefab-cdef-4abc-8def-abcdefabcdef",
+        },
+      });
+      expectEnvelope(foreign, 404, "SESSION_NOT_FOUND");
+    });
+
     it("refuses LOOP access to a request that names a revoked session", async () => {
       const { app } = await createApp(
         fakes({
