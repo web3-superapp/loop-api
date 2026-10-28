@@ -950,6 +950,130 @@ describe("LOOP API V2 mining module", () => {
       });
     });
 
+    describe("asset pool / NFT pool split (Decision 0192)", () => {
+      // Cake carries 15 of NFT power folded into its 115 (pool part,
+      // Decision 0187); LOOP is a formula-path row (0).
+      const splitRows = [
+        {
+          ownerUserId: s7AccountId,
+          assetId: cakeAsset,
+          holding: "100",
+          referencePriceUsd: "2.3",
+          referencePriceQuality: "fresh" as const,
+          referencePriceProxyAssetId: null,
+          referencePricePairAddress: null,
+          weight: "0.5",
+          power: "115",
+          nftPower: "15",
+          blockNumber: "122037728",
+        },
+        {
+          ownerUserId: s7AccountId,
+          assetId: loopAsset,
+          holding: "1",
+          referencePriceUsd: "885",
+          referencePriceQuality: "fresh" as const,
+          referencePriceProxyAssetId: null,
+          referencePricePairAddress: null,
+          weight: "1",
+          power: "885",
+          nftPower: "0",
+          blockNumber: "122037728",
+        },
+      ];
+      const emit = { MINING_POOL_SPLIT_EMIT: "on" };
+
+      async function read(app: FastifyInstance, url: string) {
+        const response = await app.inject({
+          method: "GET",
+          url,
+          headers: s7CommonHeaders(),
+        });
+        expect(response.statusCode, url).toBe(200);
+        return response.json<Record<string, unknown>>();
+      }
+
+      it("publishes assetPower + nftPower = power and each row's nftPower under MINING_POOL_SPLIT_EMIT=on", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            listAccountPowers: vi.fn(() => Promise.resolve(splitRows)),
+          }),
+          emit,
+        );
+        const summary = await read(app, "/v2/mining/summary");
+        expect(summary).toMatchObject({
+          power: { status: "available", value: "1000" },
+          assetPower: "985",
+          nftPower: "15",
+          networkPower: { status: "available", value: "4000" },
+        });
+        expect(summary).not.toHaveProperty("networkAssetPower");
+        expect(summary).not.toHaveProperty("networkNftPower");
+        const assets = await read(app, "/v2/mining/assets");
+        const included = assets["included"] as Record<string, unknown>[];
+        expect(
+          included.map((row) => [
+            row["assetId"],
+            row["power"],
+            row["nftPower"],
+          ]),
+        ).toEqual([
+          [cakeAsset, "115", "15"],
+          [loopAsset, "885", "0"],
+        ]);
+      });
+
+      it("keeps both payloads without the keys while the switch is off (default)", async () => {
+        const listAccountPowers = vi.fn(() => Promise.resolve(splitRows));
+        const { app } = await createApp(
+          approvedRepository({ listAccountPowers }),
+        );
+        const summary = await read(app, "/v2/mining/summary");
+        expect(summary).not.toHaveProperty("assetPower");
+        expect(summary).not.toHaveProperty("nftPower");
+        // Off adds no read to the summary.
+        expect(listAccountPowers).not.toHaveBeenCalled();
+        const assets = await read(app, "/v2/mining/assets");
+        for (const row of assets["included"] as Record<string, unknown>[]) {
+          expect(row).not.toHaveProperty("nftPower");
+        }
+      });
+
+      it("omits the keys for a snapshot stored before 0192 (rows without nftPower)", async () => {
+        const { app } = await createApp(approvedRepository(), emit);
+        const summary = await read(app, "/v2/mining/summary");
+        expect(summary["power"]).toEqual({
+          status: "available",
+          value: "1000",
+        });
+        expect(summary).not.toHaveProperty("assetPower");
+        expect(summary).not.toHaveProperty("nftPower");
+        const assets = await read(app, "/v2/mining/assets");
+        for (const row of assets["included"] as Record<string, unknown>[]) {
+          expect(row).not.toHaveProperty("nftPower");
+        }
+      });
+
+      it("omits the keys while power is unavailable", async () => {
+        const { app } = await createApp(
+          approvedRepository({
+            getAccountStanding: vi.fn(() => Promise.resolve(null)),
+            listAccountPowers: vi.fn(() => Promise.resolve([])),
+            listAccountBalanceAssetIds: vi.fn(() => Promise.resolve([])),
+            hasActiveWallet: vi.fn(() => Promise.resolve(true)),
+          }),
+          emit,
+        );
+        const summary = await read(app, "/v2/mining/summary");
+        expect(summary["power"]).toEqual({
+          status: "unavailable",
+          reasonCode: "MINING_SNAPSHOT_PENDING",
+        });
+        expect(summary).not.toHaveProperty("assetPower");
+        expect(summary).not.toHaveProperty("nftPower");
+      });
+    });
+
     it("takes every symbol from the Asset Registry and fails closed when it cannot answer", async () => {
       // A registry without a row for an asset yields null, never a guess
       // from the address or the chain slot.

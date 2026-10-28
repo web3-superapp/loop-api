@@ -64,6 +64,7 @@ import {
   type MiningSnapshotAttemptRecord,
   type MiningSnapshotRecord,
 } from "./mining-repository.js";
+import { splitMiningSnapshotPower } from "./mining-pool-split.js";
 import { selectMiningWeight } from "./mining-snapshot.js";
 
 /**
@@ -172,6 +173,14 @@ export type MiningFormulaStateProjection =
 
 export interface MiningSummaryResource {
   readonly power: MiningDecimalOrUnavailable;
+  /**
+   * Decision 0192 (optional, only under `MINING_POOL_SPLIT_EMIT=on`): the
+   * caller's snapshot self power in the asset pool / NFT pool; together
+   * exactly `power`. Absent while `power` is unavailable or the snapshot
+   * predates 0192.
+   */
+  readonly assetPower?: string;
+  readonly nftPower?: string;
   readonly networkPower: MiningDecimalOrUnavailable;
   readonly estimatedToday: MiningEstimateOrUnavailable;
   readonly accumulated: UnavailableProjection;
@@ -207,6 +216,12 @@ export interface MiningIncludedAssetProjection {
   readonly referencePricePairAddress: string | null;
   readonly weight: string;
   readonly power: string;
+  /**
+   * Decision 0192 (optional, only under `MINING_POOL_SPLIT_EMIT=on`): the
+   * NFT share folded into `power`; `0` on a row without one. Absent when the
+   * snapshot predates 0192.
+   */
+  readonly nftPower?: string;
   readonly blockNumber: string;
 }
 
@@ -708,8 +723,16 @@ export function createMiningService(dependencies: {
    */
   readonly cursorCodec?: V2CursorCodec | null;
   readonly now?: () => Date;
+  /**
+   * Decision 0192 (`MINING_POOL_SPLIT_EMIT`, default off): publish the
+   * optional `assetPower` / `nftPower` (summary) and `included[].nftPower`
+   * (assets). Off keeps both payloads byte-identical — the shipped `/v2`
+   * client codec refuses unknown keys.
+   */
+  readonly poolSplitEmit?: boolean;
 }): MiningService {
   const { repository, registry } = dependencies;
+  const poolSplitEmit = dependencies.poolSplitEmit ?? false;
   const now = dependencies.now ?? (() => new Date());
 
   /** `assetId → symbol` for the given IDs; an ID without a row is absent. */
@@ -891,8 +914,24 @@ export function createMiningService(dependencies: {
         });
         const absent =
           standing === null ? await absentReason(input.principal.userId) : null;
+        // Decision 0192: the split is read from the rows that make `power`.
+        const split =
+          poolSplitEmit && absent === null
+            ? splitMiningSnapshotPower(
+                standing?.totalPower ?? "0",
+                standing === null
+                  ? []
+                  : await repository.listAccountPowers({
+                      snapshotId: snapshot.snapshotId,
+                      ownerUserId: input.principal.userId,
+                    }),
+              )
+            : null;
         return Object.freeze({
           power: absent ?? decimal(standing?.totalPower ?? "0"),
+          ...(split === null
+            ? {}
+            : { assetPower: split.assetPower, nftPower: split.nftPower }),
           networkPower: decimal(snapshot.totalPower),
           estimatedToday: estimateProjection(
             resolution.formula,
@@ -1002,6 +1041,13 @@ export function createMiningService(dependencies: {
                   : { referencePriceReasonCode: row.referencePriceReasonCode }),
                 weight: row.weight,
                 power: row.power,
+                // Decision 0192: only under MINING_POOL_SPLIT_EMIT=on and
+                // only on a row stored with its NFT share.
+                ...(poolSplitEmit &&
+                row.nftPower !== undefined &&
+                row.nftPower !== null
+                  ? { nftPower: row.nftPower }
+                  : {}),
                 blockNumber: row.blockNumber,
               }),
             ),

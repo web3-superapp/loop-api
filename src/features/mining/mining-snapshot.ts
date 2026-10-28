@@ -135,6 +135,12 @@ export interface MiningSnapshotPower {
   readonly referencePricePairAddress: string | null;
   readonly weight: string;
   readonly power: string;
+  /**
+   * Decision 0192: the NFT share folded into `power` (pool part, Decision
+   * 0187); `0` on a formula-path row. Absent / null on a row stored before
+   * 0192 — such a snapshot publishes no asset / NFT split.
+   */
+  readonly nftPower?: string | null;
   readonly blockNumber: string;
 }
 
@@ -490,6 +496,7 @@ export function computeMiningSnapshot(
               existing === undefined
                 ? power
                 : addDecimalStrings(existing.power, power),
+            nftPower: "0",
             blockNumber:
               existing === undefined ||
               compareBlocks(balance.blockNumber, existing.blockNumber) > 0
@@ -552,6 +559,7 @@ export function computeMiningSnapshot(
           existing === undefined
             ? power
             : addDecimalStrings(existing.power, power),
+        nftPower: "0",
         blockNumber:
           existing === undefined ||
           compareBlocks(balance.blockNumber, existing.blockNumber) > 0

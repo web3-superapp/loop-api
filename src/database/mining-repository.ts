@@ -171,6 +171,7 @@ const powerRowSchema = z
       .nullable(),
     weight: decimalSchema,
     power: decimalSchema,
+    nft_power: decimalSchema.nullable(),
     block_number: blockNumberSchema,
   })
   .strict()
@@ -1242,9 +1243,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                   snapshot_id, owner_user_id, asset_id, holding,
                   reference_price_usd, reference_price_quality,
                   reference_price_proxy_asset_id, reference_price_pair_address,
-                  weight, power, block_number, reference_price_reason_code
+                  weight, power, block_number, reference_price_reason_code,
+                  nft_power
                 )
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
               `,
               values: [
                 snapshotId,
@@ -1265,6 +1267,10 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                 decimalSchema.parse(power.power),
                 blockNumberSchema.parse(power.blockNumber),
                 power.referencePriceReasonCode ?? null,
+                // Decision 0192: the NFT share of `power`; null = unknown.
+                power.nftPower === undefined || power.nftPower === null
+                  ? null
+                  : decimalSchema.parse(power.nftPower),
               ],
             });
           }
@@ -1431,7 +1437,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
               owner_user_id, asset_id, holding, reference_price_usd,
               reference_price_quality, reference_price_proxy_asset_id,
               reference_price_pair_address, reference_price_reason_code,
-              weight, power, block_number::text as block_number
+              weight, power, nft_power, block_number::text as block_number
             from public.mining_snapshot_powers
             where snapshot_id = $1 and owner_user_id = $2
             order by asset_id
@@ -1456,6 +1462,7 @@ export function createPostgresMiningRepository(pool: Pool): MiningRepository {
                   }),
               weight: row.weight,
               power: row.power,
+              ...(row.nft_power === null ? {} : { nftPower: row.nft_power }),
               blockNumber: row.block_number,
             });
           }),

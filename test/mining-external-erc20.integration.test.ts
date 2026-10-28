@@ -533,6 +533,86 @@ describe("Decision 0189 erc20 external tokens on PostgreSQL", () => {
     ).rejects.toThrow(/mining_snapshot_powers_unpriced_check/u);
   });
 
+  it("stores the NFT share of a power row and reads it back; legacy rows stay null (migration 000104, Decision 0192)", async () => {
+    // Reuses the approved formula of the 000103 case (one approved row).
+    const mining = createPostgresMiningRepository(pool);
+    const row = {
+      referencePriceUsd: "0.01",
+      referencePriceQuality: "fresh" as const,
+      referencePriceProxyAssetId: null,
+      referencePricePairAddress: null,
+      weight: "1",
+      blockNumber: "5000",
+    };
+    const snapshotId = randomUUID();
+    await mining.writeSnapshot({
+      snapshotId,
+      blockNumber: "5000",
+      blockHash: hex(5000),
+      formulaVersion: "s317-formula",
+      priceVersion: "launch2_curve:2026-10-28T00:00:00.000Z",
+      totalPower: "113.5",
+      powers: [
+        // pool part: 100 tokens + 2 NFTs
+        {
+          ...row,
+          ownerUserId: users[1]!,
+          assetId: ASSET_A,
+          holding: "100",
+          power: "102",
+          nftPower: "2",
+        },
+        // formula path
+        {
+          ...row,
+          ownerUserId: users[1]!,
+          assetId: CAKE,
+          holding: "11.5",
+          power: "11.5",
+          nftPower: "0",
+        },
+      ],
+      holdingsSource: "chain",
+    });
+    expect(
+      (
+        await mining.listAccountPowers({ snapshotId, ownerUserId: users[1]! })
+      ).map((power) => [power.assetId, power.power, power.nftPower]),
+    ).toEqual(
+      [
+        [ASSET_A, "102", "2"],
+        [CAKE, "11.5", "0"],
+      ].sort((left, right) => left[0]!.localeCompare(right[0]!)),
+    );
+    // A row written without the share (every row before 0192) reads back
+    // without the key.
+    await pool.query(
+      `insert into public.mining_snapshot_powers (snapshot_id, owner_user_id, asset_id,
+         holding, reference_price_usd, reference_price_quality, weight, power, block_number)
+       values ($1, $2, $3, '1', '1', 'fresh', '1', '1', 5000)`,
+      [snapshotId, users[2], CAKE],
+    );
+    const [legacy] = await mining.listAccountPowers({
+      snapshotId,
+      ownerUserId: users[2]!,
+    });
+    expect(legacy).toBeDefined();
+    expect(legacy).not.toHaveProperty("nftPower");
+    // The share is a decimal no larger than the row's power.
+    for (const nftPower of ["2", "-1", "abc"]) {
+      await expect(
+        pool.query(
+          `insert into public.mining_snapshot_powers (snapshot_id, owner_user_id, asset_id,
+             holding, reference_price_usd, reference_price_quality, weight, power,
+             block_number, nft_power)
+           values ($1, $2, $3, '1', '1', 'fresh', '1', '1', 5000, $4)`,
+          [snapshotId, users[2], ASSET_A, nftPower],
+        ),
+        nftPower,
+      ).rejects.toThrow(/mining_snapshot_powers_nft_power_check/u);
+    }
+  });
+
   it("keeps the 0187 community rank projection for an hour settled before 0189", async () => {
     const mining = createPostgresMiningRepository(pool);
     const ranked = async () =>

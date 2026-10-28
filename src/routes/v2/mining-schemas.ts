@@ -283,6 +283,16 @@ export const miningSummaryResourceSchema = {
   ],
   properties: {
     power: decimalOrUnavailableSchema,
+    assetPower: {
+      ...decimalSchema,
+      description:
+        "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the caller's snapshot self power in the asset pool (token holdings × weight). assetPower + nftPower = power.value exactly. Absent while power is unavailable or when the snapshot was stored before 0192.",
+    },
+    nftPower: {
+      ...decimalSchema,
+      description:
+        "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the caller's snapshot self power in the NFT pool (NFT units × community coefficient), present exactly when assetPower is.",
+    },
     networkPower: decimalOrUnavailableSchema,
     estimatedToday: estimateSchema,
     accumulated: unavailableSchema,
@@ -377,6 +387,11 @@ export const miningAssetsResourceSchema = {
               "The effective weight: the formula's asset weight, multiplied by the approved community weight when one community binds the asset.",
           },
           power: decimalSchema,
+          nftPower: {
+            ...decimalSchema,
+            description:
+              "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the NFT share folded into this row's power (a platform MEME row's NFTs × coefficient); \"0\" on a row without one. power − nftPower is the token part. Absent when the snapshot was stored before 0192.",
+          },
           blockNumber: { type: "string", pattern: "^(0|[1-9][0-9]{0,19})$" },
         },
       },

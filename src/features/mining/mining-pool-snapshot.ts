@@ -37,8 +37,8 @@ import type {
  *           NFT coefficient
  *
  * `holding` is the MEME balance (18 decimals), `weight` the token weight;
- * the NFT part is folded into `power` (no new public key — the client's
- * strict codec would refuse one). Referral power is not part of a snapshot.
+ * the NFT part is folded into `power` and, since Decision 0192, also kept as
+ * `nftPower` (stored, published only under `MINING_POOL_SPLIT_EMIT=on`). Referral power is not part of a snapshot.
  * `referencePriceUsd` is the bonding-curve price after the last indexed
  * curve trade before `at` (for a graduated MEME: its graduation price); it
  * multiplies nothing (Decision 0125) and is published as `fresh` because
@@ -167,10 +167,17 @@ export function computeMiningPoolSnapshot(input: {
   }
   const powers: MiningSnapshotPower[] = [];
   for (const user of result.users) {
-    const rows = new Map<string, { balance: bigint; power: bigint }>();
+    const rows = new Map<
+      string,
+      { balance: bigint; power: bigint; nftPower: bigint }
+    >();
     for (const holding of user.assetHoldings) {
       if (!pool.has(holding.assetId)) continue;
-      const row = rows.get(holding.assetId) ?? { balance: 0n, power: 0n };
+      const row = rows.get(holding.assetId) ?? {
+        balance: 0n,
+        power: 0n,
+        nftPower: 0n,
+      };
       row.balance += holding.balanceAtEndRaw;
       row.power += holding.power;
       rows.set(holding.assetId, row);
@@ -178,8 +185,13 @@ export function computeMiningPoolSnapshot(input: {
     for (const holding of user.nftHoldings) {
       const assetId = memeOf.get(holding.instanceId);
       if (assetId === undefined || !pool.has(assetId)) continue;
-      const row = rows.get(assetId) ?? { balance: 0n, power: 0n };
+      const row = rows.get(assetId) ?? {
+        balance: 0n,
+        power: 0n,
+        nftPower: 0n,
+      };
       row.power += holding.power;
+      row.nftPower += holding.power;
       rows.set(assetId, row);
     }
     for (const [assetId, row] of rows) {
@@ -195,6 +207,7 @@ export function computeMiningPoolSnapshot(input: {
           referencePricePairAddress: null,
           weight: formatMiningDecimal(weights.get(assetId) ?? 0n),
           power: formatMiningDecimal(row.power),
+          nftPower: formatMiningDecimal(row.nftPower),
           blockNumber: input.block.blockNumber,
         }),
       );

@@ -117367,6 +117367,16 @@
                         }
                       ]
                     },
+                    "assetPower": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                      "description": "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the caller's snapshot self power in the asset pool (token holdings × weight). assetPower + nftPower = power.value exactly. Absent while power is unavailable or when the snapshot was stored before 0192."
+                    },
+                    "nftPower": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                      "description": "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the caller's snapshot self power in the NFT pool (NFT units × community coefficient), present exactly when assetPower is."
+                    },
                     "networkPower": {
                       "anyOf": [
                         {
@@ -118449,6 +118459,11 @@
                           "power": {
                             "type": "string",
                             "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$"
+                          },
+                          "nftPower": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]{1,60})?$",
+                            "description": "Decision 0192 (optional key; clients must not require it; emitted only under MINING_POOL_SPLIT_EMIT=on): the NFT share folded into this row's power (a platform MEME row's NFTs × coefficient); \"0\" on a row without one. power − nftPower is the token part. Absent when the snapshot was stored before 0192."
                           },
                           "blockNumber": {
                             "type": "string",

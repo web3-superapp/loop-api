@@ -466,6 +466,34 @@ describe("Decision 0187 snapshot pool part", () => {
     ]);
   });
 
+  it("keeps the NFT share folded into each MEME row as nftPower (Decision 0192)", () => {
+    const part = computeMiningPoolSnapshot({
+      at: S + 17n,
+      versions: [versionWith()],
+      poolAssetIds: [ASSET1, ASSET2],
+      facts: facts(),
+      block,
+      registeredAssetIds: new Set([ASSET1, ASSET2]),
+    });
+    expect(part.kind).toBe("computed");
+    if (part.kind !== "computed") return;
+    expect(
+      part.powers.map((row) => [
+        row.ownerUserId,
+        row.assetId,
+        row.power,
+        row.nftPower,
+      ]),
+    ).toEqual([
+      // both: 100 tokens + 2 NFTs
+      [U1, ASSET1, "102", "2"],
+      // token only
+      [U2, ASSET1, "50", "0"],
+      // NFT only
+      [U2, ASSET2, "1", "1"],
+    ]);
+  });
+
   it("applies explicit weights / coefficients and exclusions", () => {
     const part = computeMiningPoolSnapshot({
       at: S,
@@ -618,11 +646,13 @@ describe("Decision 0187 snapshot pool part", () => {
         row.ownerUserId,
         row.assetId,
         row.power,
+        row.nftPower,
       ]),
     ).toEqual([
-      [U1, BTCB, "2"],
-      [U1, ASSET1, "102"],
-      [U2, ASSET1, "50"],
+      // Decision 0192: a formula-path row stores nftPower 0.
+      [U1, BTCB, "2", "0"],
+      [U1, ASSET1, "102", "2"],
+      [U2, ASSET1, "50", "0"],
     ]);
     expect(computation.totalPower).toBe("154");
     expect(computation.blockNumber).toBe("900");

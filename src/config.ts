@@ -1078,6 +1078,11 @@ const environmentSchema = z
     // POST /v2/wallets/sync (new) always carries them. Turn on only once
     // every supported client decodes the keys.
     WALLET_LINK_POLICY_EMIT: z.enum(["off", "on"]),
+    // Decision 0192: off|on (default off). off keeps GET /v2/mining/summary
+    // and GET /v2/mining/assets byte-identical; on adds the optional
+    // `assetPower` / `nftPower` (summary) and `included[].nftPower` (assets)
+    // keys. Turn on only once every supported client decodes the keys.
+    MINING_POOL_SPLIT_EMIT: z.enum(["off", "on"]),
     // Decision 0185: true|false (default false; any other value refuses
     // boot). false = a trader / holder address that belongs to an account
     // only through an *external* wallet is never shown next to that account
@@ -2014,6 +2019,8 @@ export interface AppConfig {
   readonly launchReviewInboxEmit: boolean;
   /** Decision 0185: WALLET_LINK_POLICY_EMIT === "on" (default off). */
   readonly walletLinkPolicyEmit: boolean;
+  /** Decision 0192: MINING_POOL_SPLIT_EMIT === "on" (default off). */
+  readonly miningPoolSplitEmit: boolean;
   /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
   readonly externalWalletAddressPublic: boolean;
   /**
@@ -4536,6 +4543,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     NOTIFICATION_INBOX_EMIT: environment["NOTIFICATION_INBOX_EMIT"] ?? "off",
     LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
     WALLET_LINK_POLICY_EMIT: environment["WALLET_LINK_POLICY_EMIT"] ?? "off",
+    MINING_POOL_SPLIT_EMIT: environment["MINING_POOL_SPLIT_EMIT"] ?? "off",
     EXTERNAL_WALLET_ADDRESS_PUBLIC:
       environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4717,6 +4725,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     notificationInboxEmit: parsed.data.NOTIFICATION_INBOX_EMIT === "on",
     launchReviewInboxEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
     walletLinkPolicyEmit: parsed.data.WALLET_LINK_POLICY_EMIT === "on",
+    miningPoolSplitEmit: parsed.data.MINING_POOL_SPLIT_EMIT === "on",
     externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
