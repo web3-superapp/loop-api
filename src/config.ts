@@ -1021,6 +1021,12 @@ const environmentSchema = z
     // GET /v2/launch2/me/positions rows; on emits it (null when none). Turn
     // on only once every supported client decodes the key.
     LAUNCH2_NFT_IMAGE_EMIT: z.enum(["off", "on"]),
+    // Decision 0194: off|on (default off). off omits the optional
+    // `nft.heldTokenIds` key (token IDs the wallet currently holds, from the
+    // indexed ERC-721 Transfer logs) from the launch2 instance viewer and
+    // GET /v2/launch2/me/positions rows. Shipped clients decode `nft`
+    // strictly; turn on only once every supported client decodes the key.
+    LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT: z.enum(["off", "on"]),
     // Decision 0174: off|on (default off). off omits the optional
     // `priceUsd1` / `valueUsd1` / `priceSource` keys from the
     // GET /v2/launch2/me/positions rows; on emits them (null when there is
@@ -1088,6 +1094,11 @@ const environmentSchema = z
     // /v2/feedback/mine) answer 503 CAPABILITY_UNAVAILABLE /
     // BETA_FEEDBACK_DISABLED; the console reads and triage stay open.
     BETA_FEEDBACK_ENABLED: z.enum(["off", "on"]),
+    // Decision 0194 (S339): off|on (default off). off makes POST
+    // /v2/wallet-intents/send-nft answer 503 CAPABILITY_UNAVAILABLE /
+    // NFT_SEND_DISABLED and keeps the send preflight on eip155:56 only.
+    // Turn on only once a released client decodes the send_nft kind.
+    NFT_SEND_ENABLED: z.enum(["off", "on"]),
     // Decision 0185: true|false (default false; any other value refuses
     // boot). false = a trader / holder address that belongs to an account
     // only through an *external* wallet is never shown next to that account
@@ -2028,6 +2039,8 @@ export interface AppConfig {
   readonly miningPoolSplitEmit: boolean;
   /** Decision 0193: BETA_FEEDBACK_ENABLED === "on" (default on). */
   readonly betaFeedbackEnabled: boolean;
+  /** Decision 0194: NFT_SEND_ENABLED === "on" (default off). */
+  readonly nftSendEnabled: boolean;
   /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
   readonly externalWalletAddressPublic: boolean;
   /**
@@ -2057,6 +2070,8 @@ export interface AppConfig {
      * the `nftImageUrl` key from the instance / position projections.
      */
     readonly nftImageEmit: boolean;
+    /** Decision 0194: LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT === "on" (default off). */
+    readonly nftHeldTokenIdsEmit: boolean;
     /**
      * Decision 0174: LAUNCH2_POSITION_VALUE_EMIT === "on". False (default)
      * omits the price / value keys from the position rows.
@@ -4537,6 +4552,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_TRADER_ACCOUNT_EMIT:
       environment["LAUNCH2_TRADER_ACCOUNT_EMIT"] ?? "off",
     LAUNCH2_NFT_IMAGE_EMIT: environment["LAUNCH2_NFT_IMAGE_EMIT"] ?? "off",
+    LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT:
+      environment["LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT"] ?? "off",
     LAUNCH2_POSITION_VALUE_EMIT:
       environment["LAUNCH2_POSITION_VALUE_EMIT"] ?? "off",
     LAUNCH2_PNL_EMIT: environment["LAUNCH2_PNL_EMIT"] ?? "off",
@@ -4552,6 +4569,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     WALLET_LINK_POLICY_EMIT: environment["WALLET_LINK_POLICY_EMIT"] ?? "off",
     MINING_POOL_SPLIT_EMIT: environment["MINING_POOL_SPLIT_EMIT"] ?? "off",
     BETA_FEEDBACK_ENABLED: environment["BETA_FEEDBACK_ENABLED"] ?? "on",
+    NFT_SEND_ENABLED: environment["NFT_SEND_ENABLED"] ?? "off",
     EXTERNAL_WALLET_ADDRESS_PUBLIC:
       environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4735,6 +4753,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     walletLinkPolicyEmit: parsed.data.WALLET_LINK_POLICY_EMIT === "on",
     miningPoolSplitEmit: parsed.data.MINING_POOL_SPLIT_EMIT === "on",
     betaFeedbackEnabled: parsed.data.BETA_FEEDBACK_ENABLED === "on",
+    nftSendEnabled: parsed.data.NFT_SEND_ENABLED === "on",
     externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
@@ -4764,6 +4783,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       tradeDeadlineSeconds: parsed.data.LAUNCH2_POOL_TRADE_DEADLINE_SECONDS,
       traderAccountEmit: parsed.data.LAUNCH2_TRADER_ACCOUNT_EMIT === "on",
       nftImageEmit: parsed.data.LAUNCH2_NFT_IMAGE_EMIT === "on",
+      nftHeldTokenIdsEmit: parsed.data.LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT === "on",
       positionValueEmit: parsed.data.LAUNCH2_POSITION_VALUE_EMIT === "on",
       pnlEmit: parsed.data.LAUNCH2_PNL_EMIT === "on",
       poolRouter:

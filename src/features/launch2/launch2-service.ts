@@ -278,6 +278,12 @@ export interface Launch2ServiceDependencies {
    */
   readonly nftImageEmit?: boolean;
   /**
+   * Decision 0194 (LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT): whether the viewer /
+   * position `nft` objects carry `heldTokenIds`. False (default) omits it —
+   * shipped clients decode `nft` strictly.
+   */
+  readonly nftHeldTokenIdsEmit?: boolean;
+  /**
    * Decision 0174 (LAUNCH2_POSITION_VALUE_EMIT): whether the position rows
    * carry `priceUsd1` / `valueUsd1` / `priceSource` at all. False (default)
    * omits the three keys — shipped clients decode the rows strictly.
@@ -1249,6 +1255,37 @@ export function createLaunch2Service(
   const traderAccountEmit = deps.traderAccountEmit === true;
   // Decision 0173: off (default) = no `nftImageUrl` key.
   const nftImageEmit = deps.nftImageEmit === true;
+  // Decision 0194: off (default) = no `nft.heldTokenIds` key, no read.
+  const nftHeldTokenIdsEmit = deps.nftHeldTokenIdsEmit === true;
+  /**
+   * Decision 0194: `instanceId|holder` → held token IDs, or null when the
+   * key is not emitted (switch off, or a repository without the read).
+   */
+  async function heldTokenIdsOf(
+    instanceIds: readonly string[],
+    holderAddresses: readonly string[],
+  ): Promise<ReadonlyMap<string, readonly string[]> | null> {
+    const store = deps.repository;
+    if (
+      !nftHeldTokenIdsEmit ||
+      store === null ||
+      store.heldNftTokenIds === undefined
+    ) {
+      return null;
+    }
+    if (instanceIds.length === 0 || holderAddresses.length === 0) {
+      return new Map();
+    }
+    const rows = await store
+      .heldNftTokenIds({ instanceIds, holderAddresses })
+      .catch(translate);
+    return new Map(
+      rows.map((row) => [
+        `${row.instanceId}|${row.holderAddress}`,
+        row.tokenIds,
+      ]),
+    );
+  }
   // Decision 0174: off (default) = no price / value keys on position rows.
   const positionValueEmit = deps.positionValueEmit === true;
   // Decision 0176: off (default) = no cost / PnL keys.
@@ -4292,6 +4329,17 @@ export function createLaunch2Service(
         : null;
       const stage = stageOf(record, at);
       const position = positions[0] ?? null;
+      const viewerHeldTokenIds =
+        wallet === null
+          ? undefined
+          : await heldTokenIdsOf([record.instanceId], [wallet.address]).then(
+              (held) =>
+                held === null
+                  ? undefined
+                  : (held.get(
+                      `${record.instanceId}|${wallet.address.toLowerCase()}`,
+                    ) ?? []),
+            );
       const snapshot = record.snapshot;
       const graduation = record.graduation;
       return Object.freeze({
@@ -4412,6 +4460,9 @@ export function createLaunch2Service(
                   nft: Object.freeze({
                     mintedTokenId: position?.nftMintedTokenId ?? null,
                     held: position?.nftHeld ?? 0,
+                    ...(viewerHeldTokenIds === undefined
+                      ? {}
+                      : { heldTokenIds: viewerHeldTokenIds }),
                   }),
                   snapshot: Object.freeze({
                     member: member?.proof !== null && member !== null,
@@ -4695,6 +4746,11 @@ export function createLaunch2Service(
       const statsOf = new Map(
         stats.map((row) => [`${row.instanceId}|${row.walletAddress}`, row]),
       );
+      // Decision 0194: one read for every row, only when emitted.
+      const heldOf = await heldTokenIdsOf(
+        positions.map((position) => position.instanceId),
+        [...byAddress.keys()],
+      );
       // Decision 0126: live balances of graduated rows, a few reads at a
       // time (each cached ≤ 15 s).
       const balancesOf = new Map<string, Resource>();
@@ -4736,6 +4792,12 @@ export function createLaunch2Service(
               nft: Object.freeze({
                 mintedTokenId: position.nftMintedTokenId,
                 held: position.nftHeld,
+                ...(heldOf === null
+                  ? {}
+                  : {
+                      heldTokenIds:
+                        heldOf.get(key) ?? ([] as readonly string[]),
+                    }),
               }),
               snapshotMember: position.snapshotMember,
               curve: positionCurveOf(position, curvePurchaseCapOf(record)),

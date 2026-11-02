@@ -1141,8 +1141,8 @@
                     },
                     "capabilities": {
                       "type": "array",
-                      "minItems": 35,
-                      "maxItems": 35,
+                      "minItems": 36,
+                      "maxItems": 36,
                       "items": {
                         "type": "object",
                         "additionalProperties": false,
@@ -1190,7 +1190,8 @@
                               "meme",
                               "launch2",
                               "testnetFaucet",
-                              "squareFeed"
+                              "squareFeed",
+                              "nftSend"
                             ]
                           },
                           "availability": {
@@ -72795,7 +72796,7 @@
         "operationId": "listV2WalletIntents",
         "summary": "List the account's wallet intents",
         "tags": ["wallet-intents"],
-        "description": "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired.",
+        "description": "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired. Intents of an opt-in kind (send_nft, Decision 0194) appear only when includeKinds names it.",
         "parameters": [
           {
             "schema": {
@@ -72813,6 +72814,17 @@
             "in": "query",
             "name": "limit",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(send_nft)(,(send_nft))*$",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "includeKinds",
+            "required": false,
+            "description": "Decision 0194: comma-separated opt-in kinds the client decodes (send_nft). Intents of an opt-in kind not named here are left out of the page, so a client released before the kind existed never sees it. The cursor binds this set."
           },
           {
             "schema": {
@@ -72899,7 +72911,13 @@
                           },
                           "kind": {
                             "type": "string",
-                            "enum": ["send", "approve", "revoke", "swap"]
+                            "enum": [
+                              "send",
+                              "approve",
+                              "revoke",
+                              "swap",
+                              "send_nft"
+                            ]
                           },
                           "state": {
                             "type": "string",
@@ -72940,7 +72958,13 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "enum": ["send", "approve", "revoke", "swap"]
+                                "enum": [
+                                  "send",
+                                  "approve",
+                                  "revoke",
+                                  "swap",
+                                  "send_nft"
+                                ]
                               },
                               "asset": {
                                 "type": "object",
@@ -73091,7 +73115,12 @@
                                     "properties": {
                                       "functionName": {
                                         "type": "string",
-                                        "enum": ["transfer", "approve"]
+                                        "enum": [
+                                          "transfer",
+                                          "approve",
+                                          "safeTransferFrom"
+                                        ],
+                                        "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                       },
                                       "selector": {
                                         "type": "string",
@@ -73519,6 +73548,31 @@
                                   },
                                   { "type": "null" }
                                 ]
+                              },
+                              "nft": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "contractAddress",
+                                  "tokenId",
+                                  "projectName"
+                                ],
+                                "properties": {
+                                  "contractAddress": {
+                                    "type": "string",
+                                    "pattern": "^0x[0-9a-f]{40}$"
+                                  },
+                                  "tokenId": {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                  },
+                                  "projectName": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128
+                                  }
+                                },
+                                "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                               }
                             },
                             "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -73690,7 +73744,7 @@
                                   "chainId": {
                                     "type": "integer",
                                     "enum": [56, 97],
-                                    "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                                    "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                                   },
                                   "from": {
                                     "type": "string",
@@ -74713,7 +74767,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -74754,7 +74808,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -74898,7 +74958,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -75321,6 +75386,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -75485,7 +75575,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -76487,7 +76577,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -76528,7 +76618,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -76672,7 +76768,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -77095,6 +77196,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -77259,7 +77385,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -78287,7 +78413,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -78328,7 +78454,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -78472,7 +78604,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -78895,6 +79032,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -79059,7 +79221,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -81120,7 +81282,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -81161,7 +81323,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -81305,7 +81473,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -81728,6 +81901,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -81892,7 +82090,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -82223,7 +82421,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -82264,7 +82462,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -82408,7 +82612,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -82831,6 +83040,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -82995,7 +83229,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -84025,7 +84259,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -84066,7 +84300,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -84210,7 +84450,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -84633,6 +84878,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -84797,7 +85067,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -85744,7 +86014,7 @@
                   "chainId": {
                     "type": "string",
                     "pattern": "^eip155:[1-9][0-9]{0,9}$",
-                    "description": "Optional; anything other than eip155:56 is CHAIN_MISMATCH."
+                    "description": "Optional; anything other than eip155:56 is CHAIN_MISMATCH, except the launch slot's chain (eip155:97 on BSC Testnet) while NFT_SEND_ENABLED is on (Decision 0194), which checks the recipient on that chain."
                   }
                 }
               }
@@ -86537,7 +86807,7 @@
                   "chainId": {
                     "type": "string",
                     "pattern": "^eip155:[1-9][0-9]{0,9}$",
-                    "description": "Optional; anything other than eip155:56 is CHAIN_MISMATCH."
+                    "description": "Optional; anything other than eip155:56 is CHAIN_MISMATCH, except the launch slot's chain (eip155:97 on BSC Testnet) while NFT_SEND_ENABLED is on (Decision 0194), which checks the recipient on that chain."
                   }
                 }
               }
@@ -86619,7 +86889,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -86660,7 +86930,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -86804,7 +87080,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -87227,6 +87508,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -87391,7 +87697,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -87722,7 +88028,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -87763,7 +88069,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -87907,7 +88219,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -88330,6 +88647,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -88494,7 +88836,2998 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
+                            },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x([0-9a-f]{2})*$",
+                              "maxLength": 20000
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "The exact JSON-RPC transaction the device passes to Privy eth_sendTransaction. The client must not alter any field."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "authorizationPayload": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "version",
+                            "method",
+                            "url",
+                            "body",
+                            "headers"
+                          ],
+                          "properties": {
+                            "version": { "type": "integer", "enum": [1] },
+                            "method": { "type": "string", "enum": ["POST"] },
+                            "url": {
+                              "type": "string",
+                              "format": "uri",
+                              "maxLength": 512
+                            },
+                            "body": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "base_amount",
+                                "source",
+                                "destination",
+                                "amount_type",
+                                "slippage_bps"
+                              ],
+                              "properties": {
+                                "base_amount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["asset_address", "caip2"],
+                                  "properties": {
+                                    "asset_address": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "caip2": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                                    }
+                                  }
+                                },
+                                "destination": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["asset_address", "caip2"],
+                                  "properties": {
+                                    "asset_address": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "caip2": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                                    }
+                                  }
+                                },
+                                "amount_type": {
+                                  "type": "string",
+                                  "enum": ["exact_input"]
+                                },
+                                "slippage_bps": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 300
+                                },
+                                "fee_configuration": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["type", "value"],
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["total_fee_bps"]
+                                    },
+                                    "value": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 1000
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "headers": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "privy-app-id",
+                                "privy-idempotency-key",
+                                "privy-request-expiry"
+                              ],
+                              "properties": {
+                                "privy-app-id": {
+                                  "type": "string",
+                                  "maxLength": 255
+                                },
+                                "privy-idempotency-key": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "privy-request-expiry": {
+                                  "type": "string",
+                                  "pattern": "^[1-9][0-9]{0,15}$"
+                                }
+                              }
+                            }
+                          },
+                          "description": "The exact Privy request the user authorizes with generateAuthorizationSignature. Byte-exact conformance with Privy's canonical form is pending device evidence."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "transactionHash",
+                        "providerActionId",
+                        "reasonCode",
+                        "receipt"
+                      ],
+                      "properties": {
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "providerActionId": {
+                          "anyOf": [
+                            { "type": "string", "maxLength": 128 },
+                            { "type": "null" }
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "receipt": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "blockNumber",
+                                "blockHash",
+                                "gasUsed",
+                                "effectiveGasPrice",
+                                "confirmations",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["success", "reverted"]
+                                },
+                                "blockNumber": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                },
+                                "blockHash": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "gasUsed": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "effectiveGasPrice": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "confirmations": {
+                                  "anyOf": [
+                                    { "type": "integer", "minimum": 0 },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "version": {
+                      "type": "string",
+                      "pattern": "^[1-9][0-9]{0,18}$"
+                    },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INVALID_REQUEST"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              },
+              "www-authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer realm=\"loop-api\""
+                },
+                "description": "Privy Bearer authentication challenge"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AUTH_REQUIRED", "AUTH_INVALID"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["POLICY_BLOCKED"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["reasonCode"],
+                          "properties": {
+                            "reasonCode": {
+                              "type": "string",
+                              "enum": [
+                                "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST",
+                                "CANARY_CEILING_EXCEEDED",
+                                "CANARY_DAILY_CEILING_EXCEEDED",
+                                "ASSET_NOT_IN_CANARY_ALLOWLIST",
+                                "ASSET_BLOCKED",
+                                "UNLIMITED_EXPOSURE_EXCEEDS_CEILING",
+                                "PRICE_IMPACT_BLOCKED"
+                              ],
+                              "description": "COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST: the send recipient or approve spender is outside the Development canary allowlist. CANARY_CEILING_EXCEEDED: one intent is worth more than ceilingUsd. CANARY_DAILY_CEILING_EXCEEDED: the rolling 24-hour total would exceed ceilingUsd; spentUsd and remainingUsd say how much is used and left. ASSET_NOT_IN_CANARY_ALLOWLIST: the asset is registered but not in the canary. ASSET_BLOCKED: the registry blocks the asset. UNLIMITED_EXPOSURE_EXCEEDS_CEILING: an unlimited approval, valued at the current balance, exceeds ceilingUsd. PRICE_IMPACT_BLOCKED: swap price impact at or above the hard limit."
+                            },
+                            "exposureUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "USD value the rule compared: this intent's value (per-intent ceiling), the day's total including this intent (daily ceiling), or the unlimited approval's balance-based exposure."
+                            },
+                            "ceilingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "The ceiling that refused it, in USD."
+                            },
+                            "spentUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: USD already counted in the rolling 24-hour window before this intent."
+                            },
+                            "remainingUsd": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$",
+                              "description": "Daily ceiling only: ceilingUsd minus spentUsd, floored at 0."
+                            }
+                          }
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["NOT_FOUND"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "ACCOUNT_BOOTSTRAP_REQUIRED",
+                        "IDEMPOTENCY_CONFLICT",
+                        "INSUFFICIENT_BALANCE",
+                        "DATA_STALE",
+                        "QUOTE_EXPIRED",
+                        "SIMULATION_FAILED",
+                        "SUBMISSION_UNKNOWN"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["CHAIN_MISMATCH", "VALIDATION_FAILED"]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": { "type": "string", "enum": ["INTERNAL_ERROR"] },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "category",
+                    "retryable",
+                    "userMessageKey",
+                    "correlationId",
+                    "detailsSafe",
+                    "providerReferenceSafe"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "CAPABILITY_UNAVAILABLE",
+                        "INDEXING_DELAYED",
+                        "PROVIDER_DISCONNECTED",
+                        "REQUEST_TIMEOUT"
+                      ]
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "authorization",
+                        "availability",
+                        "conflict",
+                        "internal",
+                        "rateLimit",
+                        "stale",
+                        "validation"
+                      ]
+                    },
+                    "retryable": { "type": "boolean" },
+                    "userMessageKey": {
+                      "type": "string",
+                      "pattern": "^errors\\.[A-Za-z0-9.]+$",
+                      "maxLength": 128
+                    },
+                    "correlationId": { "type": "string", "format": "uuid" },
+                    "detailsSafe": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": true },
+                        { "type": "null" }
+                      ]
+                    },
+                    "providerReferenceSafe": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9._:-]+$"
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/wallet-intents/send-nft": {
+      "post": {
+        "operationId": "prepareV2SendNftIntent",
+        "summary": "Prepare an immutable LOOP project NFT send intent",
+        "tags": ["wallet-intents"],
+        "description": "Decision 0194 (S339). Sends one LOOP Launch project NFT (ERC-721) on the launch slot. The server checks the contract is an indexed launch2 ProjectNFT, reads ownerOf(tokenId), builds safeTransferFrom(owner, recipient, tokenId), pre-executes it with eth_call and estimateGas, and binds nonce/gas/expiry into a send_nft intent that walks the same lifecycle as send (device signs, broadcast-report, reconciliation). 503 CAPABILITY_UNAVAILABLE / NFT_SEND_DISABLED while NFT_SEND_ENABLED is off; 422 VALIDATION_FAILED with detailsSafe.reasonCode NFT_NOT_OWNED, NFT_CONTRACT_UNSUPPORTED, NFT_RECIPIENT_REJECTS or RECIPIENT_SELF.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "walletId",
+                  "chainId",
+                  "contractAddress",
+                  "tokenId",
+                  "recipientAddress"
+                ],
+                "properties": {
+                  "walletId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  },
+                  "chainId": {
+                    "type": "string",
+                    "pattern": "^eip155:[1-9][0-9]{0,9}$",
+                    "description": "The launch slot's chain (eip155:97 on BSC Testnet, eip155:56 on mainnet); anything else is CHAIN_MISMATCH."
+                  },
+                  "contractAddress": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                    "description": "A LOOP Launch project NFT (launch2 ProjectNFT) the API indexes; any other contract is 422 VALIDATION_FAILED / NFT_CONTRACT_UNSUPPORTED."
+                  },
+                  "tokenId": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,77})$",
+                    "description": "Decimal token ID (uint256)."
+                  },
+                  "recipientAddress": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{40}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 64,
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+            },
+            "in": "header",
+            "name": "x-loop-client-version",
+            "required": true
+          },
+          {
+            "schema": { "type": "string", "enum": ["2.0"] },
+            "in": "header",
+            "name": "x-loop-contract-version",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true
+          }
+        ],
+        "security": [{ "privyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "intentId",
+                    "kind",
+                    "state",
+                    "walletId",
+                    "chainId",
+                    "review",
+                    "reviewSha256",
+                    "factsObservedAt",
+                    "expiresAt",
+                    "simulation",
+                    "policy",
+                    "signing",
+                    "unsignedTransaction",
+                    "authorizationPayload",
+                    "result",
+                    "version",
+                    "createdAt",
+                    "updatedAt",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "intentId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "awaiting_signature",
+                        "submitted",
+                        "confirmed",
+                        "reverted",
+                        "failed",
+                        "unknown",
+                        "cancelled",
+                        "expired"
+                      ]
+                    },
+                    "walletId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "chainId": {
+                      "type": "string",
+                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "asset",
+                        "amount",
+                        "recipient",
+                        "spender",
+                        "decodedCall",
+                        "fee",
+                        "balance",
+                        "swap"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
+                        },
+                        "asset": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "address",
+                            "symbol",
+                            "decimals"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                            },
+                            "address": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            },
+                            "decimals": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 36
+                            }
+                          }
+                        },
+                        "amount": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["raw", "display"],
+                          "properties": {
+                            "raw": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "display": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                },
+                                { "type": "string", "enum": ["unlimited"] }
+                              ]
+                            }
+                          }
+                        },
+                        "recipient": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "address",
+                                "checksumAddress",
+                                "isContract",
+                                "isFirstRecipient",
+                                "basis",
+                                "screening"
+                              ],
+                              "properties": {
+                                "address": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "checksumAddress": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                                },
+                                "isContract": { "type": "boolean" },
+                                "isFirstRecipient": {
+                                  "type": "boolean",
+                                  "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
+                                },
+                                "screening": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "spender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "address",
+                                "checksumAddress",
+                                "isContract",
+                                "isUnlimited"
+                              ],
+                              "properties": {
+                                "address": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "checksumAddress": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                                },
+                                "isContract": { "type": "boolean" },
+                                "isUnlimited": { "type": "boolean" }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "decodedCall": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["functionName", "selector", "args"],
+                              "properties": {
+                                "functionName": {
+                                  "type": "string",
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
+                                },
+                                "selector": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{8}$"
+                                },
+                                "args": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "maxLength": 128
+                                  },
+                                  "maxProperties": 4
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "fee": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "gasLimit",
+                                "type",
+                                "maxFeePerGas",
+                                "maxPriorityFeePerGas",
+                                "gasPrice",
+                                "maximumFeeRaw",
+                                "maximumFee",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "gasLimit": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["eip1559", "legacy"]
+                                },
+                                "maxFeePerGas": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "maxPriorityFeePerGas": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "gasPrice": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "maximumFeeRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "maximumFee": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "balance": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "blockNumber",
+                            "blockHash",
+                            "observedAt",
+                            "rawBalance",
+                            "displayBalance",
+                            "rawNativeBalance",
+                            "gasReserveRaw"
+                          ],
+                          "properties": {
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "rawBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "displayBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                            },
+                            "rawNativeBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "gasReserveRaw": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            }
+                          }
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "destinationAsset",
+                                "quote",
+                                "policy"
+                              ],
+                              "properties": {
+                                "destinationAsset": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "assetId",
+                                    "address",
+                                    "symbol",
+                                    "decimals"
+                                  ],
+                                  "properties": {
+                                    "assetId": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                                    },
+                                    "address": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "symbol": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 32
+                                    },
+                                    "decimals": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 36
+                                    }
+                                  }
+                                },
+                                "quote": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "quoteId",
+                                    "provider",
+                                    "amountType",
+                                    "inputAmount",
+                                    "estimatedOutputAmount",
+                                    "minimumOutputAmount",
+                                    "slippageBps",
+                                    "gasEstimateRaw",
+                                    "quotedAt",
+                                    "expiresAt",
+                                    "priceImpact",
+                                    "platformFeeBps"
+                                  ],
+                                  "properties": {
+                                    "quoteId": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "enum": ["privy"]
+                                    },
+                                    "amountType": {
+                                      "type": "string",
+                                      "enum": ["exact_input"]
+                                    },
+                                    "inputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "estimatedOutputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "minimumOutputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "slippageBps": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 300
+                                    },
+                                    "gasEstimateRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "quotedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "expiresAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "priceImpact": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "status",
+                                        "value",
+                                        "decision",
+                                        "reasonCode",
+                                        "marketValueUsd",
+                                        "estimatedOutputValueUsd",
+                                        "priceSource"
+                                      ],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["available", "unavailable"]
+                                        },
+                                        "value": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "decision": {
+                                          "type": "string",
+                                          "enum": [
+                                            "allowed",
+                                            "confirm",
+                                            "blocked"
+                                          ]
+                                        },
+                                        "reasonCode": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "marketValueUsd": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "estimatedOutputValueUsd": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "priceSource": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 32
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "platformFeeBps": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "maximum": 1000
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "policy": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "configVersion",
+                                    "status",
+                                    "defaultSlippageBps",
+                                    "maximumSlippageBps",
+                                    "hardBlockPriceImpact",
+                                    "confirmPriceImpact",
+                                    "quoteTtlSeconds"
+                                  ],
+                                  "properties": {
+                                    "configVersion": {
+                                      "type": "string",
+                                      "enum": ["swapPolicyV1"]
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["pendingProductConfirmation"]
+                                    },
+                                    "defaultSlippageBps": {
+                                      "type": "integer",
+                                      "enum": [50]
+                                    },
+                                    "maximumSlippageBps": {
+                                      "type": "integer",
+                                      "enum": [300]
+                                    },
+                                    "hardBlockPriceImpact": {
+                                      "type": "string",
+                                      "enum": ["0.05"]
+                                    },
+                                    "confirmPriceImpact": {
+                                      "type": "string",
+                                      "enum": ["0.01"]
+                                    },
+                                    "quoteTtlSeconds": {
+                                      "type": "integer",
+                                      "enum": [30]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
+                        }
+                      },
+                      "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
+                    },
+                    "reviewSha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$",
+                      "description": "SHA-256 of the canonical payload. The client checks the displayed review against this digest before invoking the signer."
+                    },
+                    "factsObservedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expiresAt": { "type": "string", "format": "date-time" },
+                    "simulation": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "source",
+                        "observedAt",
+                        "reasonCode"
+                      ],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["passed", "reverted", "unavailable"]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": ["rpc_call", "provider_quote"]
+                        },
+                        "observedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "configVersion",
+                        "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
+                        "valueUsd",
+                        "priceSource",
+                        "priceFetchedAt"
+                      ],
+                      "properties": {
+                        "configVersion": {
+                          "type": "string",
+                          "enum": ["bscWriteCanaryV1"]
+                        },
+                        "canaryMaxUsd": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "valueUsd": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "priceSource": {
+                          "anyOf": [
+                            { "type": "string", "maxLength": 32 },
+                            { "type": "null" }
+                          ]
+                        },
+                        "priceFetchedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "signing": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["mode", "allowed", "reasonCode"],
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "device_eth_send_transaction",
+                            "privy_authorization_signature"
+                          ]
+                        },
+                        "allowed": {
+                          "type": "boolean",
+                          "description": "True only in awaiting_signature before expiry. The signing sheet's confirm button follows this flag."
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "unsignedTransaction": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "chainId",
+                            "from",
+                            "to",
+                            "data",
+                            "value",
+                            "gas",
+                            "nonce",
+                            "type",
+                            "maxFeePerGas",
+                            "maxPriorityFeePerGas",
+                            "gasPrice"
+                          ],
+                          "properties": {
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
+                            },
+                            "from": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "to": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "data": {
+                              "type": "string",
+                              "pattern": "^0x([0-9a-f]{2})*$",
+                              "maxLength": 20000
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "gas": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "nonce": {
+                              "type": "string",
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                              "description": "JSON-RPC quantity as a 0x hex string."
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": ["eip1559", "legacy"]
+                            },
+                            "maxFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "maxPriorityFeePerGas": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "gasPrice": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+                                  "description": "JSON-RPC quantity as a 0x hex string."
+                                },
+                                { "type": "null" }
+                              ]
+                            }
+                          },
+                          "description": "The exact JSON-RPC transaction the device passes to Privy eth_sendTransaction. The client must not alter any field."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "authorizationPayload": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "version",
+                            "method",
+                            "url",
+                            "body",
+                            "headers"
+                          ],
+                          "properties": {
+                            "version": { "type": "integer", "enum": [1] },
+                            "method": { "type": "string", "enum": ["POST"] },
+                            "url": {
+                              "type": "string",
+                              "format": "uri",
+                              "maxLength": 512
+                            },
+                            "body": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "base_amount",
+                                "source",
+                                "destination",
+                                "amount_type",
+                                "slippage_bps"
+                              ],
+                              "properties": {
+                                "base_amount": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["asset_address", "caip2"],
+                                  "properties": {
+                                    "asset_address": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "caip2": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                                    }
+                                  }
+                                },
+                                "destination": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["asset_address", "caip2"],
+                                  "properties": {
+                                    "asset_address": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "caip2": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                                    }
+                                  }
+                                },
+                                "amount_type": {
+                                  "type": "string",
+                                  "enum": ["exact_input"]
+                                },
+                                "slippage_bps": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 300
+                                },
+                                "fee_configuration": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["type", "value"],
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["total_fee_bps"]
+                                    },
+                                    "value": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 1000
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "headers": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "privy-app-id",
+                                "privy-idempotency-key",
+                                "privy-request-expiry"
+                              ],
+                              "properties": {
+                                "privy-app-id": {
+                                  "type": "string",
+                                  "maxLength": 255
+                                },
+                                "privy-idempotency-key": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                },
+                                "privy-request-expiry": {
+                                  "type": "string",
+                                  "pattern": "^[1-9][0-9]{0,15}$"
+                                }
+                              }
+                            }
+                          },
+                          "description": "The exact Privy request the user authorizes with generateAuthorizationSignature. Byte-exact conformance with Privy's canonical form is pending device evidence."
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "transactionHash",
+                        "providerActionId",
+                        "reasonCode",
+                        "receipt"
+                      ],
+                      "properties": {
+                        "transactionHash": {
+                          "anyOf": [
+                            { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+                            { "type": "null" }
+                          ]
+                        },
+                        "providerActionId": {
+                          "anyOf": [
+                            { "type": "string", "maxLength": 128 },
+                            { "type": "null" }
+                          ]
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "receipt": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "status",
+                                "blockNumber",
+                                "blockHash",
+                                "gasUsed",
+                                "effectiveGasPrice",
+                                "confirmations",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["success", "reverted"]
+                                },
+                                "blockNumber": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                                },
+                                "blockHash": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "gasUsed": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "effectiveGasPrice": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "confirmations": {
+                                  "anyOf": [
+                                    { "type": "integer", "minimum": 0 },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "version": {
+                      "type": "string",
+                      "pattern": "^[1-9][0-9]{0,18}$"
+                    },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "type": "string", "format": "date-time" },
+                    "contractVersion": { "type": "string", "enum": ["2.0"] }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Default Response",
+            "headers": {
+              "cache-control": {
+                "schema": { "type": "string", "const": "no-store" },
+                "description": "Sensitive and operational responses are never cached"
+              },
+              "x-request-id": {
+                "schema": { "type": "string", "format": "uuid" },
+                "description": "Server-generated request correlation ID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "intentId",
+                    "kind",
+                    "state",
+                    "walletId",
+                    "chainId",
+                    "review",
+                    "reviewSha256",
+                    "factsObservedAt",
+                    "expiresAt",
+                    "simulation",
+                    "policy",
+                    "signing",
+                    "unsignedTransaction",
+                    "authorizationPayload",
+                    "result",
+                    "version",
+                    "createdAt",
+                    "updatedAt",
+                    "contractVersion"
+                  ],
+                  "properties": {
+                    "intentId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "prepared",
+                        "awaiting_signature",
+                        "submitted",
+                        "confirmed",
+                        "reverted",
+                        "failed",
+                        "unknown",
+                        "cancelled",
+                        "expired"
+                      ]
+                    },
+                    "walletId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    },
+                    "chainId": {
+                      "type": "string",
+                      "pattern": "^eip155:[1-9][0-9]{0,9}$"
+                    },
+                    "review": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "asset",
+                        "amount",
+                        "recipient",
+                        "spender",
+                        "decodedCall",
+                        "fee",
+                        "balance",
+                        "swap"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
+                        },
+                        "asset": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "assetId",
+                            "address",
+                            "symbol",
+                            "decimals"
+                          ],
+                          "properties": {
+                            "assetId": {
+                              "type": "string",
+                              "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                            },
+                            "address": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "symbol": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 32
+                            },
+                            "decimals": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 36
+                            }
+                          }
+                        },
+                        "amount": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["raw", "display"],
+                          "properties": {
+                            "raw": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "display": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                },
+                                { "type": "string", "enum": ["unlimited"] }
+                              ]
+                            }
+                          }
+                        },
+                        "recipient": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "address",
+                                "checksumAddress",
+                                "isContract",
+                                "isFirstRecipient",
+                                "basis",
+                                "screening"
+                              ],
+                              "properties": {
+                                "address": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "checksumAddress": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                                },
+                                "isContract": { "type": "boolean" },
+                                "isFirstRecipient": {
+                                  "type": "boolean",
+                                  "description": "True when the wallet has no indexed outgoing transfer to this address."
+                                },
+                                "basis": {
+                                  "type": "string",
+                                  "enum": ["indexed_erc20_transfers"]
+                                },
+                                "screening": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": ["status", "reasonCode"],
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["unavailable"]
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "spender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "address",
+                                "checksumAddress",
+                                "isContract",
+                                "isUnlimited"
+                              ],
+                              "properties": {
+                                "address": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{40}$"
+                                },
+                                "checksumAddress": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                                },
+                                "isContract": { "type": "boolean" },
+                                "isUnlimited": { "type": "boolean" }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "decodedCall": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["functionName", "selector", "args"],
+                              "properties": {
+                                "functionName": {
+                                  "type": "string",
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
+                                },
+                                "selector": {
+                                  "type": "string",
+                                  "pattern": "^0x[0-9a-f]{8}$"
+                                },
+                                "args": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "maxLength": 128
+                                  },
+                                  "maxProperties": 4
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "fee": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "gasLimit",
+                                "type",
+                                "maxFeePerGas",
+                                "maxPriorityFeePerGas",
+                                "gasPrice",
+                                "maximumFeeRaw",
+                                "maximumFee",
+                                "observedAt"
+                              ],
+                              "properties": {
+                                "gasLimit": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["eip1559", "legacy"]
+                                },
+                                "maxFeePerGas": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "maxPriorityFeePerGas": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "gasPrice": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    { "type": "null" }
+                                  ]
+                                },
+                                "maximumFeeRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "maximumFee": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "balance": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "blockNumber",
+                            "blockHash",
+                            "observedAt",
+                            "rawBalance",
+                            "displayBalance",
+                            "rawNativeBalance",
+                            "gasReserveRaw"
+                          ],
+                          "properties": {
+                            "blockNumber": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            "blockHash": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{64}$"
+                            },
+                            "observedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "rawBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "displayBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                            },
+                            "rawNativeBalance": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "gasReserveRaw": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            }
+                          }
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "destinationAsset",
+                                "quote",
+                                "policy"
+                              ],
+                              "properties": {
+                                "destinationAsset": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "assetId",
+                                    "address",
+                                    "symbol",
+                                    "decimals"
+                                  ],
+                                  "properties": {
+                                    "assetId": {
+                                      "type": "string",
+                                      "pattern": "^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$"
+                                    },
+                                    "address": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^0x[0-9a-f]{40}$"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "symbol": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 32
+                                    },
+                                    "decimals": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 36
+                                    }
+                                  }
+                                },
+                                "quote": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "quoteId",
+                                    "provider",
+                                    "amountType",
+                                    "inputAmount",
+                                    "estimatedOutputAmount",
+                                    "minimumOutputAmount",
+                                    "slippageBps",
+                                    "gasEstimateRaw",
+                                    "quotedAt",
+                                    "expiresAt",
+                                    "priceImpact",
+                                    "platformFeeBps"
+                                  ],
+                                  "properties": {
+                                    "quoteId": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "enum": ["privy"]
+                                    },
+                                    "amountType": {
+                                      "type": "string",
+                                      "enum": ["exact_input"]
+                                    },
+                                    "inputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "estimatedOutputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "minimumOutputAmount": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": ["raw", "display"],
+                                      "properties": {
+                                        "raw": {
+                                          "type": "string",
+                                          "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                        },
+                                        "display": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["unlimited"]
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "slippageBps": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 300
+                                    },
+                                    "gasEstimateRaw": {
+                                      "type": "string",
+                                      "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                    },
+                                    "quotedAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "expiresAt": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "priceImpact": {
+                                      "type": "object",
+                                      "additionalProperties": false,
+                                      "required": [
+                                        "status",
+                                        "value",
+                                        "decision",
+                                        "reasonCode",
+                                        "marketValueUsd",
+                                        "estimatedOutputValueUsd",
+                                        "priceSource"
+                                      ],
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["available", "unavailable"]
+                                        },
+                                        "value": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "decision": {
+                                          "type": "string",
+                                          "enum": [
+                                            "allowed",
+                                            "confirm",
+                                            "blocked"
+                                          ]
+                                        },
+                                        "reasonCode": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "marketValueUsd": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "estimatedOutputValueUsd": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "priceSource": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 32
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "platformFeeBps": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "maximum": 1000
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "policy": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "configVersion",
+                                    "status",
+                                    "defaultSlippageBps",
+                                    "maximumSlippageBps",
+                                    "hardBlockPriceImpact",
+                                    "confirmPriceImpact",
+                                    "quoteTtlSeconds"
+                                  ],
+                                  "properties": {
+                                    "configVersion": {
+                                      "type": "string",
+                                      "enum": ["swapPolicyV1"]
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": ["pendingProductConfirmation"]
+                                    },
+                                    "defaultSlippageBps": {
+                                      "type": "integer",
+                                      "enum": [50]
+                                    },
+                                    "maximumSlippageBps": {
+                                      "type": "integer",
+                                      "enum": [300]
+                                    },
+                                    "hardBlockPriceImpact": {
+                                      "type": "string",
+                                      "enum": ["0.05"]
+                                    },
+                                    "confirmPriceImpact": {
+                                      "type": "string",
+                                      "enum": ["0.01"]
+                                    },
+                                    "quoteTtlSeconds": {
+                                      "type": "integer",
+                                      "enum": [30]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
+                        }
+                      },
+                      "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
+                    },
+                    "reviewSha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$",
+                      "description": "SHA-256 of the canonical payload. The client checks the displayed review against this digest before invoking the signer."
+                    },
+                    "factsObservedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "expiresAt": { "type": "string", "format": "date-time" },
+                    "simulation": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "source",
+                        "observedAt",
+                        "reasonCode"
+                      ],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["passed", "reverted", "unavailable"]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": ["rpc_call", "provider_quote"]
+                        },
+                        "observedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "configVersion",
+                        "canaryMaxUsd",
+                        "exposureBasis",
+                        "exposureRaw",
+                        "exposureBlockNumber",
+                        "valueUsd",
+                        "priceSource",
+                        "priceFetchedAt"
+                      ],
+                      "properties": {
+                        "configVersion": {
+                          "type": "string",
+                          "enum": ["bscWriteCanaryV1"]
+                        },
+                        "canaryMaxUsd": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                        },
+                        "exposureBasis": {
+                          "type": "string",
+                          "enum": ["amount", "balance_at_prepare", "none"],
+                          "description": "amount: the transferred/swapped amount; balance_at_prepare: min(allowance, balance) at the snapshot block for an approve; none: a revoke."
+                        },
+                        "exposureRaw": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "exposureBlockNumber": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,19})$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "valueUsd": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})(\\.[0-9]+)?$"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "priceSource": {
+                          "anyOf": [
+                            { "type": "string", "maxLength": 32 },
+                            { "type": "null" }
+                          ]
+                        },
+                        "priceFetchedAt": {
+                          "anyOf": [
+                            { "type": "string", "format": "date-time" },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "signing": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["mode", "allowed", "reasonCode"],
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "device_eth_send_transaction",
+                            "privy_authorization_signature"
+                          ]
+                        },
+                        "allowed": {
+                          "type": "boolean",
+                          "description": "True only in awaiting_signature before expiry. The signing sheet's confirm button follows this flag."
+                        },
+                        "reasonCode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      }
+                    },
+                    "unsignedTransaction": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "chainId",
+                            "from",
+                            "to",
+                            "data",
+                            "value",
+                            "gas",
+                            "nonce",
+                            "type",
+                            "maxFeePerGas",
+                            "maxPriorityFeePerGas",
+                            "gasPrice"
+                          ],
+                          "properties": {
+                            "chainId": {
+                              "type": "integer",
+                              "enum": [56, 97],
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -89554,7 +92887,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -89595,7 +92928,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -89739,7 +93078,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -90162,6 +93506,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -90326,7 +93695,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -90657,7 +94026,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -90698,7 +94067,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -90842,7 +94217,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -91265,6 +94645,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -91429,7 +94834,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -92455,7 +95860,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -92496,7 +95901,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -92640,7 +96051,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -93063,6 +96479,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -93227,7 +96668,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -93558,7 +96999,7 @@
                     },
                     "kind": {
                       "type": "string",
-                      "enum": ["send", "approve", "revoke", "swap"]
+                      "enum": ["send", "approve", "revoke", "swap", "send_nft"]
                     },
                     "state": {
                       "type": "string",
@@ -93599,7 +97040,13 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["send", "approve", "revoke", "swap"]
+                          "enum": [
+                            "send",
+                            "approve",
+                            "revoke",
+                            "swap",
+                            "send_nft"
+                          ]
                         },
                         "asset": {
                           "type": "object",
@@ -93743,7 +97190,12 @@
                               "properties": {
                                 "functionName": {
                                   "type": "string",
-                                  "enum": ["transfer", "approve"]
+                                  "enum": [
+                                    "transfer",
+                                    "approve",
+                                    "safeTransferFrom"
+                                  ],
+                                  "description": "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string)."
                                 },
                                 "selector": {
                                   "type": "string",
@@ -94166,6 +97618,31 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nft": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "contractAddress",
+                            "tokenId",
+                            "projectName"
+                          ],
+                          "properties": {
+                            "contractAddress": {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-f]{40}$"
+                            },
+                            "tokenId": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,77})$"
+                            },
+                            "projectName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            }
+                          },
+                          "description": "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name."
                         }
                       },
                       "description": "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256."
@@ -94330,7 +97807,7 @@
                             "chainId": {
                               "type": "integer",
                               "enum": [56, 97],
-                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077)."
+                              "description": "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194)."
                             },
                             "from": {
                               "type": "string",
@@ -162144,7 +165621,16 @@
                                         { "type": "null" }
                                       ]
                                     },
-                                    "held": { "type": "integer", "minimum": 0 }
+                                    "held": { "type": "integer", "minimum": 0 },
+                                    "heldTokenIds": {
+                                      "type": "array",
+                                      "maxItems": 100,
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                      },
+                                      "description": "Decision 0194 (LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT, default off — absent while off): the project NFT token IDs this wallet holds now, ascending, from the indexed ERC-721 Transfer logs (at most 100). Any of them can be sent with POST /v2/wallet-intents/send-nft."
+                                    }
                                   }
                                 },
                                 "snapshot": {
@@ -174418,7 +177904,16 @@
                                   { "type": "null" }
                                 ]
                               },
-                              "held": { "type": "integer", "minimum": 0 }
+                              "held": { "type": "integer", "minimum": 0 },
+                              "heldTokenIds": {
+                                "type": "array",
+                                "maxItems": 100,
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$"
+                                },
+                                "description": "Decision 0194 (LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT, default off — absent while off): the project NFT token IDs this wallet holds now, ascending, from the indexed ERC-721 Transfer logs (at most 100). Any of them can be sent with POST /v2/wallet-intents/send-nft."
+                              }
                             }
                           },
                           "snapshotMember": { "type": "boolean" },

@@ -111,10 +111,38 @@ function assertChain(chainId: unknown): void {
   }
 }
 
+/**
+ * Decision 0194: the launch slot runtime a preflight names, when the NFT
+ * send is enabled, the slot is open and differs from the primary chain.
+ * Null keeps the primary-chain rule (`assertChain`).
+ */
+function nftPreflightRuntime(
+  runtime: WalletIntentRuntime,
+  chainId: unknown,
+): { readonly runtime: WalletIntentRuntime; readonly chainId: string } | null {
+  const nft = runtime.nftSend ?? null;
+  if (
+    nft === null ||
+    !nft.enabled ||
+    chainId === bscChainId ||
+    chainId !== nft.chainId
+  ) {
+    return null;
+  }
+  if (!nft.slotOpen || nft.readClient === null) {
+    throw V2ApiError.capabilityUnavailable();
+  }
+  return {
+    runtime: Object.freeze({ ...runtime, readClient: nft.readClient }),
+    chainId: nft.chainId,
+  };
+}
+
 export async function reviewRecipient(
   runtime: WalletIntentRuntime,
   walletAddress: string,
   recipient: string,
+  chainId: string = bscChainId,
 ): Promise<RecipientReview> {
   let code: Hex;
   try {
@@ -123,7 +151,7 @@ export async function reviewRecipient(
     throw V2ApiError.capabilityUnavailable();
   }
   const isFirstRecipient = !(await runtime.indexer.hasOutgoingTransferTo({
-    chainId: bscChainId,
+    chainId,
     fromAddress: walletAddress,
     toAddress: recipient,
   }));
@@ -153,19 +181,31 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
         readonly address?: unknown;
         readonly chainId?: unknown;
       };
-      assertChain(request.chainId);
+      // Decision 0194: with NFT_SEND_ENABLED the launch slot's chain is
+      // also accepted, so the project NFT send reuses this preflight.
+      const nftChain = nftPreflightRuntime(runtime, request.chainId);
+      if (nftChain === null) {
+        assertChain(request.chainId);
+      }
+      const chainRuntime = nftChain?.runtime ?? runtime;
+      const chainId = nftChain?.chainId ?? bscChainId;
       const wallet = await requireWallet(runtime, principal, request.walletId);
       const recipient = parseRecipient(request.address);
       if (recipient === wallet.address) {
         throw V2ApiError.fromCode("VALIDATION_FAILED");
       }
-      if (runtime.readClient.currentVerification() !== "verified") {
-        const state = await runtime.readClient.verifyChain();
+      if (chainRuntime.readClient.currentVerification() !== "verified") {
+        const state = await chainRuntime.readClient.verifyChain();
         if (state !== "verified") {
           throw V2ApiError.capabilityUnavailable();
         }
       }
-      const review = await reviewRecipient(runtime, wallet.address, recipient);
+      const review = await reviewRecipient(
+        chainRuntime,
+        wallet.address,
+        recipient,
+        chainId,
+      );
       const warnings: string[] = [];
       if (review.isFirstRecipient) {
         warnings.push("send.recipient.firstTime");
@@ -176,7 +216,7 @@ export function createSendService(runtime: WalletIntentRuntime): SendService {
       warnings.push("send.recipient.screeningUnavailable");
       return Object.freeze({
         walletId: wallet.walletId,
-        chainId: bscChainId,
+        chainId,
         recipient: review,
         basis: firstRecipientBasis,
         warnings: Object.freeze(warnings),

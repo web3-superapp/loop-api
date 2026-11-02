@@ -105,10 +105,47 @@ export interface LaunchSlotWriteTarget {
   readonly usd1Address: string;
 }
 
+/**
+ * Decision 0194 (S339): one LOOP Launch project NFT as the send path sees
+ * it — the launch2 instance whose `ProjectNFT` the contract address is.
+ */
+export interface ProjectNftRecord {
+  readonly instanceId: string;
+  readonly chainId: string;
+  /** Lowercase `ProjectNFT` address. */
+  readonly nftAddress: string;
+  readonly name: string;
+  readonly ticker: string;
+}
+
+/** Decision 0194: the launch2 registry of project NFT contracts. */
+export interface ProjectNftDirectory {
+  findByContract(input: {
+    readonly chainId: string;
+    readonly contractAddress: string;
+  }): Promise<ProjectNftRecord | null>;
+}
+
+/**
+ * Decision 0194: the project NFT send (`NFT_SEND_ENABLED`, default off) on
+ * the launch slot. `readClient` is the slot's client (the primary one when
+ * the slot is chain 56); `slotOpen` is Decision 0150 (testnet, or 56 with
+ * LAUNCH_MAINNET_ACK). Null pieces fail closed.
+ */
+export interface NftSendRuntime {
+  readonly enabled: boolean;
+  readonly chainId: string;
+  readonly slotOpen: boolean;
+  readonly readClient: BscChainCallClient | null;
+  readonly directory: ProjectNftDirectory | null;
+}
+
 export interface WalletIntentRuntime {
   readonly config: WalletIntentRuntimeConfig;
   /** Decision 0077; absent or null keeps every intent on the primary chain. */
   readonly launchSlot?: LaunchSlotWriteTarget | null;
+  /** Decision 0194; absent or null keeps the NFT send closed. */
+  readonly nftSend?: NftSendRuntime | null;
   readonly repository: WalletIntentRepository;
   readonly wallets: AccountWalletRepository;
   readonly registry: ChainRegistryRepository;
@@ -136,11 +173,20 @@ export function runtimeForChain(
   runtime: WalletIntentRuntime,
   chainId: string,
 ): WalletIntentRuntime {
-  const slot = runtime.launchSlot ?? null;
-  if (slot === null || chainId === bscChainId || chainId !== slot.chainId) {
+  if (chainId === bscChainId) {
     return runtime;
   }
-  return Object.freeze({ ...runtime, readClient: slot.readClient });
+  const slot = runtime.launchSlot ?? null;
+  if (slot !== null && chainId === slot.chainId) {
+    return Object.freeze({ ...runtime, readClient: slot.readClient });
+  }
+  // Decision 0194: a project NFT send recorded on the launch slot reads the
+  // slot's client even when no Launch (v1) contract is configured.
+  const nftClient = runtime.nftSend?.readClient ?? null;
+  if (nftClient !== null && chainId === nftClient.chainId) {
+    return Object.freeze({ ...runtime, readClient: nftClient });
+  }
+  return runtime;
 }
 
 export function chainUnavailable(error: unknown): never {

@@ -1215,6 +1215,9 @@ export interface Launch2OverviewInstanceFacts extends Launch2StageFacts {
   readonly buybackUsd1: string;
 }
 
+/** Decision 0194: the most token IDs `nft.heldTokenIds` lists. */
+export const launch2HeldTokenIdsLimit = 100;
+
 export interface Launch2Repository {
   // --- Lane ---
   /**
@@ -1361,6 +1364,15 @@ export interface Launch2Repository {
   getInstances(
     instanceIds: readonly string[],
   ): Promise<readonly Launch2InstanceRecord[]>;
+  /**
+   * Decision 0194: the listed (activated or held) instance whose
+   * `ProjectNFT` is `nftAddress` on `chainId`; null when none. Optional so
+   * read-only doubles need not implement it (absent = NFT send closed).
+   */
+  getInstanceByNftAddress?(input: {
+    readonly chainId: string;
+    readonly nftAddress: string;
+  }): Promise<Launch2InstanceRecord | null>;
   /** Decision 0173: by the Factory launch id (`0x` + 64 hex, any case). */
   getInstanceByLaunchId(
     launchId: string,
@@ -1369,6 +1381,23 @@ export interface Launch2Repository {
     readonly holderAddresses: readonly string[];
     readonly instanceId: string | null;
   }): Promise<readonly Launch2PositionRecord[]>;
+  /**
+   * Decision 0194: the project NFT token IDs each holder currently owns,
+   * from the indexed (non-removed) ERC-721 `Transfer` logs — the last
+   * transfer of each token names its owner. Ascending, at most
+   * `launch2HeldTokenIdsLimit` per (instance, holder). Optional: absent
+   * omits the key.
+   */
+  heldNftTokenIds?(input: {
+    readonly instanceIds: readonly string[];
+    readonly holderAddresses: readonly string[];
+  }): Promise<
+    readonly {
+      readonly instanceId: string;
+      readonly holderAddress: string;
+      readonly tokenIds: readonly string[];
+    }[]
+  >;
   getSnapshotMember(input: {
     readonly instanceId: string;
     readonly address: string;

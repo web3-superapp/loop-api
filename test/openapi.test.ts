@@ -241,6 +241,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/wallet-intents/approve",
       "/v2/wallet-intents/revoke",
       "/v2/wallet-intents/send",
+      "/v2/wallet-intents/send-nft",
       "/v2/wallet-intents/send/preflight",
       "/v2/wallet-intents/swap",
       "/v2/wallet-intents/{intentId}",
@@ -257,7 +258,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(210);
+    expect(operationIds).toHaveLength(211);
     // Decision 0174: the public recent pool trades — no Bearer, 429 listed,
     // no 401 / 409 / 422.
     const recentTrades =

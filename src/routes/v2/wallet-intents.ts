@@ -16,6 +16,7 @@ import {
   intentIdParamsSchema,
   revokePrepareRequestSchema,
   sendPreflightRequestSchema,
+  sendNftPrepareRequestSchema,
   sendPreflightResourceSchema,
   sendPrepareRequestSchema,
   v2CommandHeadersSchema,
@@ -68,7 +69,7 @@ export function registerV2WalletIntentLifecycleRoutes(
         operationId: "listV2WalletIntents",
         summary: "List the account's wallet intents",
         description:
-          "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired.",
+          "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired. Intents of an opt-in kind (send_nft, Decision 0194) appear only when includeKinds names it.",
         tags: ["wallet-intents"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,
@@ -86,11 +87,15 @@ export function registerV2WalletIntentLifecycleRoutes(
       const query = request.query as {
         readonly cursor?: unknown;
         readonly limit?: unknown;
+        readonly includeKinds?: unknown;
       };
       const resource = await walletIntentService.list({
         principal: requireAuthenticatedLoopPrincipal(request),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         ...(query.limit === undefined ? {} : { limit: query.limit }),
+        ...(query.includeKinds === undefined
+          ? {}
+          : { includeKinds: query.includeKinds }),
       });
       reply.header("cache-control", "no-store");
       return reply.code(200).send(resource);
@@ -206,6 +211,7 @@ export function registerV2WalletIntentRoutes(
 ): void {
   registerV2WalletIntentLifecycleRoutes(app, dependencies);
   const { authenticateLoopBearer, sendService, approvalService } = dependencies;
+  const nftSendService = dependencies.nftSendService;
 
   app.post(
     "/v2/wallet-intents/send/preflight",
@@ -264,6 +270,42 @@ export function registerV2WalletIntentRoutes(
     },
     async (request, reply) => {
       const result = await sendService.prepare({
+        principal: requireAuthenticatedLoopPrincipal(request),
+        idempotencyKey: commandIdempotencyKey(request),
+        body: request.body,
+        signal: requestSignal(request),
+      });
+      reply.header("cache-control", "no-store");
+      return reply.code(result.created ? 201 : 200).send(result.resource);
+    },
+  );
+
+  app.post(
+    "/v2/wallet-intents/send-nft",
+    {
+      schema: {
+        operationId: "prepareV2SendNftIntent",
+        summary: "Prepare an immutable LOOP project NFT send intent",
+        description:
+          "Decision 0194 (S339). Sends one LOOP Launch project NFT (ERC-721) on the launch slot. The server checks the contract is an indexed launch2 ProjectNFT, reads ownerOf(tokenId), builds safeTransferFrom(owner, recipient, tokenId), pre-executes it with eth_call and estimateGas, and binds nonce/gas/expiry into a send_nft intent that walks the same lifecycle as send (device signs, broadcast-report, reconciliation). 503 CAPABILITY_UNAVAILABLE / NFT_SEND_DISABLED while NFT_SEND_ENABLED is off; 422 VALIDATION_FAILED with detailsSafe.reasonCode NFT_NOT_OWNED, NFT_CONTRACT_UNSUPPORTED, NFT_RECIPIENT_REJECTS or RECIPIENT_SELF.",
+        tags: ["wallet-intents"],
+        security: [{ privyBearer: [] }],
+        headers: v2CommandHeadersSchema,
+        querystring: emptyQueryStringSchema,
+        body: sendNftPrepareRequestSchema,
+        response: {
+          200: walletIntentResourceSchema,
+          201: walletIntentResourceSchema,
+          ...walletIntentCommandErrors,
+        },
+      },
+      onRequest: validateIntentCommandHeaders,
+      // A JSON-number tokenId is refused before AJV could coerce it.
+      preValidation: [assertNoQuery, assertDecimalStringFields(["tokenId"])],
+      preHandler: authenticateLoopBearer,
+    },
+    async (request, reply) => {
+      const result = await nftSendService.prepare({
         principal: requireAuthenticatedLoopPrincipal(request),
         idempotencyKey: commandIdempotencyKey(request),
         body: request.body,

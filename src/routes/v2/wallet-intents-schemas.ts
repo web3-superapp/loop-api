@@ -29,12 +29,14 @@ import {
   bscWriteCanaryPolicyVersion,
   exposureBases,
   firstRecipientBasis,
+  nftSendReasonCodes,
   signingModes,
   simulationSources,
   simulationStatuses,
   swapPolicy,
   walletIntentKinds,
   walletIntentListLimits,
+  walletIntentOptInKinds,
   walletIntentRefusalReasonCodes,
   walletIntentStates,
 } from "../../features/wallet-intents/intent-contract.js";
@@ -177,7 +179,12 @@ const decodedCallSchema = {
   additionalProperties: false,
   required: ["functionName", "selector", "args"],
   properties: {
-    functionName: { type: "string", enum: ["transfer", "approve"] },
+    functionName: {
+      type: "string",
+      enum: ["transfer", "approve", "safeTransferFrom"],
+      description:
+        "safeTransferFrom (Decision 0194) only on a send_nft intent: ERC-721 safeTransferFrom(from, to, tokenId); args are from, to and tokenId (decimal string).",
+    },
     selector: { type: "string", pattern: "^0x[0-9a-f]{8}$" },
     args: {
       type: "object",
@@ -370,6 +377,18 @@ const reviewSchema = {
         { type: "null" },
       ],
     },
+    nft: {
+      type: "object",
+      additionalProperties: false,
+      required: ["contractAddress", "tokenId", "projectName"],
+      properties: {
+        contractAddress: addressSchema,
+        tokenId: { type: "string", pattern: "^(0|[1-9][0-9]{0,77})$" },
+        projectName: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      description:
+        "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name.",
+    },
   },
   description:
     "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256.",
@@ -396,7 +415,7 @@ const unsignedTransactionSchema = {
       type: "integer",
       enum: [56, 97],
       description:
-        "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077).",
+        "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194).",
     },
     from: addressSchema,
     to: addressSchema,
@@ -685,6 +704,13 @@ export const walletIntentListQuerySchema = {
       minimum: 1,
       maximum: walletIntentListLimits.maximum,
     },
+    includeKinds: {
+      type: "string",
+      pattern: `^(${walletIntentOptInKinds.join("|")})(,(${walletIntentOptInKinds.join("|")}))*$`,
+      maxLength: 64,
+      description:
+        "Decision 0194: comma-separated opt-in kinds the client decodes (send_nft). Intents of an opt-in kind not named here are left out of the page, so a client released before the kind existed never sees it. The cursor binds this set.",
+    },
   },
 } as const;
 
@@ -699,7 +725,8 @@ const optionalChainIdProperty = {
   chainId: {
     type: "string",
     pattern: chainIdPatternSource,
-    description: "Optional; anything other than eip155:56 is CHAIN_MISMATCH.",
+    description:
+      "Optional; anything other than eip155:56 is CHAIN_MISMATCH, except the launch slot's chain (eip155:97 on BSC Testnet) while NFT_SEND_ENABLED is on (Decision 0194), which checks the recipient on that chain.",
   },
 } as const;
 
@@ -769,6 +796,58 @@ export const sendPrepareRequestSchema = {
     ...optionalChainIdProperty,
   },
 } as const;
+
+/** Decision 0194 (S339): `POST /v2/wallet-intents/send-nft`. */
+export const sendNftPrepareRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "walletId",
+    "chainId",
+    "contractAddress",
+    "tokenId",
+    "recipientAddress",
+  ],
+  properties: {
+    walletId: opaqueIdSchema,
+    chainId: {
+      type: "string",
+      pattern: chainIdPatternSource,
+      description:
+        "The launch slot's chain (eip155:97 on BSC Testnet, eip155:56 on mainnet); anything else is CHAIN_MISMATCH.",
+    },
+    contractAddress: {
+      type: "string",
+      pattern: anyCaseEvmAddressPatternSource,
+      description:
+        "A LOOP Launch project NFT (launch2 ProjectNFT) the API indexes; any other contract is 422 VALIDATION_FAILED / NFT_CONTRACT_UNSUPPORTED.",
+    },
+    tokenId: {
+      type: "string",
+      pattern: "^(0|[1-9][0-9]{0,77})$",
+      description: "Decimal token ID (uint256).",
+    },
+    recipientAddress: {
+      type: "string",
+      pattern: anyCaseEvmAddressPatternSource,
+    },
+  },
+} as const;
+
+/**
+ * Decision 0194: `detailsSafe.reasonCode` values of the NFT send. 422
+ * VALIDATION_FAILED: NFT_NOT_OWNED, NFT_CONTRACT_UNSUPPORTED,
+ * NFT_RECIPIENT_REJECTS, RECIPIENT_SELF. 503 CAPABILITY_UNAVAILABLE:
+ * NFT_SEND_DISABLED, NFT_SEND_CHAIN_UNAVAILABLE (null otherwise).
+ */
+export const nftSendErrorReasonCodes = Object.freeze([
+  nftSendReasonCodes.notOwned,
+  nftSendReasonCodes.contractUnsupported,
+  nftSendReasonCodes.recipientRejects,
+  nftSendReasonCodes.recipientSelf,
+  nftSendReasonCodes.disabled,
+  nftSendReasonCodes.chainUnavailable,
+] as const);
 
 export const approvePrepareRequestSchema = {
   type: "object",

@@ -627,6 +627,7 @@ export function intentRepositoryFake(
     list: (input) => {
       const items = [...records.values()]
         .filter((record) => record.ownerUserId === input.ownerUserId)
+        .filter((record) => !(input.excludeKinds ?? []).includes(record.kind))
         .sort((left, right) =>
           right.createdAt === left.createdAt
             ? right.intentId.localeCompare(left.intentId)

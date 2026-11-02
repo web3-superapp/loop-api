@@ -37,8 +37,24 @@ import { hooksLaunchReviewCommandSchema } from "../src/features/launch/hooks-lau
 import { createHooksLaunchSubmissionService } from "../src/features/launch/hooks-launch-submission.js";
 import { parseLaunch2Amount } from "../src/features/launch2/launch2-contract.js";
 import { createLaunch2Service } from "../src/features/launch2/launch2-service.js";
+import { createPostgresAccountWalletRepository } from "../src/database/account-wallet-repository.js";
+import { createPostgresBscIndexerRepository } from "../src/database/bsc-indexer-repository.js";
+import { createPostgresChainRegistryRepository } from "../src/database/chain-registry-repository.js";
+import { createPostgresControlPlaneRepository } from "../src/database/control-plane-repository.js";
+import { createPostgresWalletIntentRepository } from "../src/database/wallet-intent-repository.js";
+import type { WalletIntentRuntime } from "../src/features/wallet-intents/intent-preparation.js";
+import { createWalletIntentReconciler } from "../src/features/wallet-intents/intent-reconciliation.js";
+import {
+  createNftSendService,
+  projectNftDirectoryFromLaunch2,
+} from "../src/features/wallet-intents/nft-send-service.js";
+import { createWalletIntentService } from "../src/features/wallet-intents/wallet-intent-service.js";
 import type { BscChainCallClient } from "../src/integrations/bsc/rpc-client.js";
-import { createUnavailableBscReadClient } from "../src/integrations/bsc/rpc-client.js";
+import {
+  asChainCallClient,
+  createUnavailableBscReadClient,
+} from "../src/integrations/bsc/rpc-client.js";
+import { createUnavailablePrivySwapAdapter } from "../src/integrations/privy/swap-adapter.js";
 import { createHooksLaunchExecutorChain } from "../src/integrations/launch/hooks-launch-executor-chain.js";
 import { createHooksLaunchFactoryReader } from "../src/integrations/launch/hooks-launch-factory-reader.js";
 import {
@@ -69,8 +85,9 @@ import { requireIntegrationDatabaseUrl } from "./helpers/integration-database.js
  * is published; a holder buys in the priority hour through the launch2
  * quote + trade prepare (MAX and quote equal the contract's views); a
  * non-holder is refused; after indexing, instances / positions / trades /
- * snapshot members are what the chain says. Skips when anvil / forge /
- * loop-contracts are absent.
+ * snapshot members are what the chain says; Decision 0194: the holder then
+ * sends its project NFT through a send_nft intent and the position moves.
+ * Skips when anvil / forge / loop-contracts are absent.
  */
 
 const foundry = locateFoundry();
@@ -195,6 +212,66 @@ function anvilCallClient(rpcUrl: string): BscChainCallClient {
         address: address as Address,
         blockTag: "pending",
       }),
+  };
+}
+
+/**
+ * Decision 0194: the launch-slot client the wallet-intent lifecycle needs
+ * on top of `anvilCallClient` (verified chain, code, transactions,
+ * receipts, head; one confirmation).
+ */
+function anvilIntentClient(rpcUrl: string): BscChainCallClient {
+  const client = createPublicClient({
+    chain: bscTestnet,
+    transport: http(rpcUrl),
+  });
+  return {
+    ...anvilCallClient(rpcUrl),
+    confirmations: 1,
+    verifyChain: () => Promise.resolve("verified" as const),
+    currentVerification: () => "verified" as const,
+    getHead: async () => {
+      const block = await client.getBlock({ blockTag: "latest" });
+      return {
+        blockNumber: block.number,
+        blockHash: block.hash.toLowerCase(),
+        observedAt: new Date().toISOString(),
+      };
+    },
+    getCode: async (address) =>
+      (await client.getCode({ address: address as Address })) ?? "0x",
+    getTransaction: async (hash) => {
+      const tx = await client
+        .getTransaction({ hash: hash as Hex })
+        .catch(() => null);
+      return tx === null
+        ? null
+        : {
+            hash: tx.hash.toLowerCase(),
+            from: tx.from.toLowerCase(),
+            to: tx.to === null ? null : tx.to.toLowerCase(),
+            input: tx.input,
+            value: tx.value,
+            nonce: tx.nonce,
+            chainId: tx.chainId ?? null,
+            blockNumber: tx.blockNumber,
+          };
+    },
+    getTransactionReceipt: async (hash) => {
+      const receipt = await client
+        .getTransactionReceipt({ hash: hash as Hex })
+        .catch(() => null);
+      return receipt === null
+        ? null
+        : {
+            hash: receipt.transactionHash.toLowerCase(),
+            status: receipt.status,
+            blockNumber: receipt.blockNumber,
+            blockHash: receipt.blockHash.toLowerCase(),
+            gasUsed: receipt.gasUsed,
+            effectiveGasPrice: receipt.effectiveGasPrice,
+          };
+    },
   };
 }
 
@@ -497,7 +574,7 @@ describe.skipIf(skipReason !== null)(
         pollIntervalMs: 1_000,
         now: () => new Date(Number(chainNow) * 1000),
       });
-      const service = createLaunch2Service({
+      const serviceDeps: Parameters<typeof createLaunch2Service>[0] = {
         repository,
         chain: launch2Chain,
         readClient: anvilCallClient(chain.rpcUrl),
@@ -518,7 +595,8 @@ describe.skipIf(skipReason !== null)(
         quoteTtlSeconds: 60,
         defaultSlippageBps: 100,
         now: () => new Date(Number(chainNow) * 1000),
-      });
+      };
+      const service = createLaunch2Service(serviceDeps);
 
       // 1. The lane registers the activated task and sees the activation.
       await refreshNow();
@@ -896,6 +974,247 @@ describe.skipIf(skipReason !== null)(
         [holderUser],
       );
       expect(exposure.rows[0]?.total).toBe("150");
+
+      // 9. Decision 0194 (S339): the holder sends project NFT #1 to the
+      //    outsider through a send_nft intent; the device broadcasts the
+      //    exact payload, the reconciliation lane confirms it on the slot,
+      //    and the launch2 lane's ERC-721 Transfer moves the position.
+      for (const [userId, key] of [
+        [holderUser, holderKey],
+        [outsiderUser, outsiderKey],
+      ] as const) {
+        await pool.query(
+          `insert into public.account_wallets
+             (wallet_id, owner_user_id, provider_wallet_id, address, kind, is_active)
+           values ($1, $2, $3, $4, 'embedded', true)`,
+          [
+            walletIdOf(userId),
+            userId,
+            `privy-${userId}`,
+            privateKeyToAccount(key).address.toLowerCase(),
+          ],
+        );
+      }
+      const slotClient = anvilIntentClient(chain.rpcUrl);
+      const intentRuntime: WalletIntentRuntime = {
+        config: {
+          bscWrites: {
+            configVersion: "bscWriteCanaryV1",
+            canaryAssetIds: [],
+            canaryMaxUsd: "100000",
+            canaryDailyMaxUsd: null,
+            canaryCounterpartyAddresses: [],
+            swapFeeBps: null,
+          },
+          privyAppId: null,
+          gasReserveRawWei: 0n,
+        },
+        repository: createPostgresWalletIntentRepository(pool),
+        wallets: createPostgresAccountWalletRepository(pool),
+        registry: createPostgresChainRegistryRepository(pool),
+        indexer: createPostgresBscIndexerRepository(pool),
+        readClient: asChainCallClient(
+          createUnavailableBscReadClient({
+            chainId: "eip155:56",
+            chainReference: 56,
+            confirmations: 15,
+            reorgDepthBlocks: 64,
+          }),
+        ),
+        nftSend: {
+          enabled: true,
+          chainId: "eip155:97",
+          slotOpen: true,
+          readClient: slotClient,
+          directory: projectNftDirectoryFromLaunch2(repository),
+        },
+        controlPlane: createPostgresControlPlaneRepository(pool),
+        marketFacts: null,
+        swapAdapter: createUnavailablePrivySwapAdapter(),
+        cursorCodec: null,
+        now: () => new Date(),
+        createUuid: randomUUID,
+      };
+      const nftSend = createNftSendService(intentRuntime);
+      const walletIntents = createWalletIntentService(intentRuntime);
+      const outsiderAddress =
+        privateKeyToAccount(outsiderKey).address.toLowerCase();
+      const nftBody = (overrides: Record<string, unknown> = {}) => ({
+        walletId: walletIdOf(holderUser),
+        chainId: "eip155:97",
+        contractAddress: contracts["nft"],
+        tokenId: "1",
+        recipientAddress: outsiderAddress,
+        ...overrides,
+      });
+      // Not the owner of #1; an ERC-20 recipient has no onERC721Received.
+      await expect(
+        nftSend.prepare({
+          principal: principal(outsiderUser),
+          idempotencyKey: randomUUID(),
+          body: nftBody({
+            walletId: walletIdOf(outsiderUser),
+            recipientAddress: holderAddress,
+          }),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        detailsSafe: { reasonCode: "NFT_NOT_OWNED" },
+      });
+      await expect(
+        nftSend.prepare({
+          principal: principal(holderUser),
+          idempotencyKey: randomUUID(),
+          body: nftBody({ recipientAddress: deployed.usd1 }),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        detailsSafe: { reasonCode: "NFT_RECIPIENT_REJECTS" },
+      });
+      await expect(
+        nftSend.prepare({
+          principal: principal(holderUser),
+          idempotencyKey: randomUUID(),
+          body: nftBody({ contractAddress: contracts["meme"] }),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        detailsSafe: { reasonCode: "NFT_CONTRACT_UNSUPPORTED" },
+      });
+      const { resource: sendIntent } = await nftSend.prepare({
+        principal: principal(holderUser),
+        idempotencyKey: randomUUID(),
+        body: nftBody(),
+        signal: new AbortController().signal,
+      });
+      expect(sendIntent).toMatchObject({
+        kind: "send_nft",
+        chainId: "eip155:97",
+        state: "awaiting_signature",
+        simulation: { status: "passed" },
+        review: {
+          decodedCall: {
+            functionName: "safeTransferFrom",
+            args: { tokenId: "1", to: outsiderAddress },
+          },
+        },
+      });
+      const unsigned = sendIntent.unsignedTransaction!;
+      const holderWallet = createWalletClient({
+        account: privateKeyToAccount(holderKey),
+        chain: bscTestnet,
+        transport: http(chain.rpcUrl),
+      });
+      const sentHash = await holderWallet.sendTransaction({
+        to: unsigned.to as Address,
+        data: unsigned.data,
+        value: BigInt(unsigned.value),
+        gas: BigInt(unsigned.gas),
+        nonce: Number(BigInt(unsigned.nonce)),
+        gasPrice: BigInt(unsigned.gasPrice!),
+      });
+      expect(
+        (await publicClient().waitForTransactionReceipt({ hash: sentHash }))
+          .status,
+      ).toBe("success");
+      const reported = await walletIntents.reportBroadcast({
+        principal: principal(holderUser),
+        intentId: sendIntent.intentId,
+        body: { txHash: sentHash },
+      });
+      expect(reported).toMatchObject({ state: "submitted", kind: "send_nft" });
+      await chain.mine(2);
+      await pool.query(
+        "update public.wallet_intents set reconcile_after = now() - interval '1 minute' where intent_id = $1",
+        [sendIntent.intentId],
+      );
+      const reconciled = await createWalletIntentReconciler({
+        repository: intentRuntime.repository,
+        wallets: intentRuntime.wallets,
+        readClient: intentRuntime.readClient,
+        launchReadClient: slotClient,
+        swapAdapter: intentRuntime.swapAdapter,
+        createUuid: randomUUID,
+      }).reconcileOnce();
+      expect(reconciled.transitions).toEqual([
+        {
+          intentId: sendIntent.intentId,
+          toState: "confirmed",
+          reasonCode: null,
+        },
+      ]);
+      await refreshNow();
+      await lane.runOnce();
+      expect(
+        await repository.listPositions({
+          holderAddresses: [holderAddress.toLowerCase()],
+          instanceId,
+        }),
+      ).toEqual([
+        expect.objectContaining({ nftMintedTokenId: "1", nftHeld: 0 }),
+      ]);
+      expect(
+        await repository.listPositions({
+          holderAddresses: [outsiderAddress],
+          instanceId,
+        }),
+      ).toEqual([
+        expect.objectContaining({ nftMintedTokenId: null, nftHeld: 1 }),
+      ]);
+      // Decision 0194: the held token IDs follow the last Transfer of each
+      // token; the key is emitted only behind its switch.
+      expect(
+        await repository.heldNftTokenIds!({
+          instanceIds: [instanceId],
+          holderAddresses: [
+            holderAddress,
+            outsiderAddress,
+            privateKeyToAccount(secondKey).address,
+          ],
+        }),
+      ).toEqual(
+        expect.arrayContaining([
+          { instanceId, holderAddress: outsiderAddress, tokenIds: ["1"] },
+          {
+            instanceId,
+            holderAddress: privateKeyToAccount(secondKey).address.toLowerCase(),
+            tokenIds: ["2"],
+          },
+        ]),
+      );
+      const plainPositions = (
+        await service.listMyPositions({ principal: principal(outsiderUser) })
+      )["positions"] as Record<string, Record<string, unknown>>[];
+      expect(plainPositions[0]?.["nft"]).toEqual({
+        mintedTokenId: null,
+        held: 1,
+      });
+      const emitting = createLaunch2Service({
+        ...serviceDeps,
+        nftHeldTokenIdsEmit: true,
+      });
+      const heldPositions = (
+        await emitting.listMyPositions({ principal: principal(outsiderUser) })
+      )["positions"] as Record<string, Record<string, unknown>>[];
+      expect(heldPositions[0]?.["nft"]).toEqual({
+        mintedTokenId: null,
+        held: 1,
+        heldTokenIds: ["1"],
+      });
+      const holderView = (
+        await emitting.getInstance({
+          principal: principal(holderUser),
+          instanceId,
+        })
+      )["instance"] as Record<string, Record<string, unknown>>;
+      expect(holderView["viewer"]?.["nft"]).toEqual({
+        mintedTokenId: "1",
+        held: 0,
+        heldTokenIds: [],
+      });
     }, 900_000);
   },
 );

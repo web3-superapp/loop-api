@@ -60,7 +60,15 @@ import {
   createApprovalService,
   type ApprovalService,
 } from "./features/wallet-intents/approval-service.js";
-import type { WalletIntentRuntime } from "./features/wallet-intents/intent-preparation.js";
+import type {
+  ProjectNftDirectory,
+  WalletIntentRuntime,
+} from "./features/wallet-intents/intent-preparation.js";
+import {
+  createNftSendService,
+  projectNftDirectoryFromLaunch2,
+  type NftSendService,
+} from "./features/wallet-intents/nft-send-service.js";
 import {
   createSendService,
   type SendService,
@@ -644,6 +652,9 @@ export interface BuildAppOptions {
   readonly privySwapAdapter?: PrivySwapAdapter;
   readonly walletIntentService?: WalletIntentService;
   readonly sendService?: SendService;
+  /** Decision 0194: test seams for the project NFT send. */
+  readonly nftSendService?: NftSendService;
+  readonly projectNftDirectory?: ProjectNftDirectory;
   readonly approvalService?: ApprovalService;
   readonly swapService?: SwapService;
   readonly walletIntentNow?: () => Date;
@@ -2145,6 +2156,25 @@ export async function buildApp(
             contractAddress: config.launchContract.address,
             usd1Address: config.launchContract.usd1Address,
           }),
+    // Decision 0194: the project NFT send (NFT_SEND_ENABLED, default off)
+    // on the launch slot — the slot's own client, or the primary one when
+    // the slot is chain 56 (open only with LAUNCH_MAINNET_ACK, 0150).
+    nftSend: Object.freeze({
+      enabled: config.nftSendEnabled,
+      chainId: config.launchChain.chainId,
+      slotOpen: launchSlotActionsOpen({
+        chainReference: config.launchChain.chainReference,
+        mainnetAcknowledged: config.launchChain.mainnetAcknowledged,
+      }),
+      readClient: config.launchChain.sharedWithPrimary
+        ? asChainCallClient(bscReadClient)
+        : launchChainReadClient === null
+          ? null
+          : asChainCallClient(launchChainReadClient),
+      directory:
+        options.projectNftDirectory ??
+        projectNftDirectoryFromLaunch2(database.launch2),
+    }),
     controlPlane: database.controlPlane,
     marketFacts:
       options.marketFactService !== undefined || marketRuntimeAvailable
@@ -2160,6 +2190,8 @@ export async function buildApp(
     createWalletIntentService(walletIntentRuntime);
   const sendService =
     options.sendService ?? createSendService(walletIntentRuntime);
+  const nftSendService =
+    options.nftSendService ?? createNftSendService(walletIntentRuntime);
   const approvalService =
     options.approvalService ?? createApprovalService(walletIntentRuntime);
   const swapService =
@@ -2548,6 +2580,8 @@ export async function buildApp(
           traderAccountEmit: config.launch2.traderAccountEmit,
           // Decision 0173: off (default) omits `nftImageUrl`.
           nftImageEmit: config.launch2.nftImageEmit,
+          // Decision 0194: off (default) omits `nft.heldTokenIds`.
+          nftHeldTokenIdsEmit: config.launch2.nftHeldTokenIdsEmit,
           // Decision 0174: off (default) omits position price / value.
           positionValueEmit: config.launch2.positionValueEmit,
           // Decision 0176: off (default) omits position cost / PnL.
@@ -3044,6 +3078,25 @@ export async function buildApp(
         pushRuntimeAvailable,
         memeRuntimeAvailable,
         squareFeedAvailable: squareService.available,
+        // Decision 0194: the project NFT send's static pieces.
+        nftSendState: () => {
+          const nft = walletIntentRuntime.nftSend ?? null;
+          return {
+            reasonCode:
+              nft === null || !nft.enabled
+                ? "NFT_SEND_DISABLED"
+                : !walletIntentRuntimeAvailable ||
+                    !registeredModuleIds.includes("sendApprovals")
+                  ? "SEND_APPROVALS_RUNTIME_DEFERRED"
+                  : config.bscWrites === null
+                    ? "BSC_WRITES_DISABLED"
+                    : !nft.slotOpen ||
+                        nft.readClient === null ||
+                        nft.directory === null
+                      ? "NFT_SEND_CHAIN_UNAVAILABLE"
+                      : null,
+          };
+        },
         testnetFaucetState: () => ({
           reasonCode: testnetFaucetService.unavailableReason(),
         }),
@@ -3084,6 +3137,7 @@ export async function buildApp(
       voiceRoomService,
       walletIntentService,
       sendService,
+      nftSendService,
       approvalService,
       swapService,
       launchService,

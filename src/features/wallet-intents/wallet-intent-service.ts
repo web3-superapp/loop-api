@@ -12,8 +12,10 @@ import { v2ContractVersion } from "../meta/product-policy.js";
 import {
   openWalletIntentStates,
   walletIntentListLimits,
+  walletIntentOptInKinds,
   walletIntentReasonCodes,
   type UnsignedTransaction,
+  type WalletIntentOptInKind,
 } from "./intent-contract.js";
 import {
   enforceCanaryCeiling,
@@ -46,6 +48,11 @@ export interface WalletIntentService {
     readonly principal: AuthenticatedLoopPrincipal;
     readonly cursor?: unknown;
     readonly limit?: unknown;
+    /**
+     * Decision 0194: opt-in kinds (`walletIntentOptInKinds`) the client
+     * decodes; every other opt-in kind is left out of the page.
+     */
+    readonly includeKinds?: unknown;
   }): Promise<WalletIntentListResource>;
   cancel(input: {
     readonly principal: AuthenticatedLoopPrincipal;
@@ -80,6 +87,28 @@ export function transactionMatchesPayload(
     BigInt(observed.nonce) === fromHexQuantity(transaction.nonce) &&
     (observed.chainId === null || observed.chainId === transaction.chainId)
   );
+}
+
+/**
+ * `includeKinds` is a comma-separated set of opt-in kinds; an unknown or
+ * repeated value is INVALID_REQUEST. Absent is the empty set.
+ */
+function parseIncludeKinds(value: unknown): readonly WalletIntentOptInKind[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw V2ApiError.invalidRequest();
+  }
+  const kinds: WalletIntentOptInKind[] = [];
+  for (const part of value.split(",")) {
+    const kind = walletIntentOptInKinds.find((candidate) => candidate === part);
+    if (kind === undefined || kinds.includes(kind)) {
+      throw V2ApiError.invalidRequest();
+    }
+    kinds.push(kind);
+  }
+  return kinds.sort();
 }
 
 export function createWalletIntentService(
@@ -153,7 +182,7 @@ export function createWalletIntentService(
       );
     },
 
-    async list({ principal, cursor, limit }) {
+    async list({ principal, cursor, limit, includeKinds }) {
       const codec = runtime.cursorCodec;
       if (codec === null) {
         throw V2ApiError.capabilityUnavailable();
@@ -161,7 +190,14 @@ export function createWalletIntentService(
       if (cursor !== undefined && limit !== undefined) {
         throw V2ApiError.invalidRequest();
       }
-      const filter = "all";
+      const included = parseIncludeKinds(includeKinds);
+      const excludeKinds = walletIntentOptInKinds.filter(
+        (kind) => !included.includes(kind),
+      );
+      // The cursor binds the opt-in set: a page can never continue under a
+      // different filter (an old cursor with a new opt-in is invalid).
+      const filter =
+        included.length === 0 ? "all" : `all+${included.join("+")}`;
       let pageSize: number = walletIntentListLimits.default;
       let before:
         { readonly createdAt: string; readonly intentId: string } | undefined;
@@ -206,6 +242,7 @@ export function createWalletIntentService(
         ownerUserId: principal.userId,
         limit: pageSize,
         ...(before === undefined ? {} : { before }),
+        ...(excludeKinds.length === 0 ? {} : { excludeKinds }),
       });
       const now = runtime.now();
       const last = page.items.at(-1);
