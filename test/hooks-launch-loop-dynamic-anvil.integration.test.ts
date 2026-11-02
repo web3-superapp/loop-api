@@ -221,6 +221,12 @@ describe.skipIf(skipReason !== null)(
       expect(template.templateHash).toBe(
         hooksLaunchLoopDynamicTemplateHash(template.params).toLowerCase(),
       );
+      // Decision 0195: loop-contracts main (S340, 7bad42a) — the cap is
+      // admin-settable and not in TEMPLATE_HASH.
+      expect(template.params.maxCumulativeBuyAdjustable).toBe(true);
+      expect(template.params.maxCumulativeBuy).toBe(
+        "5000000000000000000000000",
+      );
 
       const ownerUserId = await user();
       const ownerKey = generatePrivateKey();
@@ -356,7 +362,12 @@ describe.skipIf(skipReason !== null)(
       expect(done.addresses.predicted.hook).toBe(prepared.hookAddress);
 
       const verification = await pool.query<{
-        verification: { checks: string[]; hookKind?: string };
+        verification: {
+          checks: string[];
+          hookKind?: string;
+          curveMaxCumulativeBuy?: string;
+          maxCumulativeBuyAdjustable?: boolean;
+        };
       }>(
         "select verification from public.hooks_launch_deployment_tasks where job_id = $1",
         [job.jobId],
@@ -365,6 +376,21 @@ describe.skipIf(skipReason !== null)(
         ...hooksLaunchLoopDynamicVerificationChecks,
       ]);
       expect(verification.rows[0]?.verification.hookKind).toBe("loopDynamic");
+      // Decision 0195: the curve's cap, verified against the receipt's
+      // LaunchMaxCumulativeBuy; the broadcast recorded the Factory value.
+      expect(verification.rows[0]?.verification.curveMaxCumulativeBuy).toBe(
+        "5000000000000000000000000",
+      );
+      expect(
+        verification.rows[0]?.verification.maxCumulativeBuyAdjustable,
+      ).toBe(true);
+      const broadcast = await pool.query<{ details: Record<string, unknown> }>(
+        "select details from public.hooks_launch_deployment_events where job_id = $1 and kind = 'broadcast' order by event_id limit 1",
+        [job.jobId],
+      );
+      expect(broadcast.rows[0]?.details["factoryMaxCumulativeBuy"]).toBe(
+        "5000000000000000000000000",
+      );
 
       // The project-signed salt is registered for the predicted Hook.
       const client = createPublicClient({

@@ -574,10 +574,24 @@ describe("deployment manifest (Decision 0152)", () => {
     );
   });
 
-  it("refuses an S209 manifest whose hash is the old formula", () => {
+  it("reads S209 keys with the eleven-field hash as an S340 manifest (Decision 0195)", () => {
+    // Decision 0195: S340 Factories keep the S209 manifest keys (the cap is
+    // the initial value) but drop the cap from TEMPLATE_HASH again.
     const manifest = s209Shape();
     (manifest["loopDynamic"] as Record<string, unknown>)["templateHash"] =
       s200TestnetManifestTemplateHash;
+    const parsed = parseHooksLaunchLoopDynamicManifest(manifest);
+    expect(parsed.generation).toBe("s340");
+    expect(parsed.params.maxCumulativeBuyAdjustable).toBe(true);
+    expect(parsed.params.maxCumulativeBuy).toBe("5000000000000000000000000");
+    expect(parsed.buyFeeToken).toBe("usd1");
+    expect(parsed.hookPermissionFlags).toBe(0x10ccn);
+  });
+
+  it("still refuses an S209-shaped manifest whose hash matches neither formula", () => {
+    const manifest = s209Shape();
+    (manifest["loopDynamic"] as Record<string, unknown>)["templateHash"] =
+      `0x${"ab".repeat(32)}`;
     expect(() => parseHooksLaunchLoopDynamicManifest(manifest)).toThrow(
       HooksLaunchManifestInvalidError,
     );

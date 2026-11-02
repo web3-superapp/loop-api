@@ -459,6 +459,10 @@ export function fakeRepository(input: {
           to: "broadcast",
           kind: "broadcast",
           txHash: signed.txHash,
+          // Decision 0195: caller facts (the Factory cap) when given.
+          ...(request.details === undefined
+            ? {}
+            : { details: { ...request.details, nonce: nonce.toString() } }),
         });
         task.status = "broadcast";
         task.txHash = signed.txHash;

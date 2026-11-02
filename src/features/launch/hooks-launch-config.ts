@@ -118,8 +118,42 @@ export interface HooksLaunchLoopDynamicParams {
    * maxCumulativeBuy`, its Hooks carry permission bits 0x10CC and take the
    * buy fee from the USD1 input. Absent = a pre-S209 Factory (5,000,000
    * constant, 0x10C4, MEME buy fee). Requires `maxDynamicFeeWad`.
+   *
+   * Decision 0195 (LOOP Decision 0268, loop-contracts Decision 0018, S340):
+   * on an S340 Factory the value is the admin-settable *default for new
+   * launches* at the moment it was read — every launch keeps the cap its
+   * `CurveEngine` was deployed with (`curve.maxCumulativeBuy()`), so this is
+   * never a project's cap.
    */
   readonly maxCumulativeBuy?: string;
+  /**
+   * Decision 0195 (S340): present (`true`) = the Factory's
+   * `maxCumulativeBuy` is admin-settable (`setMaxCumulativeBuy`, governance
+   * multisig) and is not part of `TEMPLATE_HASH` (the eleven-field
+   * 0013/0014 formula again). Absent = an S209 Factory (immutable cap, in
+   * the twelve-field hash) or older. Requires `maxCumulativeBuy`.
+   */
+  readonly maxCumulativeBuyAdjustable?: true;
+}
+
+/**
+ * Decision 0195: the LoopDynamic Factory generation the parameters belong
+ * to — `s165` (no fee cap), `s193` (fee cap), `s209` (+ immutable purchase
+ * cap in the hash), `s340` (+ admin-settable purchase cap, not hashed).
+ */
+export type HooksLaunchLoopDynamicGeneration =
+  "s165" | "s193" | "s209" | "s340";
+
+export function hooksLaunchLoopDynamicGeneration(
+  params: Pick<
+    HooksLaunchLoopDynamicParams,
+    "maxDynamicFeeWad" | "maxCumulativeBuy" | "maxCumulativeBuyAdjustable"
+  >,
+): HooksLaunchLoopDynamicGeneration {
+  if (params.maxCumulativeBuy !== undefined) {
+    return params.maxCumulativeBuyAdjustable === true ? "s340" : "s209";
+  }
+  return params.maxDynamicFeeWad === undefined ? "s165" : "s193";
 }
 
 /** Decision 0152: `MAX_CUMULATIVE_BUY_LIMIT` = the MEME total supply. */
@@ -171,7 +205,10 @@ export function isHooksLaunchMaxDynamicFeeWad(value: unknown): boolean {
  * differs from the S165 one even uncapped. Without it (an S165 Factory)
  * the hash is the ten-field S165 formula, unchanged. Decision 0152: an
  * S209 Factory appends `uint256 maxCumulativeBuy` (twelve fields); without
- * it the eleven-field S193 formula is unchanged.
+ * it the eleven-field S193 formula is unchanged. Decision 0195: an S340
+ * Factory (`maxCumulativeBuyAdjustable`) hashes the eleven-field formula
+ * again — its cap is admin-settable and not part of the template (default
+ * 50 % fee cap vector `0xe07e1859…49db`).
  */
 export function hooksLaunchLoopDynamicTemplateHash(
   params: HooksLaunchLoopDynamicParams,
@@ -190,6 +227,15 @@ export function hooksLaunchLoopDynamicTemplateHash(
   ] as const;
   const s165 =
     "bytes32, uint8, address, uint24, address, uint8, uint8, address, bool, uint24";
+  // The flag is typed `true`; a runtime object may still carry another
+  // value (or the flag without a cap) — neither is a template.
+  const adjustable: unknown = params.maxCumulativeBuyAdjustable;
+  if (
+    adjustable !== undefined &&
+    (adjustable !== true || params.maxCumulativeBuy === undefined)
+  ) {
+    throw new InvalidHooksLaunchDraftError();
+  }
   if (params.maxDynamicFeeWad === undefined) {
     if (params.maxCumulativeBuy !== undefined) {
       throw new InvalidHooksLaunchDraftError();
@@ -205,13 +251,17 @@ export function hooksLaunchLoopDynamicTemplateHash(
     if (!isHooksLaunchMaxCumulativeBuy(params.maxCumulativeBuy)) {
       throw new InvalidHooksLaunchDraftError();
     }
-    return keccak256(
-      encodeAbiParameters(parseAbiParameters(`${s165}, uint256, uint256`), [
-        ...head,
-        BigInt(params.maxDynamicFeeWad),
-        BigInt(params.maxCumulativeBuy),
-      ]),
-    );
+    if (params.maxCumulativeBuyAdjustable !== true) {
+      return keccak256(
+        encodeAbiParameters(parseAbiParameters(`${s165}, uint256, uint256`), [
+          ...head,
+          BigInt(params.maxDynamicFeeWad),
+          BigInt(params.maxCumulativeBuy),
+        ]),
+      );
+    }
+    // Decision 0195: S340 — the cap left the template (falls through to the
+    // eleven-field formula below).
   }
   return keccak256(
     encodeAbiParameters(parseAbiParameters(`${s165}, uint256`), [
@@ -241,6 +291,9 @@ export function hooksLaunchLoopDynamicFixedEconomics(
     ...base,
     // Decision 0152: an S209 Factory's cap replaces the constant in place
     // (same key position); a pre-S209 template's JSON is unchanged.
+    // Decision 0195: on an S340 Factory it is the admin-settable default
+    // read when the config was saved (same keys, no new ones — the App
+    // codecs stay unchanged); the deployed curve's own cap is the fact.
     ...(params.maxCumulativeBuy === undefined
       ? {}
       : { perAddressLifetimeBuyCapRaw: params.maxCumulativeBuy }),

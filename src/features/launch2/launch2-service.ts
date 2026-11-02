@@ -724,7 +724,9 @@ function buybackSummaryOf(
 
 /**
  * Decision 0152: the instance curve's verified per-address purchase cap
- * (S209: a Factory parameter; before: the 5,000,000 MEME constant).
+ * (S209: a Factory parameter; Decision 0195 / S340: the Factory's
+ * admin-settable default at deploy time, fixed per curve; before: the
+ * 5,000,000 MEME constant).
  */
 function curvePurchaseCapOf(record: Launch2InstanceRecord): bigint {
   const raw = record.curvePurchaseCap;

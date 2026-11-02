@@ -572,6 +572,38 @@ export const launchProjectsQuerySchema = {
   },
 } as const;
 
+/**
+ * Decision 0195 (LOOP 0268, S340): the target Factory's current
+ * per-address curve purchase cap for *new* launches — read-only; changes
+ * go through the governance multisig (`setMaxCumulativeBuy`), never the
+ * console. Optional in the schema (older consoles ignore it), always sent.
+ */
+const factoryPurchaseCapSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "factoryAddress", "maxCumulativeBuy", "adjustable"],
+  description:
+    "Decision 0195 (S340): the configured target Factory's `maxCumulativeBuy()` read live from the chain — the per-address cumulative curve purchase cap a launch deployed now receives. Existing launches keep the cap their curve was deployed with (see each deployment task's `verified` event details `curveMaxCumulativeBuy`). `unavailable` (no Factory reader configured, RPC failure, 3 s timeout) carries null values; the page itself never fails on it.",
+  properties: {
+    status: { type: "string", enum: ["available", "unavailable"] },
+    factoryAddress: {
+      anyOf: [addressSchema, { type: "null" }],
+      description: "The configured target Factory (null when not configured).",
+    },
+    maxCumulativeBuy: {
+      type: ["string", "null"],
+      pattern: "^[1-9][0-9]{0,27}$",
+      description:
+        "Raw MEME integer (18 decimals; 5000000000000000000000000 = 5,000,000 MEME). Null when unavailable or the Factory predates the getter (pre-S209: the 5,000,000 MEME constant).",
+    },
+    adjustable: {
+      type: ["boolean", "null"],
+      description:
+        "true = admin-settable by the governance multisig (S340 Factory); false = immutable (S209) or no getter; null = unknown (OfficialTax Factory, or unavailable).",
+    },
+  },
+} as const;
+
 export const launchProjectListResourceSchema = {
   type: "object",
   headers: noStoreResponseHeaders(),
@@ -586,6 +618,7 @@ export const launchProjectListResourceSchema = {
       description:
         "`projects`: a reviewer / acceptor authorized for some projects only.",
     },
+    factoryPurchaseCap: factoryPurchaseCapSchema,
   },
 } as const;
 
@@ -1204,6 +1237,7 @@ export const launchProjectDetailResourceSchema = {
   ],
   properties: {
     project: projectSummarySchema,
+    factoryPurchaseCap: factoryPurchaseCapSchema,
     versions: {
       type: "array",
       maxItems: 200,

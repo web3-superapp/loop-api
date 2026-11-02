@@ -106,7 +106,9 @@ export interface Launch2CurveState {
   /**
    * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
    * lifetime purchase cap — `maxCumulativeBuy()` of an S209 curve (a
-   * Factory parameter), `MAX_CUMULATIVE_BUY()` (5,000,000 MEME) before.
+   * Factory parameter; Decision 0195 / S340: fixed per curve at deploy
+   * time even though the Factory default is admin-settable),
+   * `MAX_CUMULATIVE_BUY()` (5,000,000 MEME) before.
    * Absent = the pre-S209 constant.
    */
   readonly maxCumulativeBuy?: bigint;

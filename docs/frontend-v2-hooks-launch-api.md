@@ -101,6 +101,12 @@
 无草稿时
 `{"draft": null, "approval": null, "latestDeployment": null, "minSaleLeadSeconds": 86400, "contractVersion": "2.0"}`。
 
+决策 0195（S340，主代理决策 0268）：S340 工厂上，`fixedEconomics.perAddressLifetimeBuyCapRaw`（及
+`fixedEconomics.loopDynamic.maxCumulativeBuy`）是**保存草稿那一刻**工厂的「新项目默认单地址上限」，
+治理多签可在之后调整；签名不绑定上限，项目按**部署时**的工厂值部署，部署后以项目自己的 curve 为准
+（`GET /v2/launch2/instances/{id}` 的 `template.perAddressCap`）。字段、键集、类型都不变，App 无需改 codec；
+文案建议写「当前单地址上限（以部署时为准）」。
+
 决策 0120（S142）新增的三个字段，供 App 冷启动后恢复项目方流程：
 
 - `approval`：无草稿为 `null`；否则 `configVersion` = 草稿版本，`status` 为

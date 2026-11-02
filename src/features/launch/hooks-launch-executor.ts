@@ -16,10 +16,14 @@ import {
   type HooksLaunchSignedSubmission,
 } from "./hooks-launch-submission.js";
 import type { HooksLaunchDeploymentStatus } from "./hooks-launch-deployment-status.js";
-import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
+import {
+  isHooksLaunchMaxCumulativeBuy,
+  type HooksLaunchLoopDynamicParams,
+} from "./hooks-launch-config.js";
 import {
   verifyHooksLaunchLoopDynamicDeployment,
   type HooksLaunchLoopDynamicOnChainFacts,
+  type HooksLaunchMaxCumulativeBuyEvent,
 } from "./hooks-launch-loop-dynamic-verification.js";
 import {
   verifyHooksLaunchDeployment,
@@ -157,6 +161,12 @@ export interface HooksLaunchExecutorContext {
     readonly version: number;
     readonly configHash: string;
     readonly approvedHash: string | null;
+    /**
+     * Decision 0195: the purchase cap the latest config's `fixedEconomics`
+     * (`perAddressLifetimeBuyCapRaw`) showed the project when it was saved;
+     * null / absent when unreadable.
+     */
+    readonly signedMaxCumulativeBuy?: string | null;
   } | null;
   readonly authorizations: readonly { readonly signedPayload: unknown }[];
 }
@@ -233,6 +243,11 @@ export interface HooksLaunchExecutorRepository {
     readonly purpose: "deploy" | "activate";
     readonly chainPendingNonce: bigint;
     readonly sign: (nonce: bigint) => Promise<HooksLaunchSignedTransaction>;
+    /**
+     * Decision 0195: extra safe facts merged into the broadcast event's
+     * details (the Factory's purchase cap read before this deploy).
+     */
+    readonly details?: Readonly<Record<string, unknown>>;
   }): Promise<HooksLaunchExecutorTask | null>;
   reservationPending(txHash: string): Promise<boolean>;
   releaseReservation(txHash: string): Promise<void>;
@@ -270,6 +285,11 @@ export interface HooksLaunchReceipt {
   readonly blockNumber: bigint;
   readonly blockHash: string;
   readonly launchDeployed: HooksLaunchDeployedEvent | null;
+  /**
+   * Decision 0195: the S340 Factory's `LaunchMaxCumulativeBuy` in the same
+   * receipt (null / absent on S209 and older Factories).
+   */
+  readonly launchMaxCumulativeBuy?: HooksLaunchMaxCumulativeBuyEvent | null;
 }
 
 export type HooksLaunchSendResult =
@@ -380,6 +400,13 @@ export interface HooksLaunchExecutorStepEvent {
   readonly kind: string;
   readonly txHash: string | null;
   readonly errorCode: string | null;
+  /**
+   * Decision 0195: a non-blocking notice the worker logs as a warning —
+   * `HOOKS_MAX_CUMULATIVE_BUY_CHANGED`: the S340 Factory's purchase cap
+   * (read before the deploy, or the deployed curve's) differs from the one
+   * the project's saved config showed. Never fails the task.
+   */
+  readonly noticeCode?: "HOOKS_MAX_CUMULATIVE_BUY_CHANGED";
 }
 
 export interface HooksLaunchExecutorTickResult {
@@ -527,6 +554,7 @@ export function createHooksLaunchExecutor(options: {
     to: HooksLaunchDeploymentStatus,
     patch: HooksLaunchTaskPatch,
     event: HooksLaunchExecutorEventInput | null,
+    noticeCode?: HooksLaunchExecutorStepEvent["noticeCode"],
   ): Promise<HooksLaunchExecutorTask | null> {
     const next = await repository.transition({
       jobId: task.jobId,
@@ -545,9 +573,41 @@ export function createHooksLaunchExecutor(options: {
         kind: event.kind,
         txHash: event.txHash ?? null,
         errorCode: event.errorCode ?? null,
+        ...(noticeCode === undefined ? {} : { noticeCode }),
       });
     }
     return next;
+  }
+
+  /** Decision 0195: a canonical cap string in (0, 1e27], else null. */
+  function validCap(value: unknown): string | null {
+    return typeof value === "string" && isHooksLaunchMaxCumulativeBuy(value)
+      ? value
+      : null;
+  }
+
+  /**
+   * Decision 0195: the broadcast event's purchase-cap facts for an S340
+   * Factory (null otherwise): the Factory value this tick read, the saved
+   * config's, and whether they differ.
+   */
+  function deployCapFacts(signed: string | null): {
+    readonly details: Readonly<Record<string, unknown>>;
+    readonly changed: boolean;
+  } | null {
+    const params = template?.params;
+    if (params?.maxCumulativeBuyAdjustable !== true) return null;
+    const factoryCap = validCap(params.maxCumulativeBuy);
+    if (factoryCap === null) return null;
+    const changed = signed !== null && signed !== factoryCap;
+    return {
+      details: {
+        factoryMaxCumulativeBuy: factoryCap,
+        ...(signed === null ? {} : { signedMaxCumulativeBuy: signed }),
+        ...(changed ? { maxCumulativeBuyChanged: true } : {}),
+      },
+      changed,
+    };
   }
 
   async function fail(
@@ -619,6 +679,8 @@ export function createHooksLaunchExecutor(options: {
         readonly kind: "ok";
         readonly payload: HooksLaunchSignedSubmission;
         readonly blockTimestamp: bigint;
+        /** Decision 0195: the saved config's purchase cap, if readable. */
+        readonly signedMaxCumulativeBuy: string | null;
       }
     | { readonly kind: "stop"; readonly outcome: StepOutcome }
   > {
@@ -668,7 +730,12 @@ export function createHooksLaunchExecutor(options: {
         }),
       };
     }
-    return { kind: "ok", payload, blockTimestamp: block.timestamp };
+    return {
+      kind: "ok",
+      payload,
+      blockTimestamp: block.timestamp,
+      signedMaxCumulativeBuy: validCap(latest.signedMaxCumulativeBuy),
+    };
   }
 
   async function sendRecorded(
@@ -792,6 +859,12 @@ export function createHooksLaunchExecutor(options: {
       throw new HooksLaunchExecutorIdleError("HOOKS_GAS_PRICE_ABOVE_CAP");
     }
     const pending = await chain.transactionCount("pending");
+    // Decision 0195: the Factory's purchase cap this deploy will hand the
+    // new curve (this tick's read; S340 = admin-settable), recorded with
+    // the broadcast. A difference from what the saved config showed is a
+    // notice, never a refusal: the project signature does not bind the cap
+    // (loop-contracts Decision 0018) and the curve's value is the fact.
+    const capFacts = deployCapFacts(checked.signedMaxCumulativeBuy);
     const recorded = await repository.reserveAndRecord({
       jobId: task.jobId,
       executorId,
@@ -799,6 +872,7 @@ export function createHooksLaunchExecutor(options: {
       purpose: "deploy",
       chainPendingNonce: pending,
       sign: (nonce) => chain.signDeploy(call, { nonce, gas, gasPrice }),
+      ...(capFacts === null ? {} : { details: capFacts.details }),
     });
     if (
       recorded === null ||
@@ -814,6 +888,9 @@ export function createHooksLaunchExecutor(options: {
       kind: "broadcast",
       txHash: recorded.txHash,
       errorCode: null,
+      ...(capFacts?.changed === true
+        ? { noticeCode: "HOOKS_MAX_CUMULATIVE_BUY_CHANGED" as const }
+        : {}),
     });
     return sendRecorded(recorded, recorded.rawTx, recorded.txHash);
   }
@@ -998,6 +1075,7 @@ export function createHooksLaunchExecutor(options: {
                 expected,
                 template,
                 event: tracked.receipt.launchDeployed,
+                capEvent: tracked.receipt.launchMaxCumulativeBuy ?? null,
                 facts: facts,
               })
           : verifyHooksLaunchDeployment({
@@ -1015,6 +1093,16 @@ export function createHooksLaunchExecutor(options: {
     for (const [address, hash] of Object.entries(facts.codeHashes)) {
       codeHashes[address] = hash;
     }
+    // Decision 0195: an S340 launch's cap is its curve's (verified equal to
+    // the receipt's LaunchMaxCumulativeBuy); compared with what the saved
+    // config showed, a difference is recorded and logged, never blocking.
+    const curveCap = (facts.curve?.maxCumulativeBuy ?? 0n).toString(10);
+    const adjustableCap =
+      factsDynamic && template?.params.maxCumulativeBuyAdjustable === true;
+    const signedCap = adjustableCap
+      ? validCap(context.latestConfig?.signedMaxCumulativeBuy)
+      : null;
+    const capChanged = signedCap !== null && signedCap !== curveCap;
     const next = await move(
       task,
       "verified",
@@ -1030,13 +1118,27 @@ export function createHooksLaunchExecutor(options: {
           nftSaleDurationSeconds: facts.factory.nftSaleDuration.toString(10),
           nftSaleEnd: (facts.nft?.saleEnd ?? 0n).toString(10),
           // Decision 0152: the verified per-address curve purchase cap
-          // (S209: the Factory's maxCumulativeBuy) the launch2 read model
+          // (the curve's own maxCumulativeBuy(); S209: equal to the
+          // Factory's immutable value, Decision 0195 / S340: the Factory's
+          // admin-settable default at deploy time) the launch2 read model
           // shows (`launch2_instances` → curve_purchase_cap).
           curveMaxCumulativeBuy: (facts.curve?.maxCumulativeBuy ?? 0n).toString(
             10,
           ),
           ...(facts.factory.nftSaleDurationLegacy
             ? { legacyFactory: true }
+            : {}),
+          // Decision 0195: S340 — the cap was the Factory's admin-settable
+          // default at deploy time; what the saved config showed, and
+          // whether that differs from the curve's.
+          ...(adjustableCap
+            ? {
+                maxCumulativeBuyAdjustable: true,
+                ...(signedCap === null
+                  ? {}
+                  : { signedMaxCumulativeBuy: signedCap }),
+                ...(capChanged ? { maxCumulativeBuyChanged: true } : {}),
+              }
             : {}),
           // Decision 0132: what the LoopDynamic launch was verified against.
           ...(factsDynamic && template !== null
@@ -1056,8 +1158,18 @@ export function createHooksLaunchExecutor(options: {
           ...(facts.factory.nftSaleDurationLegacy
             ? { legacyFactory: true }
             : {}),
+          ...(adjustableCap
+            ? {
+                curveMaxCumulativeBuy: curveCap,
+                ...(signedCap === null
+                  ? {}
+                  : { signedMaxCumulativeBuy: signedCap }),
+                ...(capChanged ? { maxCumulativeBuyChanged: true } : {}),
+              }
+            : {}),
         },
       },
+      capChanged ? "HOOKS_MAX_CUMULATIVE_BUY_CHANGED" : undefined,
     );
     return next === null ? "lost" : "advanced";
   }

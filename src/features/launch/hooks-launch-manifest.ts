@@ -22,9 +22,14 @@ import {
  *   buyFeeAccrual: "baseFeesAccrued", hookPermissionFlags: "0x10cc"}`;
  * - before — none of those keys (5,000,000 MEME constant, MEME buy fee,
  *   0x10C4). A manifest with only some of them is refused.
+ * - Decision 0195 (S340, loop-contracts Decision 0018) — the same keys as
+ *   S209 (the cap is the deployment's initial value), but the recorded
+ *   `templateHash` is the eleven-field formula without the cap: the cap is
+ *   admin-settable. Which formula reproduces the recorded hash decides
+ *   between `s209` and `s340`.
  */
 export interface HooksLaunchLoopDynamicManifest {
-  readonly generation: "s209" | "legacy";
+  readonly generation: "s340" | "s209" | "legacy";
   readonly params: HooksLaunchLoopDynamicParams;
   readonly templateHash: string;
   readonly buyFeeToken: "usd1" | "meme";
@@ -139,7 +144,7 @@ export function parseHooksLaunchLoopDynamicManifest(
       "an S209 manifest has maxDynamicFeeWad",
     );
   }
-  const params: HooksLaunchLoopDynamicParams = Object.freeze({
+  const base: HooksLaunchLoopDynamicParams = Object.freeze({
     router: address(ld["loopRouter"], "loopDynamic.loopRouter"),
     baseSellFeePpm: ppm(p["baseSellFeePpm"], "baseSellFeePpm"),
     baseFeeRecipient: address(p["baseFeeRecipient"], "baseFeeRecipient"),
@@ -155,17 +160,30 @@ export function parseHooksLaunchLoopDynamicManifest(
     ...(s209 ? { maxCumulativeBuy: top["maxCumulativeBuy"] as string } : {}),
   });
   const recorded = ld["templateHash"];
-  if (
-    typeof recorded !== "string" ||
-    hooksLaunchLoopDynamicTemplateHash(params).toLowerCase() !==
-      recorded.toLowerCase()
-  ) {
+  const reproduces = (candidate: HooksLaunchLoopDynamicParams): boolean =>
+    typeof recorded === "string" &&
+    hooksLaunchLoopDynamicTemplateHash(candidate).toLowerCase() ===
+      recorded.toLowerCase();
+  const adjustable: HooksLaunchLoopDynamicParams | null = s209
+    ? Object.freeze({ ...base, maxCumulativeBuyAdjustable: true as const })
+    : null;
+  const params = reproduces(base)
+    ? base
+    : adjustable !== null && reproduces(adjustable)
+      ? adjustable
+      : null;
+  if (params === null || typeof recorded !== "string") {
     throw new HooksLaunchManifestInvalidError(
       "loopDynamic.templateHash is not reproduced by its parameters",
     );
   }
   return Object.freeze({
-    generation: s209 ? "s209" : "legacy",
+    generation:
+      params.maxCumulativeBuyAdjustable === true
+        ? "s340"
+        : s209
+          ? "s209"
+          : "legacy",
     params,
     templateHash: recorded.toLowerCase(),
     buyFeeToken: s209 ? "usd1" : "meme",

@@ -521,8 +521,37 @@ function auditReference(audit: AdminAuditRecord | null) {
     : Object.freeze({ auditId: audit.auditId, seq: audit.seq, at: audit.at });
 }
 
+/**
+ * Decision 0195 (LOOP 0268, S340): the target Factory's current purchase
+ * cap for new launches, shown read-only in the console (changes go through
+ * the governance multisig's `setMaxCumulativeBuy`, never the console).
+ */
+export interface AdminLaunchFactoryPurchaseCapSource {
+  /** Lowercase address of the configured target Factory. */
+  readonly factoryAddress: string;
+  read(): Promise<{
+    readonly maxCumulativeBuy: string | null;
+    readonly adjustable: boolean | null;
+  }>;
+}
+
+/** Decision 0195: the console waits this long for the chain read. */
+export const adminLaunchFactoryPurchaseCapTimeoutMs = 3_000;
+
+export interface AdminLaunchFactoryPurchaseCap {
+  readonly status: "available" | "unavailable";
+  readonly factoryAddress: string | null;
+  readonly maxCumulativeBuy: string | null;
+  readonly adjustable: boolean | null;
+}
+
 export function createAdminLaunchReviewConsoleService(options: {
   readonly repository: AdminLaunchReviewRepository | null;
+  /**
+   * Decision 0195: the Factory purchase-cap read; null / absent (no
+   * Factory reader configured) answers `status: "unavailable"`.
+   */
+  readonly factoryPurchaseCap?: AdminLaunchFactoryPurchaseCapSource | null;
   /**
    * Decision 0117: the chain deployments go to (`LAUNCH_CHAIN_ID`), shown
    * next to the template's `fixedEconomics.chainId` (always 56).
@@ -542,6 +571,58 @@ export function createAdminLaunchReviewConsoleService(options: {
   const cursorKey = createHmac("sha256", "loop-admin-launch-cursor-v1")
     .update(options.sessionSecret)
     .digest();
+
+  /**
+   * Decision 0195: never fails the page — an unconfigured, slow (3 s) or
+   * failed read is `unavailable` with null values (no stale or default
+   * number is ever shown as the chain's).
+   */
+  async function factoryPurchaseCap(): Promise<AdminLaunchFactoryPurchaseCap> {
+    const source = options.factoryPurchaseCap ?? null;
+    const unavailable = Object.freeze({
+      status: "unavailable" as const,
+      factoryAddress: source?.factoryAddress.toLowerCase() ?? null,
+      maxCumulativeBuy: null,
+      adjustable: null,
+    });
+    if (source === null) return unavailable;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const read = await Promise.race([
+        source.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("factory purchase cap read timed out")),
+            adminLaunchFactoryPurchaseCapTimeoutMs,
+          );
+          timer.unref();
+        }),
+      ]);
+      if (
+        read.maxCumulativeBuy !== null &&
+        !/^[1-9][0-9]{0,27}$/u.test(read.maxCumulativeBuy)
+      ) {
+        return unavailable;
+      }
+      return Object.freeze({
+        status: "available" as const,
+        factoryAddress: source.factoryAddress.toLowerCase(),
+        maxCumulativeBuy: read.maxCumulativeBuy,
+        adjustable: read.adjustable,
+      });
+    } catch (error) {
+      options.logger.warn(
+        {
+          reasonCode: "ADMIN_FACTORY_PURCHASE_CAP_UNAVAILABLE",
+          errorClass: error instanceof Error ? error.name : "unknown",
+        },
+        "Admin launch console: factory purchase cap unreadable",
+      );
+      return unavailable;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
 
   function repository(): AdminLaunchReviewRepository {
     if (options.repository === null) {
@@ -895,13 +976,16 @@ export function createAdminLaunchReviewConsoleService(options: {
           query["cursor"] === undefined
             ? null
             : decodeCursor(filter, query["cursor"]);
-        const rows = await repository().listProjects({
-          stage,
-          kind,
-          scope,
-          limit: limit + 1,
-          after,
-        });
+        const [rows, cap] = await Promise.all([
+          repository().listProjects({
+            stage,
+            kind,
+            scope,
+            limit: limit + 1,
+            after,
+          }),
+          factoryPurchaseCap(),
+        ]);
         const page = rows.slice(0, limit);
         const last = page.at(-1);
         return Object.freeze({
@@ -911,6 +995,8 @@ export function createAdminLaunchReviewConsoleService(options: {
               ? encodeCursor(filter, last)
               : null,
           scope: scope === "*" ? "all" : "projects",
+          // Decision 0195: optional key (older consoles ignore it).
+          factoryPurchaseCap: cap,
         });
       } catch (error) {
         return translate(error);
@@ -921,7 +1007,10 @@ export function createAdminLaunchReviewConsoleService(options: {
       try {
         const scope = await scopeOf(context);
         const id = projectIdParam(projectId);
-        const detail = await repository().getProject({ projectId: id, scope });
+        const [detail, cap] = await Promise.all([
+          repository().getProject({ projectId: id, scope }),
+          factoryPurchaseCap(),
+        ]);
         if (detail === null) {
           throw new AdminApiError("NOT_FOUND", {
             reasonCode: adminReasonCodes.launchProjectNotFound,
@@ -941,6 +1030,8 @@ export function createAdminLaunchReviewConsoleService(options: {
           snapshotReleases: detail.snapshotReleases,
           snapshotClosure: detail.snapshotClosure,
           projectRejections: detail.projectRejections,
+          // Decision 0195: optional key (older consoles ignore it).
+          factoryPurchaseCap: cap,
         });
       } catch (error) {
         return translate(error);

@@ -335,8 +335,11 @@ export function createPostgresHooksLaunchExecutorRepository(
           config_version: number;
           config_hash: string;
           approved_hash: string | null;
+          signed_max_cumulative_buy: string | null;
         }>(
-          `select c.config_version, c.config_hash, a.config_hash as approved_hash
+          `select c.config_version, c.config_hash, a.config_hash as approved_hash,
+             c.config #>> '{fixedEconomics,perAddressLifetimeBuyCapRaw}'
+               as signed_max_cumulative_buy
            from public.hooks_launch_deployment_tasks t
            join public.hooks_launch_project_config_versions c on c.project_id = t.project_id
            left join public.hooks_launch_config_approvals a
@@ -360,6 +363,8 @@ export function createPostgresHooksLaunchExecutorRepository(
                 version: latest.config_version,
                 configHash: latest.config_hash,
                 approvedHash: latest.approved_hash,
+                // Decision 0195: what the saved config showed the project.
+                signedMaxCumulativeBuy: latest.signed_max_cumulative_buy,
               }),
         authorizations: Object.freeze(
           authorizations.rows.map((row) =>
@@ -493,7 +498,8 @@ export function createPostgresHooksLaunchExecutorRepository(
             event: {
               kind: "broadcast",
               txHash,
-              details: { nonce: nonce.toString() },
+              // Decision 0195: caller facts first; the nonce always wins.
+              details: { ...input.details, nonce: nonce.toString() },
             },
           });
         } else {

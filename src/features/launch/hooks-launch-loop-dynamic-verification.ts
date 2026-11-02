@@ -1,4 +1,5 @@
 import {
+  isHooksLaunchMaxCumulativeBuy,
   hooksLaunchLoopDynamicHookPermissionBits as permissionBitsOf,
   hooksLaunchLoopDynamicHookPermissionBitsByGeneration,
   hooksLaunchLoopDynamicTemplateHash,
@@ -39,7 +40,24 @@ import {
  *
  * Template economics (supply split, curve taxes, NFT price, …) are checked
  * exactly as for OfficialTax.
+ *
+ * Decision 0195 (LOOP 0268, loop-contracts 0018, S340): the purchase cap
+ * check follows the Factory generation. S209 — the cap is in
+ * `TEMPLATE_HASH` and immutable: curve = Factory = template cap, as
+ * before. S340 — the Factory's `maxCumulativeBuy()` is only the
+ * admin-settable default for new launches (it may have changed since this
+ * launch was deployed) and is not compared; the launch's cap is its own
+ * `curve.maxCumulativeBuy()`, which must be in (0, 1e27] and equal the
+ * `LaunchMaxCumulativeBuy(launchId, curve, cap)` the deploy receipt
+ * carries.
  */
+
+/** Decision 0195: the S340 `LaunchMaxCumulativeBuy` of the deploy receipt. */
+export interface HooksLaunchMaxCumulativeBuyEvent {
+  readonly launchId: string;
+  readonly curve: string;
+  readonly maxCumulativeBuy: bigint;
+}
 
 /**
  * The pre-S209 bits (kept for callers of Decision 0132); Decision 0152:
@@ -80,7 +98,8 @@ export interface HooksLaunchLoopDynamicOnChainFacts {
     readonly routerRegistry: string;
     /**
      * Decision 0152: `maxCumulativeBuy()` of an S209 Factory; null for an
-     * older Factory without the getter.
+     * older Factory without the getter. Decision 0195: on an S340 Factory
+     * the current admin-settable default (not this launch's cap).
      */
     readonly maxCumulativeBuy: bigint | null;
     readonly deployers: readonly {
@@ -197,6 +216,11 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
   readonly expected: HooksLaunchExpectedDeployment;
   readonly template: HooksLaunchLoopDynamicExpectation;
   readonly event: HooksLaunchDeployedEvent | null;
+  /**
+   * Decision 0195: the receipt's `LaunchMaxCumulativeBuy` (required for an
+   * S340 template; ignored before).
+   */
+  readonly capEvent?: HooksLaunchMaxCumulativeBuyEvent | null;
   readonly facts: HooksLaunchLoopDynamicOnChainFacts;
 }): {
   readonly passed: boolean;
@@ -204,6 +228,7 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
   readonly passedChecks: readonly HooksLaunchLoopDynamicVerificationCheck[];
 } {
   const { expected, template, event, facts } = input;
+  const capEvent = input.capEvent ?? null;
   const c = hooksLaunchTemplateConstants;
   const modules = facts.modules;
   const factory = facts.factory;
@@ -223,6 +248,7 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
   const params = template.params;
   // Decision 0152: the generation's Hook bits and curve purchase cap.
   const permissionBits = permissionBitsOf(params);
+  const adjustableCap = params.maxCumulativeBuyAdjustable === true;
   const curveCap =
     params.maxCumulativeBuy === undefined
       ? c.perAddressCap
@@ -385,15 +411,29 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
       curve.buyTaxBps === c.curveBuyTaxBps &&
       curve.sellTaxBps === c.curveSellTaxBps,
   );
-  check(
-    "curve_caps",
-    () =>
-      curve !== null &&
+  check("curve_caps", () => {
+    if (curve === null || curve.earlyRoundDuration !== c.earlyRoundSeconds) {
+      return false;
+    }
+    if (adjustableCap) {
+      // Decision 0195: S340 — the launch's own cap, as the deploy receipt
+      // recorded it; the Factory default only has to still be a value.
+      return (
+        isHooksLaunchMaxCumulativeBuy(curve.maxCumulativeBuy.toString(10)) &&
+        factory.maxCumulativeBuy !== null &&
+        capEvent !== null &&
+        modules !== null &&
+        same(capEvent.launchId, expected.launchId) &&
+        same(capEvent.curve, modules.curve) &&
+        capEvent.maxCumulativeBuy === curve.maxCumulativeBuy
+      );
+    }
+    return (
       curve.maxCumulativeBuy === curveCap &&
       factory.maxCumulativeBuy ===
-        (params.maxCumulativeBuy === undefined ? null : curveCap) &&
-      curve.earlyRoundDuration === c.earlyRoundSeconds,
-  );
+        (params.maxCumulativeBuy === undefined ? null : curveCap)
+    );
+  });
   check(
     "curve_bindings",
     () =>

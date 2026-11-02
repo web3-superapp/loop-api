@@ -1398,6 +1398,14 @@ both reviews; the `pnpm mining:approve-formula` CLI records `cli:<name>`
 | `POST /admin/v1/launch/projects/{id}/testnet-acceptance` (0109)     | `Idempotency-Key` (= acceptanceId); acceptance record                                                | BSC Testnet acceptance; editor / owner refused (`OPS_SELF_ACCEPTANCE`)                                                                                                                                                                                                                                                                                                                                                                                                                                  | `implemented` | `implemented`; testnet_acceptor only (`testnet.accept`)                                                         |
 | `GET /admin/v1/chain-guard/incidents` (0134)                        | cookie (`console.read`)                                                                              | unresolved `chain_guard` incidents of the launch chain (≤ 200, newest sighting first): `{chainId, holdActive, holdKinds, items[{incidentId, kind, subject, details, firstSeenAt, lastSeenAt, hold}], generatedAt}`; read-only                                                                                                                                                                                                                                                                           | `implemented` | `implemented`; 503 `CAPABILITY_UNAVAILABLE` (`CHAIN_GUARD_REPOSITORY_UNAVAILABLE`) without database             |
 
+Decision 0195 (S340-api, LOOP 0268): `GET /admin/v1/launch/projects` and
+`/{projectId}` add the optional top-level `factoryPurchaseCap {status,
+factoryAddress, maxCumulativeBuy, adjustable}` — the target Factory's live
+per-address purchase cap for new launches (read-only; `unavailable` never
+fails the page). Deployment task events carry `factoryMaxCumulativeBuy`
+(broadcast) and `curveMaxCumulativeBuy` (verified). Status `implemented`;
+handoff `docs/frontend-admin-launch-factory-cap-api.md`.
+
 Decision 0134 (S174): the read-only `chain_guard` worker lane
 (`CHAIN_GUARD_ENABLED`, default off; migration `000079_chain_guard`,
 tables `chain_guard_incidents` / `chain_guard_cursors`) watches USD1

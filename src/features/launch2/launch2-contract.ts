@@ -20,7 +20,8 @@ export const launch2Template = Object.freeze({
   /**
    * The pre-S209 constant `MAX_CUMULATIVE_BUY` (5,000,000 MEME). Decision
    * 0152: S209 curves take `maxCumulativeBuy` from their Factory — read
-   * models use the instance's verified value, quotes the chain's.
+   * models use the instance's verified value, quotes the chain's (Decision
+   * 0195: per curve; an S340 Factory's later default changes never apply).
    */
   perAddressCap: 5_000_000n * launch2Wad,
   earlyRoundSeconds: 3_600,
