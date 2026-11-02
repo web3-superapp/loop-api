@@ -25,6 +25,11 @@ export const walletIntentKinds = Object.freeze([
   "approve",
   "revoke",
   "swap",
+  // Decision 0194 (S339): a LOOP Launch project NFT (ERC-721)
+  // `safeTransferFrom` on the launch slot. Created only through
+  // POST /v2/wallet-intents/send-nft (NFT_SEND_ENABLED) and hidden from
+  // the intent list unless the client opts in.
+  "send_nft",
 ] as const);
 export type WalletIntentKind = (typeof walletIntentKinds)[number];
 
@@ -67,8 +72,9 @@ export interface LaunchSlotAllowanceTarget {
  * primary chain (56); only a Launch intent may bind the launch slot's testnet
  * (97) — plus, since Decision 0077, an approve/revoke whose token is the
  * configured USD1 and whose spender is the configured Launch contract, so a
- * buyer can grant (and withdraw) exactly the allowance `buy` needs. Send,
- * swap, and every other approval never leave mainnet.
+ * buyer can grant (and withdraw) exactly the allowance `buy` needs — and,
+ * since Decision 0194, a `send_nft` of a Launch project NFT. Send, swap,
+ * and every other approval never leave mainnet.
  */
 export function isIntentChainAllowed(
   kind: ChainBoundIntentKind,
@@ -81,7 +87,9 @@ export function isIntentChainAllowed(
   if (chainReference !== bscTestnetChainReference) {
     return false;
   }
-  if (kind === "launch") {
+  // Decision 0194: a project NFT lives on the launch slot, so its send is
+  // built there (the service checks the slot is open first).
+  if (kind === "launch" || kind === "send_nft") {
     return true;
   }
   return (
@@ -93,6 +101,14 @@ export function isIntentChainAllowed(
       launchAllowance.launchContractAddress.toLowerCase()
   );
 }
+
+/**
+ * Decision 0194: kinds the intent list omits unless the client names them in
+ * `includeKinds` — a client released before the kind existed decodes the
+ * list strictly and would reject the whole page.
+ */
+export const walletIntentOptInKinds = Object.freeze(["send_nft"] as const);
+export type WalletIntentOptInKind = (typeof walletIntentOptInKinds)[number];
 
 /** States from which nothing further can happen. */
 export const terminalWalletIntentStates: ReadonlySet<WalletIntentState> =
@@ -122,6 +138,7 @@ export const walletIntentPayloadVersions = Object.freeze({
   approve: "walletIntentApproveV1",
   revoke: "walletIntentRevokeV1",
   swap: "walletIntentSwapV1",
+  send_nft: "walletIntentSendNftV1",
 } as const);
 
 /** Product policy snapshots published with every intent. */
@@ -206,6 +223,20 @@ export const walletIntentReasonCodes = Object.freeze({
   priceImpactUnavailable: "PRICE_IMPACT_UNAVAILABLE",
   priceImpactBlocked: "PRICE_IMPACT_ABOVE_HARD_LIMIT",
   priceImpactConfirm: "PRICE_IMPACT_CONFIRMATION_REQUIRED",
+} as const);
+
+/**
+ * Decision 0194 (S339, LOOP decision 0267): `detailsSafe.reasonCode` of the
+ * project NFT send refusals. `422 VALIDATION_FAILED` carries the first four;
+ * `503 CAPABILITY_UNAVAILABLE` carries the last two.
+ */
+export const nftSendReasonCodes = Object.freeze({
+  notOwned: "NFT_NOT_OWNED",
+  contractUnsupported: "NFT_CONTRACT_UNSUPPORTED",
+  recipientRejects: "NFT_RECIPIENT_REJECTS",
+  recipientSelf: "RECIPIENT_SELF",
+  disabled: "NFT_SEND_DISABLED",
+  chainUnavailable: "NFT_SEND_CHAIN_UNAVAILABLE",
 } as const);
 
 export interface IntentAssetSnapshot {
@@ -327,7 +358,12 @@ export interface SpenderReview {
 }
 
 export interface DecodedCallReview {
-  readonly functionName: "transfer" | "approve";
+  /**
+   * `safeTransferFrom` (Decision 0194) is the ERC-721
+   * `safeTransferFrom(address from, address to, uint256 tokenId)`; its args
+   * are `from`, `to` and `tokenId` (decimal).
+   */
+  readonly functionName: "transfer" | "approve" | "safeTransferFrom";
   readonly selector: string;
   readonly args: Readonly<Record<string, string>>;
 }
@@ -390,6 +426,19 @@ export interface SwapAuthorizationPayload {
   };
 }
 
+/**
+ * Decision 0194: what a `send_nft` moves — the project NFT contract, the
+ * token, and the launch2 project name. Present on `send_nft` payloads and
+ * reviews only; every other kind omits the key (old clients decode reviews
+ * with a closed key set).
+ */
+export interface IntentNftReview {
+  readonly contractAddress: string;
+  /** Decimal uint256. */
+  readonly tokenId: string;
+  readonly projectName: string;
+}
+
 /** The one source object from which the payload and the review derive. */
 export interface IntentSource {
   readonly version: string;
@@ -418,6 +467,8 @@ export interface IntentSource {
   readonly signingMode: SigningMode;
   readonly factsObservedAt: string;
   readonly expiresAt: string;
+  /** Decision 0194: `send_nft` only (absent otherwise). */
+  readonly nft?: IntentNftReview;
 }
 
 export interface SealedIntent {
@@ -445,6 +496,8 @@ export interface IntentPublicReview {
     readonly quote: SwapQuoteSnapshot;
     readonly policy: typeof swapPolicy;
   } | null;
+  /** Decision 0194: `send_nft` only (absent otherwise). */
+  readonly nft?: IntentNftReview;
 }
 
 export function digestCanonicalPayload(payload: unknown): string {
@@ -474,6 +527,9 @@ export function sealIntent(source: IntentSource): SealedIntent {
             quote: canonicalPayload.swap.quote,
             policy: canonicalPayload.swap.policy,
           }),
+    ...(canonicalPayload.nft === undefined
+      ? {}
+      : { nft: canonicalPayload.nft }),
   });
   return Object.freeze({
     canonicalPayload,

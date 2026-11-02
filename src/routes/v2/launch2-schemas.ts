@@ -680,6 +680,13 @@ const positionNftSchema = {
   properties: {
     mintedTokenId: nullableUintStringSchema,
     held: { type: "integer", minimum: 0 },
+    heldTokenIds: {
+      type: "array",
+      maxItems: 100,
+      items: uintStringSchema,
+      description:
+        "Decision 0194 (LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT, default off — absent while off): the project NFT token IDs this wallet holds now, ascending, from the indexed ERC-721 Transfer logs (at most 100). Any of them can be sent with POST /v2/wallet-intents/send-nft.",
+    },
   },
 } as const;
 

@@ -21,6 +21,7 @@ import type { TokenLogoProxyService } from "../../features/market/token-logo-pro
 import type { AlertV2Service } from "../../features/alerts/alert-v2-service.js";
 import type { NotificationService } from "../../features/alerts/notification-service.js";
 import type { ApprovalService } from "../../features/wallet-intents/approval-service.js";
+import type { NftSendService } from "../../features/wallet-intents/nft-send-service.js";
 import type { SendService } from "../../features/wallet-intents/send-service.js";
 import type { SwapService } from "../../features/wallet-intents/swap-service.js";
 import type { WalletIntentService } from "../../features/wallet-intents/wallet-intent-service.js";
@@ -99,6 +100,8 @@ export interface V2RouteDependencies {
   readonly voiceRoomService: VoiceRoomService;
   readonly walletIntentService: WalletIntentService;
   readonly sendService: SendService;
+  /** Decision 0194 (S339): `POST /v2/wallet-intents/send-nft`. */
+  readonly nftSendService: NftSendService;
   readonly approvalService: ApprovalService;
   readonly swapService: SwapService;
   readonly deviceService: DeviceService;

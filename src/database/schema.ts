@@ -1,4 +1,4 @@
-export const latestMigrationName = "000105_beta_feedback";
+export const latestMigrationName = "000106_wallet_intent_send_nft";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

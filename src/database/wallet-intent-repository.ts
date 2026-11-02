@@ -202,6 +202,8 @@ export interface RecordWalletIntentEventInput {
 export interface ListWalletIntentsInput {
   readonly ownerUserId: string;
   readonly limit: number;
+  /** Decision 0194: kinds left out of the page (the client did not opt in). */
+  readonly excludeKinds?: readonly WalletIntentKind[];
   readonly before?: {
     readonly createdAt: string;
     readonly intentId: string;
@@ -614,6 +616,7 @@ export function createPostgresWalletIntentRepository(
               or created_at < $2::timestamptz
               or (created_at = $2::timestamptz and intent_id < $3::uuid)
             )
+            and kind <> all($5::text[])
           order by created_at desc, intent_id desc
           limit $4
         `,
@@ -622,6 +625,7 @@ export function createPostgresWalletIntentRepository(
           input.before?.createdAt ?? null,
           input.before?.intentId ?? null,
           input.limit + 1,
+          [...(input.excludeKinds ?? [])],
         ],
       });
       const rows = result.rows.map(mapIntent);

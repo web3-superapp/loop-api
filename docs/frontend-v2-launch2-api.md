@@ -1617,3 +1617,11 @@ this batch): `launch2-capabilities.json` (capability row), `launch2-instances-li
 `launch2-error-quote-expired.json`, `launch2-error-price-moved.json`,
 `launch2-error-not-in-snapshot.json`, `launch2-error-unavailable.json`,
 `launch2-buybacks.json`, `launch2-me-positions.json`.
+
+## 决策 0194（S339）：`nft.heldTokenIds`（可选键，默认不发）
+
+`LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT=on` 时，`GET /v2/launch2/instances/{instanceId}` 的 `viewer.nft` 与
+`GET /v2/launch2/me/positions` 的 `positions[].nft` 多一个键 `heldTokenIds: string[]`——该钱包当前持有的项目 NFT
+token ID（十进制字符串，升序，最多 100；来自已索引的 ERC-721 `Transfer`，每个 token 最后一次转入者即 owner；
+没有时为 `[]`）。开关默认 off，off 时两处 `nft` 与之前逐字节相同。shipped App 的 `nft` 解码是严格键集，必须先发版接受
+该可选键再开开关。用途：`POST /v2/wallet-intents/send-nft` 的 `tokenId`（见 `docs/frontend-v2-nft-send-api.md`）。

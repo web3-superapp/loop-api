@@ -24,6 +24,7 @@ import {
   Launch2IdempotencyConflictError,
   Launch2RepositoryUnavailableError,
   launch2ActivityKinds,
+  launch2HeldTokenIdsLimit,
   type CreateLaunch2IntentRecord,
   type Launch2ActivityKind,
   type Launch2ActivityRecord,
@@ -2568,6 +2569,61 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
         [[...new Set(instanceIds)]],
       );
       return rows.map(mapInstance);
+    },
+
+    async heldNftTokenIds(input) {
+      if (input.instanceIds.length === 0 || input.holderAddresses.length === 0)
+        return [];
+      const rows = await query<Row>(
+        `
+          with last_transfer as (
+            select distinct on (e.instance_id, (e.payload ->> 'tokenId')::numeric)
+              e.instance_id, e.payload ->> 'tokenId' as token_id,
+              e.payload ->> 'to' as holder
+            from public.launch2_events e
+            where e.instance_id = any($1::uuid[]) and not e.removed
+              and e.event_name = 'Transfer'
+              and e.payload ->> 'tokenId' ~ '^(0|[1-9][0-9]{0,77})$'
+            order by e.instance_id, (e.payload ->> 'tokenId')::numeric,
+              e.block_number desc, e.log_index desc
+          )
+          select instance_id::text, holder,
+            (array_agg(token_id order by token_id::numeric))[1:$3] as token_ids
+          from last_transfer
+          where holder = any($2::text[])
+          group by instance_id, holder
+        `,
+        [
+          [...new Set(input.instanceIds)],
+          input.holderAddresses.map((address) => address.toLowerCase()),
+          launch2HeldTokenIdsLimit,
+        ],
+      );
+      return rows.map((row) =>
+        Object.freeze({
+          instanceId: text(row, "instance_id"),
+          holderAddress: text(row, "holder"),
+          tokenIds: Object.freeze(
+            (Array.isArray(row["token_ids"]) ? row["token_ids"] : []).map(
+              String,
+            ),
+          ),
+        }),
+      );
+    },
+
+    async getInstanceByNftAddress(input) {
+      // Decision 0194: the send path's "is this a LOOP project NFT" check,
+      // with the same visibility as positions (activated or held).
+      const rows = await query<Row>(
+        `select ${instanceColumns} from public.launch2_instances
+         where chain_id = $1 and nft_address = $2
+           and (activated_at is not null or hold_reason is not null)
+         order by registered_at desc
+         limit 1`,
+        [input.chainId, input.nftAddress.toLowerCase()],
+      );
+      return rows[0] === undefined ? null : mapInstance(rows[0]);
     },
 
     async getInstanceByLaunchId(launchId) {

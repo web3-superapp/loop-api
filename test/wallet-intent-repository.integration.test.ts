@@ -725,4 +725,115 @@ describe("PostgreSQL wallet intents, approvals, and migration 000021", () => {
       }),
     ).rejects.toMatchObject({ code: "23514" });
   });
+
+  it("stores a send_nft intent on the launch slot and lists it only when not excluded (Decision 0194, 000106)", async () => {
+    const owner = await createOwner();
+    const walletId = await seedWallet(owner);
+    const send = await intents.create(await createInput(owner, walletId));
+    const nftContract = "0x00000000000000000000000000000000000000e7";
+    const base = source(randomUUID(), walletId);
+    const nftSource: IntentSource = {
+      ...base,
+      version: "walletIntentSendNftV1",
+      kind: "send_nft",
+      chainId: "eip155:97",
+      asset: {
+        assetId: `eip155:97:${nftContract}`,
+        address: nftContract,
+        symbol: "LCAT",
+        decimals: 0,
+      },
+      amount: { raw: "1", display: "1" },
+      decodedCall: {
+        functionName: "safeTransferFrom",
+        selector: "0x42842e0e",
+        args: {
+          from: walletAddress,
+          to: recipient,
+          tokenId: "7",
+        },
+      },
+      nft: {
+        contractAddress: nftContract,
+        tokenId: "7",
+        projectName: "Loop Cat Project",
+      },
+      transaction: {
+        ...(base.transaction as NonNullable<IntentSource["transaction"]>),
+        chainId: 97,
+        to: nftContract,
+        data: "0x42842e0e",
+      },
+      policy: {
+        ...base.policy,
+        exposureBasis: "none",
+        exposureRaw: null,
+        exposureBlockNumber: null,
+        valueUsd: null,
+        priceSource: null,
+        priceFetchedAt: null,
+      },
+    };
+    const sealed = sealIntent(nftSource);
+    const operation = await controlPlane.prepareProviderOperation({
+      ownerUserId: owner,
+      scope: "wallet_intent_prepare",
+      idempotencyKey: randomUUID(),
+      keySource: "client",
+      requestSha256: sealed.reviewSha256,
+      domain: "bsc",
+      operationKind: "wallet_intent_send_nft",
+      requestId: randomUUID(),
+    });
+    const nft = await intents.create({
+      intentId: nftSource.intentId,
+      ownerUserId: owner,
+      walletId,
+      providerOperationId: operation.operation.id,
+      kind: "send_nft",
+      state: "awaiting_signature",
+      chainId: "eip155:97",
+      canonicalPayload: sealed.canonicalPayload,
+      publicReview: sealed.publicReview,
+      reviewSha256: sealed.reviewSha256,
+      policyConfigVersion: "bscWriteCanaryV1",
+      factsObservedAt: nftSource.factsObservedAt,
+      expiresAt: nftSource.expiresAt,
+      simulationStatus: "passed",
+      requestId: randomUUID(),
+    });
+    expect(nft).toMatchObject({
+      kind: "send_nft",
+      chainId: "eip155:97",
+      publicReview: { nft: { tokenId: "7", contractAddress: nftContract } },
+    });
+    const all = await intents.list({ ownerUserId: owner, limit: 10 });
+    expect(all.items.map((item) => item.intentId).sort()).toEqual(
+      [send.intentId, nft.intentId].sort(),
+    );
+    const visible = await intents.list({
+      ownerUserId: owner,
+      limit: 10,
+      excludeKinds: ["send_nft"],
+    });
+    expect(visible.items.map((item) => item.intentId)).toEqual([send.intentId]);
+    // No USD exposure: the daily canary window ignores it.
+    expect(
+      await intents.sumRecentExposureUsd({
+        ownerUserId: owner,
+        since: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ).toBe("0");
+    await expect(
+      pool.query({
+        text: `update public.wallet_intents set kind = 'send_erc1155' where intent_id = $1`,
+        values: [nft.intentId],
+      }),
+    ).rejects.toThrow();
+    const index = await pool.query<{ indexname: string }>(
+      `select indexname from pg_indexes
+       where schemaname = 'public' and indexname = 'launch2_instances_nft_address_idx'`,
+    );
+    expect(index.rows).toHaveLength(1);
+  });
 });

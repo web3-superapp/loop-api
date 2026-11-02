@@ -300,6 +300,13 @@ export interface V2ProductPolicyRuntime {
    * closes `squareFeed` with SQUARE_REPOSITORY_UNAVAILABLE.
    */
   readonly squareFeedAvailable?: boolean;
+  /**
+   * Decision 0194: the project NFT send. `reasonCode` null = NFT_SEND_ENABLED
+   * on, `sendApprovals` composed, BSC writes on, launch slot open with a
+   * client and the launch2 NFT directory. Optional; absent is unavailable
+   * (NFT_SEND_DISABLED).
+   */
+  readonly nftSendState?: () => { readonly reasonCode: string | null };
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -540,6 +547,8 @@ export const v2CapabilityIds = Object.freeze([
   "launch2",
   "testnetFaucet",
   "squareFeed",
+  // Decision 0194: old clients skip unknown ids (loop-mobile decision 0180).
+  "nftSend",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -1107,6 +1116,29 @@ function squareFeedCapability(
   });
 }
 
+/**
+ * Decision 0194: not a module of its own (never `deferred`); available only
+ * while every piece of the project NFT send is in place. Chain verification
+ * is still checked per request by the route (503).
+ */
+function nftSendCapability(
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const reasonCode =
+    runtime.nftSendState === undefined
+      ? "NFT_SEND_DISABLED"
+      : runtime.nftSendState().reasonCode;
+  return Object.freeze({
+    capabilityId: "nftSend",
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable" as const,
+      reasonCode: null,
+    }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1336,6 +1368,7 @@ export async function createV2CapabilitiesProjection(
     launch2Capability(config, runtime),
     testnetFaucetCapability(runtime),
     squareFeedCapability(runtime),
+    nftSendCapability(runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

@@ -370,7 +370,7 @@ describe("LOOP API V2 meta policy gates", () => {
       expect(capabilities[capabilityId]?.availability).toBe("unavailable");
     }
     expect(Object.keys(capabilities)).toHaveLength(v2CapabilityIds.length);
-    expect(Object.keys(capabilities)).toHaveLength(35);
+    expect(Object.keys(capabilities)).toHaveLength(36);
   });
 
   it("names the launch chain slot in the launch capability's evidence only while it is the testnet (Decision 0038)", async () => {
@@ -394,7 +394,7 @@ describe("LOOP API V2 meta policy gates", () => {
           "reasonCode",
         ]);
       }
-      expect(Object.keys(shared)).toHaveLength(35);
+      expect(Object.keys(shared)).toHaveLength(36);
     }
 
     const testnet = await readCapabilities(

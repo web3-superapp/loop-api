@@ -922,6 +922,36 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT as off|on, default off (Decision 0194)", () => {
+    expect(loadConfig(validEnvironment()).launch2.nftHeldTokenIdsEmit).toBe(
+      false,
+    );
+    const environment = validEnvironment();
+    environment["LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT"] = "on";
+    expect(loadConfig(environment).launch2.nftHeldTokenIdsEmit).toBe(true);
+    environment["LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT"] = "true";
+    expect(() => loadConfig(environment)).toThrow(
+      /LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT/,
+    );
+  });
+
+  it("parses NFT_SEND_ENABLED as off|on, default off, and refuses anything else (Decision 0194)", () => {
+    expect(loadConfig(validEnvironment()).nftSendEnabled).toBe(false);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["NFT_SEND_ENABLED"] = value;
+      expect(loadConfig(environment).nftSendEnabled).toBe(enabled);
+    }
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["NFT_SEND_ENABLED"] = value;
+      expect(() => loadConfig(environment), value).toThrow(/NFT_SEND_ENABLED/);
+    }
+  });
+
   it("parses MINING_POOL_SPLIT_EMIT as off|on, default off, and refuses anything else (Decision 0192)", () => {
     expect(loadConfig(validEnvironment()).miningPoolSplitEmit).toBe(false);
     for (const [value, enabled] of [

@@ -5,6 +5,9 @@
 `X-Loop-Contract-Version: 2.0`）沿用 `docs/frontend-v2-session-api.md`、
 `docs/frontend-v2-wallet-api.md` 与 `docs/api-v2-conventions.md`。
 
+发送 LOOP 项目 NFT（`send_nft`，决策 0194）见 `docs/frontend-v2-nft-send-api.md`；
+`GET /v2/wallet-intents` 默认不返回 `send_nft`，需 `includeKinds=send_nft`。
+
 覆盖页面：`send`、`send-to`、`send-confirm`、`swap`、`swap-route`、`tx-result`、
 `approval-guard`、`approvals`，以及 `sign-sheet-states` 的真实弹层。`pay`、`bridge`、
 `bridge-status`、`dapp` 本步仍是 unavailable（第 8 步）。
