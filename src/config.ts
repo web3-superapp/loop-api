@@ -1083,6 +1083,11 @@ const environmentSchema = z
     // `assetPower` / `nftPower` (summary) and `included[].nftPower` (assets)
     // keys. Turn on only once every supported client decodes the keys.
     MINING_POOL_SPLIT_EMIT: z.enum(["off", "on"]),
+    // Decision 0193: on|off (default on). off makes the beta feedback App
+    // routes (POST /v2/media/feedback-images, POST /v2/feedback, GET
+    // /v2/feedback/mine) answer 503 CAPABILITY_UNAVAILABLE /
+    // BETA_FEEDBACK_DISABLED; the console reads and triage stay open.
+    BETA_FEEDBACK_ENABLED: z.enum(["off", "on"]),
     // Decision 0185: true|false (default false; any other value refuses
     // boot). false = a trader / holder address that belongs to an account
     // only through an *external* wallet is never shown next to that account
@@ -2021,6 +2026,8 @@ export interface AppConfig {
   readonly walletLinkPolicyEmit: boolean;
   /** Decision 0192: MINING_POOL_SPLIT_EMIT === "on" (default off). */
   readonly miningPoolSplitEmit: boolean;
+  /** Decision 0193: BETA_FEEDBACK_ENABLED === "on" (default on). */
+  readonly betaFeedbackEnabled: boolean;
   /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
   readonly externalWalletAddressPublic: boolean;
   /**
@@ -4544,6 +4551,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH_REVIEW_INBOX_EMIT: environment["LAUNCH_REVIEW_INBOX_EMIT"] ?? "off",
     WALLET_LINK_POLICY_EMIT: environment["WALLET_LINK_POLICY_EMIT"] ?? "off",
     MINING_POOL_SPLIT_EMIT: environment["MINING_POOL_SPLIT_EMIT"] ?? "off",
+    BETA_FEEDBACK_ENABLED: environment["BETA_FEEDBACK_ENABLED"] ?? "on",
     EXTERNAL_WALLET_ADDRESS_PUBLIC:
       environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4726,6 +4734,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     launchReviewInboxEmit: parsed.data.LAUNCH_REVIEW_INBOX_EMIT === "on",
     walletLinkPolicyEmit: parsed.data.WALLET_LINK_POLICY_EMIT === "on",
     miningPoolSplitEmit: parsed.data.MINING_POOL_SPLIT_EMIT === "on",
+    betaFeedbackEnabled: parsed.data.BETA_FEEDBACK_ENABLED === "on",
     externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",

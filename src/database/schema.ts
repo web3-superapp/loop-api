@@ -1,4 +1,4 @@
-export const latestMigrationName = "000104_mining_snapshot_nft_power";
+export const latestMigrationName = "000105_beta_feedback";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",
@@ -185,4 +185,6 @@ export const requiredDatabaseRelations = Object.freeze([
   "public.wallet_networth_snapshots",
   "public.fiat_fx_rates",
   "public.community_membership_history",
+  "public.beta_feedback",
+  "public.beta_feedback_attachments",
 ] as const);

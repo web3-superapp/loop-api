@@ -235,6 +235,9 @@ export const tableClassification: Readonly<Record<string, TableClass>> =
     // Decision 0143: square timeline (system posts have no author and stay)
     square_posts: "user",
     square_post_likes: "user",
+    // Decision 0193: beta feedback reports and their screenshots
+    beta_feedback: "user",
+    beta_feedback_attachments: "user",
     // Decision 0145: hourly net worth snapshots of the user's wallets
     wallet_networth_snapshots: "user",
     // Decision 0149: reference FX rates, not user data.
@@ -485,6 +488,12 @@ export const deleteSteps: readonly ResetStep[] = Object.freeze([
       (select post_id from public.square_posts where ${ownedBy("author_user_id")})`,
   ),
   del("square_posts", ownedBy("author_user_id")),
+  // Decision 0193: attachments before their reports (and before media_objects)
+  del(
+    "beta_feedback_attachments",
+    `feedback_id in (select id from public.beta_feedback where ${ownedBy("account_id")})`,
+  ),
+  del("beta_feedback", ownedBy("account_id")),
   // Decision 0128: faucet grants reference the wallet and the idempotency row
   del(
     "testnet_faucet_grants",

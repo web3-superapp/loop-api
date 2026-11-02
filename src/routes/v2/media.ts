@@ -156,7 +156,7 @@ const readErrors = {
 } as const;
 
 /** Lets the content-typed body schema validate a stream-consumed body. */
-function prepareMultipartBody(request: FastifyRequest): Promise<void> {
+export function prepareMultipartBody(request: FastifyRequest): Promise<void> {
   if (Object.keys(request.query as Record<string, unknown>).length > 0) {
     throw V2ApiError.invalidRequest();
   }
@@ -176,7 +176,7 @@ function errorCode(error: unknown): string | undefined {
 }
 
 /** Exactly one part named `file`, read fully into memory (<= 5 MiB). */
-async function readSingleFile(request: FastifyRequest): Promise<Buffer> {
+export async function readSingleFile(request: FastifyRequest): Promise<Buffer> {
   if (!request.isMultipart()) {
     throw V2ApiError.invalidRequest();
   }

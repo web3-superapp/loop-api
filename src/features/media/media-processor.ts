@@ -8,7 +8,11 @@ import {
   campaignCoverMinimumHeight,
   campaignCoverMinimumWidth,
   campaignCoverWidth,
+  feedbackImageFallbackQuality,
+  feedbackImageFallbackSide,
+  feedbackImageMaximumSide,
   mediaMaximumInputPixels,
+  mediaMaximumStoredBytes,
   mediaMaximumUploadBytes,
   mediaMinimumInputSide,
   mediaOutputQuality,
@@ -94,8 +98,16 @@ export function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/**
+ * `square` (default): the 512 x 512 cover WebP of Decision 0095. `inside`
+ * (Decision 0193, feedback screenshots): the same input rules, aspect ratio
+ * kept, fit inside 1440 x 1440 without enlargement.
+ */
+export type MediaOutputShape = "square" | "inside";
+
 export async function processMediaUpload(
   input: Buffer,
+  shape: MediaOutputShape = "square",
 ): Promise<ProcessedMedia> {
   if (input.length === 0) {
     throw new MediaRejectedError(mediaReasonCodes.typeUnsupported);
@@ -125,13 +137,32 @@ export async function processMediaUpload(
   }
   let output: { data: Buffer; info: OutputInfo };
   try {
-    output = await sharp(input, options)
-      .rotate()
-      .resize(mediaOutputSize, mediaOutputSize, { fit: "cover" })
-      .webp({ quality: mediaOutputQuality })
-      .toBuffer({ resolveWithObject: true });
+    if (shape === "inside") {
+      const encode = (side: number, quality: number) =>
+        sharp(input, options)
+          .rotate()
+          .resize(side, side, { fit: "inside", withoutEnlargement: true })
+          .webp({ quality })
+          .toBuffer({ resolveWithObject: true });
+      output = await encode(feedbackImageMaximumSide, mediaOutputQuality);
+      if (output.data.length > mediaMaximumStoredBytes) {
+        output = await encode(
+          feedbackImageFallbackSide,
+          feedbackImageFallbackQuality,
+        );
+      }
+    } else {
+      output = await sharp(input, options)
+        .rotate()
+        .resize(mediaOutputSize, mediaOutputSize, { fit: "cover" })
+        .webp({ quality: mediaOutputQuality })
+        .toBuffer({ resolveWithObject: true });
+    }
   } catch {
     throw new MediaRejectedError(mediaReasonCodes.decodeFailed);
+  }
+  if (output.data.length > mediaMaximumStoredBytes) {
+    throw new MediaRejectedError(mediaReasonCodes.tooLarge);
   }
   return Object.freeze({
     bytes: output.data,

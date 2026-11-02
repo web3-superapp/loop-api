@@ -487,6 +487,9 @@ import {
 } from "./features/testnet-faucet/testnet-faucet-service.js";
 import { registerV2TestnetFaucetRoutes } from "./routes/v2/testnet-faucet.js";
 import { registerV2SquareRoutes } from "./routes/v2/square.js";
+import { registerV2FeedbackRoutes } from "./routes/v2/feedback.js";
+import { createFeedbackService } from "./features/feedback/feedback-service.js";
+import { createAdminFeedbackService } from "./features/admin/admin-beta-feedback.js";
 import { registerV2WebRoutes } from "./routes/v2/web.js";
 import {
   createWebRegistrationService,
@@ -3123,6 +3126,24 @@ export async function buildApp(
       authenticationHooks.authenticateLoopBearer,
       squareService,
     );
+    // Decision 0193: beta feedback (BETA_FEEDBACK_ENABLED, default on).
+    registerV2FeedbackRoutes(
+      app,
+      authenticationHooks.authenticateLoopBearer,
+      createFeedbackService({
+        enabled: config.betaFeedbackEnabled,
+        repository: database.betaFeedback ?? null,
+        cursorCodec: v2CursorCodec,
+        media:
+          options.mediaService !== undefined || mediaStorageComposed
+            ? mediaService
+            : null,
+        publicBaseUrl: config.publicBaseUrl,
+        ...(options.walletIntentNow === undefined
+          ? {}
+          : { now: options.walletIntentNow }),
+      }),
+    );
   }
 
   const adminConfig = adminMounted ? config.admin : null;
@@ -3134,6 +3155,13 @@ export async function buildApp(
       tokenLogos: createAdminTokenLogoService({
         repository: database.tokenLogoCache ?? null,
         publicBaseUrl: config.publicBaseUrl,
+        ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
+      }),
+      // Decision 0193: beta feedback triage.
+      feedback: createAdminFeedbackService({
+        repository: database.betaFeedback ?? null,
+        publicBaseUrl: config.publicBaseUrl,
+        cursorSecret: adminConfig.sessionSecret,
         ...(options.adminNow === undefined ? {} : { now: options.adminNow }),
       }),
       // Decision 0143: square timeline posts (console-written system posts).

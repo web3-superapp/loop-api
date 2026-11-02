@@ -65,6 +65,8 @@ import { createPostgresPushRepository } from "./push-repository.js";
 import { createPostgresMediaRepository } from "./media-repository.js";
 import { createPostgresLaunch2CampaignRepository } from "./launch2-campaign-repository.js";
 import { createPostgresSquareRepository } from "./square-repository.js";
+import { createPostgresBetaFeedbackRepository } from "./beta-feedback-repository.js";
+import type { FeedbackRepository } from "../features/feedback/feedback-contract.js";
 import {
   createPostgresWalletNetWorthSnapshotRepository,
   type WalletNetWorthSnapshotRepository,
@@ -305,6 +307,8 @@ export interface Database {
   readonly launch2Campaigns?: Launch2CampaignRepository;
   /** Decision 0143: square timeline posts, likes, and the ingest lane. */
   readonly squareFeed?: SquareRepository;
+  /** Decision 0193: beta feedback reports and their screenshots. */
+  readonly betaFeedback?: FeedbackRepository;
   /** Decision 0145: hourly wallet net worth snapshots. */
   readonly walletNetWorthSnapshots?: WalletNetWorthSnapshotRepository;
   /** Decision 0167: wallet activity merged with launch2 facts (read-only). */
@@ -602,6 +606,7 @@ export function createPostgresDatabase(
     chainGuard: createPostgresChainGuardRepository(pool),
     launch2Campaigns: createPostgresLaunch2CampaignRepository(pool),
     squareFeed: createPostgresSquareRepository(pool),
+    betaFeedback: createPostgresBetaFeedbackRepository(pool),
     walletNetWorthSnapshots:
       createPostgresWalletNetWorthSnapshotRepository(pool),
     walletActivityMerge: createPostgresWalletActivityMergeRepository(pool),

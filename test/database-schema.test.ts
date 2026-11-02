@@ -209,6 +209,8 @@ describe("database schema readiness contract", () => {
       "public.wallet_networth_snapshots",
       "public.fiat_fx_rates",
       "public.community_membership_history",
+      "public.beta_feedback",
+      "public.beta_feedback_attachments",
     ]);
     expect(new Set(requiredDatabaseRelations).size).toBe(
       requiredDatabaseRelations.length,

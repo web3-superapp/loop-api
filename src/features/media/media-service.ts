@@ -211,7 +211,10 @@ export function createMediaService(options: {
           return project(earlier, input.kind, ipfsGatewayBaseUrl);
         }
         await options.quota.consume(ownerUserId);
-        const processed = await processMediaUpload(input.bytes);
+        const processed = await processMediaUpload(
+          input.bytes,
+          input.kind === "feedback_image" ? "inside" : "square",
+        );
         const mediaId = generateMediaId();
         // Decision 0173: pin the stored (re-encoded, metadata-stripped)
         // bytes, so the CID names exactly what /v2/media serves.
