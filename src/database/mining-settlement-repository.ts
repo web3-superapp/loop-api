@@ -1593,6 +1593,15 @@ export function createPostgresMiningSettlementRepository(
           addresses.add(opening.address);
         }
         for (const move of asset.moves) addresses.add(move.address);
+        // Decision 0196 (S341): a holder that only received a graduated
+        // MEME after graduation (transfer or outside-pool buy) never shows
+        // up in the curve rows above; without it here it went unattributed.
+        for (const opening of asset.postGraduation?.openingBalances ?? []) {
+          addresses.add(opening.address);
+        }
+        for (const move of asset.postGraduation?.moves ?? []) {
+          addresses.add(move.address);
+        }
         for (const holder of asset.unknownHolders ?? []) {
           addresses.add(holder.address);
         }

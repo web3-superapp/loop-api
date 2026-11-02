@@ -806,6 +806,12 @@ rows, null on rows stored before 0192). Under `MINING_POOL_SPLIT_EMIT=on`
 `assetPower` / `nftPower` (sum = `power`) and `GET /v2/mining/assets` adds
 optional `included[].nftPower`; a pre-0192 snapshot or an unavailable power
 sends neither (see `docs/frontend-v2-mining-api.md` §0.0 S323).
+Decision 0196 (S341, fix): the settlement facts now attribute every address
+in a graduated launch2 MEME's post-graduation ERC-20 balances (transfers and
+outside-pool buys), so a member's embedded wallet that never traded on the
+curve is counted by the 5-minute snapshot and the hourly settlement. No route,
+key, switch, formula or settled hour changes; an admin replay of an hour
+settled before the fix that had such a holder reports `digestMatches: false`.
 
 | Method and path             | Request                                                    | Success projection                                                                                                                                                                                                                      | Interface     | Capability                                                                                                             |
 | --------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
