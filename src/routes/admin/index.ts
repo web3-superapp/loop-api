@@ -32,6 +32,11 @@ import { registerAdminMiningSettlementRoutes } from "./mining-settlement-routes.
 import { registerAdminChainGuardRoutes } from "./chain-guard-routes.js";
 import { registerAdminLaunch2CampaignRoutes } from "./launch2-campaign-routes.js";
 import { registerAdminSquarePostRoutes } from "./square-post-routes.js";
+import { registerAdminFeedbackRoutes } from "./beta-feedback-routes.js";
+import {
+  createAdminFeedbackService,
+  type AdminFeedbackService,
+} from "../../features/admin/admin-beta-feedback.js";
 import { registerAdminTokenLogoRoutes } from "./token-logo-routes.js";
 import {
   createAdminTokenLogoService,
@@ -123,6 +128,8 @@ export interface AdminRouteDependencies {
   readonly squarePosts?: AdminSquarePostService;
   /** Decision 0161: manual token logos; absent = 503 CAPABILITY_UNAVAILABLE. */
   readonly tokenLogos?: AdminTokenLogoService;
+  /** Decision 0193: beta feedback triage; absent = 503 CAPABILITY_UNAVAILABLE. */
+  readonly feedback?: AdminFeedbackService;
 }
 
 /** Decision 0109: `onRequest` hooks of a protected route. */
@@ -1049,6 +1056,18 @@ export function registerAdminRoutes(
       dependencies.squarePosts ??
       createAdminSquarePostService({ repository: null }),
     guard,
+    context,
+  });
+
+  registerAdminFeedbackRoutes(app, {
+    service:
+      dependencies.feedback ??
+      createAdminFeedbackService({
+        repository: null,
+        publicBaseUrl: "http://localhost",
+        cursorSecret: null,
+      }),
+    guardAny,
     context,
   });
 

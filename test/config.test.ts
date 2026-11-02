@@ -941,6 +941,25 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses BETA_FEEDBACK_ENABLED as on|off, default on, and refuses anything else (Decision 0193)", () => {
+    expect(loadConfig(validEnvironment()).betaFeedbackEnabled).toBe(true);
+    for (const [value, enabled] of [
+      ["off", false],
+      ["on", true],
+    ] as const) {
+      const environment = validEnvironment();
+      environment["BETA_FEEDBACK_ENABLED"] = value;
+      expect(loadConfig(environment).betaFeedbackEnabled).toBe(enabled);
+    }
+    for (const value of ["", "true", "OFF", "0"]) {
+      const environment = validEnvironment();
+      environment["BETA_FEEDBACK_ENABLED"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /BETA_FEEDBACK_ENABLED/,
+      );
+    }
+  });
+
   it("parses WALLET_LINK_POLICY_EMIT as off|on and EXTERNAL_WALLET_ADDRESS_PUBLIC as a strict boolean, both default off (Decision 0185)", () => {
     const defaults = loadConfig(validEnvironment());
     expect(defaults.walletLinkPolicyEmit).toBe(false);

@@ -871,6 +871,23 @@ default on, every 60 s) writes buy / claim / graduation posts. Console:
 | `DELETE /v2/square/posts/{postId}`            | Write headers incl. `Idempotency-Key`                                | `204` (own opinion only)                                                                                                                     | `implemented` | `implemented` |
 | `PUT / DELETE /v2/square/posts/{postId}/like` | Write headers incl. `Idempotency-Key`                                | `{postId, likeCount, likedByViewer}`                                                                                                         | `implemented` | `implemented` |
 
+### V2 beta feedback (Decision 0193 / 主代理 0262, always registered)
+
+Switch `BETA_FEEDBACK_ENABLED` (on|off, default on): off makes the three App
+routes 503 `CAPABILITY_UNAVAILABLE` / `BETA_FEEDBACK_DISABLED`; without the
+database or `V2_CURSOR_HMAC_SECRET` they are 503 /
+`FEEDBACK_REPOSITORY_UNAVAILABLE`. No capability ID (not in
+`/v2/meta/capabilities`). Migration 000105 `beta_feedback` /
+`beta_feedback_attachments`, media kind `feedback_image`. Console:
+`/admin/v1/feedback` (list, get, patch; audit `beta_feedback.update`), not
+closed by the switch. Front-end contract: `docs/frontend-v2-beta-feedback-api.md`.
+
+| Method and path                  | Request                                                                        | Success projection                                                            | Interface     | Capability    |
+| -------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ------------- | ------------- |
+| `POST /v2/media/feedback-images` | Write headers incl. `Idempotency-Key`; multipart one part `file` (≤ 5 MiB)     | `201` `{mediaId, url}` (absolute `<PUBLIC_BASE_URL>/v2/media/<id>.webp`)      | `implemented` | `implemented` |
+| `POST /v2/feedback`              | Write headers incl. `Idempotency-Key`; `{category, body, mediaIds?, context?}` | `201` `{feedback: {id, status, createdAt}}` (replay `200`); 422, 429 20 a day | `implemented` | `implemented` |
+| `GET /v2/feedback/mine`          | Bearer + headers; owner-bound `cursor`                                         | `{items[] (id, category, body, status, createdAt, images[]), nextCursor}`     | `implemented` | `implemented` |
+
 ### V2 referral module (Decision 0036, `V2_MODULES_ENABLED=referral`)
 
 | Method and path             | Request                                                | Success projection                                                                                                                                                                                                              | Interface     | Capability                                                                                                              |

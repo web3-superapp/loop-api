@@ -10,6 +10,8 @@ export const mediaKinds = Object.freeze([
   "community_logo",
   // Decision 0173: the project NFT picture (pinned to IPFS when configured).
   "project_nft_image",
+  // Decision 0193: a beta feedback screenshot (never pinned, never a ref).
+  "feedback_image",
 ] as const);
 export type MediaKind = (typeof mediaKinds)[number];
 /**
@@ -41,6 +43,18 @@ export const campaignCoverHeight = 600;
 export const campaignCoverMinimumWidth = 600;
 export const campaignCoverMinimumHeight = 300;
 export const campaignCoverMaximumUploadBytes = 2 * 1024 * 1024;
+/**
+ * Decision 0193: a beta feedback screenshot keeps its aspect ratio (a
+ * phone screenshot must stay readable): the 0095 input rules, then fit
+ * inside 1440 x 1440 (never enlarged), WebP quality 82. A result above the
+ * 1 MiB storage bound is re-encoded once inside 1080 x 1080 at quality 70;
+ * still above it, the upload is MEDIA_TOO_LARGE.
+ */
+export const feedbackImageMaximumSide = 1440;
+export const feedbackImageFallbackSide = 1080;
+export const feedbackImageFallbackQuality = 70;
+/** `media_objects.bytes` upper bound (000046). */
+export const mediaMaximumStoredBytes = 1_048_576;
 /** Shared by both upload routes, per user per minute. */
 export const mediaUploadsPerMinute = 6;
 
@@ -141,7 +155,9 @@ export function mediaRef(kind: MediaKind, mediaId: string): string {
     ? `avatar:media/${mediaId}`
     : kind === "project_nft_image"
       ? `nft:media/${mediaId}`
-      : `logo:media/${mediaId}`;
+      : kind === "feedback_image"
+        ? `feedback:media/${mediaId}`
+        : `logo:media/${mediaId}`;
 }
 
 /** The API-relative path of a media object; clients prefix their base URL. */

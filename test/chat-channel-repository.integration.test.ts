@@ -50,6 +50,8 @@ describe("PostgreSQL Chat channel repository", () => {
     public.launch2_pool_swaps,
     public.launch2_snapshot_publications,
     public.launch2_intents,
+    public.beta_feedback_attachments,
+    public.beta_feedback,
     public.square_post_likes,
     public.square_posts,
     public.testnet_faucet_grants,

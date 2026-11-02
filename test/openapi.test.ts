@@ -113,6 +113,8 @@ describe("committed OpenAPI artifact", () => {
       "/v2/devices/push-token",
       "/v2/devices/revoke-all",
       "/v2/devices/{sessionId}/revoke",
+      "/v2/feedback",
+      "/v2/feedback/mine",
       "/v2/friends/{publicProfileId}",
       "/v2/intel/promotions",
       "/v2/launch/economy",
@@ -163,6 +165,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/market/smart-money",
       "/v2/media/avatars",
       "/v2/media/community-logos",
+      "/v2/media/feedback-images",
       "/v2/media/project-nft-images",
       "/v2/media/{mediaId}.webp",
       "/v2/meme/best-trades",
@@ -254,7 +257,7 @@ describe("committed OpenAPI artifact", () => {
       "/v2/watchlist",
     ]);
     expect(paths.some((path) => path.startsWith("/v1/"))).toBe(false);
-    expect(operationIds).toHaveLength(207);
+    expect(operationIds).toHaveLength(210);
     // Decision 0174: the public recent pool trades — no Bearer, 429 listed,
     // no 401 / 409 / 422.
     const recentTrades =
@@ -1353,6 +1356,8 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/chain-guard/incidents",
       "GET /admin/v1/communities",
       "GET /admin/v1/communities/{communityId}",
+      "GET /admin/v1/feedback",
+      "GET /admin/v1/feedback/{feedbackId}",
       "GET /admin/v1/launch/projects",
       "GET /admin/v1/launch/projects/{projectId}",
       "GET /admin/v1/launch2/campaigns",
@@ -1373,6 +1378,7 @@ describe("committed OpenAPI artifact", () => {
       "GET /admin/v1/settings/recommended-communities",
       "GET /admin/v1/square/posts",
       "GET /admin/v1/square/posts/{postId}",
+      "PATCH /admin/v1/feedback/{feedbackId}",
       "PATCH /admin/v1/launch2/campaigns/{campaignId}",
       "PATCH /admin/v1/square/posts/{postId}",
       "POST /admin/v1/accounts",
