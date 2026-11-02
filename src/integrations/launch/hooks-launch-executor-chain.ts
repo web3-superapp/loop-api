@@ -39,7 +39,12 @@ import type { HooksLaunchLoopDynamicOnChainFacts } from "../../features/launch/h
 import {
   isHooksLaunchContractRevert,
   readHooksLaunchLoopDynamicTemplate,
+  refreshHooksLaunchLoopDynamicCap,
 } from "./hooks-launch-factory-reader.js";
+import {
+  hooksLaunchFactoryCapAbi,
+  parseHooksLaunchMaxCumulativeBuyLog,
+} from "./hooks-launch-factory-cap-abi.js";
 import {
   buybackExecutorAbi,
   curveEngineAbi,
@@ -493,6 +498,9 @@ export function createHooksLaunchExecutorChain(input: {
    * Decision 0132: the LoopDynamic template (immutable; read once per
    * client after a successful read). A semantic mismatch throws
    * `HooksLaunchFactoryTemplateMismatchError`; RPC failures propagate.
+   * Decision 0195: an S340 Factory's admin-settable `maxCumulativeBuy()`
+   * is re-read on every call (one read per executor tick), so the value
+   * recorded before a deploy is the Factory's at that tick.
    */
   let template: Awaited<
     ReturnType<typeof readHooksLaunchLoopDynamicTemplate>
@@ -505,7 +513,13 @@ export function createHooksLaunchExecutorChain(input: {
         factory,
       );
     }
-    return template;
+    return refreshHooksLaunchLoopDynamicCap(template, () =>
+      client.readContract({
+        address: factory,
+        abi: hooksLaunchFactoryCapAbi,
+        functionName: "maxCumulativeBuy",
+      }),
+    );
   }
 
   /** Decision 0132: read-back of a LoopDynamic launch (no Hook yet). */
@@ -1097,11 +1111,18 @@ export function createHooksLaunchExecutorChain(input: {
           // Not a Factory event of this ABI; ignored.
         }
       }
+      // Decision 0195: an S340 Factory's per-launch cap record (null on
+      // S209 and older Factories, which do not emit it).
+      const launchMaxCumulativeBuy = parseHooksLaunchMaxCumulativeBuyLog(
+        receipt.logs,
+        factory,
+      );
       return {
         status: receipt.status,
         blockNumber: receipt.blockNumber,
         blockHash: lower(receipt.blockHash),
         launchDeployed,
+        launchMaxCumulativeBuy,
       };
     },
     async gatePublished(gate) {

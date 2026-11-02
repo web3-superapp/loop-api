@@ -344,7 +344,7 @@ export function registerAdminRoleRoutes(
         operationId: "listAdminLaunchProjects",
         summary: "List Hooks launch projects by review stage",
         description:
-          "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
+          "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN). Decision 0195 (S340): `factoryPurchaseCap` is the target Factory's live per-address purchase cap for new launches (read-only; `unavailable` never fails the page).",
         tags: ["admin-launch"],
         security: adminSecurity,
         querystring: launchProjectsQuerySchema,
@@ -372,7 +372,7 @@ export function registerAdminRoleRoutes(
         operationId: "getAdminLaunchProject",
         summary: "Read one Hooks launch project for review",
         description:
-          "Decision 0109 (`launch.read`). Every config version (fields, configHash, editor, approval), BSC Testnet acceptances, and deployment tasks with the EIP-712-bound predicted MEME / Hook addresses. Signatures and signed payloads are never returned. Outside the caller's scope → 404.",
+          "Decision 0109 (`launch.read`). Every config version (fields, configHash, editor, approval), BSC Testnet acceptances, and deployment tasks with the EIP-712-bound predicted MEME / Hook addresses. Signatures and signed payloads are never returned. Outside the caller's scope → 404. Decision 0195 (S340): `factoryPurchaseCap` as on the list; this project's own cap is in its deployment task's events (`broadcast` details `factoryMaxCumulativeBuy` = the Factory value read before the deploy, `verified` details `curveMaxCumulativeBuy`, plus `signedMaxCumulativeBuy` / `maxCumulativeBuyChanged` when the multisig changed it after the config was saved).",
         tags: ["admin-launch"],
         security: adminSecurity,
         params: launchProjectParamsSchema,

@@ -1938,7 +1938,7 @@ const hooksLaunchFixedEconomicsSchema = {
         maxCumulativeBuy: {
           ...uintStringSchema,
           description:
-            "Decision 0152: the Factory's per-address curve purchase cap `maxCumulativeBuy()`, a raw MEME integer (5000000000000000000000000 = 5,000,000 MEME). Absent on templates of pre-S209 Factories.",
+            "Decision 0152: the Factory's per-address curve purchase cap `maxCumulativeBuy()`, a raw MEME integer (5000000000000000000000000 = 5,000,000 MEME). Absent on templates of pre-S209 Factories. Decision 0195 (S340): on an S340 Factory this is the admin-adjustable default for new launches at the moment the config was saved; a launch deployed after a governance change receives the Factory value at deploy time (the project signature does not bind it), recorded per launch on chain.",
         },
         buyFeeToken: {
           type: "string",

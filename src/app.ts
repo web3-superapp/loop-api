@@ -3231,6 +3231,17 @@ export async function buildApp(
       }),
       launchReview: createAdminLaunchReviewConsoleService({
         repository: database.adminLaunchReview ?? null,
+        // Decision 0195: the target Factory's live cap for new launches.
+        factoryPurchaseCap:
+          hooksFactoryReader?.factoryPurchaseCap === undefined
+            ? null
+            : {
+                factoryAddress: hooksFactoryReader.factoryAddress,
+                read: () =>
+                  hooksFactoryReader.factoryPurchaseCap === undefined
+                    ? Promise.reject(new Error("unavailable"))
+                    : hooksFactoryReader.factoryPurchaseCap(),
+              },
         deploymentChainId: config.launchChain.chainReference,
         deploymentMainnetAcknowledged: config.launchChain.mainnetAcknowledged,
         review: createHooksLaunchReviewService({

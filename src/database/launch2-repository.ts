@@ -145,8 +145,10 @@ function stageOf(value: unknown): Launch2Stage {
 
 /**
  * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
- * purchase cap the executor read back and verified (S209: the Factory's
- * `maxCumulativeBuy()`), kept in the task's
+ * purchase cap the executor read back and verified (the curve's own
+ * `maxCumulativeBuy()`; S209: equal to the Factory's immutable value,
+ * Decision 0195 / S340: the Factory's admin-settable default at deploy
+ * time — never the Factory's current value), kept in the task's
  * `verification.curveMaxCumulativeBuy`. Tasks verified before S209 lack
  * the key; that code only passed curves whose cap was exactly the
  * 5,000,000 MEME constant, so that is their fact.

@@ -31,6 +31,7 @@ import {
   loopHookDeploymentFactoryAbi,
   loopRouterRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
+import { hooksLaunchFactoryCapAbi } from "./hooks-launch-factory-cap-abi.js";
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
@@ -138,7 +139,7 @@ export async function readHooksLaunchLoopDynamicTemplate(
   ) {
     throw new HooksLaunchFactoryTemplateMismatchError();
   }
-  const params: HooksLaunchLoopDynamicParams = Object.freeze({
+  const base: HooksLaunchLoopDynamicParams = Object.freeze({
     router: String(router).toLowerCase(),
     baseSellFeePpm: Number(baseSellFeePpm),
     baseFeeRecipient: String(baseFeeRecipient).toLowerCase(),
@@ -156,9 +157,21 @@ export async function readHooksLaunchLoopDynamicTemplate(
   });
   // An S193 Factory's TEMPLATE_HASH has the trailing cap word, an S165 one
   // does not, an S209 one also the purchase cap word (Decision 0152); the
-  // recomputed hash must equal the chain's either way.
-  const expected = hooksLaunchLoopDynamicTemplateHash(params);
-  if (expected.toLowerCase() !== String(templateHash).toLowerCase()) {
+  // recomputed hash must equal the chain's either way. Decision 0195: a
+  // Factory answering `maxCumulativeBuy()` is S209 (the cap is in the hash)
+  // or S340 (the admin-settable cap is not); the chain's TEMPLATE_HASH
+  // decides which — an S209 instance is never re-read as S340 or back.
+  const chainHash = String(templateHash).toLowerCase();
+  let params = base;
+  let expected = hooksLaunchLoopDynamicTemplateHash(base);
+  if (
+    base.maxCumulativeBuy !== undefined &&
+    expected.toLowerCase() !== chainHash
+  ) {
+    params = Object.freeze({ ...base, maxCumulativeBuyAdjustable: true });
+    expected = hooksLaunchLoopDynamicTemplateHash(params);
+  }
+  if (expected.toLowerCase() !== chainHash) {
     throw new HooksLaunchFactoryTemplateMismatchError();
   }
   return Object.freeze({
@@ -168,6 +181,44 @@ export async function readHooksLaunchLoopDynamicTemplate(
     routerRegistry: registryAddress,
   });
 }
+
+/**
+ * Decision 0195 (S340): an S340 Factory's `maxCumulativeBuy()` is the
+ * admin-settable default for new launches, so a cached template (its hash
+ * and Hook parameters are immutable) is answered with the value read now.
+ * S209 and older templates are returned unchanged (their cap is
+ * immutable). A revert or an out-of-range answer is a template mismatch;
+ * RPC failures propagate.
+ */
+export async function refreshHooksLaunchLoopDynamicCap<
+  T extends { readonly params: HooksLaunchLoopDynamicParams },
+>(template: T, readCap: () => Promise<unknown>): Promise<T> {
+  if (template.params.maxCumulativeBuyAdjustable !== true) return template;
+  let value: unknown;
+  try {
+    value = await readCap();
+  } catch (error) {
+    if (isHooksLaunchContractRevert(error)) {
+      throw new HooksLaunchFactoryTemplateMismatchError();
+    }
+    throw error;
+  }
+  if (
+    typeof value !== "bigint" ||
+    !isHooksLaunchMaxCumulativeBuy(value.toString(10))
+  ) {
+    throw new HooksLaunchFactoryTemplateMismatchError();
+  }
+  const maxCumulativeBuy = value.toString(10);
+  if (maxCumulativeBuy === template.params.maxCumulativeBuy) return template;
+  return Object.freeze({
+    ...template,
+    params: Object.freeze({ ...template.params, maxCumulativeBuy }),
+  });
+}
+
+/** Decision 0195: how long a reader reuses an S340 default-cap read. */
+export const hooksLaunchFactoryCapTtlMs = 15_000;
 
 const hooksLaunchFactoryAbi = [
   {
@@ -471,19 +522,92 @@ export function createHooksLaunchFactoryReader(input: {
   let template: Awaited<
     ReturnType<typeof readHooksLaunchLoopDynamicTemplate>
   > | null = null;
+  // Decision 0195: an S340 Factory's admin-settable cap, re-read after the
+  // TTL (the rest of the template stays cached).
+  type LoopDynamicTemplateRead = Awaited<
+    ReturnType<typeof readHooksLaunchLoopDynamicTemplate>
+  >;
+  let capRead: {
+    readonly at: number;
+    readonly value: LoopDynamicTemplateRead;
+  } | null = null;
   async function loopDynamicTemplate() {
-    if (template !== null) return template;
-    await verifyNetworkAndCode();
+    if (template === null) {
+      await verifyNetworkAndCode();
+      try {
+        template = await readHooksLaunchLoopDynamicTemplate(
+          (address, abi, functionName) =>
+            client.readContract({ address, abi, functionName }),
+          factoryAddress,
+        );
+      } catch {
+        throw new Error("Hooks launch factory read unavailable");
+      }
+      capRead = { at: Date.now(), value: template };
+    }
+    if (template.params.maxCumulativeBuyAdjustable !== true) return template;
+    if (
+      capRead !== null &&
+      Date.now() - capRead.at < hooksLaunchFactoryCapTtlMs
+    ) {
+      return capRead.value;
+    }
+    let refreshed: LoopDynamicTemplateRead;
     try {
-      template = await readHooksLaunchLoopDynamicTemplate(
-        (address, abi, functionName) =>
-          client.readContract({ address, abi, functionName }),
-        factoryAddress,
+      refreshed = await refreshHooksLaunchLoopDynamicCap(template, () =>
+        client.readContract({
+          address: factoryAddress,
+          abi: hooksLaunchFactoryCapAbi,
+          functionName: "maxCumulativeBuy",
+        }),
       );
     } catch {
       throw new Error("Hooks launch factory read unavailable");
     }
-    return template;
+    capRead = { at: Date.now(), value: refreshed };
+    return refreshed;
+  }
+
+  /**
+   * Decision 0195: the Factory's current `maxCumulativeBuy()` — the
+   * default a launch deployed now receives (admin console, read-only).
+   * LoopDynamic: from the template (S340 = adjustable, S209 = immutable);
+   * OfficialTax: the bare getter (a revert = pre-S209, null), generation
+   * not derivable from its constant TEMPLATE_HASH (`adjustable` null).
+   */
+  async function factoryPurchaseCap(): Promise<{
+    readonly maxCumulativeBuy: string | null;
+    readonly adjustable: boolean | null;
+  }> {
+    if (loopDynamic) {
+      const read = await loopDynamicTemplate();
+      return {
+        maxCumulativeBuy: read.params.maxCumulativeBuy ?? null,
+        adjustable: read.params.maxCumulativeBuyAdjustable === true,
+      };
+    }
+    await verifyNetworkAndCode();
+    try {
+      const value = await client.readContract({
+        address: factoryAddress,
+        abi: hooksLaunchFactoryCapAbi,
+        functionName: "maxCumulativeBuy",
+      });
+      if (
+        typeof value !== "bigint" ||
+        !isHooksLaunchMaxCumulativeBuy(value.toString(10))
+      ) {
+        throw new Error("out of range");
+      }
+      return { maxCumulativeBuy: value.toString(10), adjustable: null };
+    } catch (error) {
+      if (isHooksLaunchContractRevert(error)) {
+        return { maxCumulativeBuy: null, adjustable: false };
+      }
+      throw new Error("Hooks launch factory read unavailable", {
+        cause: error,
+      });
+    }
   }
 
   // Decision 0164: immutable for a code-hash-pinned Factory; an unreadable
@@ -546,6 +670,7 @@ export function createHooksLaunchFactoryReader(input: {
     tickerTextRule,
     usd1,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
+    factoryPurchaseCap,
     ...(loopDynamic
       ? {
           async loopDynamicTemplate() {

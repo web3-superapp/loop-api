@@ -257,7 +257,9 @@ export function createLaunch2Chain(input: {
 
   /**
    * Decision 0152 (loop-contracts Decision 0015): the curve's per-address
-   * purchase cap — `maxCumulativeBuy()` (S209, a Factory parameter), or
+   * purchase cap — `maxCumulativeBuy()` (S209, a Factory parameter;
+   * Decision 0195 / S340: the Factory's admin-settable default copied into
+   * the curve at deploy time — per launch, never the Factory's), or
    * the frozen `MAX_CUMULATIVE_BUY()` constant when the curve has no such
    * function (a revert / empty answer = a pre-S209 curve). RPC failures
    * propagate. Immutable either way.

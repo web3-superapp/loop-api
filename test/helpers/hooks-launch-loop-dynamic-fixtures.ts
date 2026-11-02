@@ -116,7 +116,11 @@ export const hookDeploymentFactory =
   "0x1536992cfd3f8996f9d573cece3e08dead284d3b";
 export const routerRegistry = "0xbed2c2e1f9341c1a821182d8f96df98d52dfabe5";
 
-export async function loopDynamicSignedPayload(deadline: number) {
+export async function loopDynamicSignedPayload(
+  deadline: number,
+  /** Decision 0195: another Factory generation's TEMPLATE_HASH. */
+  templateHash: string = loopDynamicTemplate.templateHash,
+) {
   const request = {
     configHash,
     projectOwner,
@@ -133,7 +137,7 @@ export async function loopDynamicSignedPayload(deadline: number) {
     chainId: 97,
     verifyingContract: factoryAddress,
     request,
-    templateHash: loopDynamicTemplate.templateHash,
+    templateHash,
   });
   const message = {
     ...typed.message,
@@ -147,13 +151,14 @@ export async function loopDynamicSignedPayload(deadline: number) {
 
 export function loopDynamicBindingHash(
   payload: Awaited<ReturnType<typeof loopDynamicSignedPayload>>,
+  hookAddress: string = loopDynamicHookAddress,
 ): string {
   return hooksLaunchBindingHash({
     factoryAddress,
     request: payload.request,
     hookSalt: payload.hookSalt,
     memeAddress,
-    hookAddress: loopDynamicHookAddress,
+    hookAddress,
   });
 }
 

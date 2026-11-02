@@ -266,6 +266,45 @@ describe("Hooks executor repository (000059)", () => {
     ).rejects.toThrow(/retain audit history/u);
   });
 
+  it("Decision 0195: reads the saved config's purchase cap and records the Factory cap with the broadcast", async () => {
+    const seeded = await task();
+    const context = await executorRepository.context(seeded.jobId);
+    // The OfficialTax draft's fixedEconomics carries the 5,000,000 MEME cap.
+    expect(context.latestConfig?.signedMaxCumulativeBuy).toBe(
+      "5000000000000000000000000",
+    );
+    expect(context.latestConfig?.signedMaxCumulativeBuy).toBe(
+      draft.fixedEconomics.perAddressLifetimeBuyCapRaw,
+    );
+    await acquire("exec-cap", seeded.factoryAddress);
+    const recorded = await executorRepository.reserveAndRecord({
+      jobId: seeded.jobId,
+      executorId: "exec-cap",
+      executorAddress: hex(20),
+      purpose: "deploy",
+      chainPendingNonce: 3n,
+      sign: () => Promise.resolve({ txHash: hex(32), rawTx: "0x01" }),
+      details: {
+        factoryMaxCumulativeBuy: "1000000000000000000000000",
+        signedMaxCumulativeBuy: "5000000000000000000000000",
+        maxCumulativeBuyChanged: true,
+        // The repository's nonce always wins over a caller key.
+        nonce: "999",
+      },
+    });
+    expect(recorded?.status).toBe("broadcast");
+    const broadcast = await pool.query<{ details: Record<string, unknown> }>(
+      "select details from public.hooks_launch_deployment_events where job_id = $1 and kind = 'broadcast'",
+      [seeded.jobId],
+    );
+    expect(broadcast.rows[0]?.details).toEqual({
+      factoryMaxCumulativeBuy: "1000000000000000000000000",
+      signedMaxCumulativeBuy: "5000000000000000000000000",
+      maxCumulativeBuyChanged: true,
+      nonce: recorded!.txNonce!.toString(),
+    });
+  });
+
   it("guards transitions, the transaction hash, and append-only events", async () => {
     const seeded = await task();
     await acquire("exec-g", seeded.factoryAddress);

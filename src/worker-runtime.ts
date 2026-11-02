@@ -1214,7 +1214,7 @@ export async function runReconciliationWorker(
             ...chainGuardHold("hooks_launch_executor"),
             onStep: (event) => {
               const log =
-                event.errorCode === null
+                event.errorCode === null && event.noticeCode === undefined
                   ? options.logger.info.bind(options.logger)
                   : options.logger.warn.bind(options.logger);
               log(
@@ -1231,6 +1231,10 @@ export async function runReconciliationWorker(
                   ...(event.errorCode === null
                     ? {}
                     : { reasonCode: event.errorCode }),
+                  // Decision 0195: non-blocking (cap changed by the multisig).
+                  ...(event.noticeCode === undefined
+                    ? {}
+                    : { noticeCode: event.noticeCode }),
                 },
                 "LOOP hooks launch executor step",
               );

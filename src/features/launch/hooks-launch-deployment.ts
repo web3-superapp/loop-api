@@ -35,11 +35,24 @@ export interface HooksLaunchFactoryReader {
   /**
    * Decision 0132: a LoopDynamic Factory's Hook parameters and its
    * `TEMPLATE_HASH`, verified equal to
-   * `hooksLaunchLoopDynamicTemplateHash(params)` (immutable; cached).
+   * `hooksLaunchLoopDynamicTemplateHash(params)` (immutable; cached —
+   * Decision 0195: except an S340 Factory's `maxCumulativeBuy`, re-read).
    */
   loopDynamicTemplate?(): Promise<{
     readonly params: HooksLaunchLoopDynamicParams;
     readonly templateHash: string;
+  }>;
+  /**
+   * Decision 0195 (S340): the Factory's current `maxCumulativeBuy()` — the
+   * default a launch deployed now receives (never a project's cap, which
+   * is its curve's). `adjustable`: true = admin-settable (S340), false =
+   * immutable (S209) or no getter (`maxCumulativeBuy` null), null =
+   * unknown (OfficialTax). Throws when unreadable. Optional: test doubles
+   * and pre-0195 readers do not answer it.
+   */
+  factoryPurchaseCap?(): Promise<{
+    readonly maxCumulativeBuy: string | null;
+    readonly adjustable: boolean | null;
   }>;
   /**
    * Decision 0165: the Factory's immutable `usd1()` (lowercase, non-zero),

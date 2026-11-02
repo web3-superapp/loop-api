@@ -33048,7 +33048,7 @@
         "operationId": "listAdminLaunchProjects",
         "summary": "List Hooks launch projects by review stage",
         "tags": ["admin-launch"],
-        "description": "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN).",
+        "description": "Decision 0109 (`launch.read`). Newest first. `status` filters by the stage of the latest config version: draft, awaiting_approval, rejected (Decision 0122), approved, accepted, deploying, activated. Decision 0122: `kind` (all | ido | launch2) filters by product kind; every item carries kind, materialVersion and the catalog rejection. A reviewer / testnet acceptor sees only the projects their ops grants cover (`scope: projects`); a disabled operator or one without launch.read is 403 PERMISSION_DENIED (OPS_FORBIDDEN). Decision 0195 (S340): `factoryPurchaseCap` is the target Factory's live per-address purchase cap for new launches (read-only; `unavailable` never fails the page).",
         "parameters": [
           {
             "schema": {
@@ -33403,6 +33403,42 @@
                       "type": "string",
                       "enum": ["all", "projects"],
                       "description": "`projects`: a reviewer / acceptor authorized for some projects only."
+                    },
+                    "factoryPurchaseCap": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "factoryAddress",
+                        "maxCumulativeBuy",
+                        "adjustable"
+                      ],
+                      "description": "Decision 0195 (S340): the configured target Factory's `maxCumulativeBuy()` read live from the chain — the per-address cumulative curve purchase cap a launch deployed now receives. Existing launches keep the cap their curve was deployed with (see each deployment task's `verified` event details `curveMaxCumulativeBuy`). `unavailable` (no Factory reader configured, RPC failure, 3 s timeout) carries null values; the page itself never fails on it.",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["available", "unavailable"]
+                        },
+                        "factoryAddress": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-fA-F]{40}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The configured target Factory (null when not configured)."
+                        },
+                        "maxCumulativeBuy": {
+                          "type": ["null", "string"],
+                          "pattern": "^[1-9][0-9]{0,27}$",
+                          "description": "Raw MEME integer (18 decimals; 5000000000000000000000000 = 5,000,000 MEME). Null when unavailable or the Factory predates the getter (pre-S209: the 5,000,000 MEME constant)."
+                        },
+                        "adjustable": {
+                          "type": ["null", "boolean"],
+                          "description": "true = admin-settable by the governance multisig (S340 Factory); false = immutable (S209) or no getter; null = unknown (OfficialTax Factory, or unavailable)."
+                        }
+                      }
                     }
                   }
                 }
@@ -33718,7 +33754,7 @@
         "operationId": "getAdminLaunchProject",
         "summary": "Read one Hooks launch project for review",
         "tags": ["admin-launch"],
-        "description": "Decision 0109 (`launch.read`). Every config version (fields, configHash, editor, approval), BSC Testnet acceptances, and deployment tasks with the EIP-712-bound predicted MEME / Hook addresses. Signatures and signed payloads are never returned. Outside the caller's scope → 404.",
+        "description": "Decision 0109 (`launch.read`). Every config version (fields, configHash, editor, approval), BSC Testnet acceptances, and deployment tasks with the EIP-712-bound predicted MEME / Hook addresses. Signatures and signed payloads are never returned. Outside the caller's scope → 404. Decision 0195 (S340): `factoryPurchaseCap` as on the list; this project's own cap is in its deployment task's events (`broadcast` details `factoryMaxCumulativeBuy` = the Factory value read before the deploy, `verified` details `curveMaxCumulativeBuy`, plus `signedMaxCumulativeBuy` / `maxCumulativeBuyChanged` when the multisig changed it after the config was saved).",
         "parameters": [
           {
             "schema": { "type": "string", "maxLength": 64 },
@@ -34034,6 +34070,42 @@
                           "format": "date-time"
                         },
                         "updatedAt": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "factoryPurchaseCap": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "status",
+                        "factoryAddress",
+                        "maxCumulativeBuy",
+                        "adjustable"
+                      ],
+                      "description": "Decision 0195 (S340): the configured target Factory's `maxCumulativeBuy()` read live from the chain — the per-address cumulative curve purchase cap a launch deployed now receives. Existing launches keep the cap their curve was deployed with (see each deployment task's `verified` event details `curveMaxCumulativeBuy`). `unavailable` (no Factory reader configured, RPC failure, 3 s timeout) carries null values; the page itself never fails on it.",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["available", "unavailable"]
+                        },
+                        "factoryAddress": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^0x[0-9a-fA-F]{40}$"
+                            },
+                            { "type": "null" }
+                          ],
+                          "description": "The configured target Factory (null when not configured)."
+                        },
+                        "maxCumulativeBuy": {
+                          "type": ["null", "string"],
+                          "pattern": "^[1-9][0-9]{0,27}$",
+                          "description": "Raw MEME integer (18 decimals; 5000000000000000000000000 = 5,000,000 MEME). Null when unavailable or the Factory predates the getter (pre-S209: the 5,000,000 MEME constant)."
+                        },
+                        "adjustable": {
+                          "type": ["null", "boolean"],
+                          "description": "true = admin-settable by the governance multisig (S340 Factory); false = immutable (S209) or no getter; null = unknown (OfficialTax Factory, or unavailable)."
+                        }
                       }
                     },
                     "versions": {
