@@ -21,10 +21,11 @@ import {
   officialPoolRouterAbi,
   projectNFTAbi,
 } from "../../integrations/launch/hooks-launch-protocol-abi.generated.js";
-import type {
-  DappCallStandard,
-  DappDecodedCall,
-  DappRiskFlag,
+import {
+  dappRiskFlags,
+  type DappCallStandard,
+  type DappDecodedCall,
+  type DappRiskFlag,
 } from "./intent-contract.js";
 
 /**
@@ -197,7 +198,16 @@ export interface DecodedDappCall {
   } | null;
   /** Flags derivable from the calldata alone. */
   readonly flags: readonly DappRiskFlag[];
+  /**
+   * S346 (finding A5): the call grants the counterparty an allowance or an
+   * approval (a non-zero ERC-20 / Permit2 amount, an ERC-721 approve to a
+   * non-zero address, setApprovalForAll true). The service flags
+   * EOA_SPENDER when such a counterparty has no code.
+   */
+  readonly grantsApproval: boolean;
 }
+
+const zeroAddress = "0x0000000000000000000000000000000000000000";
 
 function result(
   data: Hex,
@@ -206,6 +216,7 @@ function result(
   values: readonly unknown[],
   counterparty: DecodedDappCall["counterparty"],
   flags: readonly DappRiskFlag[],
+  grantsApproval = false,
 ): DecodedDappCall {
   const dataLength = (data.length - 2) / 2;
   return Object.freeze({
@@ -218,6 +229,10 @@ function result(
     }),
     counterparty,
     flags: Object.freeze([...flags]),
+    grantsApproval:
+      grantsApproval &&
+      counterparty !== null &&
+      counterparty.address !== zeroAddress,
   });
 }
 
@@ -252,6 +267,7 @@ export function decodeDappCall(input: {
         decoded.values,
         spender === null ? null : { role: "spender", address: spender },
         amount >= dappUnlimitedApprovalFloor ? ["UNLIMITED_APPROVAL"] : [],
+        amount > 0n,
       );
     }
   }
@@ -275,6 +291,7 @@ export function decodeDappCall(input: {
           decoded.values,
           operator === null ? null : { role: "operator", address: operator },
           decoded.values[1] === true ? ["APPROVAL_FOR_ALL"] : [],
+          decoded.values[1] === true,
         );
       }
       if (name === "approve") {
@@ -286,6 +303,7 @@ export function decodeDappCall(input: {
           decoded.values,
           spender === null ? null : { role: "spender", address: spender },
           [],
+          true,
         );
       }
       const recipient = addressArg(decoded.values[1]);
@@ -319,6 +337,7 @@ export function decodeDappCall(input: {
           decoded.values,
           spender === null ? null : { role: "spender", address: spender },
           amount >= dappUnlimitedApprovalFloor ? ["UNLIMITED_APPROVAL"] : [],
+          amount > 0n,
         );
       }
       const recipient = addressArg(
@@ -356,14 +375,8 @@ export function erc165Supported(returnData: string): boolean {
   );
 }
 
-/** Fixed display order of the risk flags. */
-const flagOrder: readonly DappRiskFlag[] = [
-  "UNLIMITED_APPROVAL",
-  "APPROVAL_FOR_ALL",
-  "PERMIT_SIGNATURE",
-  "UNVERIFIED_CONTRACT",
-  "SIMULATION_FAILED",
-];
+/** Fixed display order of the risk flags (the enum order). */
+const flagOrder: readonly DappRiskFlag[] = dappRiskFlags;
 
 export function orderRiskFlags(
   flags: Iterable<DappRiskFlag>,

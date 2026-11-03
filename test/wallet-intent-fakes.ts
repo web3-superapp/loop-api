@@ -21,6 +21,7 @@ import {
   type ProviderOperation,
 } from "../src/database/control-plane-repository.js";
 import {
+  WalletIntentBusyError,
   WalletIntentStateConflictError,
   type CreateWalletIntentInput,
   type StoredSwapQuote,
@@ -33,7 +34,10 @@ import type {
   AssetPriceFact,
   MarketFactService,
 } from "../src/features/market/market-fact-service.js";
-import { openWalletIntentStates } from "../src/features/wallet-intents/intent-contract.js";
+import {
+  isDappIntentKind,
+  openWalletIntentStates,
+} from "../src/features/wallet-intents/intent-contract.js";
 import type { WalletIntentRuntime } from "../src/features/wallet-intents/intent-preparation.js";
 import type {
   BscCallOutcome,
@@ -531,10 +535,27 @@ export function intentRepositoryFake(
     records,
     events,
     create: (input: CreateWalletIntentInput) => {
+      // S346 (finding A4): mirrors the repository — a DApp prepare is
+      // refused by an open, unexpired non-DApp intent and supersedes only
+      // DApp intents.
+      const dapp = isDappIntentKind(input.kind);
+      if (dapp) {
+        for (const record of records.values()) {
+          if (
+            record.walletId === input.walletId &&
+            openWalletIntentStates.has(record.state) &&
+            !isDappIntentKind(record.kind) &&
+            Date.parse(record.expiresAt) > now().getTime()
+          ) {
+            return Promise.reject(new WalletIntentBusyError());
+          }
+        }
+      }
       for (const [id, record] of records) {
         if (
           record.walletId === input.walletId &&
-          openWalletIntentStates.has(record.state)
+          openWalletIntentStates.has(record.state) &&
+          (!dapp || isDappIntentKind(record.kind))
         ) {
           records.set(id, {
             ...record,

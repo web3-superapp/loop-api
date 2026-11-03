@@ -473,6 +473,44 @@ describe("Decision 0173: project NFT pictures on PostgreSQL", () => {
         address: row.rows[0]!.nft_address,
       }),
     ).toEqual({ kind: "launch2Instance", role: "nft", label: "S274" });
+    // S346 (finding A8): an instance on hold is not a verified LOOP
+    // contract, and neither is one not yet activated.
+    await pool.query(
+      "update public.launch2_instances set hold_reason = 'LAUNCH2_ACTIVATION_MISSING' where launch_id = $1",
+      [launchId],
+    );
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:97",
+        address: curve,
+      }),
+    ).toBeNull();
+    expect(
+      await directory.classify({
+        chainId: "eip155:97",
+        address: row.rows[0]!.nft_address,
+      }),
+    ).toBeNull();
+    await pool.query(
+      "update public.launch2_instances set hold_reason = null, activated_at = null where launch_id = $1",
+      [launchId],
+    );
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:97",
+        address: curve,
+      }),
+    ).toBeNull();
+    await pool.query(
+      "update public.launch2_instances set activated_at = now() where launch_id = $1",
+      [launchId],
+    );
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:97",
+        address: curve,
+      }),
+    ).toMatchObject({ launchId });
     // The activation projection's SQL (new columns) still runs.
     await launch2.registerActivatedInstances({
       chainId: "eip155:97",

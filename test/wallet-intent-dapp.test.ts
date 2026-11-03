@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { encodeFunctionData, maxUint256, parseAbi, type Hex } from "viem";
+import {
+  encodeFunctionData,
+  hashTypedData,
+  maxUint256,
+  parseAbi,
+  type Hex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
@@ -17,8 +23,11 @@ import {
 } from "../src/features/wallet-intents/dapp-intent-service.js";
 import {
   parseTypedData,
+  personalSignRiskFlags,
   reviewPersonalSignMessage,
   reviewTypedData,
+  typedDataBinding,
+  typedDataDigest,
   typedDataRiskFlags,
 } from "../src/features/wallet-intents/dapp-sign-review.js";
 import {
@@ -579,7 +588,10 @@ describe("DApp message review (Decision 0197)", () => {
         truncated: false,
       },
     ]);
-    expect(typedDataRiskFlags(mail, mailReview)).toEqual([]);
+    // S346 (A2): a primary type the review does not recognise is flagged.
+    expect(typedDataRiskFlags(mail, mailReview)).toEqual([
+      "UNRECOGNIZED_TYPED_DATA",
+    ]);
 
     const permit = parseTypedData(JSON.stringify(permitTypedData("1000")));
     expect(typedDataRiskFlags(permit, reviewTypedData(permit))).toEqual([
@@ -761,7 +773,12 @@ describe("dapp_tx intents (Decision 0197)", () => {
           },
           message: null,
           typedData: null,
-          riskFlags: ["UNLIMITED_APPROVAL", "UNVERIFIED_CONTRACT"],
+          // S346 (A5): the spender has no code.
+          riskFlags: [
+            "UNLIMITED_APPROVAL",
+            "EOA_SPENDER",
+            "UNVERIFIED_CONTRACT",
+          ],
         },
       },
       unsignedTransaction: {
@@ -902,6 +919,9 @@ describe("dapp_tx intents (Decision 0197)", () => {
       standard: "erc721",
       args: { to: spender, tokenId: "7" },
     });
+    expect(erc721Approve.resource.review.dapp?.riskFlags).toContain(
+      "EOA_SPENDER",
+    );
   });
 
   it("creates a reverting call as prepared, not signable, with SIMULATION_FAILED", async () => {
@@ -921,6 +941,7 @@ describe("dapp_tx intents (Decision 0197)", () => {
     });
     expect(created.resource.review.dapp?.riskFlags).toEqual([
       "UNLIMITED_APPROVAL",
+      "EOA_SPENDER",
       "UNVERIFIED_CONTRACT",
       "SIMULATION_FAILED",
     ]);
@@ -1165,7 +1186,12 @@ describe("dapp_sign intents (Decision 0197)", () => {
             domain: { name: "USD1", chainId: "97", verifyingContract: token },
             fieldsTruncated: false,
           },
-          riskFlags: ["UNLIMITED_APPROVAL", "PERMIT_SIGNATURE"],
+          // S346 (A2): the verifying contract (token) is not LOOP-known.
+          riskFlags: [
+            "UNLIMITED_APPROVAL",
+            "PERMIT_SIGNATURE",
+            "UNVERIFIED_CONTRACT",
+          ],
         },
       },
     });
@@ -1332,5 +1358,398 @@ describe("dapp_sign intents (Decision 0197)", () => {
       body: { signature },
     });
     expect(late.state).toBe("confirmed");
+  });
+});
+
+/**
+ * S346 (Decision 0197 amendment): the review findings A1 (typed-data chain
+ * binding), A2 (unrecognised typed data, verifying contract, raw hash),
+ * A4 (a DApp prepare never supersedes a send) and A5 (EOA spender).
+ */
+function withoutKey<T extends object, K extends keyof T>(
+  value: T,
+  key: K,
+): Omit<T, K> {
+  const copy = { ...value };
+  delete copy[key];
+  return copy;
+}
+
+describe("S346 review fixes (Decision 0197 amendment)", () => {
+  function signBody(overrides: Record<string, unknown> = {}) {
+    return {
+      walletId,
+      chainId: "eip155:97",
+      origin: "https://app.example.org",
+      method: "eth_signTypedData_v4",
+      payload: JSON.stringify(mailTypedData),
+      ...overrides,
+    };
+  }
+
+  const mailWithout = (
+    domain: Record<string, unknown>,
+    eip712Domain?: readonly { name: string; type: string }[],
+  ) =>
+    JSON.stringify({
+      ...mailTypedData,
+      types: {
+        ...mailTypedData.types,
+        ...(eip712Domain === undefined ? {} : { EIP712Domain: eip712Domain }),
+      },
+      domain,
+    });
+
+  it("A1: refuses typed data whose hash would not bind the request chain", async () => {
+    const { dapp } = build();
+    const prepare = (payload: string) =>
+      codeOf(
+        dapp.prepareSignature({
+          principal,
+          idempotencyKey: randomUUID(),
+          body: signBody({ payload }),
+          signal,
+        }),
+      );
+    const domainWithoutChain = withoutKey(mailTypedData.domain, "chainId");
+    // domain without chainId (with and without a page EIP712Domain).
+    const withoutChainTypes = mailTypedData.types.EIP712Domain.filter(
+      (field) => field.name !== "chainId",
+    );
+    expect(
+      await prepare(mailWithout(domainWithoutChain, withoutChainTypes)),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+    const structTypes = withoutKey(mailTypedData.types, "EIP712Domain");
+    expect(
+      await prepare(
+        JSON.stringify({
+          ...mailTypedData,
+          types: structTypes,
+          domain: domainWithoutChain,
+        }),
+      ),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+    // chainId not the request chain.
+    expect(
+      await prepare(mailWithout({ ...mailTypedData.domain, chainId: 56 })),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_CHAIN_MISMATCH");
+    expect(
+      await prepare(mailWithout({ ...mailTypedData.domain, chainId: "0x38" })),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_CHAIN_MISMATCH");
+    // The reproduced bypass: domain.chainId 97 but a page EIP712Domain that
+    // leaves chainId out of the hash.
+    expect(
+      await prepare(mailWithout(mailTypedData.domain, withoutChainTypes)),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+    // EIP712Domain naming a key the domain does not have.
+    expect(
+      await prepare(
+        mailWithout(domainWithoutChain, [
+          ...withoutChainTypes,
+          { name: "chainId", type: "uint256" },
+          { name: "salt", type: "bytes32" },
+        ]),
+      ),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+    // A wrong EIP-712 type for a domain field, and a duplicate.
+    expect(
+      await prepare(
+        mailWithout(mailTypedData.domain, [
+          { name: "name", type: "string" },
+          { name: "version", type: "string" },
+          { name: "chainId", type: "uint64" },
+          { name: "verifyingContract", type: "address" },
+        ]),
+      ),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+    expect(
+      await prepare(
+        mailWithout(mailTypedData.domain, [
+          ...mailTypedData.types.EIP712Domain,
+          { name: "name", type: "string" },
+        ]),
+      ),
+    ).toBe("422:VALIDATION_FAILED:TYPED_DATA_INVALID");
+  });
+
+  it("A1: an accepted payload's digest includes the chainId", async () => {
+    const parsed = parseTypedData(JSON.stringify(mailTypedData));
+    expect(typedDataBinding(parsed, 97n)).toBe("bound");
+    expect(typedDataBinding(parsed, 56n)).toBe("chainMismatch");
+    const digest = typedDataDigest(parsed);
+    const domainWithoutChain = withoutKey(mailTypedData.domain, "chainId");
+    const structTypes = withoutKey(mailTypedData.types, "EIP712Domain");
+    const verifyingContract = mailTypedData.domain
+      .verifyingContract as `0x${string}`;
+    const withChain = hashTypedData({
+      domain: { ...mailTypedData.domain, verifyingContract },
+      types: structTypes,
+      primaryType: "Mail",
+      message: mailTypedData.message,
+    });
+    const withoutChain = hashTypedData({
+      domain: { ...domainWithoutChain, verifyingContract },
+      types: structTypes,
+      primaryType: "Mail",
+      message: mailTypedData.message,
+    });
+    expect(digest).toBe(withChain);
+    expect(digest).not.toBe(withoutChain);
+    // The page-declared order is honoured, and still covers chainId.
+    const reordered = parseTypedData(
+      mailWithout(mailTypedData.domain, [
+        { name: "chainId", type: "uint256" },
+        { name: "name", type: "string" },
+        { name: "verifyingContract", type: "address" },
+        { name: "version", type: "string" },
+      ]),
+    );
+    expect(typedDataBinding(reordered, 97n)).toBe("bound");
+    expect(typedDataDigest(reordered)).not.toBe(withoutChain);
+
+    const { dapp } = build();
+    const created = await dapp.prepareSignature({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: signBody(),
+      signal,
+    });
+    expect(created.resource.review.dapp?.typedData?.domain.chainId).toBe("97");
+  });
+
+  it("A2: flags unrecognised typed data, an unknown verifying contract and a raw hash", async () => {
+    const seaport = {
+      types: {
+        OrderComponents: [
+          { name: "offerer", type: "address" },
+          { name: "counter", type: "uint256" },
+        ],
+      },
+      primaryType: "OrderComponents",
+      domain: {
+        name: "Seaport",
+        version: "1.5",
+        chainId: 97,
+        verifyingContract: "0x00000000000000adc04c56bf30ac9d3c0aaf14dc",
+      },
+      message: {
+        offerer: "0x1111111111111111111111111111111111111111",
+        counter: "0",
+      },
+    };
+    const parsed = parseTypedData(JSON.stringify(seaport));
+    expect(typedDataRiskFlags(parsed, reviewTypedData(parsed))).toEqual([
+      "UNRECOGNIZED_TYPED_DATA",
+    ]);
+    const { dapp } = build();
+    const order = await dapp.prepareSignature({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: signBody({ payload: JSON.stringify(seaport) }),
+      signal,
+    });
+    expect(order.resource.review.dapp?.riskFlags).toEqual([
+      "UNRECOGNIZED_TYPED_DATA",
+      "UNVERIFIED_CONTRACT",
+    ]);
+    for (const primaryType of [
+      "ForwardRequest",
+      "MetaTransaction",
+      "Delegation",
+    ]) {
+      const other = parseTypedData(
+        JSON.stringify({
+          types: { [primaryType]: [{ name: "from", type: "address" }] },
+          primaryType,
+          domain: { name: "X", chainId: 97 },
+          message: { from: walletAddress },
+        }),
+      );
+      expect(typedDataRiskFlags(other, reviewTypedData(other))).toEqual([
+        "UNRECOGNIZED_TYPED_DATA",
+      ]);
+    }
+    // A LOOP-known verifying contract is not UNVERIFIED_CONTRACT.
+    const known = await dapp.prepareSignature({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: signBody({
+        payload: mailWithout({
+          ...mailTypedData.domain,
+          verifyingContract: loopRouter,
+        }),
+      }),
+      signal,
+    });
+    expect(known.resource.review.dapp?.riskFlags).toEqual([
+      "UNRECOGNIZED_TYPED_DATA",
+    ]);
+    // 32 bytes of hex that are not text: RAW_HASH_SIGNATURE.
+    const hash = `0x${"ab".repeat(32)}`;
+    expect(
+      personalSignRiskFlags(hash, reviewPersonalSignMessage(hash)),
+    ).toEqual(["RAW_HASH_SIGNATURE"]);
+    const raw = await dapp.prepareSignature({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: signBody({ method: "personal_sign", payload: hash }),
+      signal,
+    });
+    expect(raw.resource.review.dapp).toMatchObject({
+      message: { encoding: "hex", byteLength: 32 },
+      riskFlags: ["RAW_HASH_SIGNATURE"],
+    });
+    // 31 / 33 bytes, or 32 printable bytes, are not a hash.
+    for (const payload of [
+      `0x${"ab".repeat(31)}`,
+      `0x${"ab".repeat(33)}`,
+      `0x${Buffer.from("example.org wants you to sign in").toString("hex")}`,
+      "ab".repeat(16),
+    ]) {
+      expect(
+        personalSignRiskFlags(payload, reviewPersonalSignMessage(payload)),
+      ).toEqual([]);
+    }
+  });
+
+  it("A4: a DApp prepare supersedes only DApp intents and is refused by an open send", async () => {
+    const { dapp, repository } = build();
+    const first = await dapp.prepareTransaction({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: txBody(),
+      signal,
+    });
+    // A dapp_sign supersedes the open dapp_tx.
+    const sign = await dapp.prepareSignature({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: signBody(),
+      signal,
+    });
+    expect(repository.records.get(first.resource.intentId)).toMatchObject({
+      state: "expired",
+      reasonCode: "INTENT_SUPERSEDED",
+    });
+    // An open send on the wallet (the user is reviewing it).
+    const template = repository.records.get(sign.resource.intentId)!;
+    const sendId = randomUUID();
+    repository.records.set(sendId, {
+      ...template,
+      intentId: sendId,
+      kind: "send",
+      state: "awaiting_signature",
+    });
+    const busyKey = randomUUID();
+    const busy = () =>
+      codeOf(
+        dapp.prepareTransaction({
+          principal,
+          idempotencyKey: busyKey,
+          body: txBody(),
+          signal,
+        }),
+      );
+    expect(await busy()).toBe("409:RESOURCE_CONFLICT:INTENT_BUSY");
+    expect(
+      await codeOf(
+        dapp.prepareSignature({
+          principal,
+          idempotencyKey: randomUUID(),
+          body: signBody(),
+          signal,
+        }),
+      ),
+    ).toBe("409:RESOURCE_CONFLICT:INTENT_BUSY");
+    expect(repository.records.get(sendId)?.state).toBe("awaiting_signature");
+    // The dapp_sign that was open stays open too (nothing was superseded).
+    expect(repository.records.get(sign.resource.intentId)?.state).toBe(
+      "awaiting_signature",
+    );
+    // Once the send is past its expiry it no longer blocks; the same key
+    // retried now creates the intent.
+    repository.records.set(sendId, {
+      ...repository.records.get(sendId)!,
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    expect(await busy()).toBe("OK");
+    expect(repository.records.get(sendId)?.state).toBe("awaiting_signature");
+  });
+
+  it("A5: flags EOA_SPENDER for a grant to an address without code", async () => {
+    const { dapp } = build();
+    const prepare = async (data: Hex) =>
+      (
+        await dapp.prepareTransaction({
+          principal,
+          idempotencyKey: randomUUID(),
+          body: txBody({ tx: { to: token, data } }),
+          signal,
+        })
+      ).resource.review.dapp?.riskFlags;
+    // A large but finite increaseAllowance to an EOA: no UNLIMITED flag, but
+    // EOA_SPENDER.
+    expect(
+      await prepare(
+        encodeFunctionData({
+          abi: erc20,
+          functionName: "increaseAllowance",
+          args: [spender, 10n ** 30n],
+        }),
+      ),
+    ).toEqual(["EOA_SPENDER", "UNVERIFIED_CONTRACT"]);
+    // A contract spender, or a revoke (amount 0), is not EOA_SPENDER.
+    expect(
+      await prepare(
+        encodeFunctionData({
+          abi: erc20,
+          functionName: "approve",
+          args: [contractSpender, 10n ** 30n],
+        }),
+      ),
+    ).toEqual(["UNVERIFIED_CONTRACT"]);
+    expect(
+      await prepare(
+        encodeFunctionData({
+          abi: erc20,
+          functionName: "approve",
+          args: [spender, 0n],
+        }),
+      ),
+    ).toEqual(["UNVERIFIED_CONTRACT"]);
+    // A transfer to an EOA grants nothing.
+    expect(
+      await prepare(
+        encodeFunctionData({
+          abi: erc20,
+          functionName: "transfer",
+          args: [spender, 1n],
+        }),
+      ),
+    ).toEqual(["UNVERIFIED_CONTRACT"]);
+    expect(
+      decodeDappCall({
+        data: encodeFunctionData({
+          abi: erc721,
+          functionName: "setApprovalForAll",
+          args: [spender, false],
+        }),
+        to: nft,
+        targetIsErc721: true,
+        targetIsLoop: false,
+      }).grantsApproval,
+    ).toBe(false);
+    expect(
+      decodeDappCall({
+        data: encodeFunctionData({
+          abi: permit2,
+          functionName: "approve",
+          args: [token, spender, 5n, 1_900_000_000],
+        }),
+        to: permit2Address,
+        targetIsErc721: false,
+        targetIsLoop: false,
+      }).grantsApproval,
+    ).toBe(true);
   });
 });

@@ -356,7 +356,12 @@ describe.skipIf(skipReason !== null)(
               role: "spender",
               isContract: false,
             },
-            riskFlags: ["UNLIMITED_APPROVAL", "UNVERIFIED_CONTRACT"],
+            // S346 (A5): the spender is an anvil EOA.
+            riskFlags: [
+              "UNLIMITED_APPROVAL",
+              "EOA_SPENDER",
+              "UNVERIFIED_CONTRACT",
+            ],
           },
         },
       });
@@ -472,6 +477,101 @@ describe.skipIf(skipReason !== null)(
       expect(events.rows.map((row) => row.event_type)).toContain(
         "signature_reported",
       );
+      // The dapp_sign superseded the reverting dapp_tx (DApp ↔ DApp).
+      expect(
+        await runtime.repository.get(userId, reverting.intentId),
+      ).toMatchObject({ state: "expired", reasonCode: "INTENT_SUPERSEDED" });
+
+      // 6. S346 (A4): an open send on the wallet (the user is reviewing
+      // it) is never superseded by a DApp prepare — 409 INTENT_BUSY.
+      const template = (await runtime.repository.get(
+        userId,
+        reverting.intentId,
+      ))!;
+      const sendId = randomUUID();
+      await runtime.repository.create({
+        intentId: sendId,
+        ownerUserId: userId,
+        walletId,
+        providerOperationId: null,
+        kind: "send",
+        state: "awaiting_signature",
+        chainId: "eip155:97",
+        canonicalPayload: { ...template.canonicalPayload, intentId: sendId },
+        publicReview: template.publicReview,
+        reviewSha256: template.reviewSha256,
+        policyConfigVersion: template.policyConfigVersion,
+        factsObservedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 120_000).toISOString(),
+        simulationStatus: "passed",
+        requestId: randomUUID(),
+      });
+      const openDappSign = await dapp
+        .prepareSignature({
+          principal,
+          idempotencyKey: randomUUID(),
+          body: {
+            walletId,
+            chainId: "eip155:97",
+            origin: "https://dapp.example.org",
+            method: "personal_sign",
+            payload: "busy?",
+          },
+          signal,
+        })
+        .then(
+          () => "created",
+          (error: unknown) => error,
+        );
+      expect(openDappSign).toMatchObject({
+        statusCode: 409,
+        code: "RESOURCE_CONFLICT",
+        detailsSafe: { reasonCode: "INTENT_BUSY" },
+      });
+      const busy = await dapp
+        .prepareTransaction({
+          principal,
+          idempotencyKey: randomUUID(),
+          body: {
+            walletId,
+            chainId: "eip155:97",
+            origin: "https://dapp.example.org",
+            tx: { to: usd1, data: approve, value: "0x0" },
+          },
+          signal,
+        })
+        .then(
+          () => "created",
+          (error: unknown) => error,
+        );
+      expect(busy).toMatchObject({
+        statusCode: 409,
+        code: "RESOURCE_CONFLICT",
+        detailsSafe: { reasonCode: "INTENT_BUSY" },
+      });
+      expect(await runtime.repository.get(userId, sendId)).toMatchObject({
+        kind: "send",
+        state: "awaiting_signature",
+      });
+      const open = await pool.query<{ count: string }>(
+        "select count(*)::text as count from public.wallet_intents where wallet_id = $1 and state in ('prepared', 'awaiting_signature')",
+        [walletId],
+      );
+      expect(open.rows[0]!.count).toBe("1");
+      // Once the send is cancelled, the DApp prepare goes through.
+      await intents.cancel({ principal, intentId: sendId });
+      const after = await dapp.prepareTransaction({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: {
+          walletId,
+          chainId: "eip155:97",
+          origin: "https://dapp.example.org",
+          tx: { to: usd1, data: approve, value: "0x0" },
+        },
+        signal,
+      });
+      expect(after.created).toBe(true);
     }, 300_000);
   },
 );

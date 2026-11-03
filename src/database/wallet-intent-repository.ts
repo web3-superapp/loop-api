@@ -9,6 +9,8 @@ import {
   transactionHashPatternSource,
 } from "../features/chain/chain-contract.js";
 import {
+  dappIntentKinds,
+  isDappIntentKind,
   openWalletIntentStates,
   simulationStatuses,
   walletIntentKinds,
@@ -302,6 +304,19 @@ export class WalletIntentUnavailableError extends Error {
   }
 }
 
+/**
+ * S346 (Decision 0197 amendment, finding A4): a DApp prepare found an open,
+ * unexpired intent of another kind on the wallet; it does not supersede it.
+ */
+export class WalletIntentBusyError extends Error {
+  readonly code = "wallet_intent_busy";
+
+  constructor() {
+    super("Another wallet intent is open on this wallet");
+    this.name = "WalletIntentBusyError";
+  }
+}
+
 export class WalletIntentStateConflictError extends Error {
   readonly code = "wallet_intent_state_conflict";
 
@@ -482,6 +497,34 @@ export function createPostgresWalletIntentRepository(
           );
           await admitCanaryExposure(client, input.ownerUserId, admission);
         }
+        // S346 (finding A4): a DApp prepare supersedes only open DApp
+        // intents; an open, unexpired intent of another kind (the user is
+        // reviewing a send / swap / approve / send_nft) refuses it. Every
+        // other prepare keeps superseding all open intents.
+        const dapp = isDappIntentKind(input.kind);
+        if (dapp) {
+          const busy = await client.query<Record<string, unknown>>({
+            text: `
+              select intent_id from public.wallet_intents
+              where wallet_id = $1
+                and owner_user_id = $2
+                and state = any($3::text[])
+                and kind <> all($4::text[])
+                and expires_at > clock_timestamp()
+              limit 1
+              for update
+            `,
+            values: [
+              input.walletId,
+              input.ownerUserId,
+              [...openWalletIntentStates],
+              [...dappIntentKinds],
+            ],
+          });
+          if (busy.rows.length > 0) {
+            throw new WalletIntentBusyError();
+          }
+        }
         const superseded = await client.query<Record<string, unknown>>({
           text: `
             update public.wallet_intents
@@ -493,6 +536,7 @@ export function createPostgresWalletIntentRepository(
             where wallet_id = $1
               and owner_user_id = $2
               and state = any($4::text[])
+              and ($5::text[] is null or kind = any($5::text[]))
             returning intent_id, owner_user_id
           `,
           values: [
@@ -500,6 +544,7 @@ export function createPostgresWalletIntentRepository(
             input.ownerUserId,
             walletIntentReasonCodes.superseded,
             [...openWalletIntentStates],
+            dapp ? [...dappIntentKinds] : null,
           ],
         });
         for (const row of superseded.rows) {

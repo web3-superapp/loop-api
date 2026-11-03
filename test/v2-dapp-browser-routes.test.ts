@@ -128,7 +128,11 @@ const directory: DappContractDirectory = {
   classify: () => Promise.resolve(null),
 };
 
-function database(): Database {
+function database(
+  walletIntents: ReturnType<
+    typeof intentRepositoryFake
+  > = intentRepositoryFake(),
+): Database {
   return {
     alerts: createUnavailableAlertRepository(),
     agentAuthorizations: createUnavailableAgentAuthorizationRepository(),
@@ -144,7 +148,7 @@ function database(): Database {
       externalWallet,
     ]),
     bscIndexer: indexerFake(),
-    walletIntents: intentRepositoryFake(),
+    walletIntents,
     internalUsers: {
       findByPrivyUserId: vi.fn<InternalUserRepository["findByPrivyUserId"]>(
         () => Promise.resolve({ id: accountId }),
@@ -186,6 +190,7 @@ describe("DApp browser routes (Decision 0197)", () => {
       outcome: { status: "result", result: "0x2a" },
       calls: [],
     },
+    walletIntents = intentRepositoryFake(),
   ) {
     const privyAccessTokenVerifier = {
       verifyAccessToken: vi.fn(() =>
@@ -196,7 +201,7 @@ describe("DApp browser routes (Decision 0197)", () => {
     const app = await buildApp({
       config: testConfig(overrides),
       contractSurface: "v2",
-      database: database(),
+      database: database(walletIntents),
       privyAccessTokenVerifier,
       bscReadClient:
         relay === null
@@ -344,7 +349,11 @@ describe("DApp browser routes (Decision 0197)", () => {
             args: { spender, amount: maxUint256.toString(10) },
           },
           counterparty: { address: spender, role: "spender" },
-          riskFlags: ["UNLIMITED_APPROVAL", "UNVERIFIED_CONTRACT"],
+          riskFlags: [
+            "UNLIMITED_APPROVAL",
+            "EOA_SPENDER",
+            "UNVERIFIED_CONTRACT",
+          ],
         },
       },
       unsignedTransaction: { chainId: 97, to: token, data: approveUnlimited },
@@ -585,7 +594,7 @@ describe("DApp browser routes (Decision 0197)", () => {
         await read({
           chainId: "eip155:97",
           method: "eth_getLogs",
-          params: [{ fromBlock: "0x0", toBlock: "0x3e8" }],
+          params: [{ fromBlock: "0x0", toBlock: "0x3e8", address: token }],
         }),
       ),
     ).toBe("422:VALIDATION_FAILED:RPC_LOG_RANGE_TOO_LARGE");
@@ -594,10 +603,72 @@ describe("DApp browser routes (Decision 0197)", () => {
         await read({
           chainId: "eip155:97",
           method: "eth_getLogs",
-          params: [{ fromBlock: "earliest" }],
+          params: [{ fromBlock: "earliest", address: [token] }],
         }),
       ),
     ).toBe("422:VALIDATION_FAILED:RPC_LOG_RANGE_TOO_LARGE");
+    // S346 (A3): a filter must name at least one address.
+    for (const filter of [
+      { fromBlock: "0x0", toBlock: "0x1" },
+      { fromBlock: "0x0", toBlock: "0x1", address: null },
+      { fromBlock: "0x0", toBlock: "0x1", address: [] },
+      { blockHash: `0x${"1".repeat(64)}` },
+    ]) {
+      expect(
+        (
+          await read({
+            chainId: "eip155:97",
+            method: "eth_getLogs",
+            params: [filter],
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    // S346 (A6): tags are resolved against the head and forwarded as the
+    // block numbers that were checked.
+    const head = 44_000_000;
+    await read({
+      chainId: "eip155:97",
+      method: "eth_getLogs",
+      params: [
+        {
+          fromBlock: `0x${(head - 10).toString(16)}`,
+          address: token,
+          topics: [null],
+        },
+      ],
+    });
+    expect(relay.calls.at(-1)).toEqual({
+      method: "eth_getLogs",
+      params: [
+        {
+          fromBlock: `0x${(head - 10).toString(16)}`,
+          toBlock: `0x${head.toString(16)}`,
+          address: token,
+          topics: [null],
+        },
+      ],
+    });
+    await read({
+      chainId: "eip155:97",
+      method: "eth_getLogs",
+      params: [{ fromBlock: "latest", toBlock: "finalized", address: token }],
+    });
+    expect(relay.calls.at(-1)?.params).toEqual([
+      {
+        fromBlock: `0x${head.toString(16)}`,
+        toBlock: `0x${head.toString(16)}`,
+        address: token,
+      },
+    ]);
+    await read({
+      chainId: "eip155:97",
+      method: "eth_getLogs",
+      params: [{ blockHash: `0x${"1".repeat(64)}`, address: token }],
+    });
+    expect(relay.calls.at(-1)?.params).toEqual([
+      { blockHash: `0x${"1".repeat(64)}`, address: token },
+    ]);
     // S342 integration: block and fee-history reads for wallet libraries.
     relay.outcome = { status: "result", result: { number: "0x2a" } };
     expect(
@@ -612,6 +683,16 @@ describe("DApp browser routes (Decision 0197)", () => {
     expect(relay.calls.at(-1)).toEqual({
       method: "eth_getBlockByNumber",
       params: ["latest", false],
+    });
+    // S346 (A3): the flag absent is forwarded as false; true is refused.
+    await read({
+      chainId: "eip155:97",
+      method: "eth_getBlockByNumber",
+      params: ["0x10"],
+    });
+    expect(relay.calls.at(-1)).toEqual({
+      method: "eth_getBlockByNumber",
+      params: ["0x10", false],
     });
     relay.outcome = { status: "result", result: { oldestBlock: "0x1" } };
     expect(
@@ -632,9 +713,19 @@ describe("DApp browser routes (Decision 0197)", () => {
         })
       ).statusCode,
     ).toBe(200);
+    expect(
+      (
+        await read({
+          chainId: "eip155:97",
+          method: "eth_feeHistory",
+          params: ["0x80", "latest"],
+        })
+      ).statusCode,
+    ).toBe(200);
     for (const params of [
       [],
       ["latest", "yes"],
+      ["latest", true],
       ["latest", false, 1],
       ["0xzz", false],
     ]) {
@@ -650,8 +741,9 @@ describe("DApp browser routes (Decision 0197)", () => {
     }
     for (const params of [
       ["0x0", "latest"],
-      ["0x401", "latest"],
-      [1025, "latest"],
+      ["0x81", "latest"],
+      [129, "latest"],
+      ["0x400", "latest"],
       ["0x4", "pending"],
       ["0x4", "latest", [75, 25]],
       ["0x4", "latest", [101]],
@@ -732,6 +824,93 @@ describe("DApp browser routes (Decision 0197)", () => {
     );
   });
 
+  it("S346: maps provider limits and oversized answers to 503 RPC_UPSTREAM_LIMITED and holds a process-wide budget", async () => {
+    const relay: RelayControl = { outcome: { status: "limited" }, calls: [] };
+    const app = await createApp(
+      {
+        DAPP_BROWSER_ENABLED: "on",
+        DAPP_RPC_READ_GLOBAL_PER_MINUTE: "5",
+      },
+      relay,
+    );
+    const read = (method = "eth_blockNumber") =>
+      app.inject({
+        method: "POST",
+        url: "/v2/chain/rpc-read",
+        headers: headers(false),
+        payload: { chainId: "eip155:97", method },
+      });
+    const limited = await read();
+    expect(reasonOf(limited)).toBe(
+      "503:CAPABILITY_UNAVAILABLE:RPC_UPSTREAM_LIMITED",
+    );
+    expect(limited.body).not.toContain("rate");
+    relay.outcome = {
+      status: "result",
+      result: `0x${"0".repeat(1_048_576)}`,
+    };
+    expect(reasonOf(await read())).toBe(
+      "503:CAPABILITY_UNAVAILABLE:RPC_UPSTREAM_LIMITED",
+    );
+    relay.outcome = { status: "result", result: "0x2a" };
+    expect((await read()).statusCode).toBe(200);
+    expect((await read()).statusCode).toBe(200);
+    expect((await read()).statusCode).toBe(200);
+    // Five tokens spent (eth_chainId is answered locally and costs none).
+    expect((await read("eth_chainId")).statusCode).toBe(200);
+    const exhausted = await read();
+    expect(exhausted.statusCode).toBe(429);
+    expect(exhausted.json()).toMatchObject({ code: "RATE_LIMITED" });
+    expect(relay.calls).toHaveLength(5);
+  });
+
+  it("S346: a DApp prepare is 409 RESOURCE_CONFLICT / INTENT_BUSY while a send is open", async () => {
+    const repository = intentRepositoryFake();
+    const app = await createApp(
+      { DAPP_BROWSER_ENABLED: "on" },
+      undefined,
+      repository,
+    );
+    const created = await app.inject({
+      method: "POST",
+      url: "/v2/wallet-intents/dapp-sign",
+      headers: headers(true),
+      payload: signBody,
+    });
+    expect(created.statusCode).toBe(201);
+    const template = repository.records.get(
+      created.json<{ intentId: string }>().intentId,
+    )!;
+    const sendId = randomUUID();
+    repository.records.set(sendId, {
+      ...template,
+      intentId: sendId,
+      kind: "send",
+    });
+    for (const [url, payload] of [
+      ["/v2/wallet-intents/dapp-tx", txBody],
+      ["/v2/wallet-intents/dapp-sign", signBody],
+    ] as const) {
+      const busy = await app.inject({
+        method: "POST",
+        url,
+        headers: headers(true),
+        payload,
+      });
+      expect(busy.statusCode).toBe(409);
+      expect(busy.json()).toEqual({
+        code: "RESOURCE_CONFLICT",
+        category: "conflict",
+        retryable: false,
+        userMessageKey: expect.stringMatching(/^errors\./u) as unknown,
+        correlationId: expect.any(String) as unknown,
+        detailsSafe: { reasonCode: "INTENT_BUSY" },
+        providerReferenceSafe: null,
+      });
+    }
+    expect(repository.records.get(sendId)?.state).toBe("awaiting_signature");
+  });
+
   it("publishes the routes, the opt-in kinds and the new enum values in the OpenAPI artifact", async () => {
     const document = JSON.parse(
       await readFile(openApiV2ArtifactPath, "utf8"),
@@ -781,6 +960,9 @@ describe("DApp browser routes (Decision 0197)", () => {
       '"APPROVAL_FOR_ALL"',
       '"UNVERIFIED_CONTRACT"',
       '"SIMULATION_FAILED"',
+      '"EOA_SPENDER"',
+      '"RAW_HASH_SIGNATURE"',
+      '"UNRECOGNIZED_TYPED_DATA"',
     ]) {
       expect(created).toContain(value);
     }
@@ -803,6 +985,12 @@ describe("DApp browser routes (Decision 0197)", () => {
       "RPC_LOG_RANGE_TOO_LARGE",
       "DAPP_BROWSER_DISABLED",
       "DAPP_BROWSER_CHAIN_UNAVAILABLE",
+      "RPC_UPSTREAM_LIMITED",
+      "INTENT_BUSY",
     ]);
+    const conflict = JSON.stringify(
+      (operations.tx?.["responses"] as Record<string, unknown>)["409"],
+    );
+    expect(conflict).toContain('"RESOURCE_CONFLICT"');
   });
 });

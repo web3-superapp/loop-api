@@ -75,6 +75,7 @@ import {
   type DappRpcReadService,
 } from "./features/dapp-browser/rpc-read-service.js";
 import { createFixedWindowRateLimiter } from "./core/http/fixed-window-rate-limiter.js";
+import { createTokenBucket } from "./core/http/token-bucket.js";
 import {
   createNftSendService,
   projectNftDirectoryFromLaunch2,
@@ -2257,6 +2258,9 @@ export async function buildApp(
       ]),
       limiter: createFixedWindowRateLimiter({
         perWindow: config.dappBrowser.rpcReadPerMinute,
+      }),
+      globalLimiter: createTokenBucket({
+        perMinute: config.dappBrowser.rpcReadGlobalPerMinute,
       }),
     });
   const approvalService =

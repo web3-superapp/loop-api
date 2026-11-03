@@ -11,7 +11,10 @@ import {
 } from "../../features/dapp-browser/rpc-read-service.js";
 import { v2ContractVersion } from "../../features/meta/product-policy.js";
 import { dappReasonCodes } from "../../features/wallet-intents/intent-contract.js";
-import { walletIntentReadErrors } from "./wallet-intents-schemas.js";
+import {
+  walletIntentCommandErrors,
+  walletIntentReadErrors,
+} from "./wallet-intents-schemas.js";
 
 /**
  * Route schemas of the DApp browser (Decision 0197, S342): the two prepare
@@ -182,12 +185,32 @@ export const rpcReadErrors = {
 } as const;
 
 /**
+ * S346 (Decision 0197 amendment): the two prepares add 409
+ * RESOURCE_CONFLICT / INTENT_BUSY — a send / swap / approve / send_nft is
+ * open on the wallet and a DApp prepare does not supersede it.
+ */
+export const dappPrepareErrors = {
+  ...walletIntentCommandErrors,
+  409: v2ErrorResponseSchema([
+    "ACCOUNT_BOOTSTRAP_REQUIRED",
+    "IDEMPOTENCY_CONFLICT",
+    "INSUFFICIENT_BALANCE",
+    "DATA_STALE",
+    "QUOTE_EXPIRED",
+    "SIMULATION_FAILED",
+    "SUBMISSION_UNKNOWN",
+    "RESOURCE_CONFLICT",
+  ]),
+} as const;
+
+/**
  * Decision 0197: `detailsSafe.reasonCode` values of the DApp browser. 422
  * VALIDATION_FAILED: CHAIN_SIGNING_DISABLED, TYPED_DATA_CHAIN_MISMATCH,
  * TYPED_DATA_INVALID, ORIGIN_NOT_HTTPS, SIGNATURE_MISMATCH,
  * RPC_METHOD_NOT_ALLOWED, RPC_LOG_RANGE_TOO_LARGE. 503
  * CAPABILITY_UNAVAILABLE: DAPP_BROWSER_DISABLED,
- * DAPP_BROWSER_CHAIN_UNAVAILABLE.
+ * DAPP_BROWSER_CHAIN_UNAVAILABLE, RPC_UPSTREAM_LIMITED (S346). 409
+ * RESOURCE_CONFLICT: INTENT_BUSY (S346).
  */
 export const dappBrowserErrorReasonCodes = Object.freeze([
   dappReasonCodes.chainSigningDisabled,
@@ -199,4 +222,6 @@ export const dappBrowserErrorReasonCodes = Object.freeze([
   dappReasonCodes.rpcLogRangeTooLarge,
   dappReasonCodes.disabled,
   dappReasonCodes.chainUnavailable,
+  dappReasonCodes.rpcUpstreamLimited,
+  dappReasonCodes.intentBusy,
 ] as const);

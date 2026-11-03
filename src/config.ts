@@ -1106,6 +1106,10 @@ const environmentSchema = z
     DAPP_BROWSER_ENABLED: z.enum(["off", "on"]),
     // Decision 0197: rpc-read requests per account per minute (default 120).
     DAPP_RPC_READ_PER_MINUTE: positiveIntegerString(1, 6_000),
+    // S346 (Decision 0197 amendment): rpc-read requests per minute that
+    // reach the RPC provider, all accounts together, per process (token
+    // bucket; default 1200).
+    DAPP_RPC_READ_GLOBAL_PER_MINUTE: positiveIntegerString(1, 600_000),
     // Decision 0185: true|false (default false; any other value refuses
     // boot). false = a trader / holder address that belongs to an account
     // only through an *external* wallet is never shown next to that account
@@ -2050,11 +2054,13 @@ export interface AppConfig {
   readonly nftSendEnabled: boolean;
   /**
    * Decision 0197: the DApp browser — DAPP_BROWSER_ENABLED === "on"
-   * (default off) and DAPP_RPC_READ_PER_MINUTE (default 120).
+   * (default off), DAPP_RPC_READ_PER_MINUTE (default 120) and, S346,
+   * DAPP_RPC_READ_GLOBAL_PER_MINUTE (default 1200).
    */
   readonly dappBrowser: {
     readonly enabled: boolean;
     readonly rpcReadPerMinute: number;
+    readonly rpcReadGlobalPerMinute: number;
   };
   /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
   readonly externalWalletAddressPublic: boolean;
@@ -4587,6 +4593,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     NFT_SEND_ENABLED: environment["NFT_SEND_ENABLED"] ?? "off",
     DAPP_BROWSER_ENABLED: environment["DAPP_BROWSER_ENABLED"] ?? "off",
     DAPP_RPC_READ_PER_MINUTE: environment["DAPP_RPC_READ_PER_MINUTE"] ?? "120",
+    DAPP_RPC_READ_GLOBAL_PER_MINUTE:
+      environment["DAPP_RPC_READ_GLOBAL_PER_MINUTE"] ?? "1200",
     EXTERNAL_WALLET_ADDRESS_PUBLIC:
       environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4774,6 +4782,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     dappBrowser: Object.freeze({
       enabled: parsed.data.DAPP_BROWSER_ENABLED === "on",
       rpcReadPerMinute: parsed.data.DAPP_RPC_READ_PER_MINUTE,
+      rpcReadGlobalPerMinute: parsed.data.DAPP_RPC_READ_GLOBAL_PER_MINUTE,
     }),
     externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {

@@ -1,5 +1,6 @@
 import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.js";
 import type { FixedWindowRateLimiter } from "../../core/http/fixed-window-rate-limiter.js";
+import type { TokenBucket } from "../../core/http/token-bucket.js";
 import { V2ApiError } from "../../core/http/v2-error.js";
 import {
   BscChainMismatchError,
@@ -18,6 +19,14 @@ import { dappReasonCodes } from "../wallet-intents/intent-contract.js";
  * eip155:56 or the launch slot only, with a method whitelist, strict
  * parameter shapes, an `eth_getLogs` block-span ceiling and a per-account
  * fixed-window rate limit. Nothing here signs or broadcasts.
+ *
+ * S346 (Decision 0197 amendment, findings A3 / A6 / A7): eth_getLogs must
+ * name a non-empty address and is forwarded with its resolved block numbers
+ * (not the tags it was checked against); eth_getBlockByNumber never asks
+ * for full transactions; eth_feeHistory spans at most 128 blocks; a
+ * process-wide token bucket (DAPP_RPC_READ_GLOBAL_PER_MINUTE) caps what all
+ * accounts together spend; an answer above 1 MiB, or a provider quota /
+ * rate refusal, is 503 RPC_UPSTREAM_LIMITED.
  */
 
 export const dappRpcReadMethods = Object.freeze([
@@ -42,8 +51,10 @@ export type DappRpcReadMethod = (typeof dappRpcReadMethods)[number];
 export const dappRpcLogsMaximumBlockSpan = 1_000n;
 const maximumLogAddresses = 20;
 const maximumTopicAlternatives = 20;
-/** Geth's own eth_feeHistory ceiling (`maxBlockCount`). */
-const maximumFeeHistoryBlocks = 1_024n;
+/** S346: eth_feeHistory span ceiling (viem / ethers ask for 4–20). */
+export const dappRpcFeeHistoryMaximumBlocks = 128n;
+/** S346: largest relayed answer (`result` / `error` as JSON), in bytes. */
+export const dappRpcReadMaximumResponseBytes = 1_048_576;
 const maximumRewardPercentiles = 100;
 
 export interface DappRpcReadRuntime {
@@ -51,6 +62,8 @@ export interface DappRpcReadRuntime {
   /** The chains the proxy serves: eip155:56 and the launch slot. */
   readonly clients: readonly BscChainCallClient[];
   readonly limiter: FixedWindowRateLimiter;
+  /** S346: the process-wide budget all accounts share. */
+  readonly globalLimiter: TokenBucket;
 }
 
 export interface DappRpcReadResource {
@@ -166,7 +179,7 @@ function requireTopics(value: unknown): void {
 }
 
 /**
- * eth_feeHistory: blockCount (hex quantity or JSON integer) 1…1,024, a block
+ * eth_feeHistory: blockCount (hex quantity or JSON integer) 1…128, a block
  * tag or number, and optional reward percentiles — at most 100 numbers in
  * [0, 100], non-decreasing.
  */
@@ -181,7 +194,7 @@ function requireFeeHistory(params: readonly unknown[]): void {
   } else {
     invalid();
   }
-  if (blocks < 1n || blocks > maximumFeeHistoryBlocks) invalid();
+  if (blocks < 1n || blocks > dappRpcFeeHistoryMaximumBlocks) invalid();
   requireBlock(params[1]);
   if (params[1] === "pending") invalid();
   if (params.length === 3) {
@@ -228,14 +241,16 @@ async function blockNumberOf(
 }
 
 /**
- * eth_getLogs filter: `blockHash` alone, or `fromBlock` / `toBlock` whose
- * span (tags resolved against the head) is at most 1,000 blocks; at most
- * 20 addresses and 4 topic positions of at most 20 alternatives.
+ * eth_getLogs filter: a non-empty `address` (one, or 1…20); `blockHash`
+ * alone, or `fromBlock` / `toBlock` whose span (tags resolved against the
+ * head) is at most 1,000 blocks; at most 4 topic positions of at most 20
+ * alternatives. Returns the filter to forward: the range with the resolved
+ * block numbers in hex, so the node reads the blocks that were checked.
  */
 async function requireLogFilter(
   client: BscChainCallClient,
   value: unknown,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   if (!isRecord(value)) invalid();
   for (const key of Object.keys(value)) {
     if (
@@ -244,18 +259,18 @@ async function requireLogFilter(
       invalid();
     }
   }
+  // S346 (A3): an address-less filter scans every contract's logs.
   const address = value["address"];
-  if (address !== undefined && address !== null) {
-    if (typeof address === "string") {
-      requireAddress(address);
-    } else if (
-      !Array.isArray(address) ||
-      address.length > maximumLogAddresses
-    ) {
-      invalid();
-    } else {
-      address.forEach(requireAddress);
-    }
+  if (typeof address === "string") {
+    requireAddress(address);
+  } else if (
+    !Array.isArray(address) ||
+    address.length === 0 ||
+    address.length > maximumLogAddresses
+  ) {
+    invalid();
+  } else {
+    address.forEach(requireAddress);
   }
   if (value["topics"] !== undefined && value["topics"] !== null) {
     requireTopics(value["topics"]);
@@ -269,7 +284,7 @@ async function requireLogFilter(
     ) {
       invalid();
     }
-    return;
+    return value;
   }
   const from = value["fromBlock"] ?? "latest";
   const to = value["toBlock"] ?? "latest";
@@ -286,52 +301,71 @@ async function requireLogFilter(
       maximumBlockSpan: dappRpcLogsMaximumBlockSpan.toString(10),
     });
   }
+  // S346 (A6): forward what was checked, not a tag the node resolves later.
+  return {
+    ...value,
+    fromBlock: `0x${fromNumber.toString(16)}`,
+    toBlock: `0x${toNumber.toString(16)}`,
+  };
 }
 
+/** Checks the params and returns the params to forward. */
 async function validateParams(
   client: BscChainCallClient,
   method: DappRpcReadMethod,
   params: readonly unknown[],
-): Promise<void> {
+): Promise<readonly unknown[]> {
   switch (method) {
     case "eth_chainId":
     case "eth_blockNumber":
     case "eth_gasPrice":
       requireParams(params, 0, 0);
-      return;
+      return params;
     case "eth_call":
     case "eth_estimateGas":
       requireParams(params, 1, 2);
       requireCallObject(params[0]);
       if (params.length === 2) requireBlock(params[1]);
-      return;
+      return params;
     case "eth_getBalance":
     case "eth_getCode":
       requireParams(params, 1, 2);
       requireAddress(params[0]);
       if (params.length === 2) requireBlock(params[1]);
-      return;
+      return params;
     case "eth_getTransactionReceipt":
     case "eth_getTransactionByHash":
       requireParams(params, 1, 1);
       if (typeof params[0] !== "string" || !hashPattern.test(params[0])) {
         invalid();
       }
-      return;
+      return params;
     case "eth_getLogs":
       requireParams(params, 1, 1);
-      await requireLogFilter(client, params[0]);
-      return;
+      return [await requireLogFilter(client, params[0])];
     case "eth_getBlockByNumber":
-      // [block, fullTransactions]: the flag defaults to false when absent.
+      // [block, fullTransactions]: S346 (A3) — a full block's transaction
+      // objects are the heaviest answer a node gives; only the hash list
+      // (false, the default when absent) is relayed, true is refused.
       requireParams(params, 1, 2);
       requireBlock(params[0]);
-      if (params.length === 2 && typeof params[1] !== "boolean") invalid();
-      return;
+      if (params.length === 2 && params[1] !== false) invalid();
+      return [params[0], false];
     case "eth_feeHistory":
       requireFeeHistory(params);
-      return;
+      return params;
   }
+}
+
+function upstreamLimited(): never {
+  throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", {
+    reasonCode: dappReasonCodes.rpcUpstreamLimited,
+  });
+}
+
+/** JSON size of the relayed answer, in UTF-8 bytes. */
+function answerBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value ?? null), "utf8");
 }
 
 function isAllowedMethod(value: unknown): value is DappRpcReadMethod {
@@ -393,11 +427,25 @@ export function createDappRpcReadService(
         });
       }
       try {
-        await validateParams(client, method, params as readonly unknown[]);
-        const outcome = await client.relayRead(
+        const forwarded = await validateParams(
+          client,
           method,
           params as readonly unknown[],
         );
+        // S346 (A3): the process-wide budget, taken only for a request
+        // that reaches the provider (eth_chainId and refusals cost none).
+        if (!runtime.globalLimiter.take()) {
+          throw V2ApiError.rateLimited();
+        }
+        const outcome = await client.relayRead(method, forwarded);
+        if (outcome.status === "limited") upstreamLimited();
+        if (
+          answerBytes(
+            outcome.status === "result" ? outcome.result : outcome.error,
+          ) > dappRpcReadMaximumResponseBytes
+        ) {
+          upstreamLimited();
+        }
         return Object.freeze({
           chainId,
           method,
