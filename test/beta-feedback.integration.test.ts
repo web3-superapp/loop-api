@@ -35,7 +35,11 @@ const migrationsDirectory = resolve(
   "../migrations",
 );
 const baseUrl = "https://api.loop.test";
-const t0 = new Date("2026-11-02T08:00:00.000Z");
+// Screenshots are stamped by PostgreSQL's own clock (media_objects.created_at
+// = now()), so the service clock starts at the real present: a fixed date
+// drifts past the 24-hour screenshot window and the staleness case stops
+// failing for the right reason.
+const t0 = new Date(Math.floor(Date.now() / 1_000) * 1_000);
 const hour = 3_600_000;
 
 function connectionUrl(source: string, name: string): string {

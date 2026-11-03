@@ -134,7 +134,7 @@ export const rpcReadRequestSchema = {
     params: {
       type: "array",
       maxItems: 3,
-      description: `JSON-RPC params, checked per method (call objects take from / to / data / input / value / gas / fee fields only; no state overrides). eth_getLogs: blockHash alone, or fromBlock / toBlock spanning at most ${dappRpcLogsMaximumBlockSpan.toString(10)} blocks (422 VALIDATION_FAILED / ${dappReasonCodes.rpcLogRangeTooLarge}), at most 20 addresses and 4 topic positions. Defaults to [].`,
+      description: `JSON-RPC params, checked per method (call objects take from / to / data / input / value / gas / fee fields only; no state overrides). eth_getLogs: blockHash alone, or fromBlock / toBlock spanning at most ${dappRpcLogsMaximumBlockSpan.toString(10)} blocks (422 VALIDATION_FAILED / ${dappReasonCodes.rpcLogRangeTooLarge}), at most 20 addresses and 4 topic positions. eth_getBlockByNumber: [block, fullTransactions?]. eth_feeHistory: [blockCount 1…1024, block, rewardPercentiles? (≤ 100 non-decreasing numbers in 0…100)]. Defaults to [].`,
     },
   },
 } as const;

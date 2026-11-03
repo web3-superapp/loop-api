@@ -362,10 +362,12 @@ typed data 时 `signing.mode = "device_sign_typed_data_v4"`，`signatureRequest.
 
 - `chainId`：`eip155:56` 或 `eip155:97`；其他 422 `CHAIN_MISMATCH`。
 - `method` 白名单：`eth_chainId`（服务端本地应答）、`eth_blockNumber`、`eth_call`、`eth_getBalance`、`eth_getCode`、
-  `eth_getTransactionReceipt`、`eth_getTransactionByHash`、`eth_estimateGas`、`eth_gasPrice`、`eth_getLogs`。
+  `eth_getTransactionReceipt`、`eth_getTransactionByHash`、`eth_estimateGas`、`eth_gasPrice`、`eth_getLogs`、
+  `eth_getBlockByNumber`、`eth_feeHistory`（S342 联调补：viem / ethers 估费前必读）。
   其他 → 422 / `RPC_METHOD_NOT_ALLOWED`（App 回页面 `4200`）。`eth_accounts` / `eth_requestAccounts` / `eth_chainId` 的连接语义仍由 App 本地处理。
 - `params`：缺省 `[]`，≤ 3 项，逐方法校验（call 对象只认 `from/to/data/input/value/gas/gasPrice/maxFeePerGas/maxPriorityFeePerGas`；
   不支持第 3 参 state override；块参数为标签或 hex）→ 不合格 400。
+- `eth_getBlockByNumber`：`[块标签或 hex, fullTransactions?(bool)]`；`eth_feeHistory`：`[blockCount（hex 或整数，1…1,024）, 块标签或 hex（不收 pending）, rewardPercentiles?（≤ 100 个 0…100 的非递减数）]`，不合格 400。
 - `eth_getLogs`：`blockHash` 单独用，或 `fromBlock` / `toBlock` 跨度 ≤ 1,000 块（`earliest` 视为 0），否则
   422 / `RPC_LOG_RANGE_TOO_LARGE`（`detailsSafe.maximumBlockSpan = "1000"`）；`address` ≤ 20 个，`topics` ≤ 4 位、每位 ≤ 20 个。
 - 限流：每账户每分钟 `DAPP_RPC_READ_PER_MINUTE`（默认 120）→ 超出 `429 RATE_LIMITED`（retryable）。App 应合并 / 节流页面轮询。

@@ -163,7 +163,7 @@ export function registerV2DappBrowserRoutes(
         operationId: "readV2ChainRpc",
         summary: "Forward one read-only JSON-RPC request for a DApp page",
         description:
-          "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice and eth_getLogs (at most 1,000 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200); an unreachable endpoint is 503. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
+          "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs (at most 1,000 blocks), eth_getBlockByNumber and eth_feeHistory (at most 1,024 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200); an unreachable endpoint is 503. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
         tags: ["chain"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

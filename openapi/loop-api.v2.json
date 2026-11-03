@@ -117960,7 +117960,7 @@
         "operationId": "readV2ChainRpc",
         "summary": "Forward one read-only JSON-RPC request for a DApp page",
         "tags": ["chain"],
-        "description": "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice and eth_getLogs (at most 1,000 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200); an unreachable endpoint is 503. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
+        "description": "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs (at most 1,000 blocks), eth_getBlockByNumber and eth_feeHistory (at most 1,024 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200); an unreachable endpoint is 503. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
         "requestBody": {
           "required": true,
           "content": {
@@ -117979,12 +117979,12 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 64,
-                    "description": "One of eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs; anything else is 422 VALIDATION_FAILED / RPC_METHOD_NOT_ALLOWED."
+                    "description": "One of eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs, eth_getBlockByNumber, eth_feeHistory; anything else is 422 VALIDATION_FAILED / RPC_METHOD_NOT_ALLOWED."
                   },
                   "params": {
                     "type": "array",
                     "maxItems": 3,
-                    "description": "JSON-RPC params, checked per method (call objects take from / to / data / input / value / gas / fee fields only; no state overrides). eth_getLogs: blockHash alone, or fromBlock / toBlock spanning at most 1000 blocks (422 VALIDATION_FAILED / RPC_LOG_RANGE_TOO_LARGE), at most 20 addresses and 4 topic positions. Defaults to []."
+                    "description": "JSON-RPC params, checked per method (call objects take from / to / data / input / value / gas / fee fields only; no state overrides). eth_getLogs: blockHash alone, or fromBlock / toBlock spanning at most 1000 blocks (422 VALIDATION_FAILED / RPC_LOG_RANGE_TOO_LARGE), at most 20 addresses and 4 topic positions. eth_getBlockByNumber: [block, fullTransactions?]. eth_feeHistory: [blockCount 1…1024, block, rewardPercentiles? (≤ 100 non-decreasing numbers in 0…100)]. Defaults to []."
                   }
                 }
               }
@@ -118053,7 +118053,9 @@
                         "eth_getTransactionByHash",
                         "eth_estimateGas",
                         "eth_gasPrice",
-                        "eth_getLogs"
+                        "eth_getLogs",
+                        "eth_getBlockByNumber",
+                        "eth_feeHistory"
                       ]
                     },
                     "result": {
