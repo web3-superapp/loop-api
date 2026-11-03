@@ -75,7 +75,7 @@ App 自建的 DApp 浏览器（S342-mobile）把页面发来的 `eth_sendTransac
 选代理。规则：
 
 - 链：只 `eip155:56` 与 launch slot 链（其他 422 `CHAIN_MISMATCH`）。主网**只读**——这是读，不违反规则 8。
-- 方法白名单：`eth_chainId`（本地应答，不打上游）、`eth_blockNumber`、`eth_call`、`eth_getBalance`、`eth_getCode`、`eth_getTransactionReceipt`、`eth_getTransactionByHash`、`eth_estimateGas`、`eth_gasPrice`、`eth_getLogs`；其他 → 422 / `RPC_METHOD_NOT_ALLOWED`（App 映射为 EIP-1193 4200）。
+- 方法白名单：`eth_chainId`（本地应答，不打上游）、`eth_blockNumber`、`eth_call`、`eth_getBalance`、`eth_getCode`、`eth_getTransactionReceipt`、`eth_getTransactionByHash`、`eth_estimateGas`、`eth_gasPrice`、`eth_getLogs`，以及 S342 联调补的 `eth_getBlockByNumber`（`[块, fullTransactions?]`）、`eth_feeHistory`（blockCount 1…1,024、percentiles ≤ 100 个非递减）；其他 → 422 / `RPC_METHOD_NOT_ALLOWED`（App 映射为 EIP-1193 4200）。
 - 参数逐方法严格校验（call 对象只认 from/to/data/input/value/gas/gasPrice/maxFee 字段；不允许 state override 第 3 参；块标签或 hex 块号），不合格 400。
 - `eth_getLogs`：`blockHash` 单独使用，或 `fromBlock / toBlock`（标签按 head 解析，`earliest` 视为 0）跨度 ≤ 1,000 块，否则 422 / `RPC_LOG_RANGE_TOO_LARGE`（`detailsSafe.maximumBlockSpan`）；地址 ≤ 20、topics ≤ 4 位 × 20。
 - 限流：每账户固定一分钟窗口（`DAPP_RPC_READ_PER_MINUTE`，默认 120，1–6000），超出 429 `RATE_LIMITED`。按账户而非 walletId：一个账户只有一个内置钱包，读请求本身与钱包无关。进程内窗口（同决策 0174）。

@@ -526,7 +526,7 @@ describe("DApp browser routes (Decision 0197)", () => {
       calls: [],
     };
     const app = await createApp(
-      { DAPP_BROWSER_ENABLED: "on", DAPP_RPC_READ_PER_MINUTE: "12" },
+      { DAPP_BROWSER_ENABLED: "on", DAPP_RPC_READ_PER_MINUTE: "40" },
       relay,
     );
     const read = (payload: unknown, command = false) =>
@@ -598,6 +598,76 @@ describe("DApp browser routes (Decision 0197)", () => {
         }),
       ),
     ).toBe("422:VALIDATION_FAILED:RPC_LOG_RANGE_TOO_LARGE");
+    // S342 integration: block and fee-history reads for wallet libraries.
+    relay.outcome = { status: "result", result: { number: "0x2a" } };
+    expect(
+      (
+        await read({
+          chainId: "eip155:56",
+          method: "eth_getBlockByNumber",
+          params: ["latest", false],
+        })
+      ).json(),
+    ).toMatchObject({ result: { number: "0x2a" }, error: null });
+    expect(relay.calls.at(-1)).toEqual({
+      method: "eth_getBlockByNumber",
+      params: ["latest", false],
+    });
+    relay.outcome = { status: "result", result: { oldestBlock: "0x1" } };
+    expect(
+      (
+        await read({
+          chainId: "eip155:97",
+          method: "eth_feeHistory",
+          params: ["0x4", "latest", [25, 75]],
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await read({
+          chainId: "eip155:97",
+          method: "eth_feeHistory",
+          params: [4, "0x10"],
+        })
+      ).statusCode,
+    ).toBe(200);
+    for (const params of [
+      [],
+      ["latest", "yes"],
+      ["latest", false, 1],
+      ["0xzz", false],
+    ]) {
+      expect(
+        (
+          await read({
+            chainId: "eip155:97",
+            method: "eth_getBlockByNumber",
+            params,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    for (const params of [
+      ["0x0", "latest"],
+      ["0x401", "latest"],
+      [1025, "latest"],
+      ["0x4", "pending"],
+      ["0x4", "latest", [75, 25]],
+      ["0x4", "latest", [101]],
+      ["0x4", "latest", ["50"]],
+      ["0x4"],
+    ]) {
+      expect(
+        (
+          await read({
+            chainId: "eip155:97",
+            method: "eth_feeHistory",
+            params,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
     for (const method of [
       "eth_sendRawTransaction",
       "eth_sign",
@@ -624,9 +694,9 @@ describe("DApp browser routes (Decision 0197)", () => {
       (await read({ chainId: "eip155:97", method: "eth_chainId" }, true))
         .statusCode,
     ).toBe(400);
-    // 12 per minute: the twelfth admitted request so far is the limit.
+    // 40 per minute: the fortieth admitted request so far is the limit.
     let limited = null;
-    for (let index = 0; index < 12 && limited === null; index += 1) {
+    for (let index = 0; index < 40 && limited === null; index += 1) {
       const response = await read({
         chainId: "eip155:97",
         method: "eth_blockNumber",
@@ -722,7 +792,7 @@ describe("DApp browser routes (Decision 0197)", () => {
       }[]
     ).find((parameter) => parameter.name === "includeKinds");
     expect(includeKinds?.schema.pattern).toContain("dapp_sign");
-    expect(dappRpcReadMethods).toHaveLength(10);
+    expect(dappRpcReadMethods).toHaveLength(12);
     expect(dappBrowserErrorReasonCodes).toEqual([
       "CHAIN_SIGNING_DISABLED",
       "TYPED_DATA_CHAIN_MISMATCH",

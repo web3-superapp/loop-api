@@ -31,6 +31,10 @@ export const dappRpcReadMethods = Object.freeze([
   "eth_estimateGas",
   "eth_gasPrice",
   "eth_getLogs",
+  // S342 integration: the two block / fee reads wallet libraries issue
+  // before they build a transaction (viem / ethers fee estimation).
+  "eth_getBlockByNumber",
+  "eth_feeHistory",
 ] as const);
 export type DappRpcReadMethod = (typeof dappRpcReadMethods)[number];
 
@@ -38,6 +42,9 @@ export type DappRpcReadMethod = (typeof dappRpcReadMethods)[number];
 export const dappRpcLogsMaximumBlockSpan = 1_000n;
 const maximumLogAddresses = 20;
 const maximumTopicAlternatives = 20;
+/** Geth's own eth_feeHistory ceiling (`maxBlockCount`). */
+const maximumFeeHistoryBlocks = 1_024n;
+const maximumRewardPercentiles = 100;
 
 export interface DappRpcReadRuntime {
   readonly enabled: boolean;
@@ -158,6 +165,48 @@ function requireTopics(value: unknown): void {
   }
 }
 
+/**
+ * eth_feeHistory: blockCount (hex quantity or JSON integer) 1…1,024, a block
+ * tag or number, and optional reward percentiles — at most 100 numbers in
+ * [0, 100], non-decreasing.
+ */
+function requireFeeHistory(params: readonly unknown[]): void {
+  requireParams(params, 2, 3);
+  const count = params[0];
+  let blocks: bigint;
+  if (typeof count === "string" && quantityPattern.test(count)) {
+    blocks = BigInt(count);
+  } else if (typeof count === "number" && Number.isSafeInteger(count)) {
+    blocks = BigInt(count);
+  } else {
+    invalid();
+  }
+  if (blocks < 1n || blocks > maximumFeeHistoryBlocks) invalid();
+  requireBlock(params[1]);
+  if (params[1] === "pending") invalid();
+  if (params.length === 3) {
+    const percentiles = params[2];
+    if (
+      !Array.isArray(percentiles) ||
+      percentiles.length > maximumRewardPercentiles
+    ) {
+      invalid();
+    }
+    let previous = 0;
+    for (const entry of percentiles as readonly unknown[]) {
+      if (
+        typeof entry !== "number" ||
+        !Number.isFinite(entry) ||
+        entry < previous ||
+        entry > 100
+      ) {
+        invalid();
+      }
+      previous = entry;
+    }
+  }
+}
+
 async function blockNumberOf(
   client: BscChainCallClient,
   tag: string,
@@ -272,6 +321,15 @@ async function validateParams(
     case "eth_getLogs":
       requireParams(params, 1, 1);
       await requireLogFilter(client, params[0]);
+      return;
+    case "eth_getBlockByNumber":
+      // [block, fullTransactions]: the flag defaults to false when absent.
+      requireParams(params, 1, 2);
+      requireBlock(params[0]);
+      if (params.length === 2 && typeof params[1] !== "boolean") invalid();
+      return;
+    case "eth_feeHistory":
+      requireFeeHistory(params);
       return;
   }
 }
