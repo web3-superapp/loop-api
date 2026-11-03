@@ -10,6 +10,7 @@ import { createPostgresHooksLaunchReviewRepository } from "../src/database/hooks
 import { createPostgresHooksLaunchSubmissionRepository } from "../src/database/hooks-launch-submission-repository.js";
 import { createPostgresLaunch2Repository } from "../src/database/launch2-repository.js";
 import { createPostgresMediaRepository } from "../src/database/media-repository.js";
+import { createDappContractDirectory } from "../src/features/dapp-browser/contract-directory.js";
 import { createHooksLaunchProjectConfigService } from "../src/features/launch/hooks-launch-project-config.js";
 import {
   createHooksLaunchReviewService,
@@ -426,6 +427,52 @@ describe("Decision 0173: project NFT pictures on PostgreSQL", () => {
         [launchId],
       ),
     ).rejects.toThrow(/launch2_instances_nft_image_cid_check/u);
+    // Decision 0197: any of the instance's contracts finds it (the DApp
+    // browser's "LOOP-known contract" directory), only on its chain.
+    const row = await pool.query<{
+      curve_address: string;
+      nft_address: string;
+    }>(
+      "select curve_address, nft_address from public.launch2_instances where launch_id = $1",
+      [launchId],
+    );
+    const curve = row.rows[0]!.curve_address;
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:97",
+        address: curve.toUpperCase().replace("0X", "0x"),
+      }),
+    ).toMatchObject({ launchId });
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:56",
+        address: curve,
+      }),
+    ).toBeNull();
+    expect(
+      await launch2.getInstanceByContractAddress!({
+        chainId: "eip155:97",
+        address: hex(20),
+      }),
+    ).toBeNull();
+    const directory = createDappContractDirectory({
+      statics: {
+        chainId: "eip155:97",
+        loopRouter: null,
+        poolRouter: null,
+        routerRegistry: null,
+        factories: [],
+        launchContract: null,
+        usd1: null,
+      },
+      launch2,
+    });
+    expect(
+      await directory.classify({
+        chainId: "eip155:97",
+        address: row.rows[0]!.nft_address,
+      }),
+    ).toEqual({ kind: "launch2Instance", role: "nft", label: "S274" });
     // The activation projection's SQL (new columns) still runs.
     await launch2.registerActivatedInstances({
       chainId: "eip155:97",

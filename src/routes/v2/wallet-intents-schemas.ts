@@ -27,6 +27,10 @@ import {
 } from "../../features/session/session-contract.js";
 import {
   bscWriteCanaryPolicyVersion,
+  dappCallStandards,
+  dappKnownContractKinds,
+  dappRequestMethods,
+  dappRiskFlags,
   exposureBases,
   firstRecipientBasis,
   nftSendReasonCodes,
@@ -339,6 +343,221 @@ const swapQuoteSnapshotSchema = {
   },
 } as const;
 
+/** Decision 0197 (S342): an address the DApp review describes. */
+const dappAddressProperties = {
+  address: addressSchema,
+  checksumAddress: checksumAddressSchema,
+  isContract: { type: "boolean" },
+  isVerified: {
+    type: "boolean",
+    description:
+      "True only for a contract LOOP configures or indexes on this chain (knownContract set). A contract that is not verified raises UNVERIFIED_CONTRACT.",
+  },
+  knownContract: {
+    anyOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "role", "label"],
+        properties: {
+          kind: { type: "string", enum: [...dappKnownContractKinds] },
+          role: nullableString({ type: "string", maxLength: 32 }),
+          label: nullableString({ type: "string", maxLength: 128 }),
+        },
+      },
+      { type: "null" },
+    ],
+  },
+} as const;
+
+const dappAddressRequired = [
+  "address",
+  "checksumAddress",
+  "isContract",
+  "isVerified",
+  "knownContract",
+] as const;
+
+const dappReviewSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "origin",
+    "method",
+    "to",
+    "value",
+    "decodedCall",
+    "counterparty",
+    "message",
+    "typedData",
+    "riskFlags",
+  ],
+  properties: {
+    origin: {
+      type: "string",
+      maxLength: 256,
+      pattern: "^https://",
+      description: "The page's normalised https origin.",
+    },
+    method: { type: "string", enum: [...dappRequestMethods] },
+    to: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [...dappAddressRequired],
+          properties: dappAddressProperties,
+        },
+        { type: "null" },
+      ],
+      description: "dapp_tx: the transaction target; null on dapp_sign.",
+    },
+    value: {
+      anyOf: [amountSchema, { type: "null" }],
+      description: "dapp_tx: the native value (wei / BNB); null on dapp_sign.",
+    },
+    decodedCall: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "functionName",
+            "selector",
+            "standard",
+            "args",
+            "dataLength",
+          ],
+          properties: {
+            functionName: nullableString({ type: "string", maxLength: 64 }),
+            selector: nullableString({
+              type: "string",
+              pattern: "^0x[0-9a-f]{8}$",
+            }),
+            standard: {
+              anyOf: [
+                { type: "string", enum: [...dappCallStandards] },
+                { type: "null" },
+              ],
+            },
+            args: {
+              type: "object",
+              additionalProperties: { type: "string", maxLength: 512 },
+              maxProperties: 16,
+            },
+            dataLength: { type: "integer", minimum: 0, maximum: 10_000 },
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "dapp_tx only. functionName null = a selector the API does not decode (selector and dataLength still set) or, with selector null, a plain value transfer.",
+    },
+    counterparty: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [...dappAddressRequired, "role"],
+          properties: {
+            ...dappAddressProperties,
+            role: {
+              type: "string",
+              enum: ["spender", "operator", "recipient"],
+            },
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "dapp_tx: the spender / operator / recipient argument of a decoded ERC-20 / ERC-721 / Permit2 call.",
+    },
+    message: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["encoding", "text", "hex", "byteLength"],
+          properties: {
+            encoding: { type: "string", enum: ["utf8", "hex"] },
+            text: nullableString({ type: "string", maxLength: 16_384 }),
+            hex: { type: "string", pattern: "^0x([0-9a-f]{2})+$" },
+            byteLength: { type: "integer", minimum: 1, maximum: 16_384 },
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "personal_sign only: the message bytes, as text when they are printable UTF-8.",
+    },
+    typedData: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["primaryType", "domain", "fields", "fieldsTruncated"],
+          properties: {
+            primaryType: { type: "string", maxLength: 128 },
+            domain: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "name",
+                "version",
+                "chainId",
+                "verifyingContract",
+                "salt",
+              ],
+              properties: {
+                name: nullableString({ type: "string", maxLength: 1_024 }),
+                version: nullableString({ type: "string", maxLength: 1_024 }),
+                chainId: nullableString({
+                  type: "string",
+                  pattern: "^(0|[1-9][0-9]{0,79})$",
+                }),
+                verifyingContract: nullableString(addressSchema),
+                salt: nullableString({
+                  type: "string",
+                  pattern: "^0x[0-9a-f]{64}$",
+                }),
+              },
+            },
+            fields: {
+              type: "array",
+              maxItems: 256,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["path", "type", "value", "truncated"],
+                properties: {
+                  path: { type: "string", maxLength: 2_048 },
+                  type: { type: "string", maxLength: 128 },
+                  value: { type: "string", maxLength: 1_024 },
+                  truncated: { type: "boolean" },
+                },
+              },
+            },
+            fieldsTruncated: { type: "boolean" },
+          },
+        },
+        { type: "null" },
+      ],
+      description:
+        "eth_signTypedData_v4 only: domain, primary type and the message tree flattened into leaves (integers decimal, addresses lower-case).",
+    },
+    riskFlags: {
+      type: "array",
+      maxItems: dappRiskFlags.length,
+      uniqueItems: true,
+      items: { type: "string", enum: [...dappRiskFlags] },
+      description:
+        "Present only when the condition holds. UNLIMITED_APPROVAL: an ERC-20 approve / increaseAllowance, Permit2 approve or permit granting at least 2^128 (or DAI-style allowed=true). APPROVAL_FOR_ALL: setApprovalForAll(operator, true). PERMIT_SIGNATURE: an EIP-2612 / DAI Permit or Permit2 typed-data signature. UNVERIFIED_CONTRACT: the target or the decoded counterparty is a contract LOOP does not know. SIMULATION_FAILED: the eth_call / estimateGas pre-execution did not pass (the intent is then not signable).",
+    },
+  },
+  description:
+    "Decision 0197: present on dapp_tx / dapp_sign reviews only (absent on every other kind).",
+} as const;
+
 const reviewSchema = {
   type: "object",
   additionalProperties: false,
@@ -389,6 +608,7 @@ const reviewSchema = {
       description:
         "Decision 0194: present on a send_nft review only (absent on every other kind) — the LOOP Launch project NFT contract, the token ID (decimal), and the project name.",
     },
+    dapp: dappReviewSchema,
   },
   description:
     "Projection of the signed canonical payload. Every field shown here is bound into reviewSha256.",
@@ -415,7 +635,7 @@ const unsignedTransactionSchema = {
       type: "integer",
       enum: [56, 97],
       description:
-        "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), and a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194).",
+        "56 for every intent, except an approve/revoke of LAUNCH_USD1_ADDRESS towards LAUNCH_CONTRACT_ADDRESS, which is built on the launch slot's testnet (97, Decision 0077), a send_nft, which is built on the launch slot (97 on BSC Testnet, Decision 0194), and a dapp_tx, which is only ever built on the launch slot's testnet (97, Decision 0197).",
     },
     from: addressSchema,
     to: addressSchema,
@@ -609,6 +829,25 @@ export const walletIntentResourceSchema = {
     authorizationPayload: {
       anyOf: [authorizationPayloadSchema, { type: "null" }],
     },
+    signatureRequest: {
+      type: "object",
+      additionalProperties: false,
+      required: ["method", "params"],
+      properties: {
+        method: {
+          type: "string",
+          enum: ["personal_sign", "eth_signTypedData_v4"],
+        },
+        params: {
+          type: "array",
+          minItems: 2,
+          maxItems: 2,
+          items: { type: "string", maxLength: 32_768 },
+        },
+      },
+      description:
+        "Decision 0197: present on a dapp_sign intent only (absent on every other kind). The exact JSON-RPC request the device hands to the Privy embedded provider: personal_sign params [message, address] (the message exactly as the page sent it), eth_signTypedData_v4 params [address, typedDataJson]. Bound into reviewSha256.",
+    },
     result: {
       type: "object",
       additionalProperties: false,
@@ -709,7 +948,7 @@ export const walletIntentListQuerySchema = {
       pattern: `^(${walletIntentOptInKinds.join("|")})(,(${walletIntentOptInKinds.join("|")}))*$`,
       maxLength: 64,
       description:
-        "Decision 0194: comma-separated opt-in kinds the client decodes (send_nft). Intents of an opt-in kind not named here are left out of the page, so a client released before the kind existed never sees it. The cursor binds this set.",
+        "Decisions 0194 / 0197: comma-separated opt-in kinds the client decodes (send_nft, dapp_tx, dapp_sign). Intents of an opt-in kind not named here are left out of the page, so a client released before the kind existed never sees it. The cursor binds this set.",
     },
   },
 } as const;

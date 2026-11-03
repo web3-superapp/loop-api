@@ -30,6 +30,12 @@ export const walletIntentKinds = Object.freeze([
   // POST /v2/wallet-intents/send-nft (NFT_SEND_ENABLED) and hidden from
   // the intent list unless the client opts in.
   "send_nft",
+  // Decision 0197 (S342, LOOP decision 0270): a transaction / a message
+  // signature an in-app DApp page requested. Created only through
+  // POST /v2/wallet-intents/dapp-tx and /dapp-sign (DAPP_BROWSER_ENABLED)
+  // and hidden from the intent list unless the client opts in.
+  "dapp_tx",
+  "dapp_sign",
 ] as const);
 export type WalletIntentKind = (typeof walletIntentKinds)[number];
 
@@ -92,6 +98,12 @@ export function isIntentChainAllowed(
   if (kind === "launch" || kind === "send_nft") {
     return true;
   }
+  // Decision 0197: a DApp transaction is only ever built on the launch
+  // slot's testnet; the service refuses chain 56 before reaching here
+  // (BSC Mainnet signing stays closed, docs/00 rule 8).
+  if (kind === "dapp_tx") {
+    return true;
+  }
   return (
     (kind === "approve" || kind === "revoke") &&
     launchAllowance !== null &&
@@ -107,7 +119,12 @@ export function isIntentChainAllowed(
  * `includeKinds` — a client released before the kind existed decodes the
  * list strictly and would reject the whole page.
  */
-export const walletIntentOptInKinds = Object.freeze(["send_nft"] as const);
+export const walletIntentOptInKinds = Object.freeze([
+  "send_nft",
+  // Decision 0197: the DApp browser kinds follow the same opt-in rule.
+  "dapp_tx",
+  "dapp_sign",
+] as const);
 export type WalletIntentOptInKind = (typeof walletIntentOptInKinds)[number];
 
 /** States from which nothing further can happen. */
@@ -130,6 +147,10 @@ export type SimulationStatus = (typeof simulationStatuses)[number];
 export const signingModes = Object.freeze([
   "device_eth_send_transaction",
   "privy_authorization_signature",
+  // Decision 0197: a `dapp_sign` intent — the device hands
+  // `signatureRequest` to Privy `personal_sign` / `eth_signTypedData_v4`.
+  "device_personal_sign",
+  "device_sign_typed_data_v4",
 ] as const);
 export type SigningMode = (typeof signingModes)[number];
 
@@ -139,6 +160,8 @@ export const walletIntentPayloadVersions = Object.freeze({
   revoke: "walletIntentRevokeV1",
   swap: "walletIntentSwapV1",
   send_nft: "walletIntentSendNftV1",
+  dapp_tx: "walletIntentDappTxV1",
+  dapp_sign: "walletIntentDappSignV1",
 } as const);
 
 /** Product policy snapshots published with every intent. */
@@ -254,6 +277,8 @@ export interface IntentAmount {
 export const simulationSources = Object.freeze([
   "rpc_call",
   "provider_quote",
+  // Decision 0197: a `dapp_sign` message has nothing to pre-execute.
+  "not_applicable",
 ] as const);
 export type SimulationSource = (typeof simulationSources)[number];
 
@@ -263,6 +288,7 @@ export interface SimulationFact {
    * `rpc_call`: eth_call + estimateGas over the exact payload. `provider_quote`:
    * the Provider quoted the route (Swap); no exact payload exists to
    * pre-execute because the Provider builds it at execute time.
+   * `not_applicable` (Decision 0197): a `dapp_sign` message signature.
    */
   readonly source: SimulationSource;
   readonly observedAt: string;
@@ -439,6 +465,169 @@ export interface IntentNftReview {
   readonly projectName: string;
 }
 
+/**
+ * Decision 0197 (S342): the risk facts the DApp sign sheet shows. Each one
+ * appears only when its condition holds; an empty list is "nothing to warn".
+ */
+export const dappRiskFlags = Object.freeze([
+  "UNLIMITED_APPROVAL",
+  "APPROVAL_FOR_ALL",
+  "PERMIT_SIGNATURE",
+  "UNVERIFIED_CONTRACT",
+  "SIMULATION_FAILED",
+] as const);
+export type DappRiskFlag = (typeof dappRiskFlags)[number];
+
+export const dappRequestMethods = Object.freeze([
+  "eth_sendTransaction",
+  "personal_sign",
+  "eth_signTypedData_v4",
+] as const);
+export type DappRequestMethod = (typeof dappRequestMethods)[number];
+
+/** Decision 0197: what a LOOP-known contract is. */
+export const dappKnownContractKinds = Object.freeze([
+  "loopRouter",
+  "launch2PoolRouter",
+  "loopRouterRegistry",
+  "launch2Factory",
+  "launch2Instance",
+  "launchContract",
+  "usd1",
+  "registryAsset",
+] as const);
+export type DappKnownContractKind = (typeof dappKnownContractKinds)[number];
+
+export interface DappKnownContract {
+  readonly kind: DappKnownContractKind;
+  /** launch2Instance: the contract's role (meme, nft, curve, ...); else null. */
+  readonly role: string | null;
+  /** Project name / asset symbol when the directory has one. */
+  readonly label: string | null;
+}
+
+export interface DappAddressReview {
+  readonly address: string;
+  readonly checksumAddress: string;
+  readonly isContract: boolean;
+  /** True only for a contract the LOOP directory knows (`knownContract`). */
+  readonly isVerified: boolean;
+  readonly knownContract: DappKnownContract | null;
+}
+
+export const dappCallStandards = Object.freeze([
+  "erc20",
+  "erc721",
+  "permit2",
+  "loop",
+] as const);
+export type DappCallStandard = (typeof dappCallStandards)[number];
+
+export interface DappDecodedCall {
+  /** Null when the selector is not one the API decodes (or no calldata). */
+  readonly functionName: string | null;
+  /** Null for a plain value transfer (empty calldata). */
+  readonly selector: string | null;
+  readonly standard: DappCallStandard | null;
+  /** Decoded arguments as strings (addresses lower-case, integers decimal). */
+  readonly args: Readonly<Record<string, string>>;
+  /** Calldata length in bytes. */
+  readonly dataLength: number;
+}
+
+export interface DappCounterpartyReview extends DappAddressReview {
+  /** The decoded argument the call grants or sends to. */
+  readonly role: "spender" | "operator" | "recipient";
+}
+
+export interface DappMessageReview {
+  /** `utf8`: the bytes are printable UTF-8 (`text` set); else `hex`. */
+  readonly encoding: "utf8" | "hex";
+  readonly text: string | null;
+  readonly hex: string;
+  readonly byteLength: number;
+}
+
+export interface DappTypedDataField {
+  /** Dotted path into the message (`details.amount`, `tokens[0]`). */
+  readonly path: string;
+  /** The EIP-712 type of the leaf. */
+  readonly type: string;
+  /** The leaf as a string, cut at 1,024 characters (`truncated`). */
+  readonly value: string;
+  readonly truncated: boolean;
+}
+
+export interface DappTypedDataReview {
+  readonly primaryType: string;
+  readonly domain: {
+    readonly name: string | null;
+    readonly version: string | null;
+    readonly chainId: string | null;
+    readonly verifyingContract: string | null;
+    readonly salt: string | null;
+  };
+  /** The message tree flattened into leaves, in type order (≤ 256). */
+  readonly fields: readonly DappTypedDataField[];
+  /** True when the message has more leaves than `fields` holds. */
+  readonly fieldsTruncated: boolean;
+}
+
+/**
+ * Decision 0197: the DApp half of a `dapp_tx` / `dapp_sign` review. Keys
+ * that do not apply to the kind are null so the key set is fixed.
+ */
+export interface IntentDappReview {
+  /** Normalised https origin of the page that asked. */
+  readonly origin: string;
+  readonly method: DappRequestMethod;
+  /** dapp_tx: the transaction target; null for dapp_sign. */
+  readonly to: DappAddressReview | null;
+  /** dapp_tx: the native value; null for dapp_sign. */
+  readonly value: IntentAmount | null;
+  /** dapp_tx only. */
+  readonly decodedCall: DappDecodedCall | null;
+  /** dapp_tx: the spender / operator / recipient argument when decoded. */
+  readonly counterparty: DappCounterpartyReview | null;
+  /** personal_sign only. */
+  readonly message: DappMessageReview | null;
+  /** eth_signTypedData_v4 only. */
+  readonly typedData: DappTypedDataReview | null;
+  readonly riskFlags: readonly DappRiskFlag[];
+}
+
+/**
+ * Decision 0197: the exact JSON-RPC request the device hands to the Privy
+ * embedded provider for a `dapp_sign` intent — `params` verbatim.
+ */
+export interface DappSignatureRequest {
+  readonly method: "personal_sign" | "eth_signTypedData_v4";
+  /**
+   * personal_sign: `[message, address]` (the message exactly as the page
+   * sent it); eth_signTypedData_v4: `[address, typedDataJson]`.
+   */
+  readonly params: readonly [string, string];
+}
+
+/**
+ * Decision 0197: `detailsSafe.reasonCode` values of the DApp browser
+ * refusals. 422 VALIDATION_FAILED carries the validation ones; 503
+ * CAPABILITY_UNAVAILABLE carries `DAPP_BROWSER_DISABLED` /
+ * `DAPP_BROWSER_CHAIN_UNAVAILABLE`.
+ */
+export const dappReasonCodes = Object.freeze({
+  disabled: "DAPP_BROWSER_DISABLED",
+  chainUnavailable: "DAPP_BROWSER_CHAIN_UNAVAILABLE",
+  chainSigningDisabled: "CHAIN_SIGNING_DISABLED",
+  typedDataChainMismatch: "TYPED_DATA_CHAIN_MISMATCH",
+  typedDataInvalid: "TYPED_DATA_INVALID",
+  originNotHttps: "ORIGIN_NOT_HTTPS",
+  signatureMismatch: "SIGNATURE_MISMATCH",
+  signatureNotApplicable: "SIGNATURE_NOT_SIMULATED",
+  rpcMethodNotAllowed: "RPC_METHOD_NOT_ALLOWED",
+  rpcLogRangeTooLarge: "RPC_LOG_RANGE_TOO_LARGE",
+} as const);
+
 /** The one source object from which the payload and the review derive. */
 export interface IntentSource {
   readonly version: string;
@@ -469,6 +658,10 @@ export interface IntentSource {
   readonly expiresAt: string;
   /** Decision 0194: `send_nft` only (absent otherwise). */
   readonly nft?: IntentNftReview;
+  /** Decision 0197: `dapp_tx` / `dapp_sign` only (absent otherwise). */
+  readonly dapp?: IntentDappReview;
+  /** Decision 0197: `dapp_sign` only (absent otherwise). */
+  readonly signatureRequest?: DappSignatureRequest;
 }
 
 export interface SealedIntent {
@@ -498,6 +691,8 @@ export interface IntentPublicReview {
   } | null;
   /** Decision 0194: `send_nft` only (absent otherwise). */
   readonly nft?: IntentNftReview;
+  /** Decision 0197: `dapp_tx` / `dapp_sign` only (absent otherwise). */
+  readonly dapp?: IntentDappReview;
 }
 
 export function digestCanonicalPayload(payload: unknown): string {
@@ -530,6 +725,9 @@ export function sealIntent(source: IntentSource): SealedIntent {
     ...(canonicalPayload.nft === undefined
       ? {}
       : { nft: canonicalPayload.nft }),
+    ...(canonicalPayload.dapp === undefined
+      ? {}
+      : { dapp: canonicalPayload.dapp }),
   });
   return Object.freeze({
     canonicalPayload,

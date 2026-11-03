@@ -61,6 +61,8 @@ import {
   walletIntentRefusalReasonCodes,
   type CanaryExposureAdmission,
   type CanaryPolicyFact,
+  type DappKnownContract,
+  type DappSignatureRequest,
   type ChainBoundIntentKind,
   type ExposureBasis,
   type LaunchSlotAllowanceTarget,
@@ -68,6 +70,7 @@ import {
   type IntentBalanceFact,
   type IntentFeeFact,
   type IntentPublicReview,
+  type SigningMode,
   type SimulationFact,
   type SwapAuthorizationPayload,
   type UnsignedTransaction,
@@ -140,12 +143,41 @@ export interface NftSendRuntime {
   readonly directory: ProjectNftDirectory | null;
 }
 
+/**
+ * Decision 0197 (S342): the LOOP directory of contracts a DApp transaction
+ * may target on the launch slot — routers, factories, launch2 instance
+ * contracts, the Launch contract and USD1, and verified registry assets.
+ */
+export interface DappContractDirectory {
+  classify(input: {
+    readonly chainId: string;
+    /** Lower-case address. */
+    readonly address: string;
+  }): Promise<DappKnownContract | null>;
+}
+
+/**
+ * Decision 0197: the DApp browser (`DAPP_BROWSER_ENABLED`, default off).
+ * `signingChainId` / `signingClient` are the launch slot when it is a
+ * separate testnet — the only chain a DApp request may be signed on; null
+ * when the slot is chain 56 or has no client (signing then fails closed).
+ * The read proxy (`POST /v2/chain/rpc-read`) has its own runtime.
+ */
+export interface DappBrowserRuntime {
+  readonly enabled: boolean;
+  readonly signingChainId: string | null;
+  readonly signingClient: BscChainCallClient | null;
+  readonly directory: DappContractDirectory | null;
+}
+
 export interface WalletIntentRuntime {
   readonly config: WalletIntentRuntimeConfig;
   /** Decision 0077; absent or null keeps every intent on the primary chain. */
   readonly launchSlot?: LaunchSlotWriteTarget | null;
   /** Decision 0194; absent or null keeps the NFT send closed. */
   readonly nftSend?: NftSendRuntime | null;
+  /** Decision 0197; absent or null keeps the DApp browser closed. */
+  readonly dapp?: DappBrowserRuntime | null;
   readonly repository: WalletIntentRepository;
   readonly wallets: AccountWalletRepository;
   readonly registry: ChainRegistryRepository;
@@ -185,6 +217,11 @@ export function runtimeForChain(
   const nftClient = runtime.nftSend?.readClient ?? null;
   if (nftClient !== null && chainId === nftClient.chainId) {
     return Object.freeze({ ...runtime, readClient: nftClient });
+  }
+  // Decision 0197: a DApp intent recorded on the launch slot.
+  const dappClient = runtime.dapp?.signingClient ?? null;
+  if (dappClient !== null && chainId === dappClient.chainId) {
+    return Object.freeze({ ...runtime, readClient: dappClient });
   }
   return runtime;
 }
@@ -854,13 +891,17 @@ export interface WalletIntentResource {
   readonly simulation: SimulationFact;
   readonly policy: CanaryPolicyFact;
   readonly signing: {
-    readonly mode:
-      "device_eth_send_transaction" | "privy_authorization_signature";
+    readonly mode: SigningMode;
     readonly allowed: boolean;
     readonly reasonCode: string | null;
   };
   readonly unsignedTransaction: UnsignedTransaction | null;
   readonly authorizationPayload: SwapAuthorizationPayload | null;
+  /**
+   * Decision 0197: `dapp_sign` only (absent on every other kind — old
+   * clients decode the resource with a closed key set).
+   */
+  readonly signatureRequest?: DappSignatureRequest;
   readonly result: {
     readonly transactionHash: string | null;
     readonly providerActionId: string | null;
@@ -926,6 +967,9 @@ export function projectIntent(
     }),
     unsignedTransaction: payload.transaction,
     authorizationPayload: payload.swap?.authorizationPayload ?? null,
+    ...(payload.signatureRequest === undefined
+      ? {}
+      : { signatureRequest: payload.signatureRequest }),
     result: Object.freeze({
       transactionHash: record.transactionHash,
       providerActionId: record.providerActionId,

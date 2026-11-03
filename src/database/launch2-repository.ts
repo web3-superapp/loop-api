@@ -2626,6 +2626,24 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
       return rows[0] === undefined ? null : mapInstance(rows[0]);
     },
 
+    async getInstanceByContractAddress(input) {
+      // Decision 0197: "is this a LOOP launch2 contract" for the DApp
+      // browser review, with the same visibility as positions.
+      const rows = await query<Row>(
+        `select ${instanceColumns} from public.launch2_instances
+         where chain_id = $1
+           and $2 in (meme_address, hook_address, nft_address, curve_address,
+             gate_address, escrow_address, snapshots_address,
+             graduation_adapter_address, buyback_adapter_address,
+             price_recorder_address, buyback_executor_address)
+           and (activated_at is not null or hold_reason is not null)
+         order by registered_at desc
+         limit 1`,
+        [input.chainId, input.address.toLowerCase()],
+      );
+      return rows[0] === undefined ? null : mapInstance(rows[0]);
+    },
+
     async getInstanceByLaunchId(launchId) {
       const rows = await query<Row>(
         `select ${instanceColumns} from public.launch2_instances where launch_id = $1`,

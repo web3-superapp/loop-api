@@ -8,6 +8,9 @@
 发送 LOOP 项目 NFT（`send_nft`，决策 0194）见 `docs/frontend-v2-nft-send-api.md`；
 `GET /v2/wallet-intents` 默认不返回 `send_nft`，需 `includeKinds=send_nft`。
 
+内置 DApp 浏览器（`dapp_tx` / `dapp_sign`、`signature-report`、`POST /v2/chain/rpc-read`，决策 0197）见
+`docs/frontend-v2-dapp-browser-api.md`；列表同样默认不返回，需 `includeKinds=dapp_tx,dapp_sign`。
+
 覆盖页面：`send`、`send-to`、`send-confirm`、`swap`、`swap-route`、`tx-result`、
 `approval-guard`、`approvals`，以及 `sign-sheet-states` 的真实弹层。`pay`、`bridge`、
 `bridge-status`、`dapp` 本步仍是 unavailable（第 8 步）。

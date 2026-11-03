@@ -512,6 +512,7 @@ export interface RecordedIntentEvent {
   readonly eventType: string;
   readonly toState: string;
   readonly reasonCode: string | null;
+  readonly details?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /** In-memory intent store with version checks and append-only events. */
@@ -686,6 +687,7 @@ export function intentRepositoryFake(
         eventType: input.eventType,
         toState: next.state,
         reasonCode: input.reasonCode ?? null,
+        ...(input.details === undefined ? {} : { details: input.details }),
       });
       return Promise.resolve(next);
     },
@@ -696,6 +698,7 @@ export function intentRepositoryFake(
         eventType: input.eventType,
         toState: record?.state ?? "unknown",
         reasonCode: input.reasonCode ?? null,
+        ...(input.details === undefined ? {} : { details: input.details }),
       });
       return Promise.resolve();
     },
