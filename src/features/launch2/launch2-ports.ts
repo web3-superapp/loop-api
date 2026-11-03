@@ -1374,7 +1374,7 @@ export interface Launch2Repository {
     readonly nftAddress: string;
   }): Promise<Launch2InstanceRecord | null>;
   /**
-   * Decision 0197: the listed (activated or held) instance one of whose
+   * Decision 0197: the activated instance (S346: not on hold) one of whose
    * contracts (meme, hook, nft, curve, gate, escrow, snapshots, adapters,
    * price recorder, buyback executor) is `address` on `chainId`; null when
    * none. Optional (absent = the DApp directory skips launch2 instances).

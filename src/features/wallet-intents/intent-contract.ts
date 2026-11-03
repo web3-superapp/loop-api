@@ -472,7 +472,16 @@ export interface IntentNftReview {
 export const dappRiskFlags = Object.freeze([
   "UNLIMITED_APPROVAL",
   "APPROVAL_FOR_ALL",
+  // S346 (Decision 0197 amendment): an ERC-20 / ERC-721 approve,
+  // increaseAllowance or setApprovalForAll whose spender / operator has no
+  // code (an externally owned account).
+  "EOA_SPENDER",
   "PERMIT_SIGNATURE",
+  // S346: a personal_sign message that is exactly 32 bytes of hex — the
+  // shape of a hash, which the user cannot read.
+  "RAW_HASH_SIGNATURE",
+  // S346: typed data whose primaryType is not one the review recognises.
+  "UNRECOGNIZED_TYPED_DATA",
   "UNVERIFIED_CONTRACT",
   "SIMULATION_FAILED",
 ] as const);
@@ -626,7 +635,27 @@ export const dappReasonCodes = Object.freeze({
   signatureNotApplicable: "SIGNATURE_NOT_SIMULATED",
   rpcMethodNotAllowed: "RPC_METHOD_NOT_ALLOWED",
   rpcLogRangeTooLarge: "RPC_LOG_RANGE_TOO_LARGE",
+  // S346: 409 RESOURCE_CONFLICT — a send / swap / approve / send_nft intent
+  // is open on the wallet; a DApp prepare does not supersede it.
+  intentBusy: "INTENT_BUSY",
+  // S346: 503 CAPABILITY_UNAVAILABLE — the RPC provider answered with a
+  // quota / rate-limit error, or the answer exceeded the size ceiling.
+  rpcUpstreamLimited: "RPC_UPSTREAM_LIMITED",
 } as const);
+
+/**
+ * S346 (Decision 0197 amendment): the DApp kinds. A DApp prepare supersedes
+ * only an open DApp intent; an open intent of any other kind makes it 409
+ * INTENT_BUSY. Other prepares keep superseding every open intent.
+ */
+export const dappIntentKinds: readonly WalletIntentKind[] = Object.freeze([
+  "dapp_tx",
+  "dapp_sign",
+]);
+
+export function isDappIntentKind(kind: WalletIntentKind): boolean {
+  return dappIntentKinds.includes(kind);
+}
 
 /** The one source object from which the payload and the review derive. */
 export interface IntentSource {

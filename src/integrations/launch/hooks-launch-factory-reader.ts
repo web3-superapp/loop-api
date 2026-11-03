@@ -572,8 +572,10 @@ export function createHooksLaunchFactoryReader(input: {
    * Decision 0195: the Factory's current `maxCumulativeBuy()` — the
    * default a launch deployed now receives (admin console, read-only).
    * LoopDynamic: from the template (S340 = adjustable, S209 = immutable);
-   * OfficialTax: the bare getter (a revert = pre-S209, null), generation
-   * not derivable from its constant TEMPLATE_HASH (`adjustable` null).
+   * OfficialTax: the bare getter — a value has `adjustable` null (the
+   * generation is not derivable from its constant TEMPLATE_HASH); a revert
+   * is a pre-S209 Factory with no cap at all: `maxCumulativeBuy` null and
+   * `adjustable` false (nothing to adjust).
    */
   async function factoryPurchaseCap(): Promise<{
     readonly maxCumulativeBuy: string | null;

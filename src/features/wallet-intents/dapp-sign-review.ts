@@ -307,6 +307,59 @@ export function parseTypedData(payload: string): ParsedTypedData {
   return parsed;
 }
 
+/** The EIP-712 type of each domain field (EIP-712 §Definition of domainSeparator). */
+const domainFieldTypes: Readonly<Record<string, string>> = Object.freeze({
+  name: "string",
+  version: "string",
+  chainId: "uint256",
+  verifyingContract: "address",
+  salt: "bytes32",
+});
+
+export type TypedDataBinding = "bound" | "invalid" | "chainMismatch";
+
+/**
+ * S346 (Decision 0197 amendment, finding A1): the chain binding a prepare
+ * requires of eth_signTypedData_v4. `domain.chainId` must be present
+ * (`invalid` otherwise) and equal the request chain (`chainMismatch`). When
+ * the page supplies its own `types.EIP712Domain`, the hash is built from
+ * that list — so its field set must be exactly the domain's present keys,
+ * each with its EIP-712 type, no duplicates (`invalid` otherwise); a list
+ * that left `chainId` out would hash a domain separator without the chain
+ * while the review still showed it.
+ *
+ * Kept apart from `parseTypedData`, which the signature report also runs on
+ * a payload frozen before this rule existed.
+ */
+export function typedDataBinding(
+  parsed: ParsedTypedData,
+  chainReference: bigint,
+): TypedDataBinding {
+  if (parsed.domainChainId === null) return "invalid";
+  const declared = parsed.types["EIP712Domain"];
+  if (declared !== undefined) {
+    const present = new Set(
+      Object.entries(parsed.domain as Record<string, unknown>)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key]) => key),
+    );
+    const seen = new Set<string>();
+    for (const field of declared) {
+      if (
+        seen.has(field.name) ||
+        domainFieldTypes[field.name] !== field.type ||
+        !present.has(field.name)
+      ) {
+        return "invalid";
+      }
+      seen.add(field.name);
+    }
+    if (seen.size !== present.size) return "invalid";
+  }
+  if (parsed.domainChainId !== chainReference) return "chainMismatch";
+  return "bound";
+}
+
 function typedDataArguments(parsed: ParsedTypedData) {
   return {
     domain: parsed.domain,
@@ -420,6 +473,12 @@ const permit2PrimaryTypes = new Set([
  * type named `Permit…`. UNLIMITED_APPROVAL on top when a permit grants an
  * amount at or above 2^128 (`value` / `amount` leaves) or a DAI-style
  * `allowed: true`.
+ *
+ * S346 (finding A2): any other primary type is UNRECOGNIZED_TYPED_DATA —
+ * Seaport orders, meta-transaction forward requests, delegations and the
+ * like are all signable authorisations the review cannot interpret. (The
+ * verifying contract's UNVERIFIED_CONTRACT is the service's, it needs the
+ * directory.)
  */
 export function typedDataRiskFlags(
   parsed: ParsedTypedData,
@@ -431,7 +490,7 @@ export function typedDataRiskFlags(
     permit2PrimaryTypes.has(parsed.primaryType) ||
     domain.name === "Permit2" ||
     domain.verifyingContract === permit2Address;
-  if (!isPermit) return [];
+  if (!isPermit) return ["UNRECOGNIZED_TYPED_DATA"];
   const flags: DappRiskFlag[] = ["PERMIT_SIGNATURE"];
   const unlimited = review.fields.some((field) => {
     const leaf = field.path
@@ -450,6 +509,23 @@ export function typedDataRiskFlags(
   });
   if (unlimited) flags.push("UNLIMITED_APPROVAL");
   return flags;
+}
+
+/**
+ * S346 (finding A2): a personal_sign of exactly 32 bytes given as hex that
+ * is not readable text is the shape of a hash (an order / transaction
+ * digest a page wants signed blind) — RAW_HASH_SIGNATURE. 32 bytes of
+ * printable UTF-8 are shown as text and not flagged.
+ */
+export function personalSignRiskFlags(
+  payload: string,
+  review: DappMessageReview,
+): readonly DappRiskFlag[] {
+  return hexBytesPattern.test(payload) &&
+    review.byteLength === 32 &&
+    review.encoding === "hex"
+    ? ["RAW_HASH_SIGNATURE"]
+    : [];
 }
 
 /** The address that produced `signature` over the personal_sign payload. */

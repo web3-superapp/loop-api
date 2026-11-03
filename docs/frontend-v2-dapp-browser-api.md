@@ -137,7 +137,7 @@
       },
       "message": null,
       "typedData": null,
-      "riskFlags": ["UNLIMITED_APPROVAL", "UNVERIFIED_CONTRACT"]
+      "riskFlags": ["UNLIMITED_APPROVAL", "EOA_SPENDER", "UNVERIFIED_CONTRACT"]
     }
   },
   "simulation": {
@@ -201,13 +201,18 @@
   `standard`：`erc20` / `erc721` / `permit2` / `loop` / `null`。`args` 全是字符串（地址小写、整数十进制、bool `"true"/"false"`、元组为 JSON 串，单值 ≤ 512 字符）。
 - `riskFlags`（只在风险时出现，固定顺序；空数组 = 不显示风险条）：
 
-| flag                  | 条件                                                                                    |
-| --------------------- | --------------------------------------------------------------------------------------- |
-| `UNLIMITED_APPROVAL`  | ERC-20 `approve` / `increaseAllowance`、Permit2 `approve` 金额 ≥ 2^128；Permit 签名同理 |
-| `APPROVAL_FOR_ALL`    | `setApprovalForAll(operator, true)`                                                     |
-| `PERMIT_SIGNATURE`    | （仅 `dapp_sign`）EIP-2612 / DAI Permit、Permit2 签名                                   |
-| `UNVERIFIED_CONTRACT` | `to` 或 `counterparty` 是合约且 `isVerified = false`                                    |
-| `SIMULATION_FAILED`   | 预执行未通过（此时 `signing.allowed = false`）                                          |
+| flag                      | 条件                                                                                                                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UNLIMITED_APPROVAL`      | ERC-20 `approve` / `increaseAllowance`、Permit2 `approve` 金额 ≥ 2^128；Permit 签名同理                                                                                           |
+| `APPROVAL_FOR_ALL`        | `setApprovalForAll(operator, true)`                                                                                                                                               |
+| `EOA_SPENDER`             | （S346）授权对象（`spender` / `operator`）没有合约代码：ERC-20 `approve` / `increaseAllowance` 金额 > 0、ERC-721 `approve`、`setApprovalForAll(true)`、Permit2 `approve` 金额 > 0 |
+| `PERMIT_SIGNATURE`        | （仅 `dapp_sign`）EIP-2612 / DAI Permit、Permit2 签名                                                                                                                             |
+| `RAW_HASH_SIGNATURE`      | （S346，仅 personal_sign）payload 是 0x hex、恰好 32 字节、且不是可读文本（`message.encoding = "hex"`）——形如哈希的盲签                                                           |
+| `UNRECOGNIZED_TYPED_DATA` | （S346，仅 typed data）`primaryType` 不是 Permit 系（Seaport 订单、ForwardRequest、MetaTransaction、Delegation、登录消息等一律带）                                                |
+| `UNVERIFIED_CONTRACT`     | `to` 或 `counterparty` 是合约且 `isVerified = false`；（S346）typed data 的 `domain.verifyingContract` 不在 LOOP 目录                                                             |
+| `SIMULATION_FAILED`       | 预执行未通过（此时 `signing.allowed = false`）                                                                                                                                    |
+
+`riskFlags` 是字符串数组；旧客户端遇到不认识的值只是不显示（不应解码失败）。新客户端对 S346 三个新值都应显示风险提示。
 
 **预执行失败**：intent 仍创建（201），`state = "prepared"`、`signing.allowed = false`、`signing.reasonCode` 为
 `BSC_CALL_REVERTED` / `GAS_ESTIMATE_UNAVAILABLE` / `SIMULATION_UNAVAILABLE`，`riskFlags` 含 `SIMULATION_FAILED`。
@@ -234,7 +239,10 @@ App 不弹签名，回页面 EIP-1193 错误（建议 `-32603`，message 可带 
 - `payload`：
   - personal_sign：页面 `params[0]` 原样（0x hex = 原始字节；其他字符串 = UTF-8 文本），≤ 16,384 字节；空 → 400。
   - eth_signTypedData_v4：页面 `params[1]`（JSON **字符串**，若页面给的是对象，App 用 `JSON.stringify`），≤ 32,768 字符。
-    `domain.chainId` 存在且 ≠ `chainId` → 422 `TYPED_DATA_CHAIN_MISMATCH`；不能按 EIP-712 哈希 → 422 `TYPED_DATA_INVALID`。
+    `domain.chainId` 必须存在（S346；缺失 → 422 `TYPED_DATA_INVALID`）且 = `chainId`（≠ → 422 `TYPED_DATA_CHAIN_MISMATCH`）；
+    页面若自带 `types.EIP712Domain`，其字段集必须与 `domain` 中出现的键完全一致、类型为 EIP-712 规定类型（`name`/`version` string、
+    `chainId` uint256、`verifyingContract` address、`salt` bytes32）、不重复，否则 422 `TYPED_DATA_INVALID`（S346：防止哈希不含 chainId
+    而确认页仍显示 97）；不能按 EIP-712 哈希 → 422 `TYPED_DATA_INVALID`。
 
 响应 `201` / `200`，差异字段：
 
@@ -330,13 +338,17 @@ typed data 时 `signing.mode = "device_sign_typed_data_v4"`，`signatureRequest.
 }
 ```
 
-此例 `riskFlags = ["UNLIMITED_APPROVAL", "PERMIT_SIGNATURE"]`。嵌套字段 `path` 为 `details.amount`、数组为 `tokens[0]`；
+此例 `riskFlags = ["UNLIMITED_APPROVAL", "PERMIT_SIGNATURE", "UNVERIFIED_CONTRACT"]`（verifyingContract 是外部代币）。嵌套字段 `path` 为 `details.amount`、数组为 `tokens[0]`；
 叶子 ≤ 256 个、单值 ≤ 1,024 字符（超出 `truncated` / `fieldsTruncated` 为 true——确认页可提示「内容过长已截断」，待签原文仍完整在 `signatureRequest`）。
 
 签名：App 把 `signatureRequest` 原样交给 Privy embedded provider（`request(method, params)`），得到签名后：
 先回给页面，再调 §6 回报。确认页展示内容与 `signatureRequest` 同源，任何字段都不能改。
 
-注意：同一钱包同一时刻只有一个 open intent，新 prepare 会把旧的置为 `expired / INTENT_SUPERSEDED`——页面并发发起多个签名请求时 App 要排队。
+注意：同一钱包同一时刻只有一个 open intent。DApp prepare（dapp-tx / dapp-sign）只顶替 open 的 `dapp_tx` / `dapp_sign`
+（置为 `expired / INTENT_SUPERSEDED`）——页面并发发起多个签名请求时 App 要排队。**S346**：若钱包上有未过期的 open
+send / swap / approve / send_nft（用户正在别处审查），DApp prepare 不顶替它，返回 `409 RESOURCE_CONFLICT` /
+`detailsSafe.reasonCode = "INTENT_BUSY"`——App 映射为「钱包有待处理的操作」，回页面 EIP-1193 `4001` 或 `-32603`，
+不弹签名。send / swap / approve / send_nft 的 prepare 仍照旧顶替一切 open intent（含 DApp 的）。
 
 ## 6. `POST /v2/wallet-intents/{intentId}/signature-report`
 
@@ -367,10 +379,14 @@ typed data 时 `signing.mode = "device_sign_typed_data_v4"`，`signatureRequest.
   其他 → 422 / `RPC_METHOD_NOT_ALLOWED`（App 回页面 `4200`）。`eth_accounts` / `eth_requestAccounts` / `eth_chainId` 的连接语义仍由 App 本地处理。
 - `params`：缺省 `[]`，≤ 3 项，逐方法校验（call 对象只认 `from/to/data/input/value/gas/gasPrice/maxFeePerGas/maxPriorityFeePerGas`；
   不支持第 3 参 state override；块参数为标签或 hex）→ 不合格 400。
-- `eth_getBlockByNumber`：`[块标签或 hex, fullTransactions?(bool)]`；`eth_feeHistory`：`[blockCount（hex 或整数，1…1,024）, 块标签或 hex（不收 pending）, rewardPercentiles?（≤ 100 个 0…100 的非递减数）]`，不合格 400。
-- `eth_getLogs`：`blockHash` 单独用，或 `fromBlock` / `toBlock` 跨度 ≤ 1,000 块（`earliest` 视为 0），否则
-  422 / `RPC_LOG_RANGE_TOO_LARGE`（`detailsSafe.maximumBlockSpan = "1000"`）；`address` ≤ 20 个，`topics` ≤ 4 位、每位 ≤ 20 个。
-- 限流：每账户每分钟 `DAPP_RPC_READ_PER_MINUTE`（默认 120）→ 超出 `429 RATE_LIMITED`（retryable）。App 应合并 / 节流页面轮询。
+- `eth_getBlockByNumber`：`[块标签或 hex, fullTransactions?]`——S346 起只转发交易哈希列表：缺省或 `false` 按 `false` 转发，`true` → 400。
+- `eth_feeHistory`：`[blockCount（hex 或整数，1…128；S346 由 1,024 收紧）, 块标签或 hex（不收 pending）, rewardPercentiles?（≤ 100 个 0…100 的非递减数）]`，不合格 400。
+- `eth_getLogs`：**必须带非空 `address`**（S346；单个地址或 1…20 个的数组；缺失 / `null` / `[]` → 400）；`blockHash` 单独用，或
+  `fromBlock` / `toBlock` 跨度 ≤ 1,000 块（标签按服务端 head 解析，`earliest` 视为 0），否则 422 / `RPC_LOG_RANGE_TOO_LARGE`
+  （`detailsSafe.maximumBlockSpan = "1000"`）；`topics` ≤ 4 位、每位 ≤ 20 个。S346：服务端把解析出的块号以 hex 写回
+  `fromBlock` / `toBlock` 再转发（节点读的就是校验过的区间）。
+- 限流：每账户每分钟 `DAPP_RPC_READ_PER_MINUTE`（默认 120）；S346 另有进程级令牌桶 `DAPP_RPC_READ_GLOBAL_PER_MINUTE`
+  （默认 1200，所有账户合计、只计真正打到节点的请求，`eth_chainId` 与被拒请求不计）。任一超出 → `429 RATE_LIMITED`（retryable）。App 应合并 / 节流页面轮询。
 
 响应 `200`：
 
@@ -401,32 +417,39 @@ typed data 时 `signing.mode = "device_sign_typed_data_v4"`，`signatureRequest.
 ```
 
 App 把 `result` 原样交给页面，或把 `error` 作为 EIP-1193 错误（`code` / `message` / `data`）抛给页面。
+S346：`error.message` 只在 `code = 3` 或标准节点文案（`execution reverted…` / `insufficient funds…` / `gas required exceeds…` /
+`intrinsic gas too low` / `nonce too low|high` / `out of gas` / `invalid opcode` / `header not found`）时原样，其他一律为固定文案
+`"RPC request failed"`；`error.data` 只在是 hex 串（revert data）时给出，否则 `null`。
 节点不可达 / 链未验证 → `503 CAPABILITY_UNAVAILABLE`（App 回 `-32603`，可重试）。
+S346：节点额度 / 限流拒绝（HTTP 429、JSON-RPC `-32005` / `-32016` / `429` 或限流文案），或应答（`result` / `error` 的 JSON）超过
+1 MiB → `503 CAPABILITY_UNAVAILABLE` / `RPC_UPSTREAM_LIMITED`（retryable；App 回页面 `-32005` 或 `-32603`，稍后重试）。
 
 ## 8. 错误码全集
 
-| HTTP | code                             | `detailsSafe.reasonCode`                             | 出现于                                       |
-| ---- | -------------------------------- | ---------------------------------------------------- | -------------------------------------------- |
-| 400  | `INVALID_REQUEST`                | —                                                    | 全部（形状 / headers / 参数）                |
-| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                    | 全部                                         |
-| 403  | `POLICY_BLOCKED`                 | `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`               | dapp-tx（金丝雀对手名单非空时）              |
-| 404  | `NOT_FOUND`                      | —                                                    | 钱包 / intent 不存在                         |
-| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | —                                                    | 全部                                         |
-| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                    | dapp-tx / dapp-sign                          |
-| 409  | `INSUFFICIENT_BALANCE`           | —                                                    | dapp-tx（value + 最大 gas 费 > 余额）        |
-| 409  | `DATA_STALE`                     | —                                                    | signature-report（状态已越过且不可迟到记录） |
-| 422  | `VALIDATION_FAILED`              | `CHAIN_SIGNING_DISABLED`                             | dapp-tx / dapp-sign（eip155:56）             |
-| 422  | `VALIDATION_FAILED`              | `ORIGIN_NOT_HTTPS`                                   | dapp-tx / dapp-sign                          |
-| 422  | `VALIDATION_FAILED`              | `TYPED_DATA_CHAIN_MISMATCH` / `TYPED_DATA_INVALID`   | dapp-sign                                    |
-| 422  | `VALIDATION_FAILED`              | `SIGNATURE_MISMATCH`                                 | signature-report                             |
-| 422  | `VALIDATION_FAILED`              | `RPC_METHOD_NOT_ALLOWED` / `RPC_LOG_RANGE_TOO_LARGE` | rpc-read                                     |
-| 422  | `VALIDATION_FAILED`              | `null`                                               | 外部钱包；signature-report 对非 dapp_sign    |
-| 422  | `CHAIN_MISMATCH`                 | —                                                    | 不支持的链                                   |
-| 429  | `RATE_LIMITED`                   | —                                                    | rpc-read                                     |
-| 500  | `INTERNAL_ERROR`                 | —                                                    | 全部                                         |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `DAPP_BROWSER_DISABLED`                              | dapp-tx / dapp-sign / rpc-read（开关关）     |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `DAPP_BROWSER_CHAIN_UNAVAILABLE`                     | slot 不是独立测试网 / client 不能转发        |
-| 503  | `CAPABILITY_UNAVAILABLE`         | `null`                                               | BSC 写开关关、链未验证、RPC 不可达           |
+| HTTP | code                             | `detailsSafe.reasonCode`                             | 出现于                                                                         |
+| ---- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 400  | `INVALID_REQUEST`                | —                                                    | 全部（形状 / headers / 参数）                                                  |
+| 401  | `AUTH_REQUIRED` / `AUTH_INVALID` | —                                                    | 全部                                                                           |
+| 403  | `POLICY_BLOCKED`                 | `COUNTERPARTY_NOT_IN_CANARY_ALLOWLIST`               | dapp-tx（金丝雀对手名单非空时）                                                |
+| 404  | `NOT_FOUND`                      | —                                                    | 钱包 / intent 不存在                                                           |
+| 409  | `ACCOUNT_BOOTSTRAP_REQUIRED`     | —                                                    | 全部                                                                           |
+| 409  | `IDEMPOTENCY_CONFLICT`           | —                                                    | dapp-tx / dapp-sign                                                            |
+| 409  | `INSUFFICIENT_BALANCE`           | —                                                    | dapp-tx（value + 最大 gas 费 > 余额）                                          |
+| 409  | `DATA_STALE`                     | —                                                    | signature-report（状态已越过且不可迟到记录）                                   |
+| 409  | `RESOURCE_CONFLICT`              | `INTENT_BUSY`                                        | dapp-tx / dapp-sign（S346：钱包上有 open 的 send / swap / approve / send_nft） |
+| 422  | `VALIDATION_FAILED`              | `CHAIN_SIGNING_DISABLED`                             | dapp-tx / dapp-sign（eip155:56）                                               |
+| 422  | `VALIDATION_FAILED`              | `ORIGIN_NOT_HTTPS`                                   | dapp-tx / dapp-sign                                                            |
+| 422  | `VALIDATION_FAILED`              | `TYPED_DATA_CHAIN_MISMATCH` / `TYPED_DATA_INVALID`   | dapp-sign                                                                      |
+| 422  | `VALIDATION_FAILED`              | `SIGNATURE_MISMATCH`                                 | signature-report                                                               |
+| 422  | `VALIDATION_FAILED`              | `RPC_METHOD_NOT_ALLOWED` / `RPC_LOG_RANGE_TOO_LARGE` | rpc-read                                                                       |
+| 422  | `VALIDATION_FAILED`              | `null`                                               | 外部钱包；signature-report 对非 dapp_sign                                      |
+| 422  | `CHAIN_MISMATCH`                 | —                                                    | 不支持的链                                                                     |
+| 429  | `RATE_LIMITED`                   | —                                                    | rpc-read                                                                       |
+| 500  | `INTERNAL_ERROR`                 | —                                                    | 全部                                                                           |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `DAPP_BROWSER_DISABLED`                              | dapp-tx / dapp-sign / rpc-read（开关关）                                       |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `DAPP_BROWSER_CHAIN_UNAVAILABLE`                     | slot 不是独立测试网 / client 不能转发                                          |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `RPC_UPSTREAM_LIMITED`                               | rpc-read（S346：节点额度 / 限流拒绝，或应答 > 1 MiB）                          |
+| 503  | `CAPABILITY_UNAVAILABLE`         | `null`                                               | BSC 写开关关、链未验证、RPC 不可达                                             |
 
 错误体恒为七字段：`code / category / retryable / userMessageKey / correlationId / detailsSafe / providerReferenceSafe`。
 

@@ -2628,7 +2628,9 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
 
     async getInstanceByContractAddress(input) {
       // Decision 0197: "is this a LOOP launch2 contract" for the DApp
-      // browser review, with the same visibility as positions.
+      // browser review. S346 (finding A8): only an activated instance that
+      // is not on hold counts — a held instance (its deployment or
+      // activation did not match what LOOP expected) is not "verified".
       const rows = await query<Row>(
         `select ${instanceColumns} from public.launch2_instances
          where chain_id = $1
@@ -2636,7 +2638,7 @@ export function createPostgresLaunch2Repository(pool: Pool): Launch2Repository {
              gate_address, escrow_address, snapshots_address,
              graduation_adapter_address, buyback_adapter_address,
              price_recorder_address, buyback_executor_address)
-           and (activated_at is not null or hold_reason is not null)
+           and activated_at is not null and hold_reason is null
          order by registered_at desc
          limit 1`,
         [input.chainId, input.address.toLowerCase()],

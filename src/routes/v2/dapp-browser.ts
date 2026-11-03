@@ -4,6 +4,7 @@ import { requireAuthenticatedLoopPrincipal } from "../../core/http/authenticatio
 import { emptyQueryStringSchema } from "../../core/http/schemas.js";
 import { assertNoQuery } from "./chain-schemas.js";
 import {
+  dappPrepareErrors,
   dappSignPrepareRequestSchema,
   dappTxPrepareRequestSchema,
   rpcReadErrors,
@@ -57,7 +58,7 @@ export function registerV2DappBrowserRoutes(
         operationId: "prepareV2DappTxIntent",
         summary: "Prepare an immutable intent for a DApp page's transaction",
         description:
-          "Decision 0197 (S342). The page's eth_sendTransaction (to / data / value) on the launch slot's testnet becomes a dapp_tx intent: the server decodes the call (ERC-20 transfer / approve / increaseAllowance / transferFrom, ERC-721 approve / transferFrom / safeTransferFrom / setApprovalForAll, Permit2 approve, LOOP router / launch2 / Launch methods on LOOP-known contracts; anything else functionName null + selector), checks whether the target and the decoded counterparty are contracts LOOP knows, pre-executes it with eth_call + estimateGas and binds nonce / gas / expiry. review.dapp carries origin, to, value, decodedCall, counterparty and riskFlags (UNLIMITED_APPROVAL, APPROVAL_FOR_ALL, UNVERIFIED_CONTRACT, SIMULATION_FAILED). A pre-execution that does not pass still creates the intent, in prepared with signing.allowed=false and SIMULATION_FAILED. The intent walks the send lifecycle (device signs, broadcast-report, reconciliation). eip155:56 is 422 VALIDATION_FAILED / CHAIN_SIGNING_DISABLED; 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off.",
+          "Decision 0197 (S342). The page's eth_sendTransaction (to / data / value) on the launch slot's testnet becomes a dapp_tx intent: the server decodes the call (ERC-20 transfer / approve / increaseAllowance / transferFrom, ERC-721 approve / transferFrom / safeTransferFrom / setApprovalForAll, Permit2 approve, LOOP router / launch2 / Launch methods on LOOP-known contracts; anything else functionName null + selector), checks whether the target and the decoded counterparty are contracts LOOP knows, pre-executes it with eth_call + estimateGas and binds nonce / gas / expiry. review.dapp carries origin, to, value, decodedCall, counterparty and riskFlags (UNLIMITED_APPROVAL, APPROVAL_FOR_ALL, EOA_SPENDER for a grant to an address without code, UNVERIFIED_CONTRACT, SIMULATION_FAILED). A pre-execution that does not pass still creates the intent, in prepared with signing.allowed=false and SIMULATION_FAILED. The intent walks the send lifecycle (device signs, broadcast-report, reconciliation). A new DApp prepare supersedes only an open DApp intent; an open send / swap / approve / send_nft on the wallet is 409 RESOURCE_CONFLICT / INTENT_BUSY. eip155:56 is 422 VALIDATION_FAILED / CHAIN_SIGNING_DISABLED; 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off.",
         tags: ["wallet-intents"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -66,7 +67,7 @@ export function registerV2DappBrowserRoutes(
         response: {
           200: walletIntentResourceSchema,
           201: walletIntentResourceSchema,
-          ...walletIntentCommandErrors,
+          ...dappPrepareErrors,
         },
       },
       onRequest: validateIntentCommandHeaders,
@@ -92,7 +93,7 @@ export function registerV2DappBrowserRoutes(
         operationId: "prepareV2DappSignIntent",
         summary: "Prepare an immutable intent for a DApp page's signature",
         description:
-          "Decision 0197 (S342). personal_sign / eth_signTypedData_v4 on the launch slot's testnet becomes a dapp_sign intent in awaiting_signature: review.dapp.message (UTF-8 text when printable, else hex) or review.dapp.typedData (domain, primaryType, message leaves) plus riskFlags (PERMIT_SIGNATURE for EIP-2612 / DAI Permit and Permit2, UNLIMITED_APPROVAL on top for an unlimited permit); signatureRequest is the exact JSON-RPC request the device signs. The device then reports the signature with POST /v2/wallet-intents/{intentId}/signature-report. eip155:56 is 422 VALIDATION_FAILED / CHAIN_SIGNING_DISABLED; a typed-data domain.chainId other than chainId is TYPED_DATA_CHAIN_MISMATCH; 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off.",
+          "Decision 0197 (S342). personal_sign / eth_signTypedData_v4 on the launch slot's testnet becomes a dapp_sign intent in awaiting_signature: review.dapp.message (UTF-8 text when printable, else hex) or review.dapp.typedData (domain, primaryType, message leaves) plus riskFlags (PERMIT_SIGNATURE for EIP-2612 / DAI Permit and Permit2, UNLIMITED_APPROVAL on top for an unlimited permit, UNRECOGNIZED_TYPED_DATA for any other primaryType, UNVERIFIED_CONTRACT for a verifyingContract LOOP does not know, RAW_HASH_SIGNATURE for a personal_sign of 32 non-text bytes); signatureRequest is the exact JSON-RPC request the device signs. The device then reports the signature with POST /v2/wallet-intents/{intentId}/signature-report. eip155:56 is 422 VALIDATION_FAILED / CHAIN_SIGNING_DISABLED; typed data must carry domain.chainId (TYPED_DATA_INVALID otherwise) equal to chainId (TYPED_DATA_CHAIN_MISMATCH), and a page-supplied types.EIP712Domain must list exactly the domain's keys with their EIP-712 types (TYPED_DATA_INVALID); an open send / swap / approve / send_nft is 409 RESOURCE_CONFLICT / INTENT_BUSY; 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off.",
         tags: ["wallet-intents"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -101,7 +102,7 @@ export function registerV2DappBrowserRoutes(
         response: {
           200: walletIntentResourceSchema,
           201: walletIntentResourceSchema,
-          ...walletIntentCommandErrors,
+          ...dappPrepareErrors,
         },
       },
       onRequest: validateIntentCommandHeaders,
@@ -163,7 +164,7 @@ export function registerV2DappBrowserRoutes(
         operationId: "readV2ChainRpc",
         summary: "Forward one read-only JSON-RPC request for a DApp page",
         description:
-          "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs (at most 1,000 blocks), eth_getBlockByNumber and eth_feeHistory (at most 1,024 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200); an unreachable endpoint is 503. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
+          "Decision 0197 (S342). The DApp browser's read channel: eth_chainId, eth_blockNumber, eth_call, eth_getBalance, eth_getCode, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_gasPrice, eth_getLogs (a non-empty address, at most 1,000 blocks; forwarded with the resolved block numbers), eth_getBlockByNumber (transaction hashes only; fullTransactions true is 400) and eth_feeHistory (at most 128 blocks) on eip155:56 or the launch slot, through the API's verified RPC endpoints. A JSON-RPC error the node answers is returned in error (200; message only for standard node texts, data only when hex); an unreachable endpoint is 503; a provider quota / rate refusal or an answer above 1 MiB is 503 CAPABILITY_UNAVAILABLE / RPC_UPSTREAM_LIMITED. Per-account fixed one-minute window (DAPP_RPC_READ_PER_MINUTE, default 120) and a process-wide token bucket (DAPP_RPC_READ_GLOBAL_PER_MINUTE, default 1200) → 429 RATE_LIMITED. 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED while DAPP_BROWSER_ENABLED is off. A POST because it carries a body; it creates no state, so it rejects an Idempotency-Key.",
         tags: ["chain"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

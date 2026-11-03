@@ -362,7 +362,12 @@ export interface BscChainCallClient extends BscReadClient {
   ): Promise<BscRelayReadOutcome>;
 }
 
-/** Decision 0197: what the node answered to a relayed read. */
+/**
+ * Decision 0197: what the node answered to a relayed read. S346 (finding
+ * A7): `limited` = the provider refused on quota / rate grounds (the proxy
+ * answers 503 RPC_UPSTREAM_LIMITED; nothing of the provider's text is
+ * kept).
+ */
 export type BscRelayReadOutcome =
   | { readonly status: "result"; readonly result: unknown }
   | {
@@ -372,7 +377,68 @@ export type BscRelayReadOutcome =
         readonly message: string;
         readonly data: unknown;
       };
-    };
+    }
+  | { readonly status: "limited" };
+
+/** JSON-RPC codes providers use for quota / rate refusals. */
+const relayLimitedCodes = new Set<number>([
+  LimitExceededRpcError.code, // -32005
+  -32016, // "over rate limit" (NodeReal / Infura family)
+  429,
+]);
+/**
+ * Node error texts a page's wallet library reads (viem / ethers map them
+ * to typed errors). Any other text is the provider's and is replaced.
+ */
+const relayPassThroughMessage =
+  /^(execution reverted|insufficient funds|gas required exceeds|intrinsic gas too low|nonce too (?:low|high)|out of gas|invalid opcode|header not found)/iu;
+const relayGenericMessage = "RPC request failed";
+const relayHexData = /^0x[0-9a-fA-F]*$/u;
+
+/**
+ * S346 (finding A7): classifies a relayed read's failure. A quota / rate
+ * refusal (HTTP 429, JSON-RPC -32005 / -32016 / 429, or a rate-limit text)
+ * is `limited`; another JSON-RPC error is passed on with its code, a
+ * message only when it is a standard node message (else a fixed text) and
+ * `data` only when it is hex (revert data); anything else is null (the
+ * endpoint did not answer).
+ */
+export function classifyRelayReadError(
+  error: unknown,
+): BscRelayReadOutcome | null {
+  const causes = walkCauses(error);
+  if (
+    causes.some(
+      (candidate) =>
+        candidate instanceof HttpRequestError && candidate.status === 429,
+    )
+  ) {
+    return Object.freeze({ status: "limited" as const });
+  }
+  const answered = causes.find(
+    (candidate): candidate is RpcRequestError =>
+      candidate instanceof RpcRequestError,
+  );
+  if (answered === undefined || typeof answered.code !== "number") {
+    return null;
+  }
+  const details = answered.details || "";
+  if (relayLimitedCodes.has(answered.code) || throttlePattern.test(details)) {
+    return Object.freeze({ status: "limited" as const });
+  }
+  const data = (answered as { readonly data?: unknown }).data;
+  return Object.freeze({
+    status: "error" as const,
+    error: Object.freeze({
+      code: answered.code,
+      message:
+        answered.code === 3 || relayPassThroughMessage.test(details)
+          ? details.slice(0, 256)
+          : relayGenericMessage,
+      data: typeof data === "string" && relayHexData.test(data) ? data : null,
+    }),
+  });
+}
 
 /**
  * Safe, loggable classification of a Provider error (Decision 0068). Every
@@ -2056,19 +2122,9 @@ export function createBscReadClient(
         } as never);
         return Object.freeze({ status: "result" as const, result });
       } catch (error) {
-        const answered = walkCauses(error).find(
-          (candidate): candidate is RpcRequestError =>
-            candidate instanceof RpcRequestError,
-        );
-        if (answered !== undefined && typeof answered.code === "number") {
-          return Object.freeze({
-            status: "error" as const,
-            error: Object.freeze({
-              code: answered.code,
-              message: (answered.details || "RPC error").slice(0, 256),
-              data: (answered as { readonly data?: unknown }).data ?? null,
-            }),
-          });
+        const outcome = classifyRelayReadError(error);
+        if (outcome !== null) {
+          return outcome;
         }
         throw new BscReadUnavailableError("BSC_RPC_UNREACHABLE", {
           cause: error,

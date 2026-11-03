@@ -6,6 +6,7 @@ import type { AuthenticatedLoopPrincipal } from "../../core/http/authentication.
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { isOpaqueId } from "../../core/ids/opaque-id.js";
 import {
+  WalletIntentBusyError,
   WalletIntentStateConflictError,
   type WalletIntentRecord,
 } from "../../database/wallet-intent-repository.js";
@@ -37,10 +38,12 @@ import {
 import {
   DappPayloadInvalidError,
   parseTypedData,
+  personalSignRiskFlags,
   recoverPersonalSigner,
   recoverTypedDataSigner,
   reviewPersonalSignMessage,
   reviewTypedData,
+  typedDataBinding,
   typedDataRiskFlags,
   type ParsedTypedData,
 } from "./dapp-sign-review.js";
@@ -98,7 +101,8 @@ import {
  * 422 CHAIN_SIGNING_DISABLED (docs/00 rule 8), a slot without a separate
  * testnet client is 503 DAPP_BROWSER_CHAIN_UNAVAILABLE, any other chain is
  * 422 CHAIN_MISMATCH → (sign) payload (422 TYPED_DATA_INVALID /
- * TYPED_DATA_CHAIN_MISMATCH) → BSC_WRITES_ENABLED and a verified chain
+ * TYPED_DATA_CHAIN_MISMATCH; S346: typed data must carry the request
+ * chain's domain.chainId) → BSC_WRITES_ENABLED and a verified chain
  * (503) → signable embedded wallet (422) → idempotency → facts.
  *
  * A pre-execution revert does not refuse: the intent is created in
@@ -145,6 +149,26 @@ function refuse(reasonCode: string): never {
 
 function unavailable(reasonCode: string): never {
   throw V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
+}
+
+/**
+ * S346 (finding A4): a DApp prepare never supersedes an open send / swap /
+ * approve / send_nft — the repository refuses, and the page is told the
+ * wallet is busy (409 RESOURCE_CONFLICT / INTENT_BUSY).
+ */
+async function createOrBusy(
+  create: () => Promise<WalletIntentRecord>,
+): Promise<WalletIntentRecord> {
+  try {
+    return await create();
+  } catch (error) {
+    if (error instanceof WalletIntentBusyError) {
+      throw V2ApiError.fromCode("RESOURCE_CONFLICT", {
+        reasonCode: dappReasonCodes.intentBusy,
+      });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -307,6 +331,23 @@ async function reviewAddress(
     isVerified: knownContract !== null,
     knownContract,
   });
+}
+
+/**
+ * S346 (finding A2): whether a typed-data `verifyingContract` is a contract
+ * LOOP knows. Unknown (no directory, not listed) is unverified.
+ */
+async function isKnownContract(
+  dapp: DappBrowserRuntime,
+  chainId: string,
+  address: string,
+): Promise<boolean> {
+  if (dapp.directory === null) return false;
+  try {
+    return (await dapp.directory.classify({ chainId, address })) !== null;
+  } catch {
+    throw V2ApiError.capabilityUnavailable();
+  }
 }
 
 /** ERC-165 `supportsInterface(ERC-721)`; a revert or garbage is "no". */
@@ -576,6 +617,15 @@ export function createDappIntentService(
           ) {
             flags.push("UNVERIFIED_CONTRACT");
           }
+          if (
+            decoded.grantsApproval &&
+            counterparty !== null &&
+            (counterparty.role === "spender" ||
+              counterparty.role === "operator") &&
+            !counterparty.isContract
+          ) {
+            flags.push("EOA_SPENDER");
+          }
           if (execution.simulation.status !== "passed") {
             flags.push("SIMULATION_FAILED");
           }
@@ -638,24 +688,26 @@ export function createDappIntentService(
             ).toISOString(),
           };
           const sealed = sealIntent(source);
-          return runtime.repository.create({
-            intentId,
-            ownerUserId: principal.userId,
-            walletId: wallet.walletId,
-            providerOperationId: operationId,
-            kind: "dapp_tx",
-            state: intentStateForSimulation(execution.simulation),
-            chainId: chain.chainId,
-            canonicalPayload: sealed.canonicalPayload,
-            publicReview: sealed.publicReview,
-            reviewSha256: sealed.reviewSha256,
-            policyConfigVersion: writes.configVersion,
-            factsObservedAt: source.factsObservedAt,
-            expiresAt: source.expiresAt,
-            simulationStatus: execution.simulation.status,
-            requestId,
-            canaryAdmission: null,
-          });
+          return createOrBusy(() =>
+            runtime.repository.create({
+              intentId,
+              ownerUserId: principal.userId,
+              walletId: wallet.walletId,
+              providerOperationId: operationId,
+              kind: "dapp_tx",
+              state: intentStateForSimulation(execution.simulation),
+              chainId: chain.chainId,
+              canonicalPayload: sealed.canonicalPayload,
+              publicReview: sealed.publicReview,
+              reviewSha256: sealed.reviewSha256,
+              policyConfigVersion: writes.configVersion,
+              factsObservedAt: source.factsObservedAt,
+              expiresAt: source.expiresAt,
+              simulationStatus: execution.simulation.status,
+              requestId,
+              canaryAdmission: null,
+            }),
+          );
         },
       );
       return Object.freeze({
@@ -681,12 +733,20 @@ export function createDappIntentService(
           }
           throw error;
         }
+        flags = personalSignRiskFlags(request.payload, message);
       } else {
         const parsed = parseTypedOrRefuse(request.payload);
-        if (
-          parsed.domainChainId !== null &&
-          parsed.domainChainId !== BigInt(chain.client.chainReference)
-        ) {
+        // S346 (finding A1): v4 must bind the request chain — domain.chainId
+        // present and equal, and a page-supplied EIP712Domain that covers
+        // exactly the domain's keys (so the hash includes the chainId).
+        const binding = typedDataBinding(
+          parsed,
+          BigInt(chain.client.chainReference),
+        );
+        if (binding === "invalid") {
+          refuse(dappReasonCodes.typedDataInvalid);
+        }
+        if (binding === "chainMismatch") {
           refuse(dappReasonCodes.typedDataChainMismatch);
         }
         typedData = reviewTypedData(parsed);
@@ -724,6 +784,16 @@ export function createDappIntentService(
             chain.chainId,
             wallet.address,
           );
+          // S346 (finding A2): the verifying contract goes through the same
+          // directory as a transaction's target.
+          const verifyingContract = typedData?.domain.verifyingContract ?? null;
+          const riskFlags: DappRiskFlag[] = [...flags];
+          if (
+            verifyingContract !== null &&
+            !(await isKnownContract(dapp, chain.chainId, verifyingContract))
+          ) {
+            riskFlags.push("UNVERIFIED_CONTRACT");
+          }
           const now = runtime.now();
           const intentId = runtime.createUuid();
           const signatureRequest: DappSignatureRequest = Object.freeze({
@@ -769,7 +839,7 @@ export function createDappIntentService(
               counterparty: null,
               message,
               typedData,
-              riskFlags: orderRiskFlags(flags),
+              riskFlags: orderRiskFlags(riskFlags),
             }),
             signatureRequest,
             factsObservedAt: now.toISOString(),
@@ -778,25 +848,27 @@ export function createDappIntentService(
             ).toISOString(),
           };
           const sealed = sealIntent(source);
-          return runtime.repository.create({
-            intentId,
-            ownerUserId: principal.userId,
-            walletId: wallet.walletId,
-            providerOperationId: operationId,
-            kind: "dapp_sign",
-            // Nothing to pre-execute: a message is signable as prepared.
-            state: "awaiting_signature",
-            chainId: chain.chainId,
-            canonicalPayload: sealed.canonicalPayload,
-            publicReview: sealed.publicReview,
-            reviewSha256: sealed.reviewSha256,
-            policyConfigVersion: writes.configVersion,
-            factsObservedAt: source.factsObservedAt,
-            expiresAt: source.expiresAt,
-            simulationStatus: simulation.status,
-            requestId,
-            canaryAdmission: null,
-          });
+          return createOrBusy(() =>
+            runtime.repository.create({
+              intentId,
+              ownerUserId: principal.userId,
+              walletId: wallet.walletId,
+              providerOperationId: operationId,
+              kind: "dapp_sign",
+              // Nothing to pre-execute: a message is signable as prepared.
+              state: "awaiting_signature",
+              chainId: chain.chainId,
+              canonicalPayload: sealed.canonicalPayload,
+              publicReview: sealed.publicReview,
+              reviewSha256: sealed.reviewSha256,
+              policyConfigVersion: writes.configVersion,
+              factsObservedAt: source.factsObservedAt,
+              expiresAt: source.expiresAt,
+              simulationStatus: simulation.status,
+              requestId,
+              canaryAdmission: null,
+            }),
+          );
         },
       );
       return Object.freeze({
