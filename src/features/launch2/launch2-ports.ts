@@ -1373,6 +1373,16 @@ export interface Launch2Repository {
     readonly chainId: string;
     readonly nftAddress: string;
   }): Promise<Launch2InstanceRecord | null>;
+  /**
+   * Decision 0197: the listed (activated or held) instance one of whose
+   * contracts (meme, hook, nft, curve, gate, escrow, snapshots, adapters,
+   * price recorder, buyback executor) is `address` on `chainId`; null when
+   * none. Optional (absent = the DApp directory skips launch2 instances).
+   */
+  getInstanceByContractAddress?(input: {
+    readonly chainId: string;
+    readonly address: string;
+  }): Promise<Launch2InstanceRecord | null>;
   /** Decision 0173: by the Factory launch id (`0x` + 64 hex, any case). */
   getInstanceByLaunchId(
     launchId: string,

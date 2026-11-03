@@ -247,6 +247,26 @@ function logged(output: string, label: string): `0x${string}` {
   return match[1].toLowerCase() as `0x${string}`;
 }
 
+/**
+ * Decision 0197 (S342): only the BSC Testnet base (PoolManager + tUSD1),
+ * for suites that need a plain ERC-20 on anvil.
+ */
+export function deployTestnetBase(
+  tools: FoundryTools,
+  rpcUrl: string,
+): { readonly poolManager: `0x${string}`; readonly usd1: `0x${string}` } {
+  const base = forgeScript(
+    tools,
+    "script/DeployBscTestnetBase.s.sol:DeployBscTestnetBase",
+    rpcUrl,
+    { BSC_TESTNET_DEPLOYER_PRIVATE_KEY: anvilPrivateKey(0) },
+  );
+  return {
+    poolManager: logged(base, "PoolManager candidate:"),
+    usd1: logged(base, "TestnetUSD1 candidate:"),
+  };
+}
+
 export interface DeployedProtocol {
   readonly poolManager: `0x${string}`;
   readonly usd1: `0x${string}`;

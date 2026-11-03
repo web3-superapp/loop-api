@@ -307,6 +307,13 @@ export interface V2ProductPolicyRuntime {
    * (NFT_SEND_DISABLED).
    */
   readonly nftSendState?: () => { readonly reasonCode: string | null };
+  /**
+   * Decision 0197: the DApp browser signing exit + read proxy. `reasonCode`
+   * null = DAPP_BROWSER_ENABLED on, `sendApprovals` composed, BSC writes
+   * on, and a launch slot testnet with a client. Optional; absent is
+   * unavailable (DAPP_BROWSER_DISABLED).
+   */
+  readonly dappBrowserState?: () => { readonly reasonCode: string | null };
 }
 
 export const v2ModuleRuntimeNotRegisteredReasonCode =
@@ -549,6 +556,8 @@ export const v2CapabilityIds = Object.freeze([
   "squareFeed",
   // Decision 0194: old clients skip unknown ids (loop-mobile decision 0180).
   "nftSend",
+  // Decision 0197 (S342): the in-app DApp browser.
+  "dappBrowser",
 ] as const);
 
 const primaryTabs: readonly V2PrimaryTab[] = v2PrimaryTabs;
@@ -1139,6 +1148,29 @@ function nftSendCapability(
   });
 }
 
+/**
+ * Decision 0197: not a module of its own (never `deferred`); available only
+ * while every piece of the DApp browser is in place. Chain verification is
+ * still checked per request by the routes (503).
+ */
+function dappBrowserCapability(
+  runtime: V2ProductPolicyRuntime,
+): V2CapabilityProjection {
+  const reasonCode =
+    runtime.dappBrowserState === undefined
+      ? "DAPP_BROWSER_DISABLED"
+      : runtime.dappBrowserState().reasonCode;
+  return Object.freeze({
+    capabilityId: "dappBrowser",
+    availability: reasonCode === null ? "available" : "unavailable",
+    reasonCode,
+    evidence: Object.freeze({
+      status: "notApplicable" as const,
+      reasonCode: null,
+    }),
+  });
+}
+
 export async function createV2CapabilitiesProjection(
   config: AppConfig,
   runtime: V2ProductPolicyRuntime,
@@ -1369,6 +1401,7 @@ export async function createV2CapabilitiesProjection(
     testnetFaucetCapability(runtime),
     squareFeedCapability(runtime),
     nftSendCapability(runtime),
+    dappBrowserCapability(runtime),
   ] satisfies readonly V2CapabilityProjection[]);
 
   return Object.freeze({

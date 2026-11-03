@@ -503,12 +503,13 @@ describe("Decision 0193 beta feedback on PostgreSQL", () => {
 
   it("rolls back only without feedback screenshots, then re-applies", async () => {
     const steps = { count: 1 };
-    // Decision 0194: 000106 sits above 000105; roll it back first.
+    // Decisions 0194 / 0197: 000106 and 000107 sit above 000105; roll them
+    // back first.
     await runner({
       databaseUrl: url,
       dir: migrationsDirectory,
       direction: "down",
-      count: 1,
+      count: 2,
       migrationsTable: "pgmigrations",
       log: () => undefined,
     });

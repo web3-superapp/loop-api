@@ -22,6 +22,8 @@ import type { AlertV2Service } from "../../features/alerts/alert-v2-service.js";
 import type { NotificationService } from "../../features/alerts/notification-service.js";
 import type { ApprovalService } from "../../features/wallet-intents/approval-service.js";
 import type { NftSendService } from "../../features/wallet-intents/nft-send-service.js";
+import type { DappIntentService } from "../../features/wallet-intents/dapp-intent-service.js";
+import type { DappRpcReadService } from "../../features/dapp-browser/rpc-read-service.js";
 import type { SendService } from "../../features/wallet-intents/send-service.js";
 import type { SwapService } from "../../features/wallet-intents/swap-service.js";
 import type { WalletIntentService } from "../../features/wallet-intents/wallet-intent-service.js";
@@ -63,6 +65,7 @@ import { registerV2SupportRoutes } from "./support.js";
 import { registerV2SwapRoutes } from "./swap.js";
 import { registerV2WalletRoutes } from "./wallet.js";
 import { registerV2WalletIntentRoutes } from "./wallet-intents.js";
+import { registerV2DappBrowserRoutes } from "./dapp-browser.js";
 import { registerV2WatchlistRoutes } from "./watchlist.js";
 
 /**
@@ -102,6 +105,10 @@ export interface V2RouteDependencies {
   readonly sendService: SendService;
   /** Decision 0194 (S339): `POST /v2/wallet-intents/send-nft`. */
   readonly nftSendService: NftSendService;
+  /** Decision 0197 (S342): the DApp browser signing exit. */
+  readonly dappIntentService: DappIntentService;
+  /** Decision 0197: `POST /v2/chain/rpc-read`. */
+  readonly dappRpcReadService: DappRpcReadService;
   readonly approvalService: ApprovalService;
   readonly swapService: SwapService;
   readonly deviceService: DeviceService;
@@ -160,6 +167,8 @@ export const v2ModuleRegistrars: Readonly<
   sendApprovals: (app, dependencies): void => {
     registerV2WalletIntentRoutes(app, dependencies);
     registerV2ApprovalRoutes(app, dependencies);
+    // Decision 0197: the DApp browser rides the signing exit's module.
+    registerV2DappBrowserRoutes(app, dependencies);
   },
   launch: registerV2LaunchRoutes,
   mining: registerV2MiningRoutes,

@@ -69,7 +69,7 @@ export function registerV2WalletIntentLifecycleRoutes(
         operationId: "listV2WalletIntents",
         summary: "List the account's wallet intents",
         description:
-          "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired. Intents of an opt-in kind (send_nft, Decision 0194) appear only when includeKinds names it.",
+          "Newest first with an opaque cursor. Open intents past expiresAt are projected as expired. Intents of an opt-in kind (send_nft, Decision 0194; dapp_tx / dapp_sign, Decision 0197) appear only when includeKinds names it.",
         tags: ["wallet-intents"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

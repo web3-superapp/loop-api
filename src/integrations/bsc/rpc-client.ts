@@ -8,6 +8,7 @@ import {
   HttpRequestError,
   InvalidParamsRpcError,
   LimitExceededRpcError,
+  RpcRequestError,
   SocketClosedError,
   TimeoutError,
   type Address,
@@ -347,7 +348,31 @@ export interface BscChainCallClient extends BscReadClient {
     items: readonly BscAllowanceRequestItem[],
     options?: BscAllowanceReadOptions,
   ): Promise<BscAllowanceReadResult>;
+  /**
+   * Decision 0197 (S342): forwards one read-only JSON-RPC request verbatim
+   * on the interactive lane after chain verification (the DApp browser read
+   * proxy; the caller whitelists the method and checks the params). A
+   * JSON-RPC error the node answered is returned, not thrown; a transport
+   * failure throws `BscReadUnavailableError`. Absent on fakes and on the
+   * unavailable client (the proxy then fails closed).
+   */
+  relayRead?(
+    method: string,
+    params: readonly unknown[],
+  ): Promise<BscRelayReadOutcome>;
 }
+
+/** Decision 0197: what the node answered to a relayed read. */
+export type BscRelayReadOutcome =
+  | { readonly status: "result"; readonly result: unknown }
+  | {
+      readonly status: "error";
+      readonly error: {
+        readonly code: number;
+        readonly message: string;
+        readonly data: unknown;
+      };
+    };
 
 /**
  * Safe, loggable classification of a Provider error (Decision 0068). Every
@@ -2017,6 +2042,39 @@ export function createBscReadClient(
         address: asAddress(address),
         blockTag: "pending",
       });
+    },
+
+    async relayRead(
+      method: string,
+      params: readonly unknown[],
+    ): Promise<BscRelayReadOutcome> {
+      await requireVerifiedChain();
+      try {
+        const result: unknown = await pointReadAggregate.request({
+          method,
+          params,
+        } as never);
+        return Object.freeze({ status: "result" as const, result });
+      } catch (error) {
+        const answered = walkCauses(error).find(
+          (candidate): candidate is RpcRequestError =>
+            candidate instanceof RpcRequestError,
+        );
+        if (answered !== undefined && typeof answered.code === "number") {
+          return Object.freeze({
+            status: "error" as const,
+            error: Object.freeze({
+              code: answered.code,
+              message: (answered.details || "RPC error").slice(0, 256),
+              data: (answered as { readonly data?: unknown }).data ?? null,
+            }),
+          });
+        }
+        throw new BscReadUnavailableError("BSC_RPC_UNREACHABLE", {
+          cause: error,
+          rpcError: summarizeRpcError(error),
+        });
+      }
     },
 
     async getCode(address: string): Promise<Hex> {

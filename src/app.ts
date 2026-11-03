@@ -61,9 +61,20 @@ import {
   type ApprovalService,
 } from "./features/wallet-intents/approval-service.js";
 import type {
+  DappContractDirectory,
   ProjectNftDirectory,
   WalletIntentRuntime,
 } from "./features/wallet-intents/intent-preparation.js";
+import {
+  createDappIntentService,
+  type DappIntentService,
+} from "./features/wallet-intents/dapp-intent-service.js";
+import { createDappContractDirectory } from "./features/dapp-browser/contract-directory.js";
+import {
+  createDappRpcReadService,
+  type DappRpcReadService,
+} from "./features/dapp-browser/rpc-read-service.js";
+import { createFixedWindowRateLimiter } from "./core/http/fixed-window-rate-limiter.js";
 import {
   createNftSendService,
   projectNftDirectoryFromLaunch2,
@@ -655,6 +666,10 @@ export interface BuildAppOptions {
   /** Decision 0194: test seams for the project NFT send. */
   readonly nftSendService?: NftSendService;
   readonly projectNftDirectory?: ProjectNftDirectory;
+  /** Decision 0197: test seams for the DApp browser. */
+  readonly dappIntentService?: DappIntentService;
+  readonly dappRpcReadService?: DappRpcReadService;
+  readonly dappContractDirectory?: DappContractDirectory;
   readonly approvalService?: ApprovalService;
   readonly swapService?: SwapService;
   readonly walletIntentNow?: () => Date;
@@ -2133,6 +2148,12 @@ export async function buildApp(
       : createPrivySwapAdapter(privyServerClient.wallets()));
   const privySwapRuntimeAvailable =
     options.privySwapAdapter !== undefined || config.privy !== null;
+  const dappSigningClient =
+    launchChainReadClient === null ||
+    config.launchChain.sharedWithPrimary ||
+    launchChainReadClient.chainReference === 56
+      ? null
+      : asChainCallClient(launchChainReadClient);
   const walletIntentRuntime: WalletIntentRuntime = Object.freeze({
     config: Object.freeze({
       bscWrites: config.bscWrites,
@@ -2175,6 +2196,37 @@ export async function buildApp(
         options.projectNftDirectory ??
         projectNftDirectoryFromLaunch2(database.launch2),
     }),
+    // Decision 0197: the DApp browser (DAPP_BROWSER_ENABLED, default off)
+    // signs only on the launch slot when it is a separate testnet; with the
+    // slot on chain 56 there is no signing chain (BSC Mainnet stays closed).
+    dapp: Object.freeze({
+      enabled: config.dappBrowser.enabled,
+      signingChainId: dappSigningClient?.chainId ?? null,
+      signingClient: dappSigningClient,
+      directory:
+        options.dappContractDirectory ??
+        createDappContractDirectory({
+          statics: {
+            chainId: config.launchChain.chainId,
+            loopRouter: config.launch2.dynamicRouter?.address ?? null,
+            poolRouter: config.launch2.poolRouter?.address ?? null,
+            routerRegistry: config.launch2.dynamicRouterRegistry,
+            factories: [
+              ...(config.hooksLaunch.factoryAddress === null
+                ? []
+                : [config.hooksLaunch.factoryAddress]),
+              ...(config.hooksLaunch.dynamicFactory === null
+                ? []
+                : [config.hooksLaunch.dynamicFactory.address]),
+              ...config.launch2.dynamicLegacyFactories,
+            ],
+            launchContract: config.launchContract?.address ?? null,
+            usd1: config.launchContract?.usd1Address ?? null,
+          },
+          launch2: database.launch2,
+          registry: chainRegistryRepository,
+        }),
+    }),
     controlPlane: database.controlPlane,
     marketFacts:
       options.marketFactService !== undefined || marketRuntimeAvailable
@@ -2192,6 +2244,21 @@ export async function buildApp(
     options.sendService ?? createSendService(walletIntentRuntime);
   const nftSendService =
     options.nftSendService ?? createNftSendService(walletIntentRuntime);
+  const dappIntentService =
+    options.dappIntentService ?? createDappIntentService(walletIntentRuntime);
+  // Decision 0197: the read proxy serves eip155:56 and the launch slot.
+  const dappRpcReadService =
+    options.dappRpcReadService ??
+    createDappRpcReadService({
+      enabled: config.dappBrowser.enabled,
+      clients: Object.freeze([
+        asChainCallClient(bscReadClient),
+        ...(dappSigningClient === null ? [] : [dappSigningClient]),
+      ]),
+      limiter: createFixedWindowRateLimiter({
+        perWindow: config.dappBrowser.rpcReadPerMinute,
+      }),
+    });
   const approvalService =
     options.approvalService ?? createApprovalService(walletIntentRuntime);
   const swapService =
@@ -3097,6 +3164,23 @@ export async function buildApp(
                       : null,
           };
         },
+        // Decision 0197: the DApp browser's static pieces.
+        dappBrowserState: () => {
+          const dapp = walletIntentRuntime.dapp ?? null;
+          return {
+            reasonCode:
+              dapp === null || !dapp.enabled
+                ? "DAPP_BROWSER_DISABLED"
+                : !walletIntentRuntimeAvailable ||
+                    !registeredModuleIds.includes("sendApprovals")
+                  ? "SEND_APPROVALS_RUNTIME_DEFERRED"
+                  : config.bscWrites === null
+                    ? "BSC_WRITES_DISABLED"
+                    : dapp.signingClient === null
+                      ? "DAPP_BROWSER_CHAIN_UNAVAILABLE"
+                      : null,
+          };
+        },
         testnetFaucetState: () => ({
           reasonCode: testnetFaucetService.unavailableReason(),
         }),
@@ -3138,6 +3222,8 @@ export async function buildApp(
       walletIntentService,
       sendService,
       nftSendService,
+      dappIntentService,
+      dappRpcReadService,
       approvalService,
       swapService,
       launchService,

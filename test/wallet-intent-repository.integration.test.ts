@@ -836,4 +836,212 @@ describe("PostgreSQL wallet intents, approvals, and migration 000021", () => {
     );
     expect(index.rows).toHaveLength(1);
   });
+  it("stores dapp_tx / dapp_sign intents, hides them unless named, and confirms a signature with only its digest (Decision 0197, 000107)", async () => {
+    const owner = await createOwner();
+    const walletId = await seedWallet(owner);
+    const base = source(randomUUID(), walletId);
+    const policy = {
+      ...base.policy,
+      exposureBasis: "none" as const,
+      exposureRaw: null,
+      exposureBlockNumber: null,
+      valueUsd: null,
+      priceSource: null,
+      priceFetchedAt: null,
+    };
+    const native = {
+      assetId: "eip155:97:native",
+      address: null,
+      symbol: "tBNB",
+      decimals: 18,
+    };
+    const dappReview = {
+      origin: "https://app.example.org",
+      method: "eth_sendTransaction" as const,
+      to: {
+        address: spender,
+        checksumAddress: spender,
+        isContract: true,
+        isVerified: false,
+        knownContract: null,
+      },
+      value: { raw: "0", display: "0" },
+      decodedCall: {
+        functionName: "approve",
+        selector: "0x095ea7b3",
+        standard: "erc20" as const,
+        args: { spender: recipient, amount: "1" },
+        dataLength: 68,
+      },
+      counterparty: null,
+      message: null,
+      typedData: null,
+      riskFlags: ["UNVERIFIED_CONTRACT" as const],
+    };
+    const txSource: IntentSource = {
+      ...base,
+      version: "walletIntentDappTxV1",
+      kind: "dapp_tx",
+      chainId: "eip155:97",
+      asset: native,
+      amount: { raw: "0", display: "0" },
+      recipient: null,
+      decodedCall: null,
+      transaction: {
+        ...(base.transaction as NonNullable<IntentSource["transaction"]>),
+        chainId: 97,
+        to: spender,
+        data: "0x095ea7b3",
+      },
+      policy,
+      dapp: dappReview,
+    };
+    const signSource: IntentSource = {
+      ...base,
+      intentId: randomUUID(),
+      version: "walletIntentDappSignV1",
+      kind: "dapp_sign",
+      chainId: "eip155:97",
+      asset: native,
+      amount: { raw: "0", display: "0" },
+      recipient: null,
+      decodedCall: null,
+      transaction: null,
+      fee: null,
+      simulation: {
+        status: "unavailable",
+        source: "not_applicable",
+        observedAt: base.factsObservedAt,
+        reasonCode: "SIGNATURE_NOT_SIMULATED",
+      },
+      policy,
+      signingMode: "device_personal_sign",
+      dapp: {
+        ...dappReview,
+        method: "personal_sign",
+        to: null,
+        value: null,
+        decodedCall: null,
+        message: {
+          encoding: "utf8",
+          text: "hello",
+          hex: "0x68656c6c6f",
+          byteLength: 5,
+        },
+        riskFlags: [],
+      },
+      signatureRequest: {
+        method: "personal_sign",
+        params: ["hello", walletAddress],
+      },
+    };
+    const created = [];
+    for (const [entry, state] of [
+      [txSource, "awaiting_signature"],
+      [signSource, "awaiting_signature"],
+    ] as const) {
+      const sealed = sealIntent(entry);
+      const operation = await controlPlane.prepareProviderOperation({
+        ownerUserId: owner,
+        scope: "wallet_intent_prepare",
+        idempotencyKey: randomUUID(),
+        keySource: "client",
+        requestSha256: sealed.reviewSha256,
+        domain: "bsc",
+        operationKind: `wallet_intent_${entry.kind}`,
+        requestId: randomUUID(),
+      });
+      created.push(
+        await intents.create({
+          intentId: entry.intentId,
+          ownerUserId: owner,
+          walletId,
+          providerOperationId: operation.operation.id,
+          kind: entry.kind,
+          state,
+          chainId: "eip155:97",
+          canonicalPayload: sealed.canonicalPayload,
+          publicReview: sealed.publicReview,
+          reviewSha256: sealed.reviewSha256,
+          policyConfigVersion: "bscWriteCanaryV1",
+          factsObservedAt: entry.factsObservedAt,
+          expiresAt: entry.expiresAt,
+          simulationStatus: entry.simulation.status,
+          requestId: randomUUID(),
+        }),
+      );
+    }
+    const [tx, sign] = created as [
+      Awaited<ReturnType<typeof intents.create>>,
+      Awaited<ReturnType<typeof intents.create>>,
+    ];
+    // The second prepare superseded the first (one open intent per wallet).
+    expect((await intents.get(owner, tx.intentId))?.state).toBe("expired");
+    expect(sign).toMatchObject({
+      kind: "dapp_sign",
+      publicReview: { dapp: { method: "personal_sign" } },
+      canonicalPayload: {
+        signatureRequest: { method: "personal_sign" },
+      },
+    });
+    expect(
+      (
+        await intents.list({
+          ownerUserId: owner,
+          limit: 10,
+          excludeKinds: ["send_nft", "dapp_tx", "dapp_sign"],
+        })
+      ).items,
+    ).toEqual([]);
+    expect(
+      (await intents.list({ ownerUserId: owner, limit: 10 })).items.map(
+        (item) => item.kind,
+      ),
+    ).toEqual(["dapp_sign", "dapp_tx"]);
+    const digest = "f".repeat(64);
+    const confirmed = await intents.transition({
+      ownerUserId: owner,
+      intentId: sign.intentId,
+      expectedVersion: sign.recordVersion,
+      fromStates: ["awaiting_signature"],
+      toState: "confirmed",
+      eventType: "signature_reported",
+      actorType: "api",
+      requestId: randomUUID(),
+      reasonCode: null,
+      details: { signatureSha256: digest },
+    });
+    expect(confirmed).toMatchObject({
+      state: "confirmed",
+      transactionHash: null,
+      receipt: null,
+    });
+    const event = await pool.query<{
+      event_type: string;
+      details: Record<string, unknown>;
+    }>({
+      text: `select event_type, details from public.wallet_intent_events
+             where intent_id = $1 and event_type = 'signature_reported'`,
+      values: [sign.intentId],
+    });
+    expect(event.rows).toEqual([
+      {
+        event_type: "signature_reported",
+        details: { signatureSha256: digest },
+      },
+    ]);
+    // The payload stays frozen; an unknown kind stays refused.
+    await expect(
+      pool.query({
+        text: `update public.wallet_intents set canonical_payload = '{}'::jsonb where intent_id = $1`,
+        values: [sign.intentId],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      pool.query({
+        text: `update public.wallet_intents set kind = 'dapp_other' where intent_id = $1`,
+        values: [sign.intentId],
+      }),
+    ).rejects.toThrow();
+  });
 });

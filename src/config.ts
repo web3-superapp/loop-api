@@ -1099,6 +1099,13 @@ const environmentSchema = z
     // NFT_SEND_DISABLED and keeps the send preflight on eip155:56 only.
     // Turn on only once a released client decodes the send_nft kind.
     NFT_SEND_ENABLED: z.enum(["off", "on"]),
+    // Decision 0197 (S342): off|on (default off). off makes POST
+    // /v2/wallet-intents/dapp-tx, /dapp-sign and POST /v2/chain/rpc-read
+    // answer 503 CAPABILITY_UNAVAILABLE / DAPP_BROWSER_DISABLED. Turn on
+    // only once a released client decodes the dapp_tx / dapp_sign kinds.
+    DAPP_BROWSER_ENABLED: z.enum(["off", "on"]),
+    // Decision 0197: rpc-read requests per account per minute (default 120).
+    DAPP_RPC_READ_PER_MINUTE: positiveIntegerString(1, 6_000),
     // Decision 0185: true|false (default false; any other value refuses
     // boot). false = a trader / holder address that belongs to an account
     // only through an *external* wallet is never shown next to that account
@@ -2041,6 +2048,14 @@ export interface AppConfig {
   readonly betaFeedbackEnabled: boolean;
   /** Decision 0194: NFT_SEND_ENABLED === "on" (default off). */
   readonly nftSendEnabled: boolean;
+  /**
+   * Decision 0197: the DApp browser — DAPP_BROWSER_ENABLED === "on"
+   * (default off) and DAPP_RPC_READ_PER_MINUTE (default 120).
+   */
+  readonly dappBrowser: {
+    readonly enabled: boolean;
+    readonly rpcReadPerMinute: number;
+  };
   /** Decision 0185: EXTERNAL_WALLET_ADDRESS_PUBLIC (default false). */
   readonly externalWalletAddressPublic: boolean;
   /**
@@ -4570,6 +4585,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     MINING_POOL_SPLIT_EMIT: environment["MINING_POOL_SPLIT_EMIT"] ?? "off",
     BETA_FEEDBACK_ENABLED: environment["BETA_FEEDBACK_ENABLED"] ?? "on",
     NFT_SEND_ENABLED: environment["NFT_SEND_ENABLED"] ?? "off",
+    DAPP_BROWSER_ENABLED: environment["DAPP_BROWSER_ENABLED"] ?? "off",
+    DAPP_RPC_READ_PER_MINUTE: environment["DAPP_RPC_READ_PER_MINUTE"] ?? "120",
     EXTERNAL_WALLET_ADDRESS_PUBLIC:
       environment["EXTERNAL_WALLET_ADDRESS_PUBLIC"] ?? "false",
     LAUNCH2_DEFAULT_SLIPPAGE_BPS:
@@ -4754,6 +4771,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     miningPoolSplitEmit: parsed.data.MINING_POOL_SPLIT_EMIT === "on",
     betaFeedbackEnabled: parsed.data.BETA_FEEDBACK_ENABLED === "on",
     nftSendEnabled: parsed.data.NFT_SEND_ENABLED === "on",
+    dappBrowser: Object.freeze({
+      enabled: parsed.data.DAPP_BROWSER_ENABLED === "on",
+      rpcReadPerMinute: parsed.data.DAPP_RPC_READ_PER_MINUTE,
+    }),
     externalWalletAddressPublic: parsed.data.EXTERNAL_WALLET_ADDRESS_PUBLIC,
     hooksLaunch: {
       enabled: parsed.data.HOOKS_LAUNCH_ENABLED === "on",
