@@ -10,7 +10,7 @@ import {
   toBytes,
   type Hex,
 } from "viem";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   hooksLaunchFixedEconomics,
@@ -25,6 +25,7 @@ import { hooksLaunchDraftOnChainTerms } from "../src/features/launch/hooks-launc
 import {
   createHooksLaunchProjectConfigService,
   HooksLaunchProjectConfigUnavailableError,
+  resetHooksLaunchProjectTermsProbeCache,
   type HooksLaunchProjectConfigRecord,
   type HooksLaunchProjectConfigRepository,
 } from "../src/features/launch/hooks-launch-project-config.js";
@@ -407,6 +408,13 @@ describe("Decision 0199 launch terms: draft hashing and deploy gate", () => {
     expect(() =>
       hooksLaunchDraftOnChainTerms(false, { config, terms }, errors),
     ).toThrow("unsupported");
+    // Default terms saved on the no-probe path: still passed on chain.
+    expect(
+      hooksLaunchDraftOnChainTerms(true, { config: legacyConfig }, errors),
+    ).toEqual({
+      nftPrice: "100000000000000000000",
+      maxCumulativeBuy: "5000000000000000000000000",
+    });
     // Terms saved for another Factory (fixedEconomics without them).
     expect(() =>
       hooksLaunchDraftOnChainTerms(
@@ -419,7 +427,14 @@ describe("Decision 0199 launch terms: draft hashing and deploy gate", () => {
 });
 
 describe("Decision 0199 launch terms: config save", () => {
-  function harness(projectTermsSupported?: () => Promise<boolean>) {
+  beforeEach(() => {
+    resetHooksLaunchProjectTermsProbeCache();
+  });
+
+  function harness(
+    projectTermsSupported?: () => Promise<boolean>,
+    factoryAddress?: string,
+  ) {
     let record: HooksLaunchProjectConfigRecord | null = null;
     const repository: HooksLaunchProjectConfigRepository = {
       getOwnedDraft: () => Promise.resolve(record),
@@ -447,6 +462,9 @@ describe("Decision 0199 launch terms: config save", () => {
         ...(projectTermsSupported === undefined
           ? {}
           : { projectTermsSupported }),
+        ...(factoryAddress === undefined
+          ? {}
+          : { factoryAddress, chainId: 97 }),
       },
       minimumLeadSeconds: 86_400,
       now: () => 1_790_000_000,
@@ -491,8 +509,60 @@ describe("Decision 0199 launch terms: config save", () => {
       harness().save({ walletCapPerMille: 6 }),
     ).rejects.toBeInstanceOf(HooksLaunchProjectTermsUnsupportedError);
     await expect(
-      harness(() => Promise.reject(new Error("rpc"))).save({}),
+      harness(() => Promise.reject(new Error("rpc"))).save({
+        nftPriceUsd1: 200,
+      }),
     ).rejects.toBeInstanceOf(HooksLaunchProjectConfigUnavailableError);
+  });
+
+  it("saves default terms without probing, even with the chain unreachable", async () => {
+    const probe = vi.fn(() => Promise.reject(new Error("rpc down")));
+    const { save } = harness(
+      probe,
+      "0x00000000000000000000000000000000000000f1",
+    );
+    for (const extra of [
+      {},
+      { nftPriceUsd1: null, walletCapPerMille: null },
+      { nftPriceUsd1: 100, walletCapPerMille: 5 },
+    ]) {
+      const saved = await save(extra);
+      expect(saved.terms).toEqual({ nftPriceUsd1: 100, walletCapPerMille: 5 });
+      expect(saved.config.fixedEconomics.nftPriceUsd1Raw).toBe(
+        "100000000000000000000",
+      );
+    }
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("caches the probe per Factory address; a hit reads no chain", async () => {
+    const factory = "0x00000000000000000000000000000000000000f2";
+    const probe = vi.fn(() => Promise.resolve(true));
+    await harness(probe, factory).save({ nftPriceUsd1: 300 });
+    expect(probe).toHaveBeenCalledTimes(1);
+    // Another reader / service of the same Factory: served from the cache,
+    // even if the chain is now unreachable.
+    const down = vi.fn(() => Promise.reject(new Error("rpc down")));
+    const saved = await harness(
+      down,
+      factory.toUpperCase().replace("0X", "0x"),
+    ).save({
+      walletCapPerMille: 9,
+    });
+    expect(saved.config.fixedEconomics.perAddressLifetimeBuyCapRaw).toBe(
+      "9000000000000000000000000",
+    );
+    expect(down).not.toHaveBeenCalled();
+    // A failed probe is not cached.
+    const other = "0x00000000000000000000000000000000000000f3";
+    await expect(
+      harness(down, other).save({ nftPriceUsd1: 2 }),
+    ).rejects.toBeInstanceOf(HooksLaunchProjectConfigUnavailableError);
+    const up = vi.fn(() => Promise.resolve(false));
+    await expect(
+      harness(up, other).save({ nftPriceUsd1: 2 }),
+    ).rejects.toBeInstanceOf(HooksLaunchProjectTermsUnsupportedError);
+    expect(up).toHaveBeenCalledTimes(1);
   });
 });
 

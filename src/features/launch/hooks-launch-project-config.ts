@@ -25,7 +25,8 @@ export type HooksLaunchTemplateFactory = Pick<
   | "loopDynamicTemplate"
   | "tickerTextRule"
   | "projectTermsSupported"
->;
+> &
+  Partial<Pick<HooksLaunchFactoryReader, "factoryAddress" | "chainId">>;
 
 export interface HooksLaunchProjectConfigRecord {
   readonly projectId: string;
@@ -208,34 +209,63 @@ export async function assertHooksLaunchFactorySupportsTicker(
  * reader without the probe answers false; a failing probe rejects.
  */
 export async function hooksLaunchFactorySupportsProjectTerms(
-  factory: Pick<HooksLaunchFactoryReader, "projectTermsSupported"> | null,
+  factory: HooksLaunchTermsProbeFactory | null,
 ): Promise<boolean> {
   if (factory?.projectTermsSupported === undefined) return false;
-  return factory.projectTermsSupported();
+  // Coordinator ruling 2026-11-04: the answer is cached per Factory address
+  // for the process lifetime (code-hash pinned bytecode never changes; a
+  // restart probes again); a hit never reads the chain. Failures are not
+  // cached.
+  const key =
+    factory.factoryAddress === undefined
+      ? null
+      : `${String(factory.chainId ?? "")}:${factory.factoryAddress.toLowerCase()}`;
+  if (key !== null) {
+    const cached = projectTermsProbeCache.get(key);
+    if (cached !== undefined) return cached;
+  }
+  const supported = await factory.projectTermsSupported();
+  if (key !== null) projectTermsProbeCache.set(key, supported);
+  return supported;
+}
+
+/** Decision 0199: the reader surface the terms probe needs. */
+export type HooksLaunchTermsProbeFactory = Pick<
+  HooksLaunchFactoryReader,
+  "projectTermsSupported"
+> &
+  Partial<Pick<HooksLaunchFactoryReader, "factoryAddress" | "chainId">>;
+
+const projectTermsProbeCache = new Map<string, boolean>();
+
+/** Test seam: forget every cached probe answer. */
+export function resetHooksLaunchProjectTermsProbeCache(): void {
+  projectTermsProbeCache.clear();
 }
 
 /**
- * Decision 0199: the terms policy of a config save. An S359 Factory gets
- * the applicant's terms hashed into fixedEconomics (`projectTerms`); a
- * pre-S359 Factory only accepts the defaults (unchanged configHash) and
- * refuses others with `HooksLaunchProjectTermsUnsupportedError`. An
- * unreadable probe is `HooksLaunchProjectConfigUnavailableError("factory")`.
+ * Decision 0199: the terms policy of a config save.
+ * - Default terms (both absent or 100 / 5): no probe, the pre-S359 path
+ *   (unchanged fixedEconomics / configHash) — a save never fails because
+ *   the probe is unreachable (coordinator ruling 2026-11-04).
+ * - Non-default terms: an S359 Factory gets them hashed into fixedEconomics
+ *   (`projectTerms`); a pre-S359 Factory refuses them with
+ *   `HooksLaunchProjectTermsUnsupportedError`; an unreadable probe is
+ *   `HooksLaunchProjectConfigUnavailableError("factory")`.
  */
 export async function hooksLaunchFactoryTermsPolicy(
-  factory: Pick<HooksLaunchFactoryReader, "projectTermsSupported"> | null,
+  factory: HooksLaunchTermsProbeFactory | null,
   terms: HooksLaunchProjectTerms,
 ): Promise<{ readonly projectTerms?: HooksLaunchProjectTerms }> {
+  if (isDefaultHooksLaunchProjectTerms(terms)) return {};
   let supported: boolean;
   try {
     supported = await hooksLaunchFactorySupportsProjectTerms(factory);
   } catch {
     throw new HooksLaunchProjectConfigUnavailableError("factory");
   }
-  if (supported) return { projectTerms: terms };
-  if (!isDefaultHooksLaunchProjectTerms(terms)) {
-    throw new HooksLaunchProjectTermsUnsupportedError();
-  }
-  return {};
+  if (!supported) throw new HooksLaunchProjectTermsUnsupportedError();
+  return { projectTerms: terms };
 }
 
 /**

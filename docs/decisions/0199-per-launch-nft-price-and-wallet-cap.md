@@ -41,10 +41,18 @@ integer not null default 5`, range checks). Every saved version carries
   `LAUNCH2_NFT_PRICE_INVALID` / `LAUNCH2_WALLET_CAP_INVALID` and
   `detailsSafe.field`. (A JSON string is coerced by the route schema like
   every other number; a non-numeric string is the generic 400.)
-- Factory generation probe: `DEFAULT_NFT_PRICE()` (0xef14e547) answers on an
-  S359 Factory; a missing-function revert = older Factory; any other read
-  failure = `503 CAPABILITY_UNAVAILABLE` / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`
-  (fail closed, never a default). Cached per reader (code-hash pinned).
+- Factory generation probe (coordinator ruling 2026-11-04):
+  `DEFAULT_NFT_PRICE()` (0xef14e547) answers on an S359 Factory; a
+  missing-function revert = older Factory. Default terms (both absent /
+  null, or exactly 100 / 5) are saved on the pre-S359 path **without
+  probing**, so a save never fails on an unreachable probe. The answer is
+  cached in process per `chainId:factoryAddress` (no expiry; a restart
+  probes again; failures are not cached); a cache hit reads no chain. Only
+  non-default terms with an unreadable probe are `503 CAPABILITY_UNAVAILABLE`
+  / `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`. Signing request and submission use
+  the same cache; on an S359 Factory a default-terms draft (template
+  fixedEconomics) still signs and deploys `nftPrice = 100e18`,
+  `maxCumulativeBuy = 5e24`.
 - Older Factory + non-default terms = `422 VALIDATION_FAILED` /
   `HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY` (save, signing request, and
   submission). Default terms keep working on every Factory.

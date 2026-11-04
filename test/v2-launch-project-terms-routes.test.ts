@@ -1,14 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { privateKeyToAccount } from "viem/accounts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import type { AccountWalletRepository } from "../src/database/account-wallet-repository.js";
 import type { Database } from "../src/database/database.js";
 import type { HooksLaunchFactoryReader } from "../src/features/launch/hooks-launch-deployment.js";
-import type {
-  HooksLaunchProjectConfigRecord,
-  HooksLaunchProjectConfigRepository,
+import {
+  resetHooksLaunchProjectTermsProbeCache,
+  type HooksLaunchProjectConfigRecord,
+  type HooksLaunchProjectConfigRepository,
 } from "../src/features/launch/hooks-launch-project-config.js";
 import type {
   HooksLaunchDeploymentJob,
@@ -142,6 +143,9 @@ const job = {
 
 describe("Decision 0199 launch terms on the Hooks routes", () => {
   const apps: FastifyInstance[] = [];
+  beforeEach(() => {
+    resetHooksLaunchProjectTermsProbeCache();
+  });
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });

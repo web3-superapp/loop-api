@@ -122,8 +122,8 @@ export interface HooksLaunchFactoryReader {
 /**
  * Decision 0199: the launch terms a deployment of `draft` signs and passes
  * to the Factory. S359 Factory (`supported`): the draft's terms as on-chain
- * values, which its saved fixedEconomics must already show (a draft saved
- * for another Factory → `mismatch`). Pre-S359 Factory: null (the struct has
+ * values; non-default terms must already show in its saved fixedEconomics
+ * (a draft saved for another Factory → `mismatch`). Pre-S359 Factory: null (the struct has
  * no such fields; the Factory deploys 100 USD1 / its own cap), and a draft
  * with non-default terms is refused (`unsupported`).
  */
@@ -138,6 +138,10 @@ export function hooksLaunchDraftOnChainTerms(
     return null;
   }
   const onChain = hooksLaunchProjectTermsOnChain(terms);
+  // Coordinator ruling 2026-11-04: default terms are saved on the pre-S359
+  // path (no probe), so their fixedEconomics keeps the template values; the
+  // signed LaunchRequest still binds the actual nftPrice / maxCumulativeBuy.
+  if (isDefaultHooksLaunchProjectTerms(terms)) return onChain;
   const economics = draft.config.fixedEconomics as Readonly<
     Record<string, unknown>
   >;
