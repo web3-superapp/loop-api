@@ -1063,6 +1063,25 @@ export const launch2InstanceDetailResourceSchema = {
         ...detailProperties,
         nftImageUrl: launch2NftImageUrlSchema,
         pool: poolSummarySchema,
+        // Decision 0199: present only while LAUNCH2_PROJECT_TERMS_EMIT=on.
+        nftPriceUsd1: {
+          type: ["integer", "null"],
+          minimum: 1,
+          description:
+            "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the instance's verified medal NFT price in whole USD1 (ProjectNFT.PRICE() / 1e18; 100 for every pre-S359 launch). null only if the on-chain price is not a whole USD1.",
+        },
+        walletCapPerMille: {
+          type: ["integer", "null"],
+          minimum: 1,
+          description:
+            "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the curve's per-address purchase cap in whole permille of the 1e9 MEME supply (maxCumulativeBuyRaw / 1e24). null when the cap is not a whole permille (a pre-S359 Factory admin value); maxCumulativeBuyRaw is always exact.",
+        },
+        maxCumulativeBuyRaw: {
+          type: "string",
+          pattern: "^[1-9][0-9]{0,77}$",
+          description:
+            "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the curve's verified maxCumulativeBuy(), raw MEME (18 decimals); same value as template.perAddressCap in raw units.",
+        },
       },
     },
     contractVersion: contractVersionSchema,

@@ -218,6 +218,50 @@ describe("Hooks owner drafts (000051)", () => {
     ).rejects.toThrow(/append-only/);
   });
 
+  it("stores each version's launch terms, defaults when absent (Decision 0199, 000108)", async () => {
+    const { owner, projectId } = await ownerDraft();
+    const first = await configs.getOwnedDraft({
+      projectId,
+      ownerUserId: owner,
+    });
+    expect(first?.terms).toEqual({ nftPriceUsd1: 100, walletCapPerMille: 5 });
+    const second = await configs.saveOwnedDraft({
+      projectId,
+      ownerUserId: owner,
+      expectedVersion: 1,
+      templateVersion: draft.templateVersion,
+      configHash: draft.configHash,
+      config: draft,
+      terms: { nftPriceUsd1: 1_000, walletCapPerMille: 12 },
+      updatedByUserId: owner,
+    });
+    expect(second.terms).toEqual({
+      nftPriceUsd1: 1_000,
+      walletCapPerMille: 12,
+    });
+    expect(
+      (await configs.getOwnedDraft({ projectId, ownerUserId: owner }))?.terms,
+    ).toEqual({ nftPriceUsd1: 1_000, walletCapPerMille: 12 });
+    expect(await configs.getLatestTerms?.(projectId)).toEqual({
+      nftPriceUsd1: 1_000,
+      walletCapPerMille: 12,
+    });
+    expect(await configs.getLatestTerms?.(randomUUID())).toBeNull();
+    for (const [column, value] of [
+      ["nft_price_usd1", 0],
+      ["nft_price_usd1", 1_001],
+      ["wallet_cap_per_mille", 0],
+      ["wallet_cap_per_mille", 1_001],
+    ] as const) {
+      await expect(
+        pool.query(
+          `insert into public.hooks_launch_project_config_versions (project_id, config_version, owner_user_id, template_version, config_hash, config, ${column}) values ($1, 99, $2, 'hooks_launch_v1', $3, $4::jsonb, $5)`,
+          [projectId, owner, draft.configHash, JSON.stringify(draft), value],
+        ),
+      ).rejects.toThrow(/_check/);
+    }
+  });
+
   it("refuses economic override keys in stored config", async () => {
     const owner = await user();
     const projectId = await project(owner);

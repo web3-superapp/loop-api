@@ -1,4 +1,4 @@
-export const latestMigrationName = "000107_wallet_intent_dapp_kinds";
+export const latestMigrationName = "000108_launch_project_terms";
 
 export const requiredDatabaseRelations = Object.freeze([
   "public.loop_users",

@@ -8,6 +8,11 @@ import {
   normalizeLaunchTokenTicker,
 } from "./launch-token-text.js";
 import { isIpfsCid } from "../media/media-contract.js";
+import {
+  hooksLaunchProjectTermsOnChain,
+  isHooksLaunchProjectTerms,
+  type HooksLaunchProjectTerms,
+} from "./hooks-launch-project-terms.js";
 
 /** Immutable economics for the user-approved LOOP Hooks launch template. */
 export const hooksLaunchTemplateVersion = "hooks_launch_v1" as const;
@@ -327,6 +332,39 @@ export function hooksLaunchLoopDynamicFixedEconomics(
   });
 }
 
+/**
+ * Decision 0199: an S359 Factory deploys each launch with the applicant's
+ * NFT price (also the buyback order amount) and purchase cap. They replace
+ * the template values in place (same keys, same positions — the App
+ * codecs are unchanged), so the configHash the project signs binds them.
+ */
+export function hooksLaunchFixedEconomicsWithTerms(
+  base: HooksLaunchFixedEconomics | Readonly<Record<string, unknown>>,
+  terms: HooksLaunchProjectTerms,
+): Readonly<Record<string, unknown>> {
+  if (!isHooksLaunchProjectTerms(terms)) {
+    throw new InvalidHooksLaunchDraftError();
+  }
+  const onChain = hooksLaunchProjectTermsOnChain(terms);
+  const loopDynamic = (base as { readonly loopDynamic?: unknown }).loopDynamic;
+  return Object.freeze({
+    ...base,
+    nftPriceUsd1Raw: onChain.nftPrice,
+    perAddressLifetimeBuyCapRaw: onChain.maxCumulativeBuy,
+    buybackOrderUsd1Raw: onChain.nftPrice,
+    ...(typeof loopDynamic === "object" &&
+    loopDynamic !== null &&
+    "maxCumulativeBuy" in loopDynamic
+      ? {
+          loopDynamic: Object.freeze({
+            ...loopDynamic,
+            maxCumulativeBuy: onChain.maxCumulativeBuy,
+          }),
+        }
+      : {}),
+  });
+}
+
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
 const unsignedDecimalPattern = /^(0|[1-9][0-9]{0,19})$/;
 const UINT64_MAX = (1n << 64n) - 1n;
@@ -437,17 +475,30 @@ export function parseHooksLaunchDraft(
      * (`MediaService.resolveProjectNftImage`); ignored without a picture.
      */
     readonly nftImageCid?: string | null;
+    /**
+     * Decision 0199: the applicant's launch terms, passed only when the
+     * target Factory takes per-launch terms (S359). Absent: the template's
+     * fixedEconomics (and configHash) are byte-identical to before.
+     */
+    readonly projectTerms?: HooksLaunchProjectTerms;
   },
 ): HooksLaunchDraft {
   const officialEconomics = hooksLaunchFixedEconomicsFor(
     policy.nftSaleDurationSeconds,
   );
-  const fixedEconomics =
+  const templateEconomics =
     policy.loopDynamic === undefined
       ? officialEconomics
       : hooksLaunchLoopDynamicFixedEconomics(
           officialEconomics,
           policy.loopDynamic,
+        );
+  const fixedEconomics =
+    policy.projectTerms === undefined
+      ? templateEconomics
+      : hooksLaunchFixedEconomicsWithTerms(
+          templateEconomics,
+          policy.projectTerms,
         );
   const templateHash =
     policy.loopDynamic === undefined

@@ -1,4 +1,9 @@
 import type { LaunchChainReference } from "../chain/chain-contract.js";
+import {
+  hooksLaunchDefaultProjectTerms,
+  hooksLaunchProjectTermsView,
+  type HooksLaunchProjectTerms,
+} from "../launch/hooks-launch-project-terms.js";
 import type { HooksLaunchDeploymentStatus } from "../launch/hooks-launch-deployment-status.js";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -553,6 +558,15 @@ export function createAdminLaunchReviewConsoleService(options: {
    */
   readonly factoryPurchaseCap?: AdminLaunchFactoryPurchaseCapSource | null;
   /**
+   * Decision 0199: `LAUNCH2_PROJECT_TERMS_EMIT` and the reader of the
+   * project's newest config version terms (null = none saved → defaults).
+   * Absent / emit off: the detail's `project` is byte-identical to before.
+   */
+  readonly projectTerms?: {
+    readonly emit: boolean;
+    latest(projectId: string): Promise<HooksLaunchProjectTerms | null>;
+  } | null;
+  /**
    * Decision 0117: the chain deployments go to (`LAUNCH_CHAIN_ID`), shown
    * next to the template's `fixedEconomics.chainId` (always 56).
    */
@@ -1016,8 +1030,19 @@ export function createAdminLaunchReviewConsoleService(options: {
             reasonCode: adminReasonCodes.launchProjectNotFound,
           });
         }
+        // Decision 0199: the application's launch terms on `project`.
+        const termsSource = options.projectTerms ?? null;
+        const terms =
+          termsSource !== null && termsSource.emit
+            ? hooksLaunchProjectTermsView(
+                (await termsSource.latest(detail.project.projectId)) ??
+                  hooksLaunchDefaultProjectTerms,
+              )
+            : null;
+        const summary = projectSummary(detail.project);
         return Object.freeze({
-          project: projectSummary(detail.project),
+          project:
+            terms === null ? summary : Object.freeze({ ...summary, ...terms }),
           versions: detail.versions,
           testnetAcceptances: detail.testnetAcceptances,
           deploymentTasks: detail.deploymentTasks,

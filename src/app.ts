@@ -2299,6 +2299,17 @@ export async function buildApp(
     (launchRuntimeAvailable
       ? createLaunchService({
           repository: database.launch ?? createUnavailableLaunchRepository(),
+          // Decision 0199: GET /v2/launch/projects/{id} launch terms.
+          projectTerms:
+            database.hooksLaunchProjectConfigs?.getLatestTerms === undefined
+              ? null
+              : {
+                  emit: config.launch2.projectTermsEmit,
+                  latest: (projectId: string) =>
+                    database.hooksLaunchProjectConfigs?.getLatestTerms?.(
+                      projectId,
+                    ) ?? Promise.resolve(null),
+                },
           cursorCodec: v2CursorCodec,
           contract: launchContractAdapter,
           chain: database.launchChain ?? null,
@@ -2418,6 +2429,8 @@ export async function buildApp(
         minimumLeadSeconds: config.hooksLaunch.minimumSaleLeadSeconds,
         // Decision 0122: LAUNCH2_BUYBACK_RECIPIENT (null fails saves closed).
         fixedBuybackRecipient: config.hooksLaunch.fixedBuybackRecipient,
+        // Decision 0199: LAUNCH2_PROJECT_TERMS_EMIT (draft read keys).
+        projectTermsEmit: config.launch2.projectTermsEmit,
         // Decision 0173: nftImageAssetUrl must be the owner's own upload.
         nftImages:
           options.mediaService !== undefined || mediaStorageComposed
@@ -2658,6 +2671,8 @@ export async function buildApp(
           nftImageEmit: config.launch2.nftImageEmit,
           // Decision 0194: off (default) omits `nft.heldTokenIds`.
           nftHeldTokenIdsEmit: config.launch2.nftHeldTokenIdsEmit,
+          // Decision 0199: off (default) omits the instance launch terms.
+          projectTermsEmit: config.launch2.projectTermsEmit,
           // Decision 0174: off (default) omits position price / value.
           positionValueEmit: config.launch2.positionValueEmit,
           // Decision 0176: off (default) omits position cost / PnL.
@@ -3380,6 +3395,17 @@ export async function buildApp(
       }),
       launchReview: createAdminLaunchReviewConsoleService({
         repository: database.adminLaunchReview ?? null,
+        // Decision 0199: launch terms on the detail's `project`.
+        projectTerms:
+          database.hooksLaunchProjectConfigs?.getLatestTerms === undefined
+            ? null
+            : {
+                emit: config.launch2.projectTermsEmit,
+                latest: (projectId: string) =>
+                  database.hooksLaunchProjectConfigs?.getLatestTerms?.(
+                    projectId,
+                  ) ?? Promise.resolve(null),
+              },
         // Decision 0195: the target Factory's live cap for new launches.
         factoryPurchaseCap:
           hooksFactoryReader?.factoryPurchaseCap === undefined

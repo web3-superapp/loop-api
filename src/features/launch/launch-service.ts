@@ -6,6 +6,11 @@ import {
 import { V2ApiError } from "../../core/http/v2-error.js";
 import { v2ContractVersion } from "../meta/product-policy.js";
 import {
+  hooksLaunchDefaultProjectTerms,
+  hooksLaunchProjectTermsView,
+  type HooksLaunchProjectTerms,
+} from "./hooks-launch-project-terms.js";
+import {
   InvalidLaunchRequestError,
   canonicalLaunchFilter,
   launchCommandDigest,
@@ -94,6 +99,16 @@ import {
 
 export interface LaunchServiceDependencies {
   readonly repository: LaunchRepository;
+  /**
+   * Decision 0199: `LAUNCH2_PROJECT_TERMS_EMIT` and the reader of a
+   * project's application terms (its newest Hooks config version; null =
+   * none saved yet → the defaults). Absent / emit off: GET
+   * /v2/launch/projects/{id} is byte-identical to before.
+   */
+  readonly projectTerms?: {
+    readonly emit: boolean;
+    latest(projectId: string): Promise<HooksLaunchProjectTerms | null>;
+  } | null;
   readonly cursorCodec: V2CursorCodec | null;
   /**
    * Launch contract adapter (Decision 0076). Absent or unconfigured keeps
@@ -1530,11 +1545,24 @@ export function createLaunchService(
           input.principal,
           input.projectId,
         );
+        const projection = projectProjection(
+          record,
+          record.ownerUserId === input.principal.userId ? "owner" : "public",
+        );
+        // Decision 0199: the application's launch terms, behind the switch.
+        const termsSource = dependencies.projectTerms ?? null;
+        const terms =
+          termsSource !== null && termsSource.emit
+            ? hooksLaunchProjectTermsView(
+                (await termsSource.latest(record.projectId)) ??
+                  hooksLaunchDefaultProjectTerms,
+              )
+            : null;
         return Object.freeze({
-          project: projectProjection(
-            record,
-            record.ownerUserId === input.principal.userId ? "owner" : "public",
-          ),
+          project:
+            terms === null
+              ? projection
+              : Object.freeze({ ...projection, ...terms }),
           contractVersion: v2ContractVersion,
         });
       } catch (error) {

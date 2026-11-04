@@ -1,5 +1,6 @@
 import { hashTypedData, recoverAddress, type Hex } from "viem";
 
+import { hooksLaunchProjectTermsArgs } from "./hooks-launch-project-terms.js";
 import {
   launchSlotRefusal,
   testnetLaunchSlot,
@@ -269,6 +270,12 @@ export interface HooksLaunchDeployCall {
     readonly buybackRecipient: string;
     readonly deadline: bigint;
     readonly memeSalt: string;
+    /**
+     * Decision 0199: an S359 Factory's launch terms (USD1 wei / raw MEME),
+     * as signed; absent for older Factories (the struct has no such fields).
+     */
+    readonly nftPrice?: bigint;
+    readonly maxCumulativeBuy?: bigint;
   };
   readonly hookSalt: string;
   readonly signature: string;
@@ -469,6 +476,8 @@ async function authorizationValid(input: {
         nftSaleStart: BigInt(request.nftSaleStart),
         deadline: BigInt(request.deadline),
         nonce: BigInt(request.nonce),
+        // Decision 0199: S359 terms (absent on older Factories).
+        ...hooksLaunchProjectTermsArgs(request),
       },
     });
     const signer = await recoverAddress({
@@ -496,6 +505,7 @@ function deployCallOf(
       buybackRecipient: request.buybackRecipient.toLowerCase(),
       deadline: BigInt(request.deadline),
       memeSalt: request.memeSalt.toLowerCase(),
+      ...(hooksLaunchProjectTermsArgs(request) ?? {}),
     }),
     hookSalt: payload.hookSalt.toLowerCase(),
     signature: payload.signature.toLowerCase(),
@@ -1019,6 +1029,7 @@ export function createHooksLaunchExecutor(options: {
     payload: HooksLaunchSignedSubmission,
   ): HooksLaunchExpectedDeployment {
     const request = payload.request;
+    const terms = hooksLaunchProjectTermsArgs(request);
     return {
       factoryAddress: task.factoryAddress,
       factoryCodeHash: policy.factoryCodeHash,
@@ -1039,6 +1050,8 @@ export function createHooksLaunchExecutor(options: {
       hookSalt: payload.hookSalt.toLowerCase(),
       predictedMemeAddress: task.memeAddress,
       predictedHookAddress: task.hookAddress,
+      // Decision 0199: the signed S359 terms are what the chain must show.
+      ...(terms === null ? {} : { projectTerms: terms }),
     };
   }
 
@@ -1125,6 +1138,10 @@ export function createHooksLaunchExecutor(options: {
           curveMaxCumulativeBuy: (facts.curve?.maxCumulativeBuy ?? 0n).toString(
             10,
           ),
+          // Decision 0199: the verified NFT price (USD1 wei) the launch2
+          // read model prices mints and buyback orders with; tasks verified
+          // before 0199 lack it (their NFTs were exactly 100 USD1).
+          nftPrice: (facts.nft?.price ?? 0n).toString(10),
           ...(facts.factory.nftSaleDurationLegacy
             ? { legacyFactory: true }
             : {}),

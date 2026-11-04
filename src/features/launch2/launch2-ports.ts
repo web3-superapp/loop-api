@@ -653,6 +653,12 @@ export interface Launch2InstanceRecord {
    * constant.
    */
   readonly curvePurchaseCap?: string;
+  /**
+   * Decision 0199: the verified medal NFT price (USD1 wei integer string;
+   * the executor's `verification.nftPrice`, 100 USD1 for launches verified
+   * before 0199). Absent = that constant.
+   */
+  readonly nftPrice?: string;
   readonly deployBlockNumber: string;
   readonly activationBlockNumber: string | null;
   readonly deployedEventSeen: boolean;

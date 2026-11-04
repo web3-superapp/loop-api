@@ -1625,3 +1625,9 @@ this batch): `launch2-capabilities.json` (capability row), `launch2-instances-li
 token ID（十进制字符串，升序，最多 100；来自已索引的 ERC-721 `Transfer`，每个 token 最后一次转入者即 owner；
 没有时为 `[]`）。开关默认 off，off 时两处 `nft` 与之前逐字节相同。shipped App 的 `nft` 解码是严格键集，必须先发版接受
 该可选键再开开关。用途：`POST /v2/wallet-intents/send-nft` 的 `tokenId`（见 `docs/frontend-v2-nft-send-api.md`）。
+
+## 决策 0199（S359）：实例的 NFT 售价与单地址限额（可选键，默认不发）
+
+开关 `LAUNCH2_PROJECT_TERMS_EMIT=on` 时 `GET /v2/launch2/instances/{instanceId}` 的 `instance` 多三个键：`nftPriceUsd1`（整数 USD1 或 `null`）、`walletCapPerMille`（整数 ‰ 或 `null`）、`maxCumulativeBuyRaw`（raw MEME 字符串，= `template.perAddressCap` 的 raw 值）。off 时不发；App 缺省回落 100 / 5。值来自执行器核验的链上 `ProjectNFT.PRICE()` 与 `curve.maxCumulativeBuy()`，S359 之前的实例为 100 / 5。
+
+无论开关：`template.nftPriceUsd1`、`template.buybackOrderUsd1`、`nftSale.priceUsd1`、`POST …/nft/prepare` 的授权与 `amountIn`、`INSUFFICIENT_BALANCE` 的 `requiredUsd1` 都按实例价格；报价 `max` 的每地址剩余额度读曲线自己的 `maxCumulativeBuy()`（不是 0.5 % 常量）。申请侧写法见 `docs/frontend-v2-hooks-launch-api.md` §15。

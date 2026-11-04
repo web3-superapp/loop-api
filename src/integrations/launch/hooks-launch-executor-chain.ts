@@ -62,6 +62,10 @@ import {
   snapshotRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
 import { legacyS200CurveEngineAbi } from "./hooks-launch-protocol-abi-legacy-s200.js";
+import {
+  hooksLaunchFactoryTermsAbi,
+  hooksLaunchModuleTermsAbi,
+} from "./hooks-launch-factory-terms-abi.js";
 
 /**
  * Decision 0112: the executor's BSC Testnet client. It signs exactly two
@@ -204,6 +208,21 @@ export function createHooksLaunchExecutorChain(input: {
     name: string,
     args: readonly unknown[] = [],
   ): Promise<bigint> => BigInt(String(await read(target, abi, name, args)));
+  /**
+   * Decision 0199: `BuybackExecutor.orderAmount()` (S359) or the kept
+   * `ORDER_AMOUNT()`; undefined when neither answers (the verifier only
+   * requires it for a launch with project terms).
+   */
+  const orderAmount = async (target: string): Promise<bigint | undefined> => {
+    for (const name of ["orderAmount", "ORDER_AMOUNT"]) {
+      try {
+        return await big(target, hooksLaunchModuleTermsAbi, name);
+      } catch {
+        // try the next getter name
+      }
+    }
+    return undefined;
+  };
   const num = async (target: string, abi: Abi, name: string): Promise<number> =>
     Number(await read(target, abi, name));
   const bool = async (
@@ -213,6 +232,27 @@ export function createHooksLaunchExecutorChain(input: {
   ): Promise<boolean> => (await read(target, abi, name)) === true;
   const str = async (target: string, abi: Abi, name: string): Promise<string> =>
     String(await read(target, abi, name));
+
+  /**
+   * Decision 0199: the `deployLaunch` calldata — an S359 request (terms
+   * present) uses the extended tuple (`hooksLaunchFactoryTermsAbi`).
+   */
+  function deployData(call: HooksLaunchDeployCall): Hex {
+    const [request, hookSalt, signature] = deployArgs(call);
+    const { nftPrice, maxCumulativeBuy } = call.request;
+    if (nftPrice === undefined || maxCumulativeBuy === undefined) {
+      return encodeFunctionData({
+        abi: loopLaunchFactoryAbi,
+        functionName: "deployLaunch",
+        args: [request, hookSalt, signature],
+      });
+    }
+    return encodeFunctionData({
+      abi: hooksLaunchFactoryTermsAbi,
+      functionName: "deployLaunch",
+      args: [{ ...request, nftPrice, maxCumulativeBuy }, hookSalt, signature],
+    });
+  }
 
   function deployArgs(call: HooksLaunchDeployCall) {
     return [
@@ -484,6 +524,9 @@ export function createHooksLaunchExecutorChain(input: {
             B,
             "resumeAuthority",
           ),
+          ...(await orderAmount(modules.buybackExecutor).then((value) =>
+            value === undefined ? {} : { orderAmount: value },
+          )),
         }))(),
         (async () => ({
           launchId: lower(await str(modules.snapshots, S, "launchId")),
@@ -1023,13 +1066,7 @@ export function createHooksLaunchExecutorChain(input: {
       return client.getGasPrice();
     },
     async estimateDeploy(call) {
-      return estimate(
-        encodeFunctionData({
-          abi: loopLaunchFactoryAbi,
-          functionName: "deployLaunch",
-          args: deployArgs(call),
-        }),
-      );
+      return estimate(deployData(call));
     },
     async estimateActivate(launchId, configHash) {
       return estimate(
@@ -1041,14 +1078,7 @@ export function createHooksLaunchExecutorChain(input: {
       );
     },
     async signDeploy(call, tx) {
-      return sign(
-        encodeFunctionData({
-          abi: loopLaunchFactoryAbi,
-          functionName: "deployLaunch",
-          args: deployArgs(call),
-        }),
-        tx,
-      );
+      return sign(deployData(call), tx);
     },
     async signActivate(launchId, configHash, tx) {
       return sign(

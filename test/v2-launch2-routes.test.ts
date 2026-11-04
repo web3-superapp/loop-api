@@ -329,6 +329,62 @@ describe("V2 launch2 routes (Decision 0114)", () => {
     expect(orphanDetail.instance).toMatchObject({ summary: null, links: [] });
   });
 
+  it("emits the instance launch terms only with LAUNCH2_PROJECT_TERMS_EMIT=on and prices the template per instance (Decision 0199)", async () => {
+    const repository = createInMemoryLaunch2Repository();
+    const custom = instanceFixture({
+      nftPrice: "300000000000000000000",
+      curvePurchaseCap: "8000000000000000000000000",
+    });
+    const legacy = instanceFixture();
+    repository.instances.set(custom.instanceId, custom);
+    repository.instances.set(legacy.instanceId, legacy);
+    const off = (await createApp({ repository })).app;
+    const offResponse = await get(
+      off,
+      `/v2/launch2/instances/${custom.instanceId}`,
+    );
+    expect(offResponse.statusCode).toBe(200);
+    const offDetail = offResponse.json<{ instance: Record<string, unknown> }>()
+      .instance;
+    expect(offDetail).not.toHaveProperty("nftPriceUsd1");
+    expect(offDetail).not.toHaveProperty("walletCapPerMille");
+    expect(offDetail).not.toHaveProperty("maxCumulativeBuyRaw");
+    expect(offDetail["template"]).toMatchObject({
+      nftPriceUsd1: "300",
+      buybackOrderUsd1: "300",
+      perAddressCap: "8000000",
+    });
+    // The NFT page price follows the instance too (switch independent).
+    expect(offDetail["nftSale"]).toMatchObject({ priceUsd1: "300" });
+    const on = (
+      await createApp({
+        repository,
+        env: { LAUNCH2_PROJECT_TERMS_EMIT: "on" },
+      })
+    ).app;
+    const onResponse = await get(
+      on,
+      `/v2/launch2/instances/${custom.instanceId}`,
+    );
+    expect(onResponse.statusCode).toBe(200);
+    expect(
+      onResponse.json<{ instance: Record<string, unknown> }>().instance,
+    ).toMatchObject({
+      nftPriceUsd1: 300,
+      walletCapPerMille: 8,
+      maxCumulativeBuyRaw: "8000000000000000000000000",
+    });
+    expect(
+      (await get(on, `/v2/launch2/instances/${legacy.instanceId}`)).json<{
+        instance: Record<string, unknown>;
+      }>().instance,
+    ).toMatchObject({
+      nftPriceUsd1: 100,
+      walletCapPerMille: 5,
+      maxCumulativeBuyRaw: "5000000000000000000000000",
+    });
+  });
+
   it("drops a hidden instance from every list, keeps its detail, and never sends listing on /v2 (Decision 0163)", async () => {
     const repository = createInMemoryLaunch2Repository();
     const shown = instanceFixture();

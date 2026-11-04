@@ -548,3 +548,69 @@ NFT 发售时长展示取 `config.fixedEconomics.nftSaleDurationSeconds`，不�
 - `GET …/hooks-deployments/{jobId}`：激活后 `addresses.deployed.hook` 与 `addresses.deployed.priceRecorder` 为 `0x0000000000000000000000000000000000000000`（Hook 在毕业交易里部署；预测地址见 `addresses.predicted.hook`）。不要把零地址当错误。
 - 种类与模板不一致（例如开关切换前保存的旧版本）：签名准备 / 提交 503 `HOOKS_FACTORY_TEMPLATE_MISMATCH`，提示项目方重新保存并重新审核。LoopDynamic 工厂未配置或其模板读不到：503 `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`。
 - 实例毕业后的外盘交易 / 奖励面板见 `docs/frontend-v2-launch2-api.md` §3.12。
+
+## 15. 每项目 NFT 售价与单地址限额（S359 / 决策 0199）
+
+Base URL 与 headers 同本文 §1（`Authorization: Bearer <Privy>`、`X-Loop-Contract-Version: 2.0`；PUT 草稿是 CAS 写，不带 `Idempotency-Key`；`POST hooks-deployments` 需 `Idempotency-Key` UUIDv4）。
+
+### 15.1 写：`PUT /v2/launch/projects/{projectId}/hooks-config`
+
+`config` 新增两个**可选**整数，留空 / `null` = 默认：
+
+```json
+{
+  "expectedVersion": 0,
+  "config": {
+    "name": "MoonCat",
+    "ticker": "MCAT",
+    "logoAssetUrl": "https://…/logo.png",
+    "description": "…",
+    "links": [],
+    "nftSaleStartAt": "4000000000",
+    "buybackRecipient": "0x1234…7890",
+    "nftPriceUsd1": 300,
+    "walletCapPerMille": 8
+  }
+}
+```
+
+| 字段                | 范围                          | 默认            | 链上                      |
+| ------------------- | ----------------------------- | --------------- | ------------------------- |
+| `nftPriceUsd1`      | 1–1000 整数 USD1              | 100             | ×1e18（也是回购单笔金额） |
+| `walletCapPerMille` | 1–1000 整数 ‰（占 10 亿总量） | 5（= 500 万枚） | ×1e24 raw MEME            |
+
+错误（七字段信封，`detailsSafe` 里看原因）：
+
+| HTTP / code                  | `detailsSafe.reasonCode`                                   | 说明                                                                       |
+| ---------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 422 `VALIDATION_FAILED`      | `LAUNCH2_NFT_PRICE_INVALID`（`field: nftPriceUsd1`）       | 小数、0、负数、> 1000                                                      |
+| 422 `VALIDATION_FAILED`      | `LAUNCH2_WALLET_CAP_INVALID`（`field: walletCapPerMille`） | 小数、0、负数、> 1000                                                      |
+| 422 `VALIDATION_FAILED`      | `HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY`                | 当前工厂早于 S359，只能用默认值（换新工厂后自动解除）；签名准备 / 提交同码 |
+| 503 `CAPABILITY_UNAVAILABLE` | `HOOKS_LAUNCH_FACTORY_UNAVAILABLE`                         | 工厂探测读不到（fail closed）                                              |
+
+响应形状：开关 off 时与以前完全一致；值的变化在 `config.fixedEconomics`：S359 工厂上 `nftPriceUsd1Raw` / `buybackOrderUsd1Raw` = 价格 ×1e18，`perAddressLifetimeBuyCapRaw` = ‰ ×1e24（键与位置不变，计入 `configHash`）。
+
+### 15.2 读（开关 `LAUNCH2_PROJECT_TERMS_EMIT`，默认 off）
+
+on 时以下位置**多三个键**，off 时一个都不发（App 必须按可选键解码，缺省回落 100 / 5）：
+
+```json
+{
+  "nftPriceUsd1": 300,
+  "walletCapPerMille": 8,
+  "maxCumulativeBuyRaw": "8000000000000000000000000"
+}
+```
+
+- `GET / PUT …/hooks-config`：`draft.config` / 响应 `config` 内；
+- `GET /v2/launch/projects/{projectId}`：`project` 内（未保存过配置 → 默认 100 / 5）；
+- `GET /v2/launch2/instances/{instanceId}`：`instance` 内（链上核验值；`nftPriceUsd1` / `walletCapPerMille` 仅在链上值不是整 USD1 / 整 ‰ 时为 `null`，`maxCumulativeBuyRaw` 永远精确）；
+- 后台 `GET /admin/v1/launch/projects/{projectId}`：`project` 内。
+
+不受开关影响（键不变、只是值按实例）：实例 `template.nftPriceUsd1` / `buybackOrderUsd1` / `perAddressCap`、`nftSale.priceUsd1`、NFT 铸造 prepare 的授权金额、报价 `max` 的每地址剩余额度（一直读曲线自己的 `maxCumulativeBuy()`）。
+
+### 15.3 签名（S359 工厂）
+
+- `GET …/signing-request`：`request` 多 `nftPrice`（wei 字符串）与 `maxCumulativeBuy`（raw 字符串）；`typedData.domain.version = "2"`，`types.LaunchRequest` 末尾多 `uint256 nftPrice, uint256 maxCumulativeBuy`。照原样签（uint 字段转 BigInt），`POST hooks-deployments` 时 `request` **原样回传**这两个键。
+- 篡改 → `409 VERSION_CONFLICT`；旧工厂上带这两个键 → `400 INVALID_REQUEST`。
+- 旧工厂：`request` 无这两个键、domain 仍 `"1"`，与以前完全相同。

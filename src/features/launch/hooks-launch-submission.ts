@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hooksLaunchProjectTermsArgs } from "./hooks-launch-project-terms.js";
 import {
   concatHex,
   getCreate2Address,
@@ -17,11 +18,13 @@ import {
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactorySupportsProjectTerms,
   hooksLaunchFactorySupportsTicker,
   type HooksLaunchProjectConfigRepository,
 } from "./hooks-launch-project-config.js";
 import {
   assertHooksLaunchFactoryTemplate,
+  hooksLaunchDraftOnChainTerms,
   readHooksLaunchFactoryTemplate,
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
@@ -58,6 +61,10 @@ export const hooksLaunchSubmissionSchema = z
         deadline: uint,
         memeSalt: hex32,
         nonce: uint,
+        // Decision 0199: an S359 Factory's launch terms (both or neither;
+        // equality with the draft is checked below).
+        nftPrice: uint.optional(),
+        maxCumulativeBuy: uint.optional(),
       })
       .strict(),
     hookSalt: hex32,
@@ -206,6 +213,8 @@ export class HooksLaunchSubmissionError extends Error {
       | "recipient_unavailable"
       /** Decision 0164: a non-legacy ticker for a pre-S242 Factory. */
       | "ticker_unsupported"
+      /** Decision 0199: non-default launch terms for a pre-S359 Factory. */
+      | "terms_unsupported"
       | "unavailable",
   ) {
     super(`Hooks launch submission ${kind}`);
@@ -331,6 +340,8 @@ export function createHooksLaunchSubmissionService(input: {
             nftSaleStart: BigInt(request.nftSaleStart),
             deadline: BigInt(request.deadline),
             nonce: BigInt(request.nonce),
+            // Decision 0199: S359 terms (absent on older Factories).
+            ...hooksLaunchProjectTermsArgs(request),
           },
         });
       } catch {
@@ -431,6 +442,7 @@ export function createHooksLaunchSubmissionService(input: {
           hookRead,
           templateRead,
           tickerRead,
+          termsRead,
         ] = await withinChainBudget(
           Promise.allSettled([
             assertHooksLaunchFactoryTemplate(
@@ -446,6 +458,8 @@ export function createHooksLaunchSubmissionService(input: {
               : Promise.resolve(null),
             // Decision 0164: the transition gate.
             hooksLaunchFactorySupportsTicker(reader, request.ticker),
+            // Decision 0199: whether the Factory takes per-launch terms.
+            hooksLaunchFactorySupportsProjectTerms(reader),
           ]),
         );
         const settled = <T>(result: PromiseSettledResult<T>): T => {
@@ -457,6 +471,30 @@ export function createHooksLaunchSubmissionService(input: {
           throw new HooksLaunchSubmissionError("unavailable");
         if (!tickerRead.value)
           throw new HooksLaunchSubmissionError("ticker_unsupported");
+        // Decision 0199: the signed terms are the draft's (S359 Factory) or
+        // absent (older Factory, default terms only).
+        if (termsRead.status === "rejected")
+          throw new HooksLaunchSubmissionError("unavailable");
+        const onChainTerms = hooksLaunchDraftOnChainTerms(
+          termsRead.value,
+          draft,
+          {
+            unsupported: () =>
+              new HooksLaunchSubmissionError("terms_unsupported"),
+            mismatch: () => new HooksLaunchSubmissionError("template_mismatch"),
+          },
+        );
+        if (onChainTerms === null) {
+          if (
+            request.nftPrice !== undefined ||
+            request.maxCumulativeBuy !== undefined
+          )
+            throw new HooksLaunchSubmissionError("invalid");
+        } else if (
+          request.nftPrice !== onChainTerms.nftPrice ||
+          request.maxCumulativeBuy !== onChainTerms.maxCumulativeBuy
+        )
+          throw new HooksLaunchSubmissionError("conflict");
         if (settled(nonceRead) !== BigInt(request.nonce))
           throw new HooksLaunchSubmissionError("conflict");
         const launchId = hooksLaunchId({

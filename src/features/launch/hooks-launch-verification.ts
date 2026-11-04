@@ -55,6 +55,16 @@ export interface HooksLaunchExpectedDeployment {
   readonly hookSalt: string;
   readonly predictedMemeAddress: string;
   readonly predictedHookAddress: string;
+  /**
+   * Decision 0199: the launch terms the project signed for an S359 Factory
+   * (NFT price in USD1 wei, curve cap in raw MEME). Absent = an older
+   * Factory: the template constants (and, for LoopDynamic, the template's
+   * cap rule) apply as before.
+   */
+  readonly projectTerms?: {
+    readonly nftPrice: bigint;
+    readonly maxCumulativeBuy: bigint;
+  };
 }
 
 export interface HooksLaunchDeployedEvent {
@@ -195,6 +205,11 @@ export interface HooksLaunchOnChainFacts {
     readonly fallbackKeeper: string;
     readonly pauseAuthority: string;
     readonly resumeAuthority: string;
+    /**
+     * Decision 0199: `orderAmount()` (S359) — read only for a launch with
+     * project terms; absent otherwise.
+     */
+    readonly orderAmount?: bigint;
   } | null;
   readonly adapter: {
     readonly lpMemeAllocation: bigint;
@@ -453,7 +468,8 @@ export function verifyHooksLaunchDeployment(input: {
     "curve_caps",
     () =>
       curve !== null &&
-      curve.maxCumulativeBuy === c.perAddressCap &&
+      curve.maxCumulativeBuy ===
+        (expected.projectTerms?.maxCumulativeBuy ?? c.perAddressCap) &&
       curve.earlyRoundDuration === c.earlyRoundSeconds,
   );
   check(
@@ -543,7 +559,7 @@ export function verifyHooksLaunchDeployment(input: {
       nft !== null &&
       modules !== null &&
       saleDurationValid &&
-      nft.price === c.nftPrice &&
+      nft.price === (expected.projectTerms?.nftPrice ?? c.nftPrice) &&
       nft.saleDuration === saleDuration &&
       same(nft.launchId, expected.launchId) &&
       same(nft.usd1, factory.usd1) &&
@@ -578,7 +594,10 @@ export function verifyHooksLaunchDeployment(input: {
       same(buyback.primaryKeeper, factory.primaryKeeper) &&
       same(buyback.fallbackKeeper, factory.fallbackKeeper) &&
       same(buyback.pauseAuthority, factory.pauseAuthority) &&
-      same(buyback.resumeAuthority, factory.resumeAuthority),
+      same(buyback.resumeAuthority, factory.resumeAuthority) &&
+      // Decision 0199: one buyback order = one NFT's price.
+      (expected.projectTerms === undefined ||
+        buyback.orderAmount === expected.projectTerms.nftPrice),
   );
   const adapter = facts.adapter;
   check(

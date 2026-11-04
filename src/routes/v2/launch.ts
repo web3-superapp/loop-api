@@ -19,6 +19,12 @@ import {
 } from "../../features/launch/hooks-launch-deployment.js";
 import { InvalidHooksLaunchDraftError } from "../../features/launch/hooks-launch-config.js";
 import {
+  HooksLaunchProjectTermsInvalidError,
+  HooksLaunchProjectTermsUnsupportedError,
+  hooksLaunchProjectTermsView,
+  hooksLaunchRecordTerms,
+} from "../../features/launch/hooks-launch-project-terms.js";
+import {
   HooksLaunchBuybackRecipientFixedError,
   HooksLaunchTickerUnsupportedByFactoryError,
   HooksLaunchProjectConfigUnavailableError,
@@ -158,6 +164,19 @@ function hooksTickerUnsupported(): V2ApiError {
   });
 }
 
+/**
+ * Decision 0199: the configured Factory predates S359 and only deploys the
+ * default launch terms (100 USD1, 5 ‰); lifted once an S359 Factory is
+ * configured.
+ */
+const hooksTermsUnsupportedReason = "HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY";
+
+function hooksTermsUnsupported(): V2ApiError {
+  return V2ApiError.fromCode("VALIDATION_FAILED", {
+    reasonCode: hooksTermsUnsupportedReason,
+  });
+}
+
 function hooksRecipientFixed(): V2ApiError {
   return V2ApiError.fromCode("VALIDATION_FAILED", {
     reasonCode: hooksBuybackRecipientFixedReason,
@@ -168,7 +187,10 @@ function hooksUnavailable(reasonCode: string): V2ApiError {
   return V2ApiError.fromCode("CAPABILITY_UNAVAILABLE", { reasonCode });
 }
 
-function projectConfigResource(record: HooksLaunchProjectConfigRecord) {
+function projectConfigResource(
+  record: HooksLaunchProjectConfigRecord,
+  projectTermsEmit: boolean,
+) {
   // Decision 0173: the server-derived `nftImageCid` stays internal — the
   // App decodes `config` strictly (only nftImageAssetUrl is optional).
   const { nftImageCid: _cid, ...config } = record.config;
@@ -177,7 +199,13 @@ function projectConfigResource(record: HooksLaunchProjectConfigRecord) {
     projectId: record.projectId,
     version: record.version,
     templateVersion: record.templateVersion,
-    config,
+    // Decision 0199: the saved launch terms, behind LAUNCH2_PROJECT_TERMS_EMIT.
+    config: projectTermsEmit
+      ? {
+          ...config,
+          ...hooksLaunchProjectTermsView(hooksLaunchRecordTerms(record)),
+        }
+      : config,
     updatedAt: record.updatedAt,
   };
 }
@@ -197,6 +225,16 @@ function projectConfigError(error: unknown): never {
   }
   if (error instanceof HooksLaunchBuybackRecipientFixedError) {
     throw hooksRecipientFixed();
+  }
+  // Decision 0199: the two launch terms.
+  if (error instanceof HooksLaunchProjectTermsInvalidError) {
+    throw V2ApiError.fromCode("VALIDATION_FAILED", {
+      reasonCode: error.reasonCode,
+      field: error.field,
+    });
+  }
+  if (error instanceof HooksLaunchProjectTermsUnsupportedError) {
+    throw hooksTermsUnsupported();
   }
   if (error instanceof HooksLaunchTickerUnsupportedByFactoryError) {
     throw hooksTickerUnsupported();
@@ -224,6 +262,8 @@ function submissionError(error: unknown): never {
         throw hooksRecipientFixed();
       case "ticker_unsupported":
         throw hooksTickerUnsupported();
+      case "terms_unsupported":
+        throw hooksTermsUnsupported();
       case "recipient_unavailable":
         throw hooksUnavailable(hooksBuybackRecipientUnavailableReason);
       case "not_found":
@@ -320,7 +360,13 @@ export function registerV2LaunchRoutes(
         }
         reply.header("cache-control", "no-store");
         return reply.code(200).send({
-          draft: draft === null ? null : projectConfigResource(draft),
+          draft:
+            draft === null
+              ? null
+              : projectConfigResource(
+                  draft,
+                  hooksConfigService.projectTermsEmit,
+                ),
           approval:
             draft === null || progress === null
               ? null
@@ -388,7 +434,11 @@ export function registerV2LaunchRoutes(
           body: body.config,
         });
         reply.header("cache-control", "no-store");
-        return reply.code(200).send(projectConfigResource(saved));
+        return reply
+          .code(200)
+          .send(
+            projectConfigResource(saved, hooksConfigService.projectTermsEmit),
+          );
       } catch (error) {
         return projectConfigError(error);
       }
@@ -442,6 +492,7 @@ export function registerV2LaunchRoutes(
           if (error.kind === "ticker_unsupported") {
             throw hooksTickerUnsupported();
           }
+          if (error.kind === "terms_unsupported") throw hooksTermsUnsupported();
           if (error.kind === "recipient_unavailable") {
             throw hooksUnavailable(hooksBuybackRecipientUnavailableReason);
           }
