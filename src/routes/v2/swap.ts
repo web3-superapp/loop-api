@@ -85,7 +85,7 @@ export function registerV2SwapRoutes(
         operationId: "prepareV2SwapIntent",
         summary: "Prepare an immutable swap intent from a quote",
         description:
-          "Binds the quote snapshot, the exact Privy execute body, and the authorizationPayload the device signs with generateAuthorizationSignature. An expired or unknown quote is QUOTE_EXPIRED; a blocked price impact is POLICY_BLOCKED; confirm-tier impact needs confirmPriceImpact=true.",
+          "Binds the quote snapshot, the exact Privy execute body, and the authorizationPayload the device signs with generateAuthorizationSignature. An expired or unknown quote is QUOTE_EXPIRED; a blocked price impact is POLICY_BLOCKED; confirm-tier impact needs confirmPriceImpact=true. Decision 0198: with PRIVY_SWAP_EXECUTION_ENABLED off (default) the intent is created prepared (signing.allowed false); with it on it is created awaiting_signature, and an input value above PRIVY_SWAP_MAX_USD is 403 POLICY_BLOCKED / CANARY_CEILING_EXCEEDED (also on quote).",
         tags: ["swap"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,
@@ -121,7 +121,7 @@ export function registerV2SwapRoutes(
         summary:
           "Execute a swap intent once with the device authorization signature",
         description:
-          "Forwards privy-authorization-signature, privy-idempotency-key (= intentId), and privy-request-expiry to wallets.swap.execute exactly once. A definitive Provider rejection is failed; an ambiguous outcome is unknown and reconciled, never retried. A second call is SUBMISSION_UNKNOWN.",
+          "Forwards privy-authorization-signature, privy-idempotency-key (= intentId), and privy-request-expiry to wallets.swap.execute exactly once. A definitive Provider rejection is failed; an ambiguous outcome is unknown and reconciled, never retried. A second call is SUBMISSION_UNKNOWN. Decision 0198: with PRIVY_SWAP_EXECUTION_ENABLED off every call is 409 SIMULATION_FAILED and nothing is sent; with it on the intent and quote must be unexpired (otherwise QUOTE_EXPIRED), the value under BSC_WRITE_CANARY_MAX_USD and PRIVY_SWAP_MAX_USD, and the sealed authorizationPayload consistent with the intent (otherwise DATA_STALE).",
         tags: ["swap"],
         security: [{ privyBearer: [] }],
         headers: v2CommandHeadersSchema,

@@ -952,6 +952,34 @@ describe("launch chain slot (Decision 0038)", () => {
     }
   });
 
+  it("parses PRIVY_SWAP_EXECUTION_ENABLED (default off) and PRIVY_SWAP_MAX_USD (default 200) (Decision 0198)", () => {
+    expect(loadConfig(validEnvironment()).privySwap).toEqual({
+      executionEnabled: false,
+      maxUsd: "200",
+    });
+    const enabled = validEnvironment();
+    enabled["PRIVY_SWAP_EXECUTION_ENABLED"] = "on";
+    enabled["PRIVY_SWAP_MAX_USD"] = "20.5";
+    expect(loadConfig(enabled).privySwap).toEqual({
+      executionEnabled: true,
+      maxUsd: "20.5",
+    });
+    for (const value of ["", "true", "ON", "1"]) {
+      const environment = validEnvironment();
+      environment["PRIVY_SWAP_EXECUTION_ENABLED"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /PRIVY_SWAP_EXECUTION_ENABLED/,
+      );
+    }
+    for (const value of ["0", "0.0", "-1", "abc", "1.1234567"]) {
+      const environment = validEnvironment();
+      environment["PRIVY_SWAP_MAX_USD"] = value;
+      expect(() => loadConfig(environment), value).toThrow(
+        /PRIVY_SWAP_MAX_USD/,
+      );
+    }
+  });
+
   it("parses MINING_POOL_SPLIT_EMIT as off|on, default off, and refuses anything else (Decision 0192)", () => {
     expect(loadConfig(validEnvironment()).miningPoolSplitEmit).toBe(false);
     for (const [value, enabled] of [

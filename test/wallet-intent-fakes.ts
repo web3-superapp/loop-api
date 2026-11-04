@@ -864,6 +864,11 @@ export interface RuntimeFakeOptions {
   readonly canaryDailyMaxUsd?: string | null;
   readonly canaryCounterpartyAddresses?: readonly string[];
   readonly privyAppId?: string | null;
+  /** Decision 0198; absent keeps Swap execution off. */
+  readonly privySwapExecution?: {
+    readonly enabled: boolean;
+    readonly maxUsd: string;
+  } | null;
   readonly readClient?: ReadClientFakeOptions;
   readonly marketFacts?: MarketFactService | null;
   readonly swapAdapter?: PrivySwapAdapter;
@@ -898,6 +903,7 @@ export function runtimeFake(options: RuntimeFakeOptions = {}) {
       privyAppId:
         options.privyAppId === undefined ? "app_test" : options.privyAppId,
       gasReserveRawWei: 5_000_000_000_000_000n,
+      privySwapExecution: options.privySwapExecution ?? null,
     },
     repository,
     wallets: walletsFake(),

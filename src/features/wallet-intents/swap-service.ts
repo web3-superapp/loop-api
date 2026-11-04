@@ -10,6 +10,7 @@ import type { WalletIntentRecord } from "../../database/wallet-intent-repository
 import { WalletIntentStateConflictError } from "../../database/wallet-intent-repository.js";
 import {
   PrivySwapProviderError,
+  swapActionTransactionHash,
   type PrivySwapAction,
 } from "../../integrations/privy/swap-adapter.js";
 import { bscChainId, formatDecimalAmount } from "../chain/chain-contract.js";
@@ -190,6 +191,43 @@ export function assessPriceImpact(input: {
   });
 }
 
+/**
+ * Decision 0198: the sealed authorization payload is exactly the Privy
+ * `POST /v1/wallets/{id}/swap` request the backend will send: version 1, the
+ * URL of the intent's Privy wallet, the quote's amount and slippage on
+ * eip155:56, and the three Privy headers (`privy-app-id` of this process,
+ * `privy-idempotency-key` = intent ID, `privy-request-expiry` = intent
+ * expiry in Unix ms). Any drift is a stale intent, never a silent rewrite.
+ */
+export function authorizationPayloadConsistent(
+  record: WalletIntentRecord,
+  swap: NonNullable<WalletIntentRecord["canonicalPayload"]["swap"]>,
+  appId: string,
+): boolean {
+  const payload = swap.authorizationPayload;
+  const body = payload.body;
+  // The sealed payload is read back from jsonb: its literal-typed fields are
+  // re-checked as observed values, not trusted from the static type.
+  const observed = payload as unknown as Readonly<Record<string, unknown>>;
+  const observedBody = body as unknown as Readonly<Record<string, unknown>>;
+  return (
+    record.chainId === bscChainId &&
+    observed["version"] === 1 &&
+    observed["method"] === "POST" &&
+    payload.url.endsWith(`/v1/wallets/${swap.providerWalletRef}/swap`) &&
+    !payload.url.endsWith("/") &&
+    payload.headers["privy-app-id"] === appId &&
+    payload.headers["privy-idempotency-key"] === record.intentId &&
+    payload.headers["privy-request-expiry"] ===
+      String(Date.parse(record.expiresAt)) &&
+    body.base_amount === swap.quote.inputAmount.raw &&
+    observedBody["amount_type"] === "exact_input" &&
+    body.slippage_bps === swap.quote.slippageBps &&
+    body.source.caip2 === bscChainId &&
+    body.destination.caip2 === bscChainId
+  );
+}
+
 export interface CreateSwapServiceInput {
   readonly runtime: WalletIntentRuntime;
   readonly privyApiBaseUrl?: string;
@@ -206,6 +244,39 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
   const privyApiBaseUrl = (
     input.privyApiBaseUrl ?? defaultPrivyApiBaseUrl
   ).replace(/\/$/, "");
+
+  /**
+   * Decision 0198: `PRIVY_SWAP_EXECUTION_ENABLED`. Off (or not composed) is
+   * the Decision 0035 behaviour: Swap intents stay `prepared` and execute is
+   * SIMULATION_FAILED.
+   */
+  function executionEnabled(): boolean {
+    return runtime.config.privySwapExecution?.enabled === true;
+  }
+
+  /**
+   * Decision 0198: with execution on, a swap whose input valuation is above
+   * `PRIVY_SWAP_MAX_USD` is refused with the same `CANARY_CEILING_EXCEEDED`
+   * refusal the canary ceiling uses (the client already renders it); the
+   * ceiling in `detailsSafe` is the swap ceiling. A missing valuation is
+   * never assumed small.
+   */
+  function enforceSwapCeiling(valueUsd: string | null): void {
+    const execution = runtime.config.privySwapExecution;
+    if (execution === undefined || execution === null || !execution.enabled) {
+      return;
+    }
+    if (valueUsd === null) {
+      throw V2ApiError.capabilityUnavailable();
+    }
+    if (compareDecimalStrings(valueUsd, execution.maxUsd) > 0) {
+      throw V2ApiError.fromCode("POLICY_BLOCKED", {
+        reasonCode: walletIntentRefusalReasonCodes.canaryCeilingExceeded,
+        exposureUsd: valueUsd,
+        ceilingUsd: execution.maxUsd,
+      });
+    }
+  }
 
   function requirePrivyAppId(): string {
     const appId = runtime.config.privyAppId;
@@ -234,9 +305,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
     };
     if (outcome.kind === "accepted") {
       const action = outcome.action;
-      const hash =
-        action.steps.find((step) => step.transactionHash !== null)
-          ?.transactionHash ?? null;
+      const hash = swapActionTransactionHash(action);
       const settled =
         action.status === "succeeded"
           ? ("confirmed" as const)
@@ -352,6 +421,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         signal,
       );
       enforceCanaryCeiling(writes, inputValuation.valueUsd);
+      enforceSwapCeiling(inputValuation.valueUsd);
       await enforceDailyCanaryCeiling(
         runtime,
         writes,
@@ -531,6 +601,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         quote.destinationAssetId,
       );
       enforceCanaryCeiling(writes, quote.inputValuation.valueUsd);
+      enforceSwapCeiling(quote.inputValuation.valueUsd);
       await enforceDailyCanaryCeiling(
         runtime,
         writes,
@@ -634,9 +705,12 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             fee: null,
             balance: balance.fact,
             // Privy builds and routes the transaction at execute time, so
-            // there is no exact payload for eth_call. Until a Provider-side
-            // simulation exists the intent is not signable (main-agent
-            // ruling): it stays `prepared` and execute is SIMULATION_FAILED.
+            // there is no exact payload for eth_call and no simulation
+            // exists. With execution off the intent is not signable (Decision
+            // 0035): it stays `prepared` and execute is SIMULATION_FAILED.
+            // With execution on (Decision 0198) the fact stays honest
+            // (`unavailable`) and the protection is the quote's minimum
+            // output (slippage_bps), the 30 s expiry, and the USD ceilings.
             simulation: Object.freeze({
               status: "unavailable" as const,
               source: "provider_quote" as const,
@@ -666,7 +740,7 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
             walletId: wallet.walletId,
             providerOperationId: operationId,
             kind: "swap",
-            state: "prepared",
+            state: executionEnabled() ? "awaiting_signature" : "prepared",
             chainId: bscChainId,
             canonicalPayload: sealed.canonicalPayload,
             publicReview: sealed.publicReview,
@@ -702,8 +776,11 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
       if (typeof body !== "object" || body === null) {
         throw V2ApiError.invalidRequest();
       }
-      const signature = (body as { readonly authorizationSignature?: unknown })
-        .authorizationSignature;
+      const executeBody = body as {
+        readonly authorizationSignature?: unknown;
+        readonly reviewSha256?: unknown;
+      };
+      const signature = executeBody.authorizationSignature;
       if (
         typeof signature !== "string" ||
         signature.length === 0 ||
@@ -711,8 +788,16 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
       ) {
         throw V2ApiError.invalidRequest();
       }
+      const clientReviewSha256 = executeBody.reviewSha256;
+      if (
+        clientReviewSha256 !== undefined &&
+        (typeof clientReviewSha256 !== "string" ||
+          !/^[0-9a-f]{64}$/.test(clientReviewSha256))
+      ) {
+        throw V2ApiError.invalidRequest();
+      }
       const writes = await requireWriteAdmission(runtime);
-      requirePrivyAppId();
+      const appId = requirePrivyAppId();
       const record = await runtime.repository.get(principal.userId, intentId);
       if (record === null) {
         throw V2ApiError.notFound();
@@ -720,11 +805,20 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
       if (record.kind !== "swap") {
         throw V2ApiError.fromCode("VALIDATION_FAILED");
       }
-      if (record.state === "prepared") {
+      // Decision 0198: with execution off nothing is ever sent, whatever
+      // state an intent prepared while it was on is in (rollback).
+      if (!executionEnabled() || record.state === "prepared") {
         throw V2ApiError.fromCode("SIMULATION_FAILED");
       }
       const requestId = runtime.createUuid();
-      if (isElapsed(record, runtime.now())) {
+      const quoteElapsed =
+        record.canonicalPayload.swap !== null &&
+        Date.parse(record.canonicalPayload.swap.quote.expiresAt) <=
+          runtime.now().getTime();
+      if (
+        (isElapsed(record, runtime.now()) || quoteElapsed) &&
+        record.state === "awaiting_signature"
+      ) {
         await runtime.repository.transition({
           ownerUserId: principal.userId,
           intentId,
@@ -750,9 +844,25 @@ export function createSwapService(input: CreateSwapServiceInput): SwapService {
         writes,
         record.canonicalPayload.policy.valueUsd ?? "0",
       );
+      enforceSwapCeiling(record.canonicalPayload.policy.valueUsd);
       const swap = record.canonicalPayload.swap;
       if (swap === null || record.providerOperationId === null) {
         throw V2ApiError.fromCode("VALIDATION_FAILED");
+      }
+      // The device signed the review it rendered; a client that echoes the
+      // digest must have rendered this one.
+      if (
+        clientReviewSha256 !== undefined &&
+        clientReviewSha256 !== record.reviewSha256
+      ) {
+        throw V2ApiError.fromCode("DATA_STALE");
+      }
+      // Decision 0198: the payload the device signed is the request Privy
+      // receives. The adapter forwards body and headers from this object, so
+      // it is re-checked against the facts it was derived from before any
+      // bytes leave the process.
+      if (!authorizationPayloadConsistent(record, swap, appId)) {
+        throw V2ApiError.fromCode("DATA_STALE");
       }
       const wallet = await requireSignableWallet(
         runtime,

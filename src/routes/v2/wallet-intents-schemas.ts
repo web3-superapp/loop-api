@@ -1221,6 +1221,12 @@ export const swapExecuteRequestSchema = {
       description:
         "Opaque signature the device produced over authorizationPayload with Privy generateAuthorizationSignature. Forwarded verbatim; never logged.",
     },
+    reviewSha256: {
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+      description:
+        "Optional (Decision 0198): the reviewSha256 of the review the device rendered and signed. When present it must equal the intent's reviewSha256, otherwise 409 DATA_STALE and nothing is sent.",
+    },
   },
 } as const;
 

@@ -94,6 +94,14 @@ export interface WalletIntentRuntimeConfig {
   readonly bscWrites: BscWriteConfig | null;
   readonly privyAppId: string | null;
   readonly gasReserveRawWei: bigint;
+  /**
+   * Decision 0198: Privy Swap execution. Absent or null is the Decision 0035
+   * behaviour (Swap intents stay `prepared`, execute is SIMULATION_FAILED).
+   */
+  readonly privySwapExecution?: {
+    readonly enabled: boolean;
+    readonly maxUsd: string;
+  } | null;
 }
 
 /**

@@ -893,8 +893,9 @@ function voiceRoomsCapability(
 /**
  * Funds-moving capabilities (Decision 0035): the module must be enabled, the
  * intent runtime composed, `BSC_WRITES_ENABLED` on, and the chain verified
- * live. `privySwap` additionally needs Privy credentials and always carries
- * the pending device evidence.
+ * live. `privySwap` additionally needs Privy credentials; its evidence is
+ * pending until `PRIVY_SWAP_EXECUTION_ENABLED` is on (Decision 0198), then
+ * `confirmed`.
  */
 function walletIntentCapability(
   config: AppConfig,
@@ -902,12 +903,17 @@ function walletIntentCapability(
   moduleId: "sendApprovals" | "swap",
 ): V2CapabilityProjection {
   const capabilityId = v2ModuleCapabilityIds[moduleId];
+  // Decision 0198: PRIVY_SWAP_EXECUTION_ENABLED on is the operator's
+  // statement that the device path was verified; the contract's existing
+  // `confirmed` status carries it (no new enum value for released clients).
   const evidence =
     moduleId === "swap"
-      ? Object.freeze({
-          status: "pending" as const,
-          reasonCode: v2PrivySwapEvidencePendingReasonCode,
-        })
+      ? config.privySwap.executionEnabled
+        ? Object.freeze({ status: "confirmed" as const, reasonCode: null })
+        : Object.freeze({
+            status: "pending" as const,
+            reasonCode: v2PrivySwapEvidencePendingReasonCode,
+          })
       : Object.freeze({ status: "notApplicable" as const, reasonCode: null });
   if (!config.v2ModulesEnabled.has(moduleId)) {
     return Object.freeze({

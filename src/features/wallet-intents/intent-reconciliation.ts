@@ -11,6 +11,7 @@ import {
 } from "../../integrations/bsc/rpc-client.js";
 import {
   PrivySwapProviderError,
+  swapActionTransactionHash,
   type PrivySwapAdapter,
 } from "../../integrations/privy/swap-adapter.js";
 import { walletIntentReasonCodes } from "./intent-contract.js";
@@ -327,9 +328,9 @@ export function createWalletIntentReconciler(
       }
       throw error;
     }
-    const hash =
-      action.steps.find((step) => step.transactionHash !== null)
-        ?.transactionHash ?? record.transactionHash;
+    // Decision 0198: the swap step is the last hashed step (an ERC-20
+    // source may carry an approve step first).
+    const hash = swapActionTransactionHash(action) ?? record.transactionHash;
     switch (action.status) {
       case "succeeded": {
         return transition(record, {
