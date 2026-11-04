@@ -22,10 +22,10 @@
   `broadcast-report`。模块未启用时对应路径 `404 NOT_FOUND`。
 - 前端必须先读 `GET /v2/meta/capabilities`：
 
-| capabilityId    | `available` 条件                                                                                                     | 典型 reasonCode（unavailable）                                                                                                                                              |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sendApprovals` | 模块启用 + intent 运行时已组装 + RPC 已配置 + `BSC_WRITES_ENABLED=true` + `eth_chainId == 56` 已实测                 | `WALLET_INTENT_RUNTIME_UNAVAILABLE` / `BSC_RPC_NOT_CONFIGURED` / `BSC_WRITES_DISABLED` / `BSC_CHAIN_VERIFICATION_PENDING` / `BSC_RPC_UNREACHABLE` / `BSC_CHAIN_ID_MISMATCH` |
-| `privySwap`     | 同上 + Privy 凭据；**`evidence` 永远是 `{status: "pending", reasonCode: "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING"}`** | 上述 + `PRIVY_NOT_CONFIGURED`                                                                                                                                               |
+| capabilityId    | `available` 条件                                                                                                                                                                                                                         | 典型 reasonCode（unavailable）                                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sendApprovals` | 模块启用 + intent 运行时已组装 + RPC 已配置 + `BSC_WRITES_ENABLED=true` + `eth_chainId == 56` 已实测                                                                                                                                     | `WALLET_INTENT_RUNTIME_UNAVAILABLE` / `BSC_RPC_NOT_CONFIGURED` / `BSC_WRITES_DISABLED` / `BSC_CHAIN_VERIFICATION_PENDING` / `BSC_RPC_UNREACHABLE` / `BSC_CHAIN_ID_MISMATCH` |
+| `privySwap`     | 同上 + Privy 凭据；`PRIVY_SWAP_EXECUTION_ENABLED=off`（默认）时 **`evidence` 是 `{status: "pending", reasonCode: "PRIVY_BSC_SWAP_DEVICE_EVIDENCE_PENDING"}`**；`on` 时是 `{status: "confirmed", reasonCode: null}`（决策 0198，见 §6.4） | 上述 + `PRIVY_NOT_CONFIGURED`                                                                                                                                               |
 
 **Swap 页的确认按钮受 `privySwap.evidence` 门禁**：evidence 仍是 `pending` 时可以报价、
 可以展示，但确认按钮必须禁用并显示"真机证据未取得"。`available` 只表示后端配置可用，
@@ -475,6 +475,54 @@ policy，`expiresAt` = quote 过期时间。**本步 Swap 没有 Provider 侧模
 （`PROVIDER_RESULT_AMBIGUOUS`），**不重试**。再次调用 → `409 SUBMISSION_UNKNOWN`；过期 →
 `409 QUOTE_EXPIRED`。之后轮询 `GET /v2/wallet-intents/{intentId}`。
 
+### 6.4 执行开关（S357，决策 0198）
+
+Base URL 与 headers 同上（`Authorization: Bearer <Privy token>`、`X-Loop-Contract-Version: 2.0`、
+`X-Loop-Client-Version`、`Idempotency-Key: <小写 UUIDv4>`）。服务端两个 env：
+
+| env                            | 默认  | 含义                                                                                                                                                                                                                                                                                            |
+| ------------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRIVY_SWAP_EXECUTION_ENABLED` | `off` | `off`：与 §6.2/§6.3 完全一致（intent 停 `prepared`，execute 一律 `409 SIMULATION_FAILED`，什么都不发）。`on`：prepare 直接进 `awaiting_signature`（`signing.allowed=true`、`signing.reasonCode=null`），execute 真调 Privy 一次；`privySwap.evidence = {status: "confirmed", reasonCode: null}` |
+| `PRIVY_SWAP_MAX_USD`           | `200` | 仅 `on` 时生效：按报价源资产 USD 估值的单笔上限，叠加在 `BSC_WRITE_CANARY_MAX_USD` 之上（两者取小）                                                                                                                                                                                             |
+
+- 兑换只在 `eip155:56`；launch 链 97 的资产 Privy 不支持，不要放进选择器。
+- `on` 时 `simulation` 仍如实返回 `{status: "unavailable", source: "provider_quote", reasonCode: "SWAP_SIMULATION_PROVIDER_PENDING"}`
+  （没有 Provider 模拟）；确认页"模拟结果"一行照常显示为不可用，**按 `signing.allowed` 决定能否签**。
+  保护是：报价的 `minimumOutputAmount`（滑点 ≤ 300 bps）、报价 30 s 过期、单笔 / 日限额、canary 资产名单。
+- 签名：设备对 `authorizationPayload` **原对象**调用 `generateAuthorizationSignature`（Privy 规范：RFC 8785
+  规范化 JSON → P-256 / SHA-256 → base64 DER）。服务端把 body 与三个 `privy-*` header 从同一对象原样转发，
+  后端单测已用 Privy SDK 的 `formatRequestForAuthorizationSignature` 对实际发出的请求验签通过。
+- execute 请求体：`{ "authorizationSignature": "<base64>", "reviewSha256"?: "<64 位小写 hex>" }`。
+  `reviewSha256` 可选，建议带上（设备渲染并签名的那份 review 的摘要）；不等于 intent 的 → `409 DATA_STALE`，什么都不发。
+
+示例（`on`）：
+
+```http
+POST /v2/wallet-intents/swap
+→ 201 { "kind": "swap", "state": "awaiting_signature",
+        "signing": { "mode": "privy_authorization_signature", "allowed": true, "reasonCode": null },
+        "authorizationPayload": { …同 §6.2… }, "reviewSha256": "…", "expiresAt": "…" }
+
+POST /v2/wallet-intents/{intentId}/execute
+{ "authorizationSignature": "MEUCIQ…", "reviewSha256": "…" }
+→ 200 { "state": "submitted", "result": { "providerActionId": "…", … } }
+```
+
+之后轮询 `GET /v2/wallet-intents/{intentId}` 直到 `confirmed` / `failed` / `reverted` / `unknown`（对账 lane
+`WALLET_INTENT_RECONCILE_ENABLED` 读 Privy action，交易哈希取最后一个带哈希的 step——ERC-20 源资产第一步可能是 approve）。
+
+execute 在 `on` 下的错误：
+
+| HTTP | code                     | 条件                                                                                                                                                           |
+| ---- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `INVALID_REQUEST`        | 缺 / 空 `authorizationSignature`，`reviewSha256` 格式错                                                                                                        |
+| 403  | `POLICY_BLOCKED`         | `detailsSafe = {reasonCode: "CANARY_CEILING_EXCEEDED", exposureUsd, ceilingUsd}`；`ceilingUsd` 可能是 `PRIVY_SWAP_MAX_USD`（quote / prepare / execute 都会判） |
+| 409  | `QUOTE_EXPIRED`          | intent 或其报价已过期（intent 同时转 `expired`）                                                                                                               |
+| 409  | `DATA_STALE`             | `reviewSha256` 不符、策略版本变了、钱包变了、封存的 `authorizationPayload` 与 intent 事实不一致                                                                |
+| 409  | `SUBMISSION_UNKNOWN`     | 已提交过（只轮询，不重发）                                                                                                                                     |
+| 409  | `SIMULATION_FAILED`      | 开关 `off`（含开关关掉后残留的 `awaiting_signature` intent）                                                                                                   |
+| 503  | `CAPABILITY_UNAVAILABLE` | 写开关 / Privy 凭据缺失；报价没有估值                                                                                                                          |
+
 ## 7. 错误码速查
 
 | HTTP | code                     | 出现位置                                                                                                                                  | 前端动作                                  |
@@ -552,7 +600,7 @@ max(0, ceilingUsd − spentUsd)`。决策 0104 起这个合计同时包含 Launc
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 收款方恶意地址筛查        | `screening.status=unavailable`，`GOPLUS_ADDRESS_SCREENING_NOT_CONFIGURED`                                                                                                                                     |
 | 授权风险事实              | `riskFacts.status=unavailable`，`GOPLUS_APPROVAL_FACTS_NOT_CONFIGURED`                                                                                                                                        |
-| Privy BSC Swap 真机证据   | `privySwap.evidence.status=pending`                                                                                                                                                                           |
+| Privy BSC Swap 真机证据   | `privySwap.evidence.status=pending`（`PRIVY_SWAP_EXECUTION_ENABLED=on` 后为 `confirmed`，决策 0198）                                                                                                          |
 | Privy Swap 能力本身       | 2026-09-22 实测 Provider 回 `403 Swaps are not enabled for this app`；`POST /v2/swap/quote` → `503 CAPABILITY_UNAVAILABLE`。`privySwap.availability=available` 只说明 LOOP 侧配置齐全，不代表 Provider 已开通 |
 | 钱包无 BNB                | prepare 走到 gas 储备校验 → `409 INSUFFICIENT_BALANCE`（不是 500）；文案应说明"需要 BNB 付手续费"                                                                                                             |
 | 平台费                    | `platformFeeBps: null`（`LOOP_SWAP_FEE_BPS` 待决策）                                                                                                                                                          |

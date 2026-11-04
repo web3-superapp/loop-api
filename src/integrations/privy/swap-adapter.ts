@@ -73,6 +73,24 @@ export interface PrivySwapAction {
   readonly failureReasonCode: string | null;
 }
 
+/**
+ * Decision 0198: the transaction hash a Swap action is tracked by. A swap of
+ * an ERC-20 source can carry an `approve` step before the swap step, and
+ * Privy lists steps in execution order, so the swap is the last step with a
+ * hash; an action with no hashed step yet has none.
+ */
+export function swapActionTransactionHash(
+  action: Pick<PrivySwapAction, "steps">,
+): string | null {
+  for (let index = action.steps.length - 1; index >= 0; index -= 1) {
+    const hash = action.steps[index]?.transactionHash ?? null;
+    if (hash !== null) {
+      return hash;
+    }
+  }
+  return null;
+}
+
 export interface PrivySwapAdapter {
   quote(request: PrivySwapQuoteRequest): Promise<PrivySwapQuote>;
   execute(request: PrivySwapExecuteRequest): Promise<PrivySwapAction>;

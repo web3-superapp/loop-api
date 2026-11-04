@@ -2160,6 +2160,11 @@ export async function buildApp(
       bscWrites: config.bscWrites,
       privyAppId: config.privy?.appId ?? null,
       gasReserveRawWei: BigInt(config.walletGasReserve.rawWei),
+      // Decision 0198: PRIVY_SWAP_EXECUTION_ENABLED / PRIVY_SWAP_MAX_USD.
+      privySwapExecution: Object.freeze({
+        enabled: config.privySwap.executionEnabled,
+        maxUsd: config.privySwap.maxUsd,
+      }),
     }),
     repository:
       database.walletIntents ?? createUnavailableWalletIntentRepository(),

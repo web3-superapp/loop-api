@@ -78,21 +78,8 @@ function observedTransaction(
   };
 }
 
-/**
- * Stands in for the Provider-side simulation that does not exist yet: moves a
- * prepared swap intent to awaiting_signature so the execute path can be
- * exercised. Production has no such transition.
- */
-function unlockForSigning(
-  repository: ReturnType<typeof runtimeFake>["repository"],
-  intentId: string,
-): void {
-  const record = repository.records.get(intentId);
-  if (record === undefined) {
-    throw new Error("missing intent");
-  }
-  repository.records.set(intentId, { ...record, state: "awaiting_signature" });
-}
+/** Decision 0198: Privy Swap execution on, with the default ceiling. */
+const executionOn = { enabled: true, maxUsd: "200" } as const;
 
 function build(options: RuntimeFakeOptions = {}) {
   const fixture = runtimeFake(options);
@@ -1238,7 +1225,7 @@ describe("swap quote, prepare, execute", () => {
         minimumOutputAmount: "6620000000000000",
       },
     });
-    const { swap, controlPlane, intents, repository } = swapBuild({
+    const { swap, repository } = swapBuild({
       swapAdapter: adapter.adapter,
     });
     const quoted = await swap.quote({ principal, body: quoteBody, signal });
@@ -1251,8 +1238,8 @@ describe("swap quote, prepare, execute", () => {
     });
     const resource = prepared.resource;
     expect(resource.kind).toBe("swap");
-    // No Provider-side simulation exists yet: the intent is prepared, never
-    // signable, and execute is SIMULATION_FAILED (main-agent ruling).
+    // Execution off (default, Decision 0198): the intent is prepared, never
+    // signable, and execute is SIMULATION_FAILED (Decision 0035 behaviour).
     expect(resource.state).toBe("prepared");
     expect(resource.signing).toEqual({
       mode: "privy_authorization_signature",
@@ -1283,7 +1270,59 @@ describe("swap quote, prepare, execute", () => {
       }),
       "QUOTE_EXPIRED",
     );
-    unlockForSigning(repository, resource.intentId);
+    expect(resource.unsignedTransaction).toBeNull();
+    expect(adapter.executeCalls).toHaveLength(0);
+    // Off (Decision 0198): an intent that is somehow awaiting a signature is
+    // still never sent (rollback after a switch-off).
+    const stored = repository.records.get(resource.intentId);
+    if (stored === undefined) {
+      throw new Error("missing intent");
+    }
+    repository.records.set(resource.intentId, {
+      ...stored,
+      state: "awaiting_signature",
+    });
+    await expectCode(
+      swap.execute({
+        principal,
+        intentId: resource.intentId,
+        body: { authorizationSignature: "sig-from-device" },
+        signal,
+      }),
+      "SIMULATION_FAILED",
+    );
+    expect(adapter.executeCalls).toHaveLength(0);
+  });
+
+  it("with execution on prepares awaiting_signature and executes once (Decision 0198)", async () => {
+    const adapter = swapAdapterFake({
+      quote: {
+        estimatedOutputAmount: "6650000000000000",
+        minimumOutputAmount: "6620000000000000",
+      },
+    });
+    const { swap, controlPlane, intents } = swapBuild({
+      swapAdapter: adapter.adapter,
+      privySwapExecution: executionOn,
+    });
+    const quoted = await swap.quote({ principal, body: quoteBody, signal });
+    const prepared = await swap.prepare({
+      principal,
+      idempotencyKey: randomUUID(),
+      body: { walletId, quoteId: quoted.quote.quoteId },
+      signal,
+    });
+    const resource = prepared.resource;
+    expect(resource.state).toBe("awaiting_signature");
+    expect(resource.signing).toEqual({
+      mode: "privy_authorization_signature",
+      allowed: true,
+      reasonCode: null,
+    });
+    expect(resource.simulation).toMatchObject({
+      status: "unavailable",
+      source: "provider_quote",
+    });
     expect(resource.unsignedTransaction).toBeNull();
     expect(resource.authorizationPayload).toEqual({
       version: 1,
@@ -1395,8 +1434,9 @@ describe("swap quote, prepare, execute", () => {
     const adapter = swapAdapterFake({
       quote: { estimatedOutputAmount: "6650000000000000" },
     });
-    const { swap, clock, repository } = swapBuild({
+    const { swap, clock } = swapBuild({
       swapAdapter: adapter.adapter,
+      privySwapExecution: executionOn,
     });
     const quoted = await swap.quote({ principal, body: quoteBody, signal });
     const prepared = await swap.prepare({
@@ -1405,7 +1445,6 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quoted.quote.quoteId },
       signal,
     });
-    unlockForSigning(repository, prepared.resource.intentId);
     clock.value += 31_000;
     await expectCode(
       swap.execute({
@@ -1460,7 +1499,10 @@ describe("swap quote, prepare, execute", () => {
           new PrivySwapProviderError("rejected", "PRIVY_SWAP_REJECTED"),
         ),
     });
-    const first = swapBuild({ swapAdapter: rejected.adapter });
+    const first = swapBuild({
+      swapAdapter: rejected.adapter,
+      privySwapExecution: executionOn,
+    });
     const quotedA = await first.swap.quote({
       principal,
       body: quoteBody,
@@ -1472,7 +1514,6 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quotedA.quote.quoteId },
       signal,
     });
-    unlockForSigning(first.repository, preparedA.resource.intentId);
     const failed = await first.swap.execute({
       principal,
       intentId: preparedA.resource.intentId,
@@ -1495,7 +1536,10 @@ describe("swap quote, prepare, execute", () => {
           ),
         ),
     });
-    const second = swapBuild({ swapAdapter: ambiguous.adapter });
+    const second = swapBuild({
+      swapAdapter: ambiguous.adapter,
+      privySwapExecution: executionOn,
+    });
     const quotedB = await second.swap.quote({
       principal,
       body: quoteBody,
@@ -1507,7 +1551,6 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quotedB.quote.quoteId },
       signal,
     });
-    unlockForSigning(second.repository, preparedB.resource.intentId);
     const unknown = await second.swap.execute({
       principal,
       intentId: preparedB.resource.intentId,
@@ -1538,7 +1581,10 @@ describe("swap quote, prepare, execute", () => {
           new PrivySwapProviderError("unavailable", "PRIVY_NOT_CONFIGURED"),
         ),
     });
-    const { swap, repository } = swapBuild({ swapAdapter: notSent.adapter });
+    const { swap } = swapBuild({
+      swapAdapter: notSent.adapter,
+      privySwapExecution: executionOn,
+    });
     const quoted = await swap.quote({ principal, body: quoteBody, signal });
     const prepared = await swap.prepare({
       principal,
@@ -1546,7 +1592,6 @@ describe("swap quote, prepare, execute", () => {
       body: { walletId, quoteId: quoted.quote.quoteId },
       signal,
     });
-    unlockForSigning(repository, prepared.resource.intentId);
     const failed = await swap.execute({
       principal,
       intentId: prepared.resource.intentId,
@@ -1563,6 +1608,198 @@ describe("swap quote, prepare, execute", () => {
       swap.quote({ principal, body: quoteBody, signal }),
       "CAPABILITY_UNAVAILABLE",
     );
+  });
+
+  describe("Decision 0198 execution guards", () => {
+    async function preparedOn(
+      options: RuntimeFakeOptions & { readonly clock?: { value: number } } = {},
+    ) {
+      const adapter = swapAdapterFake({
+        quote: { estimatedOutputAmount: "6650000000000000" },
+      });
+      const built = swapBuild({
+        swapAdapter: adapter.adapter,
+        privySwapExecution: executionOn,
+        ...options,
+      });
+      const quoted = await built.swap.quote({
+        principal,
+        body: quoteBody,
+        signal,
+      });
+      const prepared = await built.swap.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: { walletId, quoteId: quoted.quote.quoteId },
+        signal,
+      });
+      return { ...built, adapter, resource: prepared.resource };
+    }
+
+    it("refuses a quote above PRIVY_SWAP_MAX_USD with the ceiling refusal", async () => {
+      const { swap } = swapBuild({
+        privySwapExecution: { enabled: true, maxUsd: "2" },
+      });
+      const error = await swap
+        .quote({ principal, body: quoteBody, signal })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(V2ApiError);
+      expect((error as V2ApiError).code).toBe("POLICY_BLOCKED");
+      expect((error as V2ApiError).detailsSafe).toMatchObject({
+        reasonCode: "CANARY_CEILING_EXCEEDED",
+        ceilingUsd: "2",
+      });
+      // Off: the swap ceiling is not applied (Decision 0035 behaviour).
+      const { swap: off } = swapBuild({
+        privySwapExecution: { enabled: false, maxUsd: "2" },
+      });
+      await expect(
+        off.quote({ principal, body: quoteBody, signal }),
+      ).resolves.toBeDefined();
+    });
+
+    it("re-checks the swap ceiling at execute and sends nothing", async () => {
+      const { swap, adapter, resource, runtime } = await preparedOn();
+      // The operator lowers the ceiling after prepare.
+      (runtime as { config: unknown }).config = {
+        ...runtime.config,
+        privySwapExecution: { enabled: true, maxUsd: "1" },
+      };
+      await expectCode(
+        swap.execute({
+          principal,
+          intentId: resource.intentId,
+          body: { authorizationSignature: "sig" },
+          signal,
+        }),
+        "POLICY_BLOCKED",
+      );
+      expect(adapter.executeCalls).toHaveLength(0);
+    });
+
+    it("refuses a missing or empty signature before anything is read", async () => {
+      const { swap, adapter, resource } = await preparedOn();
+      for (const body of [
+        {},
+        { authorizationSignature: "" },
+        { authorizationSignature: 7 },
+      ]) {
+        await expectCode(
+          swap.execute({
+            principal,
+            intentId: resource.intentId,
+            body,
+            signal,
+          }),
+          "INVALID_REQUEST",
+        );
+      }
+      expect(adapter.executeCalls).toHaveLength(0);
+    });
+
+    it("refuses a reviewSha256 that is not the intent's", async () => {
+      const { swap, adapter, resource } = await preparedOn();
+      await expectCode(
+        swap.execute({
+          principal,
+          intentId: resource.intentId,
+          body: { authorizationSignature: "sig", reviewSha256: "0".repeat(64) },
+          signal,
+        }),
+        "DATA_STALE",
+      );
+      expect(adapter.executeCalls).toHaveLength(0);
+      const executed = await swap.execute({
+        principal,
+        intentId: resource.intentId,
+        body: {
+          authorizationSignature: "sig",
+          reviewSha256: resource.reviewSha256,
+        },
+        signal,
+      });
+      expect(executed.state).toBe("submitted");
+      expect(adapter.executeCalls).toHaveLength(1);
+    });
+
+    it("refuses an authorization payload that drifted from the intent", async () => {
+      const { swap, adapter, resource, repository } = await preparedOn();
+      const stored = repository.records.get(resource.intentId);
+      const swapPayload = stored?.canonicalPayload.swap;
+      if (
+        stored === undefined ||
+        swapPayload === null ||
+        swapPayload === undefined
+      ) {
+        throw new Error("missing intent");
+      }
+      repository.records.set(resource.intentId, {
+        ...stored,
+        canonicalPayload: {
+          ...stored.canonicalPayload,
+          swap: {
+            ...swapPayload,
+            authorizationPayload: {
+              ...swapPayload.authorizationPayload,
+              body: {
+                ...swapPayload.authorizationPayload.body,
+                slippage_bps: 300,
+              },
+            },
+          },
+        },
+      });
+      await expectCode(
+        swap.execute({
+          principal,
+          intentId: resource.intentId,
+          body: { authorizationSignature: "sig" },
+          signal,
+        }),
+        "DATA_STALE",
+      );
+      expect(adapter.executeCalls).toHaveLength(0);
+    });
+
+    it("tracks the swap step hash, not an earlier approve step", async () => {
+      const approveHash = `0x${"a".repeat(64)}`;
+      const swapHash = `0x${"b".repeat(64)}`;
+      const adapter = swapAdapterFake({
+        quote: { estimatedOutputAmount: "6650000000000000" },
+        execute: () =>
+          Promise.resolve({
+            actionId: "act_2",
+            status: "pending",
+            inputAmount: null,
+            outputAmount: null,
+            steps: [
+              { status: "confirmed", transactionHash: approveHash },
+              { status: "pending", transactionHash: swapHash },
+            ],
+            failureReasonCode: null,
+          }),
+      });
+      const { swap, repository } = swapBuild({
+        swapAdapter: adapter.adapter,
+        privySwapExecution: executionOn,
+      });
+      const quoted = await swap.quote({ principal, body: quoteBody, signal });
+      const prepared = await swap.prepare({
+        principal,
+        idempotencyKey: randomUUID(),
+        body: { walletId, quoteId: quoted.quote.quoteId },
+        signal,
+      });
+      await swap.execute({
+        principal,
+        intentId: prepared.resource.intentId,
+        body: { authorizationSignature: "sig" },
+        signal,
+      });
+      expect(
+        repository.records.get(prepared.resource.intentId)?.transactionHash,
+      ).toBe(swapHash);
+    });
   });
 });
 
@@ -1928,6 +2165,7 @@ describe("reconciliation lane", () => {
     const clock = { value: Date.parse("2026-09-08T00:00:00.000Z") };
     const fixture = runtimeFake({
       swapAdapter: adapter.adapter,
+      privySwapExecution: executionOn,
       now: () => new Date(clock.value),
     });
     const swap = createSwapService({ runtime: fixture.runtime });
@@ -1947,7 +2185,6 @@ describe("reconciliation lane", () => {
       body: { walletId, quoteId: quoted.quote.quoteId },
       signal,
     });
-    unlockForSigning(fixture.repository, prepared.resource.intentId);
     await swap.execute({
       principal,
       intentId: prepared.resource.intentId,

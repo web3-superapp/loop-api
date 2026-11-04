@@ -271,3 +271,12 @@ indexer:backfill --lane erc20_transfer --from X` on an existing lane runs a
   `expired` (including superseded) or later intent is `409 DATA_STALE`.
 - **Pagination (finding 5).** Every V2 list already fetches `limit + 1`;
   the contracts now state that the last page carries `nextCursor: null`.
+
+## Amendment 2026-11-04 (Decision 0198)
+
+`PRIVY_SWAP_EXECUTION_ENABLED` (default off) and `PRIVY_SWAP_MAX_USD`
+(default 200) gate the Swap execute path. Off keeps every ruling above.
+On makes a prepared Swap `awaiting_signature`, sets `privySwap.evidence`
+to `confirmed`, and executes once after re-checking expiry, ceilings, and
+the sealed authorization payload. The "quote authorization" open item is
+closed: the quote needs no signature (S356).

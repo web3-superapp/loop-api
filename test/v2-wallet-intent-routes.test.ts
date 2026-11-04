@@ -843,6 +843,116 @@ describe("V2 wallet-intent, swap, and approvals routes", () => {
     expect(badSlippage.statusCode).toBe(400);
   });
 
+  it("with PRIVY_SWAP_EXECUTION_ENABLED on prepares a signable swap, executes once, and confirms the evidence (Decision 0198)", async () => {
+    const { app, swap } = await createApp(fakes(), {
+      PRIVY_SWAP_EXECUTION_ENABLED: "on",
+    });
+    expect((await capabilities(app))["privySwap"]).toEqual({
+      capabilityId: "privySwap",
+      availability: "available",
+      reasonCode: null,
+      evidence: { status: "confirmed", reasonCode: null },
+    });
+    const quote = await app.inject({
+      method: "POST",
+      url: "/v2/swap/quote",
+      headers: headers(),
+      payload: {
+        walletId,
+        sourceAssetId: usdtAssetId,
+        destinationAssetId: wbnbAssetId,
+        amount: "4",
+      },
+    });
+    expect(quote.statusCode).toBe(200);
+    const quoteId = quote.json<{
+      readonly quote: { readonly quoteId: string };
+    }>().quote.quoteId;
+    const prepared = await app.inject({
+      method: "POST",
+      url: "/v2/wallet-intents/swap",
+      headers: commandHeaders(),
+      payload: { walletId, quoteId },
+    });
+    expect(prepared.statusCode).toBe(201);
+    const intent = prepared.json<{
+      readonly intentId: string;
+      readonly reviewSha256: string;
+    }>();
+    expect(prepared.json()).toMatchObject({
+      kind: "swap",
+      state: "awaiting_signature",
+      signing: {
+        mode: "privy_authorization_signature",
+        allowed: true,
+        reasonCode: null,
+      },
+    });
+
+    const badDigest = await app.inject({
+      method: "POST",
+      url: `/v2/wallet-intents/${intent.intentId}/execute`,
+      headers: commandHeaders(),
+      payload: { authorizationSignature: "sig", reviewSha256: "XYZ" },
+    });
+    expect(badDigest.statusCode).toBe(400);
+    const missing = await app.inject({
+      method: "POST",
+      url: `/v2/wallet-intents/${intent.intentId}/execute`,
+      headers: commandHeaders(),
+      payload: {},
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(swap.executeCalls).toHaveLength(0);
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v2/wallet-intents/${intent.intentId}/execute`,
+      headers: commandHeaders(),
+      payload: {
+        authorizationSignature: "device-signature",
+        reviewSha256: intent.reviewSha256,
+      },
+    });
+    expect(executed.statusCode).toBe(200);
+    expect(executed.json()).toMatchObject({ state: "submitted" });
+    expect(swap.executeCalls).toHaveLength(1);
+    const again = await app.inject({
+      method: "POST",
+      url: `/v2/wallet-intents/${intent.intentId}/execute`,
+      headers: commandHeaders(),
+      payload: { authorizationSignature: "device-signature" },
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json<ErrorBody>().code).toBe("SUBMISSION_UNKNOWN");
+    expect(swap.executeCalls).toHaveLength(1);
+  });
+
+  it("refuses a swap above PRIVY_SWAP_MAX_USD with POLICY_BLOCKED (Decision 0198)", async () => {
+    const { app } = await createApp(fakes(), {
+      PRIVY_SWAP_EXECUTION_ENABLED: "on",
+      PRIVY_SWAP_MAX_USD: "1",
+    });
+    const quote = await app.inject({
+      method: "POST",
+      url: "/v2/swap/quote",
+      headers: headers(),
+      payload: {
+        walletId,
+        sourceAssetId: usdtAssetId,
+        destinationAssetId: wbnbAssetId,
+        amount: "4",
+      },
+    });
+    expect(quote.statusCode).toBe(403);
+    const body = quote.json<ErrorBody & { detailsSafe: unknown }>();
+    expect(body.code).toBe("POLICY_BLOCKED");
+    expect(body.detailsSafe).toMatchObject({
+      reasonCode: "CANARY_CEILING_EXCEEDED",
+      ceilingUsd: "1",
+    });
+  });
+
   it("registers the shared lifecycle routes once when only swap is enabled", async () => {
     const { app } = await createApp(fakes(), {
       V2_MODULES_ENABLED: "chain,wallet,market,swap",

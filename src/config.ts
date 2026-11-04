@@ -917,6 +917,13 @@ const environmentSchema = z
     BSC_WRITE_CANARY_RECIPIENT_ALLOWLIST: optionalCredential(4_096),
     BSC_WRITE_CANARY_DAILY_MAX_USD: optionalCredential(32),
     LOOP_SWAP_FEE_BPS: positiveIntegerString(0, 1_000),
+    // Decision 0198 (S357): off|on (default off). off keeps every Swap intent
+    // `prepared` and execute SIMULATION_FAILED (Decision 0035 behaviour); on
+    // makes a prepared Swap signable and execute calls Privy once.
+    PRIVY_SWAP_EXECUTION_ENABLED: z.enum(["off", "on"]),
+    // Decision 0198: per-swap USD ceiling on the quote's input valuation
+    // (default 200), applied with execution on, on top of the canary ceiling.
+    PRIVY_SWAP_MAX_USD: z.string().trim().min(1).max(32),
     WALLET_GAS_RESERVE_BNB: z.string().trim().min(1).max(32),
     MINING_MOCK_HOLDINGS_ENABLED: booleanString,
     PASSKEY_ANDROID_PACKAGE: optionalCredential(255),
@@ -1865,6 +1872,19 @@ export interface BscWriteConfig {
   readonly swapFeeBps: number | null;
 }
 
+/**
+ * Privy Swap execution (Decision 0198). `executionEnabled` false is the
+ * Decision 0035 behaviour: every Swap intent stays `prepared`, execute is
+ * SIMULATION_FAILED, and the `privySwap` evidence stays pending. `maxUsd` is
+ * the per-swap ceiling on the quote's input valuation, applied only with
+ * execution on and in addition to `BSC_WRITE_CANARY_MAX_USD`.
+ */
+export interface PrivySwapExecutionConfig {
+  readonly executionEnabled: boolean;
+  /** Canonical positive decimal USD string (default "200"). */
+  readonly maxUsd: string;
+}
+
 export interface GoplusConfig {
   readonly appKey: string;
   readonly appSecret: string;
@@ -2164,6 +2184,8 @@ export interface AppConfig {
   readonly web: WebSurfaceConfig;
   /** `null` keeps every funds-moving path closed. */
   readonly bscWrites: BscWriteConfig | null;
+  /** Decision 0198: Privy Swap execution switch and per-swap USD ceiling. */
+  readonly privySwap: PrivySwapExecutionConfig;
   readonly market: MarketConfig;
   /** Community AI Provider (Decision 0066); null keeps `communityAi` deferred. */
   readonly communityAi: CommunityAiConfig | null;
@@ -3877,6 +3899,22 @@ const canaryAssetIdPattern = /^eip155:[1-9][0-9]{0,9}:(native|0x[0-9a-f]{40})$/;
 const canaryMaxUsdPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/;
 const canaryAddressPattern = /^0x[0-9a-f]{40}$/;
 
+function parsePrivySwapExecutionConfig(data: {
+  readonly PRIVY_SWAP_EXECUTION_ENABLED: "off" | "on";
+  readonly PRIVY_SWAP_MAX_USD: string;
+}): PrivySwapExecutionConfig {
+  const maxUsd = data.PRIVY_SWAP_MAX_USD;
+  if (!canaryMaxUsdPattern.test(maxUsd) || /^0(\.0+)?$/.test(maxUsd)) {
+    throw new ConfigurationError([
+      "PRIVY_SWAP_MAX_USD: must be a positive decimal with at most 6 fraction digits",
+    ]);
+  }
+  return Object.freeze({
+    executionEnabled: data.PRIVY_SWAP_EXECUTION_ENABLED === "on",
+    maxUsd,
+  });
+}
+
 /**
  * Write admission is off unless explicitly enabled, and enabling it requires
  * both an asset allowlist of canonical asset IDs and a positive USD ceiling.
@@ -4496,6 +4534,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     BSC_WRITE_CANARY_DAILY_MAX_USD:
       environment["BSC_WRITE_CANARY_DAILY_MAX_USD"],
     LOOP_SWAP_FEE_BPS: environment["LOOP_SWAP_FEE_BPS"] ?? "0",
+    PRIVY_SWAP_EXECUTION_ENABLED:
+      environment["PRIVY_SWAP_EXECUTION_ENABLED"] ?? "off",
+    PRIVY_SWAP_MAX_USD: environment["PRIVY_SWAP_MAX_USD"] ?? "200",
     WALLET_GAS_RESERVE_BNB: environment["WALLET_GAS_RESERVE_BNB"] ?? "0.005",
     MINING_MOCK_HOLDINGS_ENABLED:
       environment["MINING_MOCK_HOLDINGS_ENABLED"] ?? "false",
@@ -4863,6 +4904,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     appLinks: parseAppLinksConfig(parsed.data, passkeyRelyingParty.ios),
     web: parseWebSurfaceConfig(environment, parsed.data.NODE_ENV),
     bscWrites: parseBscWriteConfig(parsed.data),
+    privySwap: parsePrivySwapExecutionConfig(parsed.data),
     market: parseMarketConfig(parsed.data),
     communityAi: parseCommunityAiConfig(parsed.data),
     push: parsePushConfig(parsed.data),
