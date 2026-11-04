@@ -415,6 +415,18 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
     if (curve === null || curve.earlyRoundDuration !== c.earlyRoundSeconds) {
       return false;
     }
+    // Decision 0199: S359 — the cap the project signed, as the curve and
+    // (when the receipt carries it) LaunchMaxCumulativeBuy record it.
+    if (expected.projectTerms !== undefined) {
+      return (
+        curve.maxCumulativeBuy === expected.projectTerms.maxCumulativeBuy &&
+        (capEvent === null ||
+          (modules !== null &&
+            same(capEvent.launchId, expected.launchId) &&
+            same(capEvent.curve, modules.curve) &&
+            capEvent.maxCumulativeBuy === curve.maxCumulativeBuy))
+      );
+    }
     if (adjustableCap) {
       // Decision 0195: S340 — the launch's own cap, as the deploy receipt
       // recorded it; the Factory default only has to still be a value.
@@ -526,7 +538,7 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
       nft !== null &&
       modules !== null &&
       saleDurationValid &&
-      nft.price === c.nftPrice &&
+      nft.price === (expected.projectTerms?.nftPrice ?? c.nftPrice) &&
       nft.saleDuration === saleDuration &&
       same(nft.launchId, expected.launchId) &&
       same(nft.usd1, factory.usd1) &&
@@ -561,7 +573,10 @@ export function verifyHooksLaunchLoopDynamicDeployment(input: {
       same(buyback.primaryKeeper, factory.primaryKeeper) &&
       same(buyback.fallbackKeeper, factory.fallbackKeeper) &&
       same(buyback.pauseAuthority, factory.pauseAuthority) &&
-      same(buyback.resumeAuthority, factory.resumeAuthority),
+      same(buyback.resumeAuthority, factory.resumeAuthority) &&
+      // Decision 0199: one buyback order = one NFT's price.
+      (expected.projectTerms === undefined ||
+        buyback.orderAmount === expected.projectTerms.nftPrice),
   );
   check(
     "adapter_params",

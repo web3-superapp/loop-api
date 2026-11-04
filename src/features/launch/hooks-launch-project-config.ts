@@ -10,12 +10,23 @@ import {
   type HooksLaunchFactoryReader,
 } from "./hooks-launch-deployment.js";
 import type { HooksLaunchLoopDynamicParams } from "./hooks-launch-config.js";
+import {
+  HooksLaunchProjectTermsUnsupportedError,
+  isDefaultHooksLaunchProjectTerms,
+  takeHooksLaunchProjectTerms,
+  type HooksLaunchProjectTerms,
+} from "./hooks-launch-project-terms.js";
 
 /** Decision 0132: the reader surface a config save hashes against. */
 export type HooksLaunchTemplateFactory = Pick<
   HooksLaunchFactoryReader,
-  "nftSaleDuration" | "hookKind" | "loopDynamicTemplate" | "tickerTextRule"
->;
+  | "nftSaleDuration"
+  | "hookKind"
+  | "loopDynamicTemplate"
+  | "tickerTextRule"
+  | "projectTermsSupported"
+> &
+  Partial<Pick<HooksLaunchFactoryReader, "factoryAddress" | "chainId">>;
 
 export interface HooksLaunchProjectConfigRecord {
   readonly projectId: string;
@@ -23,6 +34,12 @@ export interface HooksLaunchProjectConfigRecord {
   readonly version: number;
   readonly templateVersion: string;
   readonly config: HooksLaunchDraft;
+  /**
+   * Decision 0199: the launch terms this version was saved with (absent on
+   * test doubles / pre-0199 records = the defaults, see
+   * `hooksLaunchRecordTerms`).
+   */
+  readonly terms?: HooksLaunchProjectTerms;
   readonly updatedAt: string;
 }
 
@@ -33,6 +50,8 @@ export interface SaveHooksLaunchProjectConfigInput {
   readonly templateVersion: string;
   readonly configHash: string;
   readonly config: HooksLaunchDraft;
+  /** Decision 0199: absent = the defaults. */
+  readonly terms?: HooksLaunchProjectTerms;
   readonly updatedByUserId: string;
 }
 
@@ -44,6 +63,12 @@ export interface HooksLaunchProjectConfigRepository {
   saveOwnedDraft(
     input: SaveHooksLaunchProjectConfigInput,
   ): Promise<HooksLaunchProjectConfigRecord>;
+  /**
+   * Decision 0199: the launch terms of the project's newest config version
+   * (any owner scope — callers decide visibility); null when none saved.
+   * Optional: test doubles need not answer it.
+   */
+  getLatestTerms?(projectId: string): Promise<HooksLaunchProjectTerms | null>;
   /**
    * Decision 0120: the owner's progress past the draft — when the operator
    * approved `configVersion` with the same configHash (`approvedAt`), and the
@@ -180,6 +205,70 @@ export async function assertHooksLaunchFactorySupportsTicker(
 }
 
 /**
+ * Decision 0199: whether the target Factory takes per-launch terms. A
+ * reader without the probe answers false; a failing probe rejects.
+ */
+export async function hooksLaunchFactorySupportsProjectTerms(
+  factory: HooksLaunchTermsProbeFactory | null,
+): Promise<boolean> {
+  if (factory?.projectTermsSupported === undefined) return false;
+  // Coordinator ruling 2026-11-04: the answer is cached per Factory address
+  // for the process lifetime (code-hash pinned bytecode never changes; a
+  // restart probes again); a hit never reads the chain. Failures are not
+  // cached.
+  const key =
+    factory.factoryAddress === undefined
+      ? null
+      : `${String(factory.chainId ?? "")}:${factory.factoryAddress.toLowerCase()}`;
+  if (key !== null) {
+    const cached = projectTermsProbeCache.get(key);
+    if (cached !== undefined) return cached;
+  }
+  const supported = await factory.projectTermsSupported();
+  if (key !== null) projectTermsProbeCache.set(key, supported);
+  return supported;
+}
+
+/** Decision 0199: the reader surface the terms probe needs. */
+export type HooksLaunchTermsProbeFactory = Pick<
+  HooksLaunchFactoryReader,
+  "projectTermsSupported"
+> &
+  Partial<Pick<HooksLaunchFactoryReader, "factoryAddress" | "chainId">>;
+
+const projectTermsProbeCache = new Map<string, boolean>();
+
+/** Test seam: forget every cached probe answer. */
+export function resetHooksLaunchProjectTermsProbeCache(): void {
+  projectTermsProbeCache.clear();
+}
+
+/**
+ * Decision 0199: the terms policy of a config save.
+ * - Default terms (both absent or 100 / 5): no probe, the pre-S359 path
+ *   (unchanged fixedEconomics / configHash) — a save never fails because
+ *   the probe is unreachable (coordinator ruling 2026-11-04).
+ * - Non-default terms: an S359 Factory gets them hashed into fixedEconomics
+ *   (`projectTerms`); a pre-S359 Factory refuses them with
+ *   `HooksLaunchProjectTermsUnsupportedError`; an unreadable probe is
+ *   `HooksLaunchProjectConfigUnavailableError("factory")`.
+ */
+export async function hooksLaunchFactoryTermsPolicy(
+  factory: HooksLaunchTermsProbeFactory | null,
+  terms: HooksLaunchProjectTerms,
+): Promise<{ readonly projectTerms?: HooksLaunchProjectTerms }> {
+  if (isDefaultHooksLaunchProjectTerms(terms)) return {};
+  let supported: boolean;
+  try {
+    supported = await hooksLaunchFactorySupportsProjectTerms(factory);
+  } catch {
+    throw new HooksLaunchProjectConfigUnavailableError("factory");
+  }
+  if (!supported) throw new HooksLaunchProjectTermsUnsupportedError();
+  return { projectTerms: terms };
+}
+
+/**
  * Decision 0122: throws `HooksLaunchProjectConfigUnavailableError("recipient")`
  * when no fixed recipient is configured (fail closed) and
  * `HooksLaunchBuybackRecipientFixedError` when `recipient` is another
@@ -254,6 +343,8 @@ export interface HooksLaunchProjectConfigService {
    * configured, every save is unavailable.
    */
   readonly fixedBuybackRecipient: string | null;
+  /** Decision 0199: LAUNCH2_PROJECT_TERMS_EMIT (default false). */
+  readonly projectTermsEmit: boolean;
   getDraft(input: {
     readonly ownerUserId: string;
     readonly projectId: string;
@@ -286,6 +377,8 @@ export function createHooksLaunchProjectConfigService(input: {
    * absent: a draft carrying the key is 503 CAPABILITY_UNAVAILABLE.
    */
   readonly nftImages?: Pick<MediaService, "resolveProjectNftImage"> | null;
+  /** Decision 0199: LAUNCH2_PROJECT_TERMS_EMIT; absent = off. */
+  readonly projectTermsEmit?: boolean;
 }): HooksLaunchProjectConfigService {
   const fixedBuybackRecipient =
     input.fixedBuybackRecipient?.toLowerCase() ?? null;
@@ -301,6 +394,7 @@ export function createHooksLaunchProjectConfigService(input: {
   return Object.freeze({
     minimumLeadSeconds: input.minimumLeadSeconds,
     fixedBuybackRecipient,
+    projectTermsEmit: input.projectTermsEmit === true,
     async getProgress(request: {
       readonly ownerUserId: string;
       readonly projectId: string;
@@ -351,7 +445,13 @@ export function createHooksLaunchProjectConfigService(input: {
       );
       // Decision 0173: the NFT picture must be the owner's own upload; the
       // draft keeps its canonical URL (the IPFS gateway URL when pinned).
-      let body = request.body as Record<string, unknown>;
+      // Decision 0199: the two optional launch terms (validated here, never
+      // part of the strict draft key set).
+      const taken = takeHooksLaunchProjectTerms(
+        request.body as Record<string, unknown>,
+      );
+      const terms = taken.terms;
+      let body = taken.rest;
       let nftImageCid: string | null = null;
       if (body["nftImageAssetUrl"] !== undefined) {
         const nftImages = input.nftImages ?? null;
@@ -371,6 +471,8 @@ export function createHooksLaunchProjectConfigService(input: {
           // Decision 0132: + the LoopDynamic Hook parameters, if any.
           ...(await hooksLaunchFactoryHashPolicy(input.factory)),
           nftImageCid,
+          // Decision 0199: hashed only for an S359 Factory.
+          ...(await hooksLaunchFactoryTermsPolicy(input.factory, terms)),
         },
       );
       // Decision 0164: refuse here, not at the deploy simulation, a ticker
@@ -386,6 +488,7 @@ export function createHooksLaunchProjectConfigService(input: {
         templateVersion: config.templateVersion,
         configHash: config.configHash,
         config,
+        terms,
         updatedByUserId: request.ownerUserId,
       });
     },

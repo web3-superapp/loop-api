@@ -22,6 +22,9 @@ const rowSchema = z
     config_version: z.number().int().positive(),
     template_version: z.literal("hooks_launch_v1"),
     config: z.record(z.string(), z.unknown()),
+    // Decision 0199 (000108): the application's launch terms.
+    nft_price_usd1: z.number().int().min(1).max(1_000),
+    wallet_cap_per_mille: z.number().int().min(1).max(1_000),
     updated_at: z.date(),
   })
   .strict();
@@ -34,6 +37,10 @@ function parseRow(row: unknown): HooksLaunchProjectConfigRecord {
     version: value.config_version,
     templateVersion: value.template_version,
     config: value.config as unknown as HooksLaunchProjectConfigRecord["config"],
+    terms: Object.freeze({
+      nftPriceUsd1: value.nft_price_usd1,
+      walletCapPerMille: value.wallet_cap_per_mille,
+    }),
     updatedAt: value.updated_at.toISOString(),
   });
 }
@@ -49,7 +56,8 @@ export function createPostgresHooksLaunchProjectConfigRepository(
       const result = await pool.query({
         text: `
           select c.project_id, c.owner_user_id, c.config_version,
-                 c.template_version, c.config, c.created_at as updated_at
+                 c.template_version, c.config, c.nft_price_usd1,
+                 c.wallet_cap_per_mille, c.created_at as updated_at
           from public.hooks_launch_project_config_versions c
           inner join public.launch_projects p
             on p.project_id = c.project_id and p.owner_user_id = c.owner_user_id
@@ -61,6 +69,28 @@ export function createPostgresHooksLaunchProjectConfigRepository(
       });
       const row: unknown = result.rows[0];
       return row === undefined ? null : parseRow(row);
+    },
+    async getLatestTerms(projectId: string) {
+      const result = await pool.query<{
+        nft_price_usd1: number;
+        wallet_cap_per_mille: number;
+      }>({
+        text: `
+          select c.nft_price_usd1, c.wallet_cap_per_mille
+          from public.hooks_launch_project_config_versions c
+          where c.project_id = $1
+          order by c.config_version desc
+          limit 1
+        `,
+        values: [projectId],
+      });
+      const row = result.rows[0];
+      return row === undefined
+        ? null
+        : Object.freeze({
+            nftPriceUsd1: row.nft_price_usd1,
+            walletCapPerMille: row.wallet_cap_per_mille,
+          });
     },
     async getOwnedProgress(input: {
       readonly projectId: string;
@@ -165,10 +195,11 @@ export function createPostgresHooksLaunchProjectConfigRepository(
           text: `
             insert into public.hooks_launch_project_config_versions (
               project_id, config_version, owner_user_id, template_version,
-              config_hash, config
-            ) values ($1, $2, $3, $4, $5, $6::jsonb)
+              config_hash, config, nft_price_usd1, wallet_cap_per_mille
+            ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
             returning project_id, owner_user_id, config_version,
-                      template_version, config, created_at as updated_at
+                      template_version, config, nft_price_usd1,
+                      wallet_cap_per_mille, created_at as updated_at
           `,
           values: [
             input.projectId,
@@ -177,6 +208,9 @@ export function createPostgresHooksLaunchProjectConfigRepository(
             input.templateVersion,
             input.configHash,
             JSON.stringify(input.config),
+            // Decision 0199: absent = the defaults (100 USD1, 5 ‰).
+            input.terms?.nftPriceUsd1 ?? 100,
+            input.terms?.walletCapPerMille ?? 5,
           ],
         });
         await client.query("commit");

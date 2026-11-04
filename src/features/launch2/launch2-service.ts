@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { hooksLaunchProjectTermsFromChain } from "../launch/hooks-launch-project-terms.js";
 import { encodeFunctionData, type Hex } from "viem";
 
 import type { BscWriteConfig } from "../../config.js";
@@ -283,6 +284,11 @@ export interface Launch2ServiceDependencies {
    * shipped clients decode `nft` strictly.
    */
   readonly nftHeldTokenIdsEmit?: boolean;
+  /**
+   * Decision 0199: LAUNCH2_PROJECT_TERMS_EMIT. True adds `nftPriceUsd1`,
+   * `walletCapPerMille` and `maxCumulativeBuyRaw` to the instance detail.
+   */
+  readonly projectTermsEmit?: boolean;
   /**
    * Decision 0174 (LAUNCH2_POSITION_VALUE_EMIT): whether the position rows
    * carry `priceUsd1` / `valueUsd1` / `priceSource` at all. False (default)
@@ -606,7 +612,7 @@ function summaryOf(
     holdReason: record.holdReason,
     activatedAt: record.activatedAt,
     nftSale: Object.freeze({
-      priceUsd1: formatLaunch2Amount(launch2Template.nftPrice),
+      priceUsd1: formatLaunch2Amount(nftPriceOf(record)),
       soldCount: record.nftMintedCount,
       startAt: record.nftSaleStart,
       endAt: record.nftSaleEnd,
@@ -710,7 +716,7 @@ function buybackSummaryOf(
   record: Launch2InstanceRecord,
   latest: Launch2BuybackRecord | null,
 ): Resource {
-  const recorded = BigInt(record.nftMintedCount) * launch2Template.nftPrice;
+  const recorded = BigInt(record.nftMintedCount) * nftPriceOf(record);
   const spent = BigInt(record.buyback.usd1);
   return Object.freeze({
     recipient: record.buybackRecipient,
@@ -739,6 +745,17 @@ function curvePurchaseCapOf(record: Launch2InstanceRecord): bigint {
   return raw !== undefined && /^[1-9][0-9]{0,77}$/u.test(raw)
     ? BigInt(raw)
     : launch2Template.perAddressCap;
+}
+
+/**
+ * Decision 0199: the instance's verified medal NFT price (USD1 wei; S359:
+ * the project's signed price; before: the 100 USD1 constant).
+ */
+function nftPriceOf(record: Launch2InstanceRecord): bigint {
+  const raw = record.nftPrice;
+  return raw !== undefined && /^[1-9][0-9]{0,77}$/u.test(raw)
+    ? BigInt(raw)
+    : launch2Template.nftPrice;
 }
 
 function positionCurveOf(
@@ -1259,6 +1276,8 @@ export function createLaunch2Service(
   const nftImageEmit = deps.nftImageEmit === true;
   // Decision 0194: off (default) = no `nft.heldTokenIds` key, no read.
   const nftHeldTokenIdsEmit = deps.nftHeldTokenIdsEmit === true;
+  // Decision 0199: off (default) omits the instance launch-terms keys.
+  const projectTermsEmit = deps.projectTermsEmit === true;
   /**
    * Decision 0194: `instanceId|holder` → held token IDs, or null when the
    * key is not emitted (switch off, or a repository without the read).
@@ -4355,7 +4374,15 @@ export function createLaunch2Service(
           template: launch2TemplateProjection(
             Number(seconds(record.nftSaleEnd) - seconds(record.nftSaleStart)),
             curvePurchaseCapOf(record),
+            nftPriceOf(record),
           ),
+          // Decision 0199: the launch terms, behind LAUNCH2_PROJECT_TERMS_EMIT.
+          ...(projectTermsEmit
+            ? hooksLaunchProjectTermsFromChain({
+                nftPriceWei: nftPriceOf(record),
+                maxCumulativeBuyRaw: curvePurchaseCapOf(record),
+              })
+            : {}),
           contracts: Object.freeze({
             factory: record.factoryAddress,
             ...record.addresses,
@@ -4933,7 +4960,8 @@ export function createLaunch2Service(
           if (state.nftMinted) {
             refuse("DATA_STALE", launch2ReasonCodes.nftAlreadyMinted);
           }
-          const price = launch2Template.nftPrice;
+          // Decision 0199: the instance's own price (S359 per project).
+          const price = nftPriceOf(record);
           if ((state.usd1Balance ?? 0n) < price) {
             refuse(
               "INSUFFICIENT_BALANCE",

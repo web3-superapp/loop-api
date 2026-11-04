@@ -1411,6 +1411,25 @@ fails the page). Deployment task events carry `factoryMaxCumulativeBuy`
 (broadcast) and `curveMaxCumulativeBuy` (verified). Status `implemented`;
 handoff `docs/frontend-admin-launch-factory-cap-api.md`.
 
+Decision 0199 (S359-api): per-launch terms. `PUT
+/v2/launch/projects/{projectId}/hooks-config` accepts optional
+`config.nftPriceUsd1` (integer 1..1000, default 100) and
+`config.walletCapPerMille` (integer 1..1000, default 5); invalid → 422
+`LAUNCH2_NFT_PRICE_INVALID` / `LAUNCH2_WALLET_CAP_INVALID`, non-default on a
+pre-S359 Factory → 422 `HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY`. Migration
+`000108_launch_project_terms` (two columns on
+`hooks_launch_project_config_versions`). S359 Factory: signing-request /
+hooks-deployments carry `request.nftPrice` / `request.maxCumulativeBuy`
+(EIP-712 domain "2"); the executor passes them to `deployLaunch` and verifies
+`nft.PRICE()`, `curve.maxCumulativeBuy()`, `BuybackExecutor.ORDER_AMOUNT()`.
+Read keys `nftPriceUsd1` / `walletCapPerMille` / `maxCumulativeBuyRaw` behind
+`LAUNCH2_PROJECT_TERMS_EMIT` (default off) on the hooks-config draft, `GET
+/v2/launch/projects/{id}` `project`, `GET /v2/launch2/instances/{id}`
+`instance` and `GET /admin/v1/launch/projects/{id}` `project`. Status
+`implemented`; `blocked-provider` for non-default terms until an S359 Factory
+is deployed on the launch slot. Handoff `docs/frontend-v2-hooks-launch-api.md`
+§15, `docs/frontend-v2-launch2-api.md` (决策 0199).
+
 Decision 0134 (S174): the read-only `chain_guard` worker lane
 (`CHAIN_GUARD_ENABLED`, default off; migration `000079_chain_guard`,
 tables `chain_guard_incidents` / `chain_guard_cursors`) watches USD1

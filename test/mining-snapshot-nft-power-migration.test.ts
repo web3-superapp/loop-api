@@ -13,7 +13,7 @@ function captureSql(operation: (pgm: MigrationBuilder) => void): string {
 
 describe("000104 mining snapshot nft_power migration contract (Decision 0192)", () => {
   it("is the latest migration", () => {
-    expect(latestMigrationName).toBe("000107_wallet_intent_dapp_kinds");
+    expect(latestMigrationName).toBe("000108_launch_project_terms");
   });
 
   it("adds a nullable decimal column bounded by power and rewrites no history", () => {

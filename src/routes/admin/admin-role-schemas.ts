@@ -513,6 +513,27 @@ const projectSummarySchema = {
     },
     latestConfigVersion: { type: ["integer", "null"], minimum: 1 },
     latestConfigHash: { anyOf: [hash32Schema, { type: "null" }] },
+    // Decision 0199: detail only, LAUNCH2_PROJECT_TERMS_EMIT=on.
+    nftPriceUsd1: {
+      type: "integer",
+      minimum: 1,
+      maximum: 1_000,
+      description:
+        "Decision 0199 (GET detail only, LAUNCH2_PROJECT_TERMS_EMIT=on): the latest config version's medal NFT price in whole USD1 (100 when no config is saved).",
+    },
+    walletCapPerMille: {
+      type: "integer",
+      minimum: 1,
+      maximum: 1_000,
+      description:
+        "Decision 0199 (GET detail only, LAUNCH2_PROJECT_TERMS_EMIT=on): the latest config version's per-address curve cap in whole permille of the 1e9 MEME supply (5 when none saved).",
+    },
+    maxCumulativeBuyRaw: {
+      type: "string",
+      pattern: "^[1-9][0-9]{0,27}$",
+      description:
+        "Decision 0199 (GET detail only, LAUNCH2_PROJECT_TERMS_EMIT=on): walletCapPerMille × 1e24, raw MEME (18 decimals).",
+    },
     latestEditedBy: { anyOf: [editorSchema, { type: "null" }] },
     latestApproval: {
       anyOf: [

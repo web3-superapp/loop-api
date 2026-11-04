@@ -181,6 +181,11 @@ export function launch2TemplateProjection(
    * parameter); absent = the pre-S209 constant.
    */
   perAddressCap: bigint = launch2Template.perAddressCap,
+  /**
+   * Decision 0199: the instance's verified NFT price (USD1 wei, also the
+   * buyback order amount on an S359 launch); absent = the 100 USD1 constant.
+   */
+  nftPrice: bigint = launch2Template.nftPrice,
 ): Record<string, unknown> {
   const t = launch2Template;
   return Object.freeze({
@@ -197,10 +202,14 @@ export function launch2TemplateProjection(
     perAddressCap: formatLaunch2Amount(perAddressCap),
     // bps of the MEME total supply, floored (5,000,000 MEME = 50).
     perAddressCapBps: Number((perAddressCap * 10_000n) / t.memeTotalSupply),
-    nftPriceUsd1: formatLaunch2Amount(t.nftPrice),
+    nftPriceUsd1: formatLaunch2Amount(nftPrice),
     nftSaleSeconds,
     earlyRoundSeconds: t.earlyRoundSeconds,
-    buybackOrderUsd1: formatLaunch2Amount(t.buybackOrderUsd1),
+    // Decision 0199: one buyback order = one NFT's price (S359); the
+    // constant (100 USD1) for every earlier launch.
+    buybackOrderUsd1: formatLaunch2Amount(
+      nftPrice === t.nftPrice ? t.buybackOrderUsd1 : nftPrice,
+    ),
     buybackMinIntervalSeconds: t.buybackMinIntervalSeconds,
   });
 }

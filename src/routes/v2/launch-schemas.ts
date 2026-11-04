@@ -83,6 +83,32 @@ const uintStringSchema = {
   pattern: "^(0|[1-9][0-9]{0,77})$",
 } as const;
 
+/**
+ * Decision 0199: the launch terms read keys — present only while
+ * LAUNCH2_PROJECT_TERMS_EMIT=on (always all three).
+ */
+export const hooksLaunchProjectTermsResponseProperties = {
+  nftPriceUsd1: {
+    type: "integer",
+    minimum: 1,
+    maximum: 1_000,
+    description:
+      "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100).",
+  },
+  walletCapPerMille: {
+    type: "integer",
+    minimum: 1,
+    maximum: 1_000,
+    description:
+      "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5).",
+  },
+  maxCumulativeBuyRaw: {
+    ...uintStringSchema,
+    description:
+      "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces.",
+  },
+} as const;
+
 const hexQuantityPattern = "^0x(0|[1-9a-f][0-9a-f]{0,63})$";
 
 const nullableHexQuantitySchema = {
@@ -263,6 +289,7 @@ export const hooksLaunchRejectionSchema = {
 const projectProjectionSchema = {
   type: "object",
   additionalProperties: false,
+  // Decision 0199: GET /v2/launch/projects/{id} only, LAUNCH2_PROJECT_TERMS_EMIT=on.
   required: [
     "projectId",
     "name",
@@ -361,6 +388,7 @@ const projectProjectionSchema = {
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
     configVersion: { type: "string", const: launchConfigVersion },
+    ...hooksLaunchProjectTermsResponseProperties,
   },
 } as const;
 
@@ -1834,6 +1862,16 @@ const hooksLaunchDraftBodySchema = {
       description:
         "Per-project MEME buyback recipient. A configuration value, never an operator or deployer identity.",
     },
+    nftPriceUsd1: {
+      type: ["number", "null"],
+      description:
+        "Decision 0199: optional medal NFT price in whole USD1, 1..1000 (on chain × 1e18; also the buyback order amount). Absent / null = 100. A fraction, 0, a negative or out-of-range value is 422 VALIDATION_FAILED (reasonCode LAUNCH2_NFT_PRICE_INVALID, field nftPriceUsd1). Non-default values need an S359 Factory: on an older Factory they are 422 VALIDATION_FAILED (reasonCode HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY). Fixed once deployed.",
+    },
+    walletCapPerMille: {
+      type: ["number", "null"],
+      description:
+        "Decision 0199: optional per-address curve purchase cap in whole permille of the 1,000,000,000 MEME supply, 1..1000 (on chain maxCumulativeBuy = n × 1e24 raw MEME). Absent / null = 5 (5,000,000 MEME). A fraction, 0, a negative or out-of-range value is 422 VALIDATION_FAILED (reasonCode LAUNCH2_WALLET_CAP_INVALID, field walletCapPerMille). Non-default values need an S359 Factory (else HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY). Fixed once deployed.",
+    },
   },
 } as const;
 
@@ -1996,6 +2034,7 @@ export const hooksLaunchProjectConfigResourceSchema = {
         buybackRecipient: addressSchema,
         fixedEconomics: hooksLaunchFixedEconomicsSchema,
         configHash: bytes32Schema,
+        ...hooksLaunchProjectTermsResponseProperties,
       },
     },
     updatedAt: { type: "string", format: "date-time" },
@@ -2022,6 +2061,16 @@ const hooksLaunchRequestFieldsSchema = {
   deadline: unixSecondsStringSchema,
   memeSalt: bytes32Schema,
   nonce: uintStringSchema,
+  nftPrice: {
+    ...uintStringSchema,
+    description:
+      "Decision 0199: present only for an S359 Factory (with maxCumulativeBuy) — the launch's medal NFT price in USD1 wei (= nftPriceUsd1 × 1e18), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories.",
+  },
+  maxCumulativeBuy: {
+    ...uintStringSchema,
+    description:
+      "Decision 0199: present only for an S359 Factory (with nftPrice) — the launch's per-address curve purchase cap in raw MEME (= walletCapPerMille × 1e24), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories.",
+  },
 } as const;
 
 const hooksLaunchRequestRequired = [

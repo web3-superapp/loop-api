@@ -9,6 +9,7 @@ import {
 } from "viem";
 
 import { hooksLaunchTemplateHash } from "./hooks-launch-config.js";
+import { hooksLaunchProjectTermsTypedFields } from "./hooks-launch-project-terms.js";
 import { isOnChainLaunchTokenText } from "./launch-token-text.js";
 
 const addressPattern = /^0x[0-9a-fA-F]{40}$/;
@@ -50,6 +51,18 @@ export const hooksLaunchDeploymentTypes = {
 } as const;
 
 /**
+ * Decision 0199 (loop-contracts S359): an S359 Factory's `LaunchRequest`
+ * also binds the launch's `nftPrice` and `maxCumulativeBuy`
+ * (`hooksLaunchProjectTermsTypedFields`, the alignment point).
+ */
+export const hooksLaunchDeploymentTermsTypes = {
+  LaunchRequest: [
+    ...hooksLaunchDeploymentTypes.LaunchRequest,
+    ...hooksLaunchProjectTermsTypedFields,
+  ],
+} as const;
+
+/**
  * Decision 0120: the standard EIP-712 domain type for the four fields the
  * `LOOP Launch Factory` domain uses, in the order EIP-712 fixes. The
  * signing-request response lists it in `typedData.types` so a wallet that
@@ -77,9 +90,18 @@ export function withHooksLaunchEip712Domain<
   });
 }
 
+/**
+ * Decision 0199 (loop-contracts S359): an S359 Factory signs under domain
+ * version "2" (its `LaunchRequest` type gained the launch terms); older
+ * Factories keep "1".
+ */
+export const hooksLaunchDomainVersionLegacy = "1";
+export const hooksLaunchDomainVersionTerms = "2";
+
 export function hooksLaunchDeploymentDomain(
   chainId: number,
   verifyingContract: string,
+  version: string = hooksLaunchDomainVersionLegacy,
 ) {
   if (
     !Number.isSafeInteger(chainId) ||
@@ -90,7 +112,7 @@ export function hooksLaunchDeploymentDomain(
   }
   return Object.freeze({
     name: "LOOP Launch Factory",
-    version: "1",
+    version,
     chainId,
     verifyingContract: verifyingContract as Address,
   });
@@ -107,6 +129,12 @@ export interface HooksLaunchTypedRequestInput {
   readonly deadline: string;
   readonly memeSalt: string;
   readonly nonce: string;
+  /**
+   * Decision 0199: present (both) only for an S359 Factory — the launch's
+   * NFT price (USD1 wei) and purchase cap (raw MEME), decimal strings.
+   */
+  readonly nftPrice?: string | undefined;
+  readonly maxCumulativeBuy?: string | undefined;
 }
 
 export function createHooksLaunchDeploymentTypedData(input: {
@@ -148,10 +176,32 @@ export function createHooksLaunchDeploymentTypedData(input: {
   if (start > uint64Max || deadline > uint64Max || nonce > uint256Max) {
     throw new Error("Hooks launch signing value out of range");
   }
+  // Decision 0199: both terms or neither, each a positive uint256.
+  const withTerms =
+    request.nftPrice !== undefined || request.maxCumulativeBuy !== undefined;
+  if (
+    withTerms &&
+    [request.nftPrice, request.maxCumulativeBuy].some(
+      (value) =>
+        value === undefined ||
+        !/^[1-9][0-9]{0,77}$/.test(value) ||
+        BigInt(value) > uint256Max,
+    )
+  ) {
+    throw new Error("Invalid Hooks launch signing terms");
+  }
 
   return Object.freeze({
-    domain: hooksLaunchDeploymentDomain(input.chainId, input.verifyingContract),
-    types: hooksLaunchDeploymentTypes,
+    domain: hooksLaunchDeploymentDomain(
+      input.chainId,
+      input.verifyingContract,
+      withTerms
+        ? hooksLaunchDomainVersionTerms
+        : hooksLaunchDomainVersionLegacy,
+    ),
+    types: withTerms
+      ? hooksLaunchDeploymentTermsTypes
+      : hooksLaunchDeploymentTypes,
     primaryType: "LaunchRequest" as const,
     message: Object.freeze({
       configHash: request.configHash as Hex,
@@ -166,6 +216,12 @@ export function createHooksLaunchDeploymentTypedData(input: {
       nonce: request.nonce,
       templateHash: (input.templateHash?.toLowerCase() ??
         hooksLaunchTemplateHash) as Hex,
+      ...(withTerms
+        ? {
+            nftPrice: request.nftPrice as string,
+            maxCumulativeBuy: request.maxCumulativeBuy as string,
+          }
+        : {}),
     }),
   });
 }

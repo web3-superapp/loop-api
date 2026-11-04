@@ -8,7 +8,9 @@ import {
 import {
   HooksLaunchBuybackRecipientFixedError,
   assertHooksLaunchFixedBuybackRecipient,
+  hooksLaunchFactorySupportsProjectTerms,
   hooksLaunchFactorySupportsTicker,
+  type HooksLaunchProjectConfigRecord,
   type HooksLaunchProjectConfigRepository,
 } from "./hooks-launch-project-config.js";
 import {
@@ -18,6 +20,12 @@ import {
   mineMemeAddressSaltAsync,
   mineHooksLaunchSaltAsync,
 } from "./hooks-launch-deployment-crypto.js";
+import {
+  hooksLaunchProjectTermsOnChain,
+  hooksLaunchRecordTerms,
+  isDefaultHooksLaunchProjectTerms,
+  type HooksLaunchProjectTermsOnChain,
+} from "./hooks-launch-project-terms.js";
 import {
   hooksLaunchLoopDynamicHookPermissionBits,
   hooksLaunchTemplateHash,
@@ -54,6 +62,13 @@ export interface HooksLaunchFactoryReader {
     readonly maxCumulativeBuy: string | null;
     readonly adjustable: boolean | null;
   }>;
+  /**
+   * Decision 0199 (S359): whether the Factory deploys each launch with the
+   * `LaunchRequest`'s own `nftPrice` / `maxCumulativeBuy` (probed on chain,
+   * immutable, cached). Rejects when unreadable. Absent = false (a pre-S359
+   * Factory or a test double): only the default terms can be deployed.
+   */
+  projectTermsSupported?(): Promise<boolean>;
   /**
    * Decision 0165: the Factory's immutable `usd1()` (lowercase, non-zero),
    * the USD1 MEME v2 trades in; cached after the first valid read. Optional
@@ -98,7 +113,46 @@ export interface HooksLaunchFactoryReader {
     readonly buybackRecipient: string;
     readonly deadline: string;
     readonly memeSalt: string;
+    /** Decision 0199: present (both) for an S359 Factory only. */
+    readonly nftPrice?: string | undefined;
+    readonly maxCumulativeBuy?: string | undefined;
   }): Promise<{ readonly deployer: string; readonly initCodeHash: string }>;
+}
+
+/**
+ * Decision 0199: the launch terms a deployment of `draft` signs and passes
+ * to the Factory. S359 Factory (`supported`): the draft's terms as on-chain
+ * values; non-default terms must already show in its saved fixedEconomics
+ * (a draft saved for another Factory → `mismatch`). Pre-S359 Factory: null (the struct has
+ * no such fields; the Factory deploys 100 USD1 / its own cap), and a draft
+ * with non-default terms is refused (`unsupported`).
+ */
+export function hooksLaunchDraftOnChainTerms(
+  supported: boolean,
+  draft: Pick<HooksLaunchProjectConfigRecord, "config" | "terms">,
+  errors: { readonly unsupported: () => Error; readonly mismatch: () => Error },
+): HooksLaunchProjectTermsOnChain | null {
+  const terms = hooksLaunchRecordTerms(draft);
+  if (!supported) {
+    if (!isDefaultHooksLaunchProjectTerms(terms)) throw errors.unsupported();
+    return null;
+  }
+  const onChain = hooksLaunchProjectTermsOnChain(terms);
+  // Coordinator ruling 2026-11-04: default terms are saved on the pre-S359
+  // path (no probe), so their fixedEconomics keeps the template values; the
+  // signed LaunchRequest still binds the actual nftPrice / maxCumulativeBuy.
+  if (isDefaultHooksLaunchProjectTerms(terms)) return onChain;
+  const economics = draft.config.fixedEconomics as Readonly<
+    Record<string, unknown>
+  >;
+  if (
+    economics["nftPriceUsd1Raw"] !== onChain.nftPrice ||
+    economics["buybackOrderUsd1Raw"] !== onChain.nftPrice ||
+    economics["perAddressLifetimeBuyCapRaw"] !== onChain.maxCumulativeBuy
+  ) {
+    throw errors.mismatch();
+  }
+  return onChain;
 }
 
 /**
@@ -126,6 +180,12 @@ export class HooksLaunchDeploymentError extends Error {
        * Factory predates S242 (422 HOOKS_LAUNCH_TICKER_UNSUPPORTED_BY_FACTORY).
        */
       | "ticker_unsupported"
+      /**
+       * Decision 0199: the draft carries non-default launch terms and the
+       * target Factory predates S359 (422
+       * HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY).
+       */
+      | "terms_unsupported"
       /**
        * Decision 0127: this wallet already deployed this config version
        * (another project of the owner, saved before versions were
@@ -230,6 +290,9 @@ export interface HooksLaunchDeploymentService {
       readonly deadline: string;
       readonly memeSalt: string;
       readonly nonce: string;
+      /** Decision 0199: present (both) for an S359 Factory only. */
+      readonly nftPrice?: string | undefined;
+      readonly maxCumulativeBuy?: string | undefined;
     };
     /** Decision 0120: `types` also carry the standard `EIP712Domain`. */
     readonly typedData: ReturnType<
@@ -398,6 +461,7 @@ export function createHooksLaunchDeploymentService(input: {
         tokenRead,
         templateRead,
         tickerRead,
+        termsRead,
       ] = await withinChainBudget(
         Promise.allSettled([
           assertHooksLaunchFactoryTemplate(
@@ -420,6 +484,8 @@ export function createHooksLaunchDeploymentService(input: {
             : Promise.resolve(null),
           // Decision 0164: the transition gate (no read for a legacy ticker).
           hooksLaunchFactorySupportsTicker(reader, requestFields.ticker),
+          // Decision 0199: whether the Factory takes per-launch terms.
+          hooksLaunchFactorySupportsProjectTerms(reader),
         ]),
       );
       const settled = <T>(result: PromiseSettledResult<T>): T => {
@@ -439,6 +505,28 @@ export function createHooksLaunchDeploymentService(input: {
           "Hooks launch ticker not supported by the Factory",
         );
       }
+      if (termsRead.status === "rejected") {
+        throw new HooksLaunchDeploymentError(
+          "unavailable",
+          "Hooks launch factory terms probe unreadable",
+        );
+      }
+      const onChainTerms = hooksLaunchDraftOnChainTerms(
+        termsRead.value,
+        draft,
+        {
+          unsupported: () =>
+            new HooksLaunchDeploymentError(
+              "terms_unsupported",
+              "Hooks launch terms not supported by the Factory",
+            ),
+          mismatch: () =>
+            new HooksLaunchDeploymentError(
+              "template_mismatch",
+              "Hooks launch config terms differ from the Factory template",
+            ),
+        },
+      );
       // Decision 0127: never hand out a signature the Factory would reject
       // with VersionAlreadyUsed.
       const usedBy = settled(usedByRead);
@@ -478,6 +566,8 @@ export function createHooksLaunchDeploymentService(input: {
       const requestWithMemeSalt = {
         ...requestFields,
         memeSalt: meme.salt,
+        // Decision 0199: S359 — the struct carries the launch terms.
+        ...(onChainTerms ?? {}),
       };
       // The Hook init code binds the mined MEME salt, so this read follows
       // the search; it still counts against the same wall-clock deadline.
@@ -524,6 +614,7 @@ export function createHooksLaunchDeploymentService(input: {
           memeSalt: meme.salt,
           deadline,
           nonce: nonce.toString(),
+          ...(onChainTerms ?? {}),
         }),
         typedData: withHooksLaunchEip712Domain(typedData),
         hookDeployer: hook.deployer.toLowerCase(),

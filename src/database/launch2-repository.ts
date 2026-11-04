@@ -164,6 +164,22 @@ const curvePurchaseCapColumn = `
   )::text as curve_purchase_cap`;
 
 /**
+ * Decision 0199: the medal NFT price (USD1 wei) the executor read back and
+ * verified (`ProjectNFT.PRICE()`, = the project's signed `nftPrice` on an
+ * S359 Factory), kept in the task's `verification.nftPrice`. Tasks
+ * verified before 0199 lack the key; that code only passed NFTs priced
+ * exactly 100 USD1, so that is their fact.
+ */
+const nftPriceColumn = `
+  coalesce(
+    (select (t.verification ->> 'nftPrice')::numeric
+       from public.hooks_launch_deployment_tasks t
+       where t.job_id = launch2_instances.job_id
+         and t.verification ->> 'nftPrice' ~ '^[1-9][0-9]{0,77}$'),
+    100000000000000000000
+  )::text as nft_price_raw`;
+
+/**
  * Decision 0119: the NFT sale end is the deployed `ProjectNFT.saleEnd()`
  * the S132 executor read back and verified (= start + the Factory's
  * `nftSaleDuration()`), kept in the task's `verification.nftSaleEnd`.
@@ -265,7 +281,8 @@ const instanceColumns = `
       and v.config_version = launch2_instances.config_version)
     as project_profile,
   ${nftSaleEndColumn},
-  ${curvePurchaseCapColumn}
+  ${curvePurchaseCapColumn},
+  ${nftPriceColumn}
 `;
 
 /**
@@ -426,6 +443,7 @@ function mapInstance(row: Row): Launch2InstanceRecord {
     nftSaleStart: iso(row, "nft_sale_start"),
     nftSaleEnd: saleEndOf(row),
     curvePurchaseCap: text(row, "curve_purchase_cap"),
+    nftPrice: text(row, "nft_price_raw"),
     deployBlockNumber: text(row, "deploy_block_number"),
     activationBlockNumber: nullableText(row, "activation_block_number"),
     deployedEventSeen: row["deployed_event_seen"] === true,

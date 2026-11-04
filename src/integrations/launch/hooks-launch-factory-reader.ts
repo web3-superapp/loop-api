@@ -23,6 +23,7 @@ import {
   type HooksLaunchLoopDynamicParams,
 } from "../../features/launch/hooks-launch-config.js";
 import type { HooksLaunchFactoryReader } from "../../features/launch/hooks-launch-deployment.js";
+import { hooksLaunchProjectTermsArgs } from "../../features/launch/hooks-launch-project-terms.js";
 import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
 import {
@@ -32,6 +33,7 @@ import {
   loopRouterRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
 import { hooksLaunchFactoryCapAbi } from "./hooks-launch-factory-cap-abi.js";
+import { hooksLaunchFactoryTermsAbi } from "./hooks-launch-factory-terms-abi.js";
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
@@ -641,6 +643,37 @@ export function createHooksLaunchFactoryReader(input: {
     return outcome;
   }
 
+  // Decision 0199: S359 probe — `DEFAULT_NFT_PRICE()` answers (> 0) on a
+  // Factory that deploys each launch with its own terms; a missing-function
+  // revert is an older Factory. Immutable for a code-hash-pinned Factory;
+  // an unreadable answer is not cached.
+  let termsSupported: boolean | null = null;
+  async function projectTermsSupported(): Promise<boolean> {
+    if (termsSupported !== null) return termsSupported;
+    await verifyNetworkAndCode();
+    let outcome: boolean;
+    try {
+      const value = await client.readContract({
+        address: factoryAddress,
+        abi: hooksLaunchFactoryTermsAbi,
+        functionName: "DEFAULT_NFT_PRICE",
+      });
+      if (typeof value !== "bigint" || value <= 0n) {
+        throw new Error("Hooks launch factory default NFT price invalid");
+      }
+      outcome = true;
+    } catch (error) {
+      if (!isHooksLaunchMissingFunctionRevert(error)) {
+        throw new Error("Hooks launch factory terms probe unreadable", {
+          cause: error,
+        });
+      }
+      outcome = false;
+    }
+    termsSupported = outcome;
+    return outcome;
+  }
+
   // Decision 0165: the Factory's immutable `usd1()` (the token MEME v2
   // trades in); the first valid read is kept for the reader's life.
   let usd1Address: string | null = null;
@@ -670,6 +703,7 @@ export function createHooksLaunchFactoryReader(input: {
     factoryAddress,
     chainId: chainReference,
     tickerTextRule,
+    projectTermsSupported,
     usd1,
     hookKind: loopDynamic ? ("loopDynamic" as const) : ("officialTax" as const),
     factoryPurchaseCap,
@@ -781,8 +815,13 @@ export function createHooksLaunchFactoryReader(input: {
       readonly buybackRecipient: string;
       readonly deadline: string;
       readonly memeSalt: string;
+      readonly nftPrice?: string | undefined;
+      readonly maxCumulativeBuy?: string | undefined;
     }) {
       await verifyNetworkAndCode();
+      // Decision 0199: an S359 request carries the launch terms; its
+      // tuple (and so the preview call) has the two extra components.
+      const terms = hooksLaunchProjectTermsArgs(request);
       const launchRequest = {
         projectOwner: request.projectOwner as Address,
         configVersion: request.configVersion,
@@ -805,12 +844,19 @@ export function createHooksLaunchFactoryReader(input: {
                 abi: loopDynamicLaunchFactoryAbi,
                 functionName: "loopHookDeploymentFactory",
               }),
-              client.readContract({
-                address: factoryAddress,
-                abi: loopDynamicLaunchFactoryAbi,
-                functionName: "previewLoopHookInitCodeHash",
-                args: [launchRequest],
-              }),
+              terms === null
+                ? client.readContract({
+                    address: factoryAddress,
+                    abi: loopDynamicLaunchFactoryAbi,
+                    functionName: "previewLoopHookInitCodeHash",
+                    args: [launchRequest],
+                  })
+                : client.readContract({
+                    address: factoryAddress,
+                    abi: hooksLaunchFactoryTermsAbi,
+                    functionName: "previewLoopHookInitCodeHash",
+                    args: [{ ...launchRequest, ...terms }],
+                  }),
             ])
           : await Promise.all([
               client.readContract({
@@ -818,12 +864,19 @@ export function createHooksLaunchFactoryReader(input: {
                 abi: hooksLaunchFactoryAbi,
                 functionName: "hookDeploymentFactory",
               }),
-              client.readContract({
-                address: factoryAddress,
-                abi: hooksLaunchFactoryAbi,
-                functionName: "previewHookInitCodeHash",
-                args: [launchRequest],
-              }),
+              terms === null
+                ? client.readContract({
+                    address: factoryAddress,
+                    abi: hooksLaunchFactoryAbi,
+                    functionName: "previewHookInitCodeHash",
+                    args: [launchRequest],
+                  })
+                : client.readContract({
+                    address: factoryAddress,
+                    abi: hooksLaunchFactoryTermsAbi,
+                    functionName: "previewHookInitCodeHash",
+                    args: [{ ...launchRequest, ...terms }],
+                  }),
             ]);
         const deployerCode = await client.getBytecode({ address: deployer });
         if (deployerCode === undefined || deployerCode === "0x") {

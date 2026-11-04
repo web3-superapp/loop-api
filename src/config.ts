@@ -1034,6 +1034,13 @@ const environmentSchema = z
     // GET /v2/launch2/me/positions rows. Shipped clients decode `nft`
     // strictly; turn on only once every supported client decodes the key.
     LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT: z.enum(["off", "on"]),
+    // Decision 0199: off|on (default off). off omits the optional
+    // `nftPriceUsd1` / `walletCapPerMille` / `maxCumulativeBuyRaw` keys from
+    // the read responses (hooks-config draft, project detail, launch2
+    // instance detail, admin launch review). The hooks-config write accepts
+    // the two optional inputs regardless. Turn on only once every supported
+    // client decodes the keys.
+    LAUNCH2_PROJECT_TERMS_EMIT: z.enum(["off", "on"]),
     // Decision 0174: off|on (default off). off omits the optional
     // `priceUsd1` / `valueUsd1` / `priceSource` keys from the
     // GET /v2/launch2/me/positions rows; on emits them (null when there is
@@ -2113,6 +2120,8 @@ export interface AppConfig {
     readonly nftImageEmit: boolean;
     /** Decision 0194: LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT === "on" (default off). */
     readonly nftHeldTokenIdsEmit: boolean;
+    /** Decision 0199: LAUNCH2_PROJECT_TERMS_EMIT === "on" (default off). */
+    readonly projectTermsEmit: boolean;
     /**
      * Decision 0174: LAUNCH2_POSITION_VALUE_EMIT === "on". False (default)
      * omits the price / value keys from the position rows.
@@ -4616,6 +4625,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
     LAUNCH2_NFT_IMAGE_EMIT: environment["LAUNCH2_NFT_IMAGE_EMIT"] ?? "off",
     LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT:
       environment["LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT"] ?? "off",
+    LAUNCH2_PROJECT_TERMS_EMIT:
+      environment["LAUNCH2_PROJECT_TERMS_EMIT"] ?? "off",
     LAUNCH2_POSITION_VALUE_EMIT:
       environment["LAUNCH2_POSITION_VALUE_EMIT"] ?? "off",
     LAUNCH2_PNL_EMIT: environment["LAUNCH2_PNL_EMIT"] ?? "off",
@@ -4855,6 +4866,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): AppConfig {
       traderAccountEmit: parsed.data.LAUNCH2_TRADER_ACCOUNT_EMIT === "on",
       nftImageEmit: parsed.data.LAUNCH2_NFT_IMAGE_EMIT === "on",
       nftHeldTokenIdsEmit: parsed.data.LAUNCH2_NFT_HELD_TOKEN_IDS_EMIT === "on",
+      projectTermsEmit: parsed.data.LAUNCH2_PROJECT_TERMS_EMIT === "on",
       positionValueEmit: parsed.data.LAUNCH2_POSITION_VALUE_EMIT === "on",
       pnlEmit: parsed.data.LAUNCH2_PNL_EMIT === "on",
       poolRouter:

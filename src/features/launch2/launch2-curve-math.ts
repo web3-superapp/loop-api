@@ -247,7 +247,7 @@ export interface Launch2Max {
 
 /**
  * The executable MAX (整体方案 §3): buy = the contract's `quoteMaxBuy`
- * (remaining 0.5 % quota vs remaining inventory, priced on the curve with
+ * (remaining per-address quota — the curve's own cap, Decision 0199 — vs remaining inventory, priced on the curve with
  * the 10 % tax), lowered to the wallet's USD1 balance when that is smaller;
  * sell = the wallet's MEME balance, bounded by the sold supply.
  */

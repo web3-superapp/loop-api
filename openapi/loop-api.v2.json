@@ -119146,6 +119146,23 @@
                                 "configHash": {
                                   "type": "string",
                                   "pattern": "^0x[0-9a-f]{64}$"
+                                },
+                                "nftPriceUsd1": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000,
+                                  "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                                },
+                                "walletCapPerMille": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000,
+                                  "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                                },
+                                "maxCumulativeBuyRaw": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,77})$",
+                                  "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                                 }
                               }
                             },
@@ -120111,6 +120128,14 @@
                         "type": "string",
                         "pattern": "^0x[0-9a-fA-F]{40}$",
                         "description": "Per-project MEME buyback recipient. A configuration value, never an operator or deployer identity."
+                      },
+                      "nftPriceUsd1": {
+                        "type": ["number", "null"],
+                        "description": "Decision 0199: optional medal NFT price in whole USD1, 1..1000 (on chain × 1e18; also the buyback order amount). Absent / null = 100. A fraction, 0, a negative or out-of-range value is 422 VALIDATION_FAILED (reasonCode LAUNCH2_NFT_PRICE_INVALID, field nftPriceUsd1). Non-default values need an S359 Factory: on an older Factory they are 422 VALIDATION_FAILED (reasonCode HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY). Fixed once deployed."
+                      },
+                      "walletCapPerMille": {
+                        "type": ["number", "null"],
+                        "description": "Decision 0199: optional per-address curve purchase cap in whole permille of the 1,000,000,000 MEME supply, 1..1000 (on chain maxCumulativeBuy = n × 1e24 raw MEME). Absent / null = 5 (5,000,000 MEME). A fraction, 0, a negative or out-of-range value is 422 VALIDATION_FAILED (reasonCode LAUNCH2_WALLET_CAP_INVALID, field walletCapPerMille). Non-default values need an S359 Factory (else HOOKS_LAUNCH_TERMS_UNSUPPORTED_BY_FACTORY). Fixed once deployed."
                       }
                     }
                   }
@@ -120395,6 +120420,23 @@
                         "configHash": {
                           "type": "string",
                           "pattern": "^0x[0-9a-f]{64}$"
+                        },
+                        "nftPriceUsd1": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                        },
+                        "walletCapPerMille": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                         }
                       }
                     },
@@ -121117,6 +121159,16 @@
                         "nonce": {
                           "type": "string",
                           "pattern": "^(0|[1-9][0-9]{0,77})$"
+                        },
+                        "nftPrice": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199: present only for an S359 Factory (with maxCumulativeBuy) — the launch's medal NFT price in USD1 wei (= nftPriceUsd1 × 1e18), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories."
+                        },
+                        "maxCumulativeBuy": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199: present only for an S359 Factory (with nftPrice) — the launch's per-address curve purchase cap in raw MEME (= walletCapPerMille × 1e24), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories."
                         }
                       }
                     },
@@ -121749,6 +121801,16 @@
                       "nonce": {
                         "type": "string",
                         "pattern": "^(0|[1-9][0-9]{0,77})$"
+                      },
+                      "nftPrice": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]{0,77})$",
+                        "description": "Decision 0199: present only for an S359 Factory (with maxCumulativeBuy) — the launch's medal NFT price in USD1 wei (= nftPriceUsd1 × 1e18), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories."
+                      },
+                      "maxCumulativeBuy": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]{0,77})$",
+                        "description": "Decision 0199: present only for an S359 Factory (with nftPrice) — the launch's per-address curve purchase cap in raw MEME (= walletCapPerMille × 1e24), part of the signed LaunchRequest. Echo it unchanged in POST hooks-deployments; absent for older Factories."
                       }
                     }
                   },
@@ -126614,6 +126676,23 @@
                           "configVersion": {
                             "type": "string",
                             "enum": ["launchCatalogV1"]
+                          },
+                          "nftPriceUsd1": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1000,
+                            "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                          },
+                          "walletCapPerMille": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1000,
+                            "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                          },
+                          "maxCumulativeBuyRaw": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,77})$",
+                            "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                           }
                         }
                       }
@@ -127484,6 +127563,23 @@
                         "configVersion": {
                           "type": "string",
                           "enum": ["launchCatalogV1"]
+                        },
+                        "nftPriceUsd1": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                        },
+                        "walletCapPerMille": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                         }
                       }
                     },
@@ -128393,6 +128489,23 @@
                         "configVersion": {
                           "type": "string",
                           "enum": ["launchCatalogV1"]
+                        },
+                        "nftPriceUsd1": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                        },
+                        "walletCapPerMille": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                         }
                       }
                     },
@@ -129261,6 +129374,23 @@
                         "configVersion": {
                           "type": "string",
                           "enum": ["launchCatalogV1"]
+                        },
+                        "nftPriceUsd1": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                        },
+                        "walletCapPerMille": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                         }
                       }
                     },
@@ -130179,6 +130309,23 @@
                         "configVersion": {
                           "type": "string",
                           "enum": ["launchCatalogV1"]
+                        },
+                        "nftPriceUsd1": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the medal NFT price in whole USD1 (default 100)."
+                        },
+                        "walletCapPerMille": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the per-address curve purchase cap in whole permille of the 1e9 MEME supply (default 5)."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,77})$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): walletCapPerMille × 1e24, the raw MEME (18 decimals) cap the curve enforces."
                         }
                       }
                     },
@@ -184237,6 +184384,21 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "nftPriceUsd1": {
+                          "type": ["null", "integer"],
+                          "minimum": 1,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the instance's verified medal NFT price in whole USD1 (ProjectNFT.PRICE() / 1e18; 100 for every pre-S359 launch). null only if the on-chain price is not a whole USD1."
+                        },
+                        "walletCapPerMille": {
+                          "type": ["null", "integer"],
+                          "minimum": 1,
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the curve's per-address purchase cap in whole permille of the 1e9 MEME supply (maxCumulativeBuyRaw / 1e24). null when the cap is not a whole permille (a pre-S359 Factory admin value); maxCumulativeBuyRaw is always exact."
+                        },
+                        "maxCumulativeBuyRaw": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]{0,77}$",
+                          "description": "Decision 0199 (LAUNCH2_PROJECT_TERMS_EMIT=on only): the curve's verified maxCumulativeBuy(), raw MEME (18 decimals); same value as template.perAddressCap in raw units."
                         }
                       }
                     },
@@ -185454,7 +185616,7 @@
         "operationId": "getV2Launch2Quote",
         "summary": "Quote a MEME v2 curve buy or sell with the executable MAX",
         "tags": ["launch2"],
-        "description": "Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining 0.5% quota, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale, snapshot_pending and closed_no_holders are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED | LAUNCH2_QUOTE_ZERO (the amount prices to 0 MEME / USD1); 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (buy) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (sell) when the balance-limited max is 0 or the request capped to the balance prices to 0 (detailsSafe.maxAmountIn = balance, requiredAmountIn = requested amount, balanceUsd1 | balanceMeme; Decision 0170); 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing. Decision 0136: 503 CAPABILITY_UNAVAILABLE / LAUNCH2_USD1_PAUSED | LAUNCH2_ADDRESS_FROZEN (detailsSafe.since = the chain guard incident's first_seen_at) while the chain guard holds the launch chain (unresolved USD1 pause, or one of our addresses frozen; chain-wide), and CHAIN_GUARD_REPOSITORY_UNAVAILABLE when that hold cannot be read; GET …/instances/{instanceId} shows the same hold as tradingHold.",
+        "description": "Reads the curve, the wallet's cumulative buy, and its USD1 / MEME balance at one block of the launch slot and recomputes CurveEngine (10% tax each way). buy amount = USD1 in (tax included); sell amount = MEME in. max = the executable maximum: buy = min(remaining per-address quota — the instance curve's own maxCumulativeBuy() (Decision 0199: per project on an S359 launch, 0.5 % of supply by default) minus the wallet's cumulative buy —, remaining inventory) priced on the curve with tax, lowered to the USD1 balance; sell = the MEME balance bounded by the sold supply. An amount above max is quoted at max with exceedsMax true. minOut = expectedOut × (1 − slippageBps), deadline = now + LAUNCH2_QUOTE_TTL_SECONDS. In the priority hour eligibility says whether the wallet is in the verified snapshot. 409 DATA_STALE / LAUNCH2_STAGE_MISMATCH (detailsSafe.stage; upcoming, nft_sale, snapshot_pending and closed_no_holders are never quoted) | LAUNCH2_SELL_NOT_OPEN | LAUNCH2_SOLD_OUT | LAUNCH2_QUOTA_EXHAUSTED | LAUNCH2_INSTANCE_PAUSED | LAUNCH2_QUOTE_ZERO (the amount prices to 0 MEME / USD1); 409 INSUFFICIENT_BALANCE / LAUNCH2_USD1_BALANCE_INSUFFICIENT (buy) | LAUNCH2_MEME_BALANCE_INSUFFICIENT (sell) when the balance-limited max is 0 or the request capped to the balance prices to 0 (detailsSafe.maxAmountIn = balance, requiredAmountIn = requested amount, balanceUsd1 | balanceMeme; Decision 0170); 422 VALIDATION_FAILED / LAUNCH2_AMOUNT_INVALID. 503 CAPABILITY_UNAVAILABLE with detailsSafe.reasonCode (LAUNCH2_FACTORY_NOT_CONFIGURED / LAUNCH2_CHAIN_NOT_CONFIGURED / LAUNCH2_REPOSITORY_UNAVAILABLE / LAUNCH2_CHAIN_READ_FAILED) while a dependency is missing. Decision 0136: 503 CAPABILITY_UNAVAILABLE / LAUNCH2_USD1_PAUSED | LAUNCH2_ADDRESS_FROZEN (detailsSafe.since = the chain guard incident's first_seen_at) while the chain guard holds the launch chain (unresolved USD1 pause, or one of our addresses frozen; chain-wide), and CHAIN_GUARD_REPOSITORY_UNAVAILABLE when that hold cannot be read; GET …/instances/{instanceId} shows the same hold as tradingHold.",
         "parameters": [
           {
             "schema": { "type": "string", "enum": ["buy", "sell"] },
