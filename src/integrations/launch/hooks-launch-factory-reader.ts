@@ -23,7 +23,10 @@ import {
   type HooksLaunchLoopDynamicParams,
 } from "../../features/launch/hooks-launch-config.js";
 import type { HooksLaunchFactoryReader } from "../../features/launch/hooks-launch-deployment.js";
-import { hooksLaunchProjectTermsArgs } from "../../features/launch/hooks-launch-project-terms.js";
+import {
+  HooksLaunchRequestTermsMissingError,
+  hooksLaunchProjectTermsArgs,
+} from "../../features/launch/hooks-launch-project-terms.js";
 import { viemLaunchChain } from "../bsc/viem-launch-chain.js";
 import { HooksLaunchFactoryTemplateMismatchError } from "../../features/launch/hooks-launch-executor.js";
 import {
@@ -33,7 +36,6 @@ import {
   loopRouterRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
 import { hooksLaunchFactoryCapAbi } from "./hooks-launch-factory-cap-abi.js";
-import { hooksLaunchFactoryTermsAbi } from "./hooks-launch-factory-terms-abi.js";
 
 const zeroAddress = "0x0000000000000000000000000000000000000000";
 
@@ -257,36 +259,6 @@ const hooksLaunchFactoryAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint64" }],
-  },
-  {
-    type: "function",
-    name: "hookDeploymentFactory",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "address" }],
-  },
-  {
-    type: "function",
-    name: "previewHookInitCodeHash",
-    stateMutability: "view",
-    inputs: [
-      {
-        name: "request",
-        type: "tuple",
-        components: [
-          { name: "projectOwner", type: "address" },
-          { name: "configVersion", type: "uint32" },
-          { name: "configHash", type: "bytes32" },
-          { name: "name", type: "string" },
-          { name: "ticker", type: "string" },
-          { name: "nftSaleStart", type: "uint64" },
-          { name: "buybackRecipient", type: "address" },
-          { name: "deadline", type: "uint64" },
-          { name: "memeSalt", type: "bytes32" },
-        ],
-      },
-    ],
-    outputs: [{ name: "", type: "bytes32" }],
   },
 ] as const;
 
@@ -655,7 +627,7 @@ export function createHooksLaunchFactoryReader(input: {
     try {
       const value = await client.readContract({
         address: factoryAddress,
-        abi: hooksLaunchFactoryTermsAbi,
+        abi: loopLaunchFactoryAbi,
         functionName: "DEFAULT_NFT_PRICE",
       });
       if (typeof value !== "bigint" || value <= 0n) {
@@ -819,9 +791,11 @@ export function createHooksLaunchFactoryReader(input: {
       readonly maxCumulativeBuy?: string | undefined;
     }) {
       await verifyNetworkAndCode();
-      // Decision 0199: an S359 request carries the launch terms; its
-      // tuple (and so the preview call) has the two extra components.
+      // Decision 0199 / 0200: only an S359 request (with the launch terms)
+      // is previewed — older Factories no longer deploy (index-only), so
+      // the 9-field tuple is never encoded.
       const terms = hooksLaunchProjectTermsArgs(request);
+      if (terms === null) throw new HooksLaunchRequestTermsMissingError();
       const launchRequest = {
         projectOwner: request.projectOwner as Address,
         configVersion: request.configVersion,
@@ -832,6 +806,7 @@ export function createHooksLaunchFactoryReader(input: {
         buybackRecipient: request.buybackRecipient as Address,
         deadline: BigInt(request.deadline),
         memeSalt: request.memeSalt as `0x${string}`,
+        ...terms,
       };
       try {
         // Decision 0132: a LoopDynamic Hook is CREATE2-deployed at
@@ -844,39 +819,25 @@ export function createHooksLaunchFactoryReader(input: {
                 abi: loopDynamicLaunchFactoryAbi,
                 functionName: "loopHookDeploymentFactory",
               }),
-              terms === null
-                ? client.readContract({
-                    address: factoryAddress,
-                    abi: loopDynamicLaunchFactoryAbi,
-                    functionName: "previewLoopHookInitCodeHash",
-                    args: [launchRequest],
-                  })
-                : client.readContract({
-                    address: factoryAddress,
-                    abi: hooksLaunchFactoryTermsAbi,
-                    functionName: "previewLoopHookInitCodeHash",
-                    args: [{ ...launchRequest, ...terms }],
-                  }),
+              client.readContract({
+                address: factoryAddress,
+                abi: loopDynamicLaunchFactoryAbi,
+                functionName: "previewLoopHookInitCodeHash",
+                args: [launchRequest],
+              }),
             ])
           : await Promise.all([
               client.readContract({
                 address: factoryAddress,
-                abi: hooksLaunchFactoryAbi,
+                abi: loopLaunchFactoryAbi,
                 functionName: "hookDeploymentFactory",
               }),
-              terms === null
-                ? client.readContract({
-                    address: factoryAddress,
-                    abi: hooksLaunchFactoryAbi,
-                    functionName: "previewHookInitCodeHash",
-                    args: [launchRequest],
-                  })
-                : client.readContract({
-                    address: factoryAddress,
-                    abi: hooksLaunchFactoryTermsAbi,
-                    functionName: "previewHookInitCodeHash",
-                    args: [{ ...launchRequest, ...terms }],
-                  }),
+              client.readContract({
+                address: factoryAddress,
+                abi: loopLaunchFactoryAbi,
+                functionName: "previewHookInitCodeHash",
+                args: [launchRequest],
+              }),
             ]);
         const deployerCode = await client.getBytecode({ address: deployer });
         if (deployerCode === undefined || deployerCode === "0x") {

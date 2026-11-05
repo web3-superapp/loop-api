@@ -613,4 +613,4 @@ on 时以下位置**多三个键**，off 时一个都不发（App 必须按可�
 
 - `GET …/signing-request`：`request` 多 `nftPrice`（wei 字符串）与 `maxCumulativeBuy`（raw 字符串）；`typedData.domain.version = "2"`，`types.LaunchRequest` 末尾多 `uint256 nftPrice, uint256 maxCumulativeBuy`。照原样签（uint 字段转 BigInt），`POST hooks-deployments` 时 `request` **原样回传**这两个键。
 - 篡改 → `409 VERSION_CONFLICT`；旧工厂上带这两个键 → `400 INVALID_REQUEST`。
-- 旧工厂：`request` 无这两个键、domain 仍 `"1"`，与以前完全相同。
+- 旧工厂（早于 S359，S362 / 决策 0200 起只读索引）：不再发新项目，`GET …/signing-request` 与 `POST hooks-deployments` 返回 `503 CAPABILITY_UNAVAILABLE`（`HOOKS_LAUNCH_FACTORY_UNAVAILABLE`），按既有 503 提示处理。后端工厂 ABI 已由 `pnpm hooks:abi-sync` 从 S359 构建生成，不再有手写片段；接口形状不变。

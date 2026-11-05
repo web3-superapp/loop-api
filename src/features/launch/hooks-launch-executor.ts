@@ -1,6 +1,9 @@
 import { hashTypedData, recoverAddress, type Hex } from "viem";
 
-import { hooksLaunchProjectTermsArgs } from "./hooks-launch-project-terms.js";
+import {
+  HooksLaunchRequestTermsMissingError,
+  hooksLaunchProjectTermsArgs,
+} from "./hooks-launch-project-terms.js";
 import {
   launchSlotRefusal,
   testnetLaunchSlot,
@@ -848,6 +851,13 @@ export function createHooksLaunchExecutor(options: {
     try {
       estimate = await chain.estimateDeploy(call);
     } catch (error) {
+      // Decision 0200: a pre-S359 request (no terms) is never encoded.
+      if (error instanceof HooksLaunchRequestTermsMissingError) {
+        return fail(task, "HOOKS_DEPLOY_SIMULATION_REVERTED", {
+          retryable: false,
+          details: { revert: "LAUNCH_REQUEST_TERMS_MISSING" },
+        });
+      }
       if (error instanceof HooksLaunchChainRevertError) {
         const fieldCode = hooksLaunchTextRevertCodes.get(error.reason);
         return fail(task, fieldCode ?? "HOOKS_DEPLOY_SIMULATION_REVERTED", {

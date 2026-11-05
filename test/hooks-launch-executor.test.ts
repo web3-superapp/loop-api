@@ -5,6 +5,7 @@ import {
   createHooksLaunchExecutor,
   type HooksLaunchExecutorPolicy,
 } from "../src/features/launch/hooks-launch-executor.js";
+import { HooksLaunchRequestTermsMissingError } from "../src/features/launch/hooks-launch-project-terms.js";
 import {
   configHash,
   factoryCodeHash,
@@ -244,6 +245,12 @@ describe("Hooks deployment executor (Decision 0112)", () => {
       "simulation InvalidTicker",
       { estimate: new HooksLaunchChainRevertError("InvalidTicker") },
       "HOOKS_LAUNCH_TICKER_INVALID",
+    ],
+    // Decision 0200: a request without the S359 terms is never encoded.
+    [
+      "a request without launch terms",
+      { estimate: new HooksLaunchRequestTermsMissingError() },
+      "HOOKS_DEPLOY_SIMULATION_REVERTED",
     ],
     [
       "gas above the cap",

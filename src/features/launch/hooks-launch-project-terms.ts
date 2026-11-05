@@ -200,15 +200,28 @@ export const hooksLaunchProjectTermsTypedFields = Object.freeze([
 ] as const);
 
 /**
- * ALIGNMENT POINT (loop-contracts S359): the components appended to the
- * Solidity `LoopLaunchFactory.LaunchRequest` tuple (after `bytes32
- * memeSalt`), used by `deployLaunch`, `launchDigest`,
- * `previewHookInitCodeHash` and `previewLoopHookInitCodeHash`.
+ * The last two components of the Solidity `LaunchRequest` tuple (after
+ * `bytes32 memeSalt`). Decision 0200: the encoders use the generated
+ * protocol ABI (`pnpm hooks:abi-sync`, S359 build); this constant must
+ * equal that tuple's tail (asserted field by field in the tests).
  */
 export const hooksLaunchProjectTermsTupleComponents = Object.freeze([
   Object.freeze({ name: "nftPrice", type: "uint256" }),
   Object.freeze({ name: "maxCumulativeBuy", type: "uint256" }),
 ] as const);
+
+/**
+ * Decision 0200: a `deployLaunch` call or Hook init-code preview without
+ * the launch terms. Only S359 Factories deploy new launches (older ones are
+ * index-only), so the 9-field pre-S359 request is never encoded; reaching
+ * this is a programming / data error, never retried.
+ */
+export class HooksLaunchRequestTermsMissingError extends Error {
+  constructor() {
+    super("The launch request carries no per-launch terms");
+    this.name = "HooksLaunchRequestTermsMissingError";
+  }
+}
 
 /** The terms as bigint struct values for viem encoders (empty when absent). */
 export function hooksLaunchProjectTermsArgs(request: {
