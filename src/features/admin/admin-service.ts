@@ -164,6 +164,7 @@ const assetIdPattern = /^eip155:[1-9][0-9]{0,9}:(0x[0-9a-f]{40}|native)$/u;
 
 export const intelPromotionDeeplinkChoices = Object.freeze([
   "/intel",
+  "/mining/rank",
   "/square",
   "/meme",
   "/community/profile?id=<communityId>",

@@ -139,7 +139,7 @@ export function registerV2MarketRoutes(
         operationId: "listV2IntelPromotions",
         summary: "List the intel page promotion cards",
         description:
-          "Decision 0100. A versioned list of the cards in force now, ordered by `order`. Decision 0102: when the operator console has saved a list it is in force (configVersion intelPromotionsV1+db.<epoch ms>, effectiveAt = its save time); otherwise the shipped list (configVersion intelPromotionsV1). `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts or the console saves. An empty `items` means no card is running: hide the strip.",
+          "Decision 0100. A versioned list of the cards in force now, ordered by `order`. Decision 0102: when the operator console has saved a list it is in force (configVersion intelPromotionsV1+db.<epoch ms>, effectiveAt = its save time); otherwise the shipped list (configVersion intelPromotionsV1). `deeplink` is always an in-app route (/intel, /mining/rank, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts or the console saves. An empty `items` means no card is running: hide the strip.",
         tags: ["market"],
         security: [{ privyBearer: [] }],
         headers: v2CommonHeadersSchema,

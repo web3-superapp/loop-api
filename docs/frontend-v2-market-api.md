@@ -901,7 +901,7 @@ X-Loop-Contract-Version: 2.0
       "title": "LOOP 挖矿算力周榜",
       "subtitle": "看看本周谁的算力最高",
       "imageUrl": null,
-      "deeplink": "/intel",
+      "deeplink": "/mining/rank",
       "startsAt": "2026-10-08T00:00:00.000Z",
       "endsAt": "2027-01-01T00:00:00.000Z",
       "order": 1
@@ -924,7 +924,8 @@ X-Loop-Contract-Version: 2.0
 ```
 
 - 只返回当前生效（`startsAt <= now < endsAt`）的卡片，按 `order` 升序；`items: []` → 隐藏活动位整块。
-- `deeplink` **只会**是 app 内路由：`/intel`、`/square`、`/meme`、`/community/profile?id=<communityId>`。
+- `deeplink` **只会**是 app 内路由：`/intel`、`/mining/rank`、`/square`、`/meme`、`/community/profile?id=<communityId>`。
+  `/mining/rank` = 算力排行榜二级页（决策 0201；占位卡「LOOP 挖矿算力周榜」自该决策起指向它，客户端白名单须先放开 `/mining/rank`，见 S368 / TF 68）。
   后端启动时校验，任何外链/scheme 都进不了响应；前端仍应只用 GoRouter 内部跳转，不交给浏览器。
 - `imageUrl` 为 `null` 时前端用自己的卡片底图；非 null 时一定是 https。
 - 错误：400（带 query）、401、409 `ACCOUNT_BOOTSTRAP_REQUIRED`；`market` 模块未启用时 404。

@@ -1218,7 +1218,7 @@ export const intelPromotionsResourceSchema = {
             type: "string",
             pattern: intelPromotionDeeplinkPatternSource,
             description:
-              "An in-app route only: /intel, /square, /meme, or /community/profile?id=<communityId>. Never an external URL.",
+              "An in-app route only: /intel, /mining/rank, /square, /meme, or /community/profile?id=<communityId>. Never an external URL.",
           },
           startsAt: dateTimeSchema,
           endsAt: dateTimeSchema,
