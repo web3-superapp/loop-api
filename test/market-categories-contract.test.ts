@@ -42,6 +42,7 @@ describe("intel promotions (Decision 0100)", () => {
   it("admits only the in-app routes", () => {
     for (const link of [
       "/intel",
+      "/mining/rank",
       "/square",
       "/meme",
       `/community/profile?id=${communityId}`,
@@ -55,6 +56,11 @@ describe("intel promotions (Decision 0100)", () => {
       "javascript:alert(1)",
       "loop://intel",
       "/wallet",
+      "/mining",
+      "/mining/rank/",
+      "/mining/rank?scope=users",
+      "/mining/ranks",
+      "/mining/invite",
       "/intel/",
       "/intel?x=1",
       "/community/profile?id=not-a-uuid",
@@ -92,7 +98,7 @@ describe("intel promotions (Decision 0100)", () => {
 
   it("ships the two placeholders and publishes only the cards in force, by order", () => {
     expect(intelPromotions.map((entry) => entry.deeplink)).toEqual([
-      "/intel",
+      "/mining/rank",
       "/square",
     ]);
     const entries = defineIntelPromotions([

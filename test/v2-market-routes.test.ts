@@ -3365,7 +3365,7 @@ describe("LOOP API V2 market module", () => {
             title: "LOOP 挖矿算力周榜",
             subtitle: "看看本周谁的算力最高",
             imageUrl: null,
-            deeplink: "/intel",
+            deeplink: "/mining/rank",
             startsAt: "2026-10-08T00:00:00.000Z",
             endsAt: "2027-01-01T00:00:00.000Z",
             order: 1,

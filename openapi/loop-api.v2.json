@@ -59343,7 +59343,7 @@
         "operationId": "listV2IntelPromotions",
         "summary": "List the intel page promotion cards",
         "tags": ["market"],
-        "description": "Decision 0100. A versioned list of the cards in force now, ordered by `order`. Decision 0102: when the operator console has saved a list it is in force (configVersion intelPromotionsV1+db.<epoch ms>, effectiveAt = its save time); otherwise the shipped list (configVersion intelPromotionsV1). `deeplink` is always an in-app route (/intel, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts or the console saves. An empty `items` means no card is running: hide the strip.",
+        "description": "Decision 0100. A versioned list of the cards in force now, ordered by `order`. Decision 0102: when the operator console has saved a list it is in force (configVersion intelPromotionsV1+db.<epoch ms>, effectiveAt = its save time); otherwise the shipped list (configVersion intelPromotionsV1). `deeplink` is always an in-app route (/intel, /mining/rank, /square, /meme, /community/profile?id=<communityId>); entries outside that allow-list are refused when the server starts or the console saves. An empty `items` means no card is running: hide the strip.",
         "parameters": [
           {
             "schema": {
@@ -59429,8 +59429,8 @@
                           },
                           "deeplink": {
                             "type": "string",
-                            "pattern": "^(/intel|/square|/meme|/community/profile\\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
-                            "description": "An in-app route only: /intel, /square, /meme, or /community/profile?id=<communityId>. Never an external URL."
+                            "pattern": "^(/intel|/mining/rank|/square|/meme|/community/profile\\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+                            "description": "An in-app route only: /intel, /mining/rank, /square, /meme, or /community/profile?id=<communityId>. Never an external URL."
                           },
                           "startsAt": {
                             "type": "string",

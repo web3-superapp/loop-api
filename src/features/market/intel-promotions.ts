@@ -49,7 +49,7 @@ export function isAllowedIntelPromotionImageUrl(
 
 /** In-app routes a promotion may open. `/community/profile` takes an opaque community ID. */
 export const intelPromotionDeeplinkPatternSource =
-  "^(/intel|/square|/meme|/community/profile\\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$";
+  "^(/intel|/mining/rank|/square|/meme|/community/profile\\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$";
 const intelPromotionDeeplinkPattern = new RegExp(
   intelPromotionDeeplinkPatternSource,
 );
@@ -141,7 +141,8 @@ export const intelPromotions: readonly IntelPromotion[] = defineIntelPromotions(
       title: "LOOP 挖矿算力周榜",
       subtitle: "看看本周谁的算力最高",
       imageUrl: null,
-      deeplink: "/intel",
+      // Decision 0201: the leaderboard sub-page, not the intel tab.
+      deeplink: "/mining/rank",
       startsAt: "2026-10-08T00:00:00.000Z",
       endsAt: "2027-01-01T00:00:00.000Z",
       order: 1,
