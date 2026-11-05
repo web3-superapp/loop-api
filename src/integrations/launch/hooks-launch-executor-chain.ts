@@ -36,6 +36,7 @@ import {
   type HooksLaunchOnChainFacts,
 } from "../../features/launch/hooks-launch-verification.js";
 import type { HooksLaunchLoopDynamicOnChainFacts } from "../../features/launch/hooks-launch-loop-dynamic-verification.js";
+import { HooksLaunchRequestTermsMissingError } from "../../features/launch/hooks-launch-project-terms.js";
 import {
   isHooksLaunchContractRevert,
   readHooksLaunchLoopDynamicTemplate,
@@ -62,10 +63,6 @@ import {
   snapshotRegistryAbi,
 } from "./hooks-launch-protocol-abi.generated.js";
 import { legacyS200CurveEngineAbi } from "./hooks-launch-protocol-abi-legacy-s200.js";
-import {
-  hooksLaunchFactoryTermsAbi,
-  hooksLaunchModuleTermsAbi,
-} from "./hooks-launch-factory-terms-abi.js";
 
 /**
  * Decision 0112: the executor's BSC Testnet client. It signs exactly two
@@ -216,7 +213,7 @@ export function createHooksLaunchExecutorChain(input: {
   const orderAmount = async (target: string): Promise<bigint | undefined> => {
     for (const name of ["orderAmount", "ORDER_AMOUNT"]) {
       try {
-        return await big(target, hooksLaunchModuleTermsAbi, name);
+        return await big(target, buybackExecutorAbi, name);
       } catch {
         // try the next getter name
       }
@@ -234,21 +231,18 @@ export function createHooksLaunchExecutorChain(input: {
     String(await read(target, abi, name));
 
   /**
-   * Decision 0199: the `deployLaunch` calldata — an S359 request (terms
-   * present) uses the extended tuple (`hooksLaunchFactoryTermsAbi`).
+   * Decision 0199 / 0200: the `deployLaunch` calldata, always the S359
+   * 11-field request (generated ABI). A request without the terms is not
+   * encoded: `HooksLaunchRequestTermsMissingError`.
    */
   function deployData(call: HooksLaunchDeployCall): Hex {
     const [request, hookSalt, signature] = deployArgs(call);
     const { nftPrice, maxCumulativeBuy } = call.request;
     if (nftPrice === undefined || maxCumulativeBuy === undefined) {
-      return encodeFunctionData({
-        abi: loopLaunchFactoryAbi,
-        functionName: "deployLaunch",
-        args: [request, hookSalt, signature],
-      });
+      throw new HooksLaunchRequestTermsMissingError();
     }
     return encodeFunctionData({
-      abi: hooksLaunchFactoryTermsAbi,
+      abi: loopLaunchFactoryAbi,
       functionName: "deployLaunch",
       args: [{ ...request, nftPrice, maxCumulativeBuy }, hookSalt, signature],
     });

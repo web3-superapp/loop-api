@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  formatHooksLaunchAbiModule,
   hooksLaunchAbiSelection,
   renderHooksLaunchAbiModule,
   selectHooksLaunchAbi,
@@ -92,7 +93,7 @@ try {
     });
     if (mismatched.length > 0) {
       process.stderr.write(
-        `hooks:abi-sync --check: ${mismatched.map(([c]) => c).join(", ")} differ from the Foundry build; run pnpm hooks:abi-sync && pnpm format\n`,
+        `hooks:abi-sync --check: ${mismatched.map(([c]) => c).join(", ")} differ from the Foundry build; run pnpm hooks:abi-sync\n`,
       );
       process.exit(1);
     }
@@ -102,7 +103,10 @@ try {
   } else {
     writeFileSync(
       targetPath,
-      renderHooksLaunchAbiModule(selected, sourceCommit),
+      await formatHooksLaunchAbiModule(
+        renderHooksLaunchAbiModule(selected, sourceCommit),
+        targetPath,
+      ),
     );
     process.stdout.write(
       `hooks:abi-sync wrote ${path.relative(repositoryRoot, targetPath)} from ${sourceCommit}\n`,

@@ -50,9 +50,9 @@ import {
   passingFacts,
 } from "./helpers/hooks-launch-executor-fixtures.js";
 import {
-  hooksLaunchFactoryTermsAbi,
-  hooksLaunchModuleTermsAbi,
-} from "../src/integrations/launch/hooks-launch-factory-terms-abi.js";
+  buybackExecutorAbi,
+  loopLaunchFactoryAbi,
+} from "../src/integrations/launch/hooks-launch-protocol-abi.generated.js";
 
 const recipient = "0x1234567890123456789012345678901234567890";
 const body = {
@@ -176,7 +176,7 @@ describe("Decision 0199 launch terms: on-chain conversion", () => {
 
 describe("Decision 0199 launch terms: Factory ABI and EIP-712 (loop-contracts S359)", () => {
   it("pins the S359 selectors and event topic", () => {
-    const deploy = hooksLaunchFactoryTermsAbi.find(
+    const deploy = loopLaunchFactoryAbi.find(
       (item) => item.type === "function" && item.name === "deployLaunch",
     );
     expect(deploy).toBeDefined();
@@ -186,7 +186,7 @@ describe("Decision 0199 launch terms: Factory ABI and EIP-712 (loop-contracts S3
       ),
     ).toBe("0xd2d589a0");
     const data = encodeFunctionData({
-      abi: hooksLaunchFactoryTermsAbi,
+      abi: loopLaunchFactoryAbi,
       functionName: "deployLaunch",
       args: [
         {
@@ -209,7 +209,7 @@ describe("Decision 0199 launch terms: Factory ABI and EIP-712 (loop-contracts S3
     expect(data.slice(0, 10)).toBe("0xd2d589a0");
     expect(
       encodeFunctionData({
-        abi: hooksLaunchFactoryTermsAbi,
+        abi: loopLaunchFactoryAbi,
         functionName: "DEFAULT_NFT_PRICE",
       }),
     ).toBe("0xef14e547");
@@ -220,7 +220,7 @@ describe("Decision 0199 launch terms: Factory ABI and EIP-712 (loop-contracts S3
     );
     expect(
       encodeFunctionData({
-        abi: hooksLaunchModuleTermsAbi,
+        abi: buybackExecutorAbi,
         functionName: "ORDER_AMOUNT",
       }),
     ).toBe(toFunctionSelector("ORDER_AMOUNT()"));

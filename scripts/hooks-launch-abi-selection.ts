@@ -1,3 +1,5 @@
+import { format, resolveConfig } from "prettier";
+
 /**
  * Decision 0112: which ABI items of the loop-contracts Foundry build the
  * Hooks deployment executor consumes; Decision 0114 adds the events and
@@ -43,6 +45,13 @@ export const hooksLaunchAbiSelection = {
     "InvalidTicker",
     // Decision 0164 §10: the text-rule generation (2 = S242).
     "launchTextRulesVersion",
+    // Decision 0199 / 0200 (loop-contracts Decision 0019, S359): the
+    // per-launch terms probe and event; the OfficialTax Hook preview
+    // (11-field request) the deployment preparation mines the salt for.
+    "DEFAULT_NFT_PRICE",
+    "LaunchNftPrice",
+    "hookDeploymentFactory",
+    "previewHookInitCodeHash",
   ],
   LaunchPublicationGate: [
     "launchId",
@@ -151,6 +160,8 @@ export const hooksLaunchAbiSelection = {
     "lastSuccessfulAt",
     "quoteNextOrder",
     "ORDER_AMOUNT",
+    // Decision 0199 / 0200 (S359): the per-launch order amount getter.
+    "orderAmount",
     "MIN_SUCCESS_INTERVAL",
     "execute",
     "pause",
@@ -351,6 +362,9 @@ export const hooksLaunchAbiSelection = {
     "previewLoopHookInitCodeHash",
     // Decision 0152 (loop-contracts Decision 0015): absent before S209.
     "maxCumulativeBuy",
+    // Decision 0199 / 0200 (S359): see LoopLaunchFactory.
+    "DEFAULT_NFT_PRICE",
+    "LaunchNftPrice",
     "LaunchDeployed",
     "LaunchActivated",
   ],
@@ -419,4 +433,17 @@ export function renderHooksLaunchAbiModule(
     lines.push(`export const ${name} = ${JSON.stringify(abi)} as const;`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Decision 0200: the written module is already in the repository's
+ * Prettier format (the same config `pnpm format:check` applies), so a sync
+ * needs no follow-up `pnpm format`.
+ */
+export async function formatHooksLaunchAbiModule(
+  source: string,
+  filepath: string,
+): Promise<string> {
+  const options = (await resolveConfig(filepath)) ?? {};
+  return format(source, { ...options, filepath });
 }
